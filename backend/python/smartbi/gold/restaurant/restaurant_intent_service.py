@@ -150,14 +150,19 @@ def _time_range_disclosure(spec: Any) -> str:
     **选择**。正因为它是选择, 披露才更不能省 —— 用户看到数字之前就该知道这是哪一段
     时间的数字, 否则他会拿一个 30 天的数去对一个他心里想的 7 天的数。
 
-    ⚠️ 不改 SQL: resolver 自己从原句派生 date_range, 用户没说时间时它本来就落到近
-    30 天。这里只负责把「这是代码替你选的」说出来。
+    ⚠️ 窗口本身由 `_build_spec` 顶部补 `time_phrase` 落实（date_range /
+    window_label / resolver seed 一起变），这里只负责把「这是代码替你选的」说出来。
     """
     if not getattr(spec, "time_range_defaulted", False):
         return ""
+    # ⛔ 逐字引用同一个常量：说的窗口与算的窗口必须同源。各写一份，哪天默认从
+    #    30 天改成 7 天，就会出现「按 30 天算、却说 7 天」—— 比反问更糟，
+    #    因为用户会拿着错的口径去做决定。
+    from smartbi.gold.restaurant.restaurant_intent import DEFAULT_TIME_PHRASE
+
     return (
-        "\n\n（你没有指定时间范围，以上按**最近 30 天**计算；"
-        "想看别的区间可以直接说，例如「最近 7 天」。）"
+        f"\n\n（你没有指定时间范围，以上按**{DEFAULT_TIME_PHRASE}**计算；"
+        "想看别的区间可以直接说，例如「最近7天」。）"
     )
 
 

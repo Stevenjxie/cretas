@@ -37,9 +37,17 @@ class _Spec:
 def test_time_range_default_is_disclosed():
     """时间窗是**选择**不是超集, 所以披露比门店那条更不能省。"""
     text = _time_range_disclosure(_Spec(time_range_defaulted=True))
-    assert text.startswith("\n\n"), "披露要另起段, 不要粘在数字后面"
-    assert "最近 30 天" in text
-    assert "最近 7 天" in text, "要告诉用户怎么改, 否则他不知道可以改"
+    assert text.startswith(chr(10) * 2), "披露要另起段, 不要粘在数字后面"
+    # ⛔ 说的窗口必须与算的窗口**逐字同源** —— 这条钉住的正是那个同源关系。
+    #    第一版把「最近 30 天」写死在断言里，而实现引用的是 DEFAULT_TIME_PHRASE
+    #    （「最近30天」，无空格），两处一改就假红/假绿。
+    from smartbi.gold.restaurant.restaurant_intent import DEFAULT_TIME_PHRASE
+
+    assert DEFAULT_TIME_PHRASE in text, (
+        f"披露里没有出现实际使用的窗口 {DEFAULT_TIME_PHRASE} —— "
+        "说的和算的不是同一个窗口，比反问更糟"
+    )
+    assert "最近7天" in text, "要告诉用户怎么改, 否则他不知道可以改"
 
 
 def test_no_disclosure_when_user_said_it():
@@ -52,7 +60,8 @@ def test_two_disclosures_do_not_collide():
     spec = _Spec(store_scope_defaulted=True, time_range_defaulted=True,
                  store_options=("A店", "B店"))
     combined = _store_scope_disclosure(spec) + _time_range_disclosure(spec)
-    assert "最近 30 天" in combined
+    from smartbi.gold.restaurant.restaurant_intent import DEFAULT_TIME_PHRASE
+    assert DEFAULT_TIME_PHRASE in combined
     assert combined.count("（") >= 2, "两条披露被合并成一句了"
 
 
@@ -77,10 +86,12 @@ class TestAutoDefaultableSet:
         m = re.search(r"_AUTO_DEFAULTABLE\s*=\s*\{([^}]*)\}", self.SRC)
         assert m, "_AUTO_DEFAULTABLE 不见了或写法变了 —— 这道闸已经空转"
         members = {s.strip().strip('"\'') for s in m.group(1).split(",") if s.strip()}
-        assert members == {"store_scope", "time_range"}, (
+        assert members == {"store_scope"}, (
             f"可自动补默认的槽位集合变成了 {members}。"
             "加一个槽位进来之前先回答两个问题: 它的默认值有没有歧义? 会不会被披露? "
             "指标/对象两条都不满足 —— 补错就是给一个看着像答案的错答案。"
+            "⚠️ 时间窗**故意不在这里**: 它在 _build_spec 顶部补(见那里的注释) —— "
+            "在这里补会打断 T3 自己发起的澄清延续链。"
         )
 
     def test_missing_metric_still_asks(self):
@@ -89,7 +100,7 @@ class TestAutoDefaultableSet:
             r"_AUTO_DEFAULTABLE\s*=\s*\{([^}]*)\}", self.SRC).group(1)
 
     def test_subset_check_not_equality(self):
-        """并缺(门店+时间)也要能补 —— 用 <= 而不是 ==。"""
+        """用子集判断而不是相等 —— 将来加第二个可默认槽位时并缺也能覆盖。"""
         assert re.search(r"set\(_missing\)\s*<=\s*_AUTO_DEFAULTABLE", self.SRC), (
             "这里必须是子集判断: 写成 == 就只覆盖单缺, "
             "「哪个菜卖得最好」这种门店和时间同时缺的照样反问"

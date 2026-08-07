@@ -374,6 +374,17 @@ _VALID_CODES = frozenset(_INTENT_DESCRIPTIONS)
 TIME_CLARIFICATION_QUESTION = (
     "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。"
 )
+#: 用户没说时间时代码补的默认窗口。**必须与 `_time_range_disclosure` 里说的那句
+#: 一致** —— 说的和算的不是同一个窗口, 比反问更糟。
+DEFAULT_TIME_PHRASE = "最近30天"
+
+#: planner 不可信的几种来源 —— 这些情况下**不许**替用户补时间窗:
+#: 我们并没有真读懂这句话, 补一个默认只会把「没读懂」伪装成「有答案」。
+_UNTRUSTED_PLANNER_AUTHORITIES = frozenset({
+    "tenant_gate_unavailable",
+    "llm_unavailable",
+})
+
 _TIME_SCOPED_INTENTS = frozenset({
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
     "RESTAURANT_OPS_WASTAGE_TOP",
@@ -1925,6 +1936,50 @@ def _build_spec(
     # already resolve.  Continuations such as "原问题 本月" already contain
     # the clicked option; appending the same label again would make the sealed
     # resolver seed drift from the actual two-turn conversation.
+    # ── 用户没说时间 → 补默认「最近30天」而不是反问 ──────────────────────
+    #
+    # 🔴 2026-08-07 本地实测(基线问句, 真实 prod 数据)剩余 7 条 D 里有 4 条是这个:
+    #    「加权毛利率是多少」missing_slot=time / 「最近损耗情况怎么样」missing_slot=time
+    #    /「哪个菜卖得最好」store+time /「营收趋势怎么样」store+time。
+    #
+    # ⚠️ 我先在 T3 产出处按 `missing_fields` 补过默认, **不够** —— 「营收趋势怎么样」
+    #    那条实测 `time_range_defaulted=True` 却仍然被反问, 因为真正做决定的是下面
+    #    那道**确定性时间闸**(它只看 query 里有没有时间短语, 不看 T3 说了什么)。
+    #    判据(本轮第二次栽): **改之前先确认「谁才是真正做决定的那处」**,
+    #    上游标记了不等于下游会认。
+    #
+    # ⛔ 为什么必须在**这里**补而不是在闸那里放行: 闸放行只是不问, 而
+    #    `_resolve_sales_date_range(query)` 仍是「全部历史」—— 下游会按全历史算,
+    #    披露却说「最近 30 天」。**那才是真正的降级处理**(数字与说明不符)。
+    #    补 time_phrase 会让 date_range / window_label / resolver seed 一起变成
+    #    30 天, 四者同源。
+    #
+    # ⛔ 这不推翻原闸的意图。原注释说「LLM 的 time_range 只是抽取补充, 绝不是发明
+    #    默认窗口的许可」—— 对的, 所以这里不是让 LLM 发明, 是**代码给一个固定的、
+    #    会被显式披露的默认**(见 `_time_range_disclosure`)。偷偷选口径才是降级,
+    #    选了并说出来不是。
+    # ⛔ 只对「T3 自己产出的、语义可信的新问句」补默认。
+    #    第一版没有这三个限制, **27 个既有测试当场红**, 而它们红得有道理:
+    #      · T3 挂掉时(planner_authority ∈ 不可信集)必须问, 不能拿一个默认窗口
+    #        去顶替一个我们根本没理解的句子;
+    #      · 澄清延续(is_continuation)里时间是用户正在回答的槽位, 替他答就是抢答;
+    #      · reviewed-exact 注册表命中(tier != "llm")有自己的四按钮契约。
+    #    判据(本轮又一次): **闸红了不许加豁免, 要看它想逼出什么** —— 这里它逼出的是
+    #    「只有在我们真读懂了句子时, 才有资格替用户选口径」。
+    if (
+        not time_phrase
+        and require_explicit_time
+        and code in _TIME_SCOPED_INTENTS
+        and not clarification_needed
+        and not is_continuation
+        and tier == "llm"
+        and llm_semantics_authoritative
+        and planner_authority not in _UNTRUSTED_PLANNER_AUTHORITIES
+        and _resolve_sales_date_range(query)[1] == "全部历史"
+    ):
+        time_phrase = DEFAULT_TIME_PHRASE
+        time_range_defaulted = True
+
     effective_query = query
     if time_phrase and _resolve_sales_date_range(query)[1] == "全部历史":
         effective_query = f"{query} {time_phrase}".strip()
@@ -2290,6 +2345,8 @@ def _build_spec(
         and code in _TIME_SCOPED_INTENTS
         and _resolve_sales_date_range(query)[1] == "全部历史"
         and not clarification_needed
+        # 上面已经补了默认窗口并会显式披露 —— 再反问就是明知故问。
+        and not time_range_defaulted
     ):
         # LLM time_range is an extraction supplement, never permission to
         # invent a default window.  Only a time phrase in the user's effective
@@ -5232,7 +5289,15 @@ def _semantic_spec_from_t3(
     #
     # ⛔ 只有「有安全默认值 + 会被显式披露」的槽位才进这个集合。
     #    指标/对象**不进**: 它们没有无歧义的默认, 补错等于给一个看着像答案的错答案。
-    _AUTO_DEFAULTABLE = {"store_scope", "time_range"}
+    #
+    # ⚠️ 时间窗**不在这里**补, 在 `_build_spec` 顶部补。两个原因:
+    #   1) 实测这里补了没用 ——「营收趋势怎么样」标了 time_range_defaulted=True
+    #      仍被反问, 因为真正做决定的是 `_build_spec` 里那道确定性时间闸;
+    #   2) T3 **自己**要求澄清时间(带它自己的按钮)时, 在这里清掉会把
+    #      「澄清延续链」整条打断 —— 用户点了「本月」之后那一轮不再是延续,
+    #      要重走 T3(既有测试 test_semantic_first_dish_time_store_buttons_survive_t3_outage
+    #      当场抓到)。`_build_spec` 那处带 `not clarification_needed`, 不抢这一类。
+    _AUTO_DEFAULTABLE = {"store_scope"}
 
     store_scope_defaulted = False
     time_range_defaulted = False
@@ -5253,10 +5318,7 @@ def _semantic_spec_from_t3(
         if "store_scope" in _missing and not store_scope:
             store_scope = "all"
             store_scope_defaulted = True
-        if "time_range" in _missing:
-            # ⚠️ 不在这里改写 query 或 SQL —— resolver 自己从原句派生 date_range,
-            # 没说时间时它本来就落到近 30 天。这里只负责**别反问**并**说出来**。
-            time_range_defaulted = True
+
 
     if daypart_contract_repair:
         # 时段经营问句由**历史时段表现** resolver 承接。这是 post-LLM 的能力编译,

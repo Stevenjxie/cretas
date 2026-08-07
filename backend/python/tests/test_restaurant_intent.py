@@ -214,13 +214,52 @@ def test_matrix_object_dimensions_detected():
     assert "ingredient" in _build_spec("RESTAURANT_OPS_REQUISITION_TREND", "领料", confidence=1.0, tier="test").dimensions
 
 
-def test_time_gate_replaces_llm_store_choices_with_time_choices():
+def test_trusted_t3_defaults_the_window_instead_of_asking():
+    """🔴 2026-08-07 契约变更：T3 读懂了的新问句，缺时间**补默认而不是反问**。
+
+    实测依据（基线问句、真实 prod 数据）：改前 A=5/D=9，改后 A≈11/D=2；差额几乎
+    全是「用户没说时间 → 反问」。G1 明确要求归宿只有 A/B/C，**没有第四种**。
+
+    ⛔ 这不是「让 LLM 发明窗口」（原时间闸注释担心的那件事）：窗口是代码给的固定
+    常量 `DEFAULT_TIME_PHRASE`，并且会被 `_time_range_disclosure` 显式说出来。
+    偷偷替用户选口径才是降级，选了并说出来不是。
+
+    ⛔ 只在**可信 T3**上生效 —— 见下一条测试：T3 不可用时照旧反问。
+    """
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
         "米饭的销量是多少",
         confidence=0.95,
         tier="llm",
         planner_authority="llm",
+        clarification_options=("全部门店", "东城店"),
+        llm_dish="米饭",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("dish",),
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.clarification_needed is False, "T3 读懂了就不该再问时间"
+    assert spec.time_range_defaulted is True, "补了默认必须打标记, 否则不会被披露"
+    assert spec.window_label == "最近30天"
+    # 🔑 窗口不能只是个标记: date_range 必须真的跟着变, 否则会出现
+    #    「披露说最近30天、数字按全部历史算」—— 那才是真正的降级处理。
+    assert spec.date_range[0] is not None and spec.date_range[1] is not None
+
+
+def test_time_gate_replaces_llm_store_choices_with_time_choices():
+    """闸**确实触发**时, 按钮必须描述时间 —— 否则问一个问题、给另一个问题的选项。
+
+    ⚠️ 触发路径改用 T3 不可用: 可信 T3 现在会补默认(见上一条)。这个不变量本身
+    没有变, 变的只是「什么时候还会走到闸」。
+    """
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "米饭的销量是多少",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm_unavailable",
         clarification_options=("全部门店", "东城店"),
         llm_dish="米饭",
         llm_requested_metrics=("sales_volume",),
@@ -452,6 +491,9 @@ async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
     assert spec.planner_authority == "llm"
     assert spec.requested_metrics == ("sales_volume",)
     assert spec.dish_slot == "米饭"
+    # 本条测的是 review 预算(超时尾巴), 澄清与否只是顺带断言。
+    # ⚠️ 这里 T3 **自己**发起了时间澄清, 所以不走「代码补默认」那条路 ——
+    #    `_build_spec` 的默认带 `not clarification_needed`, 不与 T3 抢。
     assert spec.clarification_needed is True
     from common.llm_router import SLOT
     args, kwargs = mock_chain.call_args
@@ -4045,8 +4087,11 @@ def test_store_revenue_ranking_implies_all_store_scope_after_llm():
     assert spec.store_scope == "all"
     assert spec.dimensions == ("store",)
     assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    # 🔴 2026-08-07 契约变更: 唯一缺项是时间且 T3 可信 -> 补默认窗口并披露,
+    #    不再反问(G1: 归宿只有 A/B/C, 没有第四种)。门店维度/范围的推断不受影响。
+    assert spec.clarification_needed is False
+    assert spec.time_range_defaulted is True
+    assert spec.window_label == "最近30天"
 
 
 @pytest.mark.asyncio
