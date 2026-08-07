@@ -76,18 +76,27 @@
     <section class="port-section output-section">
       <div class="section-title">
         <span>产出物料</span>
-        <el-button
-          v-if="canWrite"
-          text
-          size="small"
-          type="primary"
-          class="nodrag"
-          data-testid="add-output-inline"
-          @click.stop="emit('addOutput')"
-        >+ 产出 Cell（分流）</el-button>
+        <span v-if="canWrite" class="section-actions">
+          <el-button
+            text
+            size="small"
+            type="primary"
+            class="nodrag"
+            data-testid="add-output-inline"
+            @click.stop="emit('addOutput')"
+          >+ 产出 Cell（分流）</el-button>
+          <el-button
+            text
+            size="small"
+            class="nodrag byproduct-add"
+            data-testid="add-byproduct-inline"
+            @click.stop="emit('addByproduct')"
+          >+ 副产</el-button>
+        </span>
       </div>
       <div class="actual-io-help">
         这里不配置产出关系、主副角色或固定比例；每次报工填写本次实际产出的 SKU 和数量。
+        副产同理——只在这里指定它是哪个 SKU，产出多少在报工时填。
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
         <div class="port-row output-row">
@@ -185,6 +194,8 @@ const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
   addInput: [];
   addOutput: [];
+  /** 副产走 addOutput 的同一条路径, 只是 data 上多一个 isByproduct 标记(见编辑器 addOutputToProcess)。 */
+  addByproduct: [];
   selectOutput: [portId: string, skuId: string];
   delete: [];
   editProcess: [];
@@ -284,6 +295,11 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .system-inference-hint { color: #9aa5b8; font-size: 10px; }
 .port-section, .unit-rule-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
+/* 两个建产出按钮并排; space-between 只在"标题 vs 按钮组"之间生效, 按钮之间用 gap。 */
+.section-actions { display: inline-flex; align-items: center; gap: 2px; }
+/* 副产用琥珀色与主产出的蓝色区分 —— owner 要求副产和主产出在视觉上分得开。 */
+.byproduct-add { color: #b54708; }
+.byproduct-add:hover { color: #93370d; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .output-entry { margin-top: 6px; }

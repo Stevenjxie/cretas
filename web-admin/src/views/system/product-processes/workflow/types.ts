@@ -25,6 +25,18 @@ export interface MaterialNodeData extends Record<string, unknown> {
   specification?: string | null;
   baseUnit?: string;
   bound?: boolean;
+  /**
+   * 这个产出 Cell 是副产(2026-08-07 阶段 2)。
+   *
+   * ⛔ 副产**不是** `ProductProcessNodeKind` 的第 5 个值。设计定稿的原话:
+   * 「副产不是分类的第 5 个桶, 它是物料上的 isByproduct 标记, 与材质分类正交」。
+   * 所以副产节点的 kind 仍是 SEMI_FINISHED —— 它确实是一件要入库的产出物,
+   * 图校验(evaluateWorkflowConnection / BOUNDARY_REQUIRED / SKU_REQUIRED)
+   * 对它的处理与普通产出完全一致, 一行都不用为它开特例。
+   *
+   * 与 `ProcessPort.outputRole` 的关系: 那个字段已弃用(见其注释), 不要用它表达副产。
+   */
+  isByproduct?: boolean;
 }
 
 export interface ProcessPort {

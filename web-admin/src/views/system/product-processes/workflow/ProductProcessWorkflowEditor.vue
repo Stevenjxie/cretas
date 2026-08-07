@@ -270,12 +270,14 @@
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :byproduct-options="byproductMaterialOptions"
               :unit-error="unitIssueForNode(slotProps.id)"
               :validation-error="publishBindingErrorForNode(slotProps.id)"
               :validation-attention="publishBindingAttentionNodeIds.has(slotProps.id)"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
+              @select-byproduct-sku="(materialTypeId) => selectByproductSku(slotProps.id, materialTypeId)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
@@ -294,6 +296,7 @@
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
+              @add-byproduct="addOutputToProcess(slotProps.id, { byproduct: true })"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
               @edit-process="openQuickEditProcess(slotProps.id)"
               @delete="removeNode(slotProps.id)"
@@ -318,15 +321,6 @@
               :can-write="canEdit"
               @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
               @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
-            />
-          </template>
-          <template #node-bomByproduct="slotProps">
-            <WorkflowByproductNode
-              :id="slotProps.id"
-              :data="slotProps.data"
-              :can-write="canEdit"
-              @add-row="openByproductEditor(slotProps.data.outputNodeId)"
-              @edit-row="(rowId) => openByproductEditor(slotProps.data.outputNodeId, rowId)"
             />
           </template>
         </VueFlow>
@@ -645,17 +639,6 @@
       @saved="onPackagingDialogSaved"
     />
 
-    <ByproductBindingDialog
-      v-model="byproductDialogVisible"
-      :factory-id="byproductDialogFactoryId"
-      :recipe-id="byproductDialogRecipeId"
-      :output-name="byproductDialogOutputName"
-      :base-unit="byproductDialogBaseUnit"
-      :row="byproductDialogRow"
-      :materials="bomOverlayByproductMaterials"
-      @saved="onByproductDialogSaved"
-    />
-
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
     <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
       <div v-loading="versionLoading" class="version-list">
@@ -714,8 +697,6 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
-import WorkflowByproductNode from './WorkflowByproductNode.vue';
-import ByproductBindingDialog, { type ByproductMaterialOption } from './ByproductBindingDialog.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -733,7 +714,6 @@ import {
   stripBomOverlayEdges,
   type BomOverlayAuxiliaryInput,
   type BomOverlayPackagingInput,
-  type BomOverlayByproductInput,
   type BomOverlaySourceNode,
   type BomOverlaySourceNodeData,
 } from './bomOverlay';
@@ -746,7 +726,8 @@ import {
 import type { DraftBomNotice } from './bomEditableRecipe';
 import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
-import type { AuxiliaryCellRow, ByproductCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type { ByproductMaterialOption } from './WorkflowMaterialNode.vue';
 import type { BomRowMarker } from './bomOverlayMarkers';
 import {
   formatAuxiliaryDosageText,
@@ -1080,6 +1061,12 @@ async function resolveWritableRecipeId(
 }
 const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspace>>({});
 const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
+/**
+ * 副产 cell 的可选物料。空列表**不是**「加载中」—— 见 WorkflowMaterialNode 的空态文案:
+ * 档案里一个物料都没勾「这是副产」时, 必须给出去处而不是一个空下拉(防呆规则 5)。
+ */
+const byproductMaterialOptions = ref<ByproductMaterialOption[]>([]);
+const byproductMaterialsLoaded = ref(false);
 const bomOverlayMaterials = ref<SeasoningMaterialOption[]>([]);
 const bomOverlayMaterialsLoaded = ref(false);
 // #Task1(2026-08-05 bom-canvas-phase3-2): 包材编辑弹窗需要知道某个终端产出归哪个 recipe
@@ -1089,8 +1076,6 @@ const bomOverlayMaterialsLoaded = ref(false);
 const bomOverlayRecipeIdByOutput = ref<Record<string, string>>({});
 const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
 // 副产: 同样两份 —— 展示用行 + 编辑用原始行。
-const bomOverlayByproductByOutput = ref<Record<string, BomOverlayByproductInput>>({});
-const bomOverlayByproductRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
 const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
 const bomOverlayPackagingMaterialsLoaded = ref(false);
 let bomOverlayLoadGeneration = 0;
@@ -1109,69 +1094,6 @@ const auxDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
 });
 // 包材编辑弹窗(#Task1: 画布上直接挂 PackagingBindingDialog, 不再打开 BOM 抽屉 —— 见
 // task-1-brief.md「拆抽屉之前必须先有它」)。
-const byproductDialogVisible = ref(false);
-const byproductDialogFactoryId = ref('');
-const byproductDialogRecipeId = ref('');
-const byproductDialogOutputName = ref('');
-const byproductDialogBaseUnit = ref('未配');
-const byproductDialogRow = ref<BomRecipeItemView | null>(null);
-/**
- * 副产可选物料 —— 与包材共用同一份物料档案端点(不另开接口), 但**筛选口径不同**:
- * 副产看物料上的 `isByproduct` 标记, 包材看材质大类。两份列表不可互相赋值。
- */
-const bomOverlayByproductMaterials = ref<ByproductMaterialOption[]>([]);
-const bomOverlayByproductMaterialsLoaded = ref(false);
-
-/**
- * 副产与包材同挂产出节点, 写入同样只接受 DRAFT(见 bomEditableRecipe.ts),
- * 所以照走 resolveWritableRecipeId, 不另写一套解析。
- */
-async function openByproductEditor(outputNodeId: string, rowId?: string): Promise<void> {
-  if (!canEdit.value) {
-    ElMessage.info('当前无编辑权限，无法编辑副产。');
-    return;
-  }
-  const node = flowNodes.value.find((item) => item.id === outputNodeId);
-  if (!node) {
-    ElMessage.warning('未找到对应的产出节点，请刷新后重试');
-    return;
-  }
-  // 同辅料/包材: 零版本(冷启动)不早退, 交给 ensureDraft 建首版草稿。
-  const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
-  await ensureBomOverlayByproductMaterials();
-
-  const productTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
-  if (!productTypeId) {
-    ElMessage.warning('未能确定该产出对应的成品，请刷新后重试');
-    return;
-  }
-  const writableRecipeId = await resolveWritableRecipeId(
-    productTypeId,
-    recipeId,
-    () => bomOverlayRecipeIdByOutput.value[outputNodeId],
-  );
-  if (!writableRecipeId) return;
-
-  const writableRow = rowId
-    ? bomOverlayByproductRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
-    : null;
-  if (rowId && !writableRow) {
-    ElMessage.warning('该副产行在草稿版本中不存在，请刷新后重试');
-    return;
-  }
-
-  byproductDialogFactoryId.value = props.factoryId;
-  byproductDialogRecipeId.value = writableRecipeId;
-  byproductDialogOutputName.value = String(node.data.name ?? '未命名产出');
-  byproductDialogBaseUnit.value = String(node.data.baseUnit ?? '未配');
-  byproductDialogRow.value = writableRow;
-  byproductDialogVisible.value = true;
-}
-
-function onByproductDialogSaved(): void {
-  void loadBomOverlayData();
-}
-
 const packagingDialogVisible = ref(false);
 const packagingDialogFactoryId = ref('');
 const packagingDialogRecipeId = ref('');
@@ -2080,8 +2002,6 @@ async function loadBomOverlayData(): Promise<void> {
   if (!factoryId || uniqueSkuIds.length === 0) {
     bomOverlayAuxiliaryByProcess.value = {};
     bomOverlayPackagingByOutput.value = {};
-    bomOverlayByproductByOutput.value = {};
-    bomOverlayByproductRawByOutput.value = {};
     bomOverlayRecipeIdByProcess.value = {};
     bomOverlayProductIdByRecipe.value = {};
     bomDraftNotices.value = [];
@@ -2115,8 +2035,6 @@ async function loadBomOverlayData(): Promise<void> {
     const recipeIdByOutput: Record<string, string> = {};
     const productIdByRecipe: Record<string, string> = {};
     const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
-    const byproductByOutput: Record<string, BomOverlayByproductInput> = {};
-    const byproductRawByOutput: Record<string, BomRecipeItemView[]> = {};
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
@@ -2152,20 +2070,8 @@ async function loadBomOverlayData(): Promise<void> {
           packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
         }),
       }));
-      // 副产是产出声明(materialCategory=BYPRODUCT), 与包材同挂产出节点, 但语义相反:
-      // 「每 1 单位成品产出多少」, 所以文案与 markers 都不复用包材那套投入侧口径。
-      const byproductItems = (recipe.items || []).filter((item) => item.materialCategory === 'BYPRODUCT');
-      const byproductRows: ByproductCellRow[] = byproductItems.map((item) => ({
-        id: String(item.id),
-        materialName: item.materialName || '未命名物料',
-        yieldText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
-        markers: [] as BomRowMarker[],
-      }));
-
       targets.filter((target) => target.skuId === skuId).forEach((target) => {
         packagingByOutput[target.nodeId] = { rows };
-        byproductByOutput[target.nodeId] = { rows: byproductRows };
-        byproductRawByOutput[target.nodeId] = byproductItems;
         recipeIdByOutput[target.nodeId] = recipe.id;
         // #Task1: 包材编辑弹窗的 row prop 需要完整原始行(materialTypeId/standardQuantity/
         // 替代关系等), 不是上面 rows 里那份只供展示用的 PackagingCellRow。
@@ -2253,8 +2159,6 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
     bomOverlayRecipeIdByOutput.value = recipeIdByOutput;
     bomOverlayPackagingRawByOutput.value = packagingRawByOutput;
-    bomOverlayByproductByOutput.value = byproductByOutput;
-    bomOverlayByproductRawByOutput.value = byproductRawByOutput;
     refreshBomOverlay();
   } catch (error) {
     if (!stillCurrent()) return;
@@ -2280,6 +2184,36 @@ async function loadBomOverlayMaterialArchive(): Promise<BomOverlayArchiveRow[] |
   const rows = response.success && response.data ? response.data : [];
   bomOverlayMaterialArchive.value = rows;
   return rows;
+}
+
+/**
+ * 副产可选物料(2026-08-07 阶段 2)。
+ *
+ * 🔴 这份列表不能用 `rawMaterialOptions` 代替 —— 那份被 `isRawMaterialOption` 按
+ * 「材质大类 === 原料」筛过, 而副产**按定义筛不出来**: 鸡架的材质是原料、肥油是油脂,
+ * 按材质怎么筛都不对。副产只看物料上的 `isByproduct` 标记, 与材质正交。
+ * (同一份档案筛出来的两个列表, 类型相同 ≠ 口径相同 —— 见 bomOverlayMaterialSources.ts
+ *  顶部记的 #2313 事故: 当时把包材列表直接赋给副产, 编译全绿而功能上线即不可用。)
+ *
+ * 为什么是物料而不是产品 SKU: `bom_recipe_items.material_type_id` 是指向
+ * `raw_material_types(id)` 的硬外键, 报工时 ByproductBatchMaterializer 也是按
+ * materialTypeId 建 MaterialBatch。副产在系统里始终是**物料**。
+ */
+async function ensureByproductMaterialOptions(): Promise<void> {
+  if (byproductMaterialsLoaded.value) return;
+  try {
+    const rows = await loadBomOverlayMaterialArchive();
+    if (!rows) return;
+    byproductMaterialOptions.value = selectByproductMaterials(rows).map((row) => ({
+      id: String(row.id),
+      name: row.name,
+      code: row.code ?? null,
+      unit: row.unit ?? null,
+    }));
+    byproductMaterialsLoaded.value = true;
+  } catch {
+    ElMessage.error('副产物料档案加载失败');
+  }
 }
 
 async function ensureBomOverlayMaterials(): Promise<void> {
@@ -2356,25 +2290,6 @@ async function ensureBomOverlayPackagingMaterials(): Promise<void> {
     bomOverlayPackagingMaterialsLoaded.value = true;
   } catch {
     ElMessage.error('包材档案加载失败');
-  }
-}
-
-/**
- * 副产可选物料 —— 与包材同一份档案, **口径不同**: 副产看 `isByproduct` 标记, 包材看材质。
- *
- * ⛔ 2026-08-06 修复: 此前这里是 `byproductMaterials = packagingMaterials`(#2313),
- * 于是副产下拉里 25 项全是贴体膜/外箱, 鸡架骨头一个选不到 —— 上线即不可用且不报错。
- * 判据见 bomOverlayMaterialSources.ts 顶部注释。
- */
-async function ensureBomOverlayByproductMaterials(): Promise<void> {
-  if (bomOverlayByproductMaterialsLoaded.value) return;
-  try {
-    const rows = await loadBomOverlayMaterialArchive();
-    if (!rows) return;
-    bomOverlayByproductMaterials.value = selectByproductMaterials(rows);
-    bomOverlayByproductMaterialsLoaded.value = true;
-  } catch {
-    ElMessage.error('副产物料档案加载失败');
   }
 }
 
@@ -2487,7 +2402,6 @@ function refreshBomOverlay(): void {
     workflowNodes,
     auxiliaryByProcess: bomOverlayAuxiliaryByProcess.value,
     packagingByOutput: bomOverlayPackagingByOutput.value,
-    byproductByOutput: bomOverlayByproductByOutput.value,
   });
   flowNodes.value = [
     ...strippedNodes,
@@ -3040,12 +2954,31 @@ function addInputToProcess(processId: string): void {
   });
 }
 
-function addOutputToProcess(processId: string): void {
+/**
+ * 工序「产出分流」—— 主产出与副产走**同一条路径**, 只差 data 上的一个标记。
+ *
+ * 2026-08-07 阶段 2: 副产从 BOM 浮层(`bom-overlay:byp:*`)改成真实产出节点。
+ * 设计定稿要求「复用已有的『＋ 产出 Cell（分流）』入口, 不新造入口」——
+ * 所以这里不是新写一个 addByproductToProcess, 而是给同一个函数加一个 flag:
+ * 节点 id 规则、端口构造、连边、mutate 置 dirty 全部共用。副产因此天然继承
+ * 主产出已有的一切(图校验、拓扑、SKU 必填、发布前检查), 不需要为它开特例。
+ *
+ * 为什么不是 `kind: 'BYPRODUCT'`: 见 MaterialNodeData.isByproduct 的注释 ——
+ * 副产是与材质分类正交的标记, 不是第 5 种 kind。
+ */
+function addOutputToProcess(processId: string, options: { byproduct?: boolean } = {}): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
+  const isByproduct = options.byproduct === true;
+  // 建了副产 cell 才去拉副产档案 —— 不建就不请求。⚠️ 不 await: 建节点必须立即可见,
+  // 档案回来后下拉自然填充; 真空列表的解释文案由节点自己给(见 WorkflowMaterialNode)。
+  if (isByproduct) void ensureByproductMaterialOptions();
   mutate(() => {
     const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
     const outputCount = data.ports.filter((port) => port.direction === 'OUTPUT').length;
+    const byproductCount = flowNodes.value.filter(
+      (node) => node.type === 'material' && (node.data as MaterialNodeData)?.isByproduct === true,
+    ).length;
     const timestamp = nextGraphIdSeed();
     const materialId = `material:output:${timestamp}`;
     const portId = `output:${timestamp}`;
@@ -3054,8 +2987,13 @@ function addOutputToProcess(processId: string): void {
       type: 'material',
       position: snapPosition({ x: process.position.x + 480, y: process.position.y + outputCount * 160 }),
       data: {
-        kind: 'SEMI_FINISHED', name: `产出半成品 ${outputCount + 1}`, skuId: '',
-        skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: 'kg',
+        kind: 'SEMI_FINISHED',
+        name: isByproduct ? `副产 ${byproductCount + 1}` : `产出半成品 ${outputCount + 1}`,
+        skuId: '',
+        skuCode: '待选择或现场创建 SKU',
+        bound: false,
+        baseUnit: 'kg',
+        ...(isByproduct ? { isByproduct: true } : {}),
       },
     });
     data.ports = [
@@ -3074,6 +3012,26 @@ function updateProcessData(processId: string, patch: Partial<ProcessNodeData>): 
   if (!process) return;
   mutate(() => {
     process.data = { ...process.data, ...toPlainWorkflowValue(patch), kind: 'PROCESS' };
+  });
+}
+
+/**
+ * 副产 cell 选物料。**刻意不复用 selectRawSku** —— 那个函数带两件 RAW_MATERIAL 专属的事:
+ * 「同一原料不能在本 Workflow 里用两次」的去重, 以及把新单位回写进所有工序的投入端口。
+ * 副产是产出侧, 两件都不该发生(同一副产可以从两道工序各出一份; 它的单位不是任何工序的投入单位)。
+ */
+function selectByproductSku(materialNodeId: string, materialTypeId: string): void {
+  const node = flowNodes.value.find((item) => item.id === materialNodeId);
+  const option = byproductMaterialOptions.value.find((item) => item.id === materialTypeId);
+  if (!node || !option) return;
+  mutate(() => {
+    Object.assign(node.data, {
+      name: option.name,
+      skuId: option.id,
+      skuCode: option.code || option.id,
+      baseUnit: option.unit || String(node.data?.baseUnit || 'kg'),
+      bound: true,
+    });
   });
 }
 
