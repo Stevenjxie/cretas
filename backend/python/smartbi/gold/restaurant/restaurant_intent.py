@@ -768,15 +768,47 @@ def _is_broad_business_overview(text: str) -> bool:
 
 
 def _is_daypart_business_query(text: str) -> bool:
+    """时段经营问句 —— 由 grounded staffing / 客流 resolver 承接。
+
+    🔴 2026-08-07 prod 实测: 「最近30天哪个时段生意最好」**没被这里认出来**,
+    于是 planner 给了 `SALES_SUMMARY + dimensions=('time',)`, 而
+    `_RESOLVER_DIMENSIONS[SALES_SUMMARY]` 只声明 `{store}` —— 执行前被拦成
+    「查询维度超出计划 resolver 的能力范围」, 用户拿到一句反问。
+    (是新加的拦截日志把这条查出来的; 在那之前服务端一行痕迹都没有。)
+
+    两处缺口:
+      · 日段词表只有**具体**的午市/晚市…, 没有泛指的「时段」;
+      · 疑问词表没有最高级问法「最好/最忙/最高」。
+
+    ⛔ 点名了菜品时不触发: 「晚市生意最好的菜」问的是菜, 不是时段 ——
+    路由到排班 resolver 会用错粒度回答, 那比反问更糟。
+    """
+    _DAYPART_WORDS = (
+        "早上", "上午", "中午", "午市", "下午", "晚上", "晚市",
+        "夜宵", "下午茶", "时段", "时间段",
+    )
+    # ⛔ 明确在问「菜」时不触发: 「晚市生意最好的菜是什么」问的是菜, 不是时段。
+    #    路由到排班 resolver 会用错粒度回答, 那比反问更糟。
+    #    ⚠️ 不能只靠 `extract_dish_candidate`: 它对「…最好的菜是什么」返回 None
+    #    (「菜」在 _DISH_GENERIC_TOKENS 里), 挡不住这一类。
+    if any(token in text for token in ("菜品", "的菜", "哪道", "单品")):
+        return False
+    # ⚠️ 抽到的「菜名」如果本身就是日段词(夜宵/下午茶), 那是抽取器的误判, 不算点名菜品。
+    #    第一版直接 `if extract_dish_candidate(text): return False`, 把
+    #    「夜宵营收多少」挡掉了 —— 我自己引入的回归, 测试当场抓到。
+    dish = extract_dish_candidate(text)
+    if dish and dish not in _DAYPART_WORDS:
+        return False
     return bool(
-        any(token in text for token in (
-            "早上", "上午", "中午", "午市", "下午", "晚上", "晚市",
-            "夜宵", "下午茶",
-        ))
+        any(token in text for token in _DAYPART_WORDS)
         and any(token in text for token in (
             "生意", "营收", "客流", "人效", "情况", "忙不忙",
         ))
-        and any(token in text for token in ("怎么样", "如何", "好不好", "多少", "忙不忙"))
+        and any(token in text for token in (
+            "怎么样", "如何", "好不好", "多少", "忙不忙",
+            # 最高级问法: 「哪个时段生意最好」是最自然的问法之一。
+            "最好", "最忙", "最高", "最差",
+        ))
     )
 
 
