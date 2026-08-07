@@ -1173,3 +1173,22 @@ Steve 拍板「本地跑通再说」。做法：本地直接调 `tiered_answer()
   `fact_pos_item` / `fact_pos_transaction` / `dim_product`。
 - 所有 fact/dim 表 **RLS forced=true**，策略 `factory_id = current_setting('app.factory_id')`；
   建池必须带 `setup=set_pg_connection_tenant`，否则查什么都是 0 行。
+
+### 🎁 意外收获：LLM 全线不可用时的阴性对照
+
+最后一轮本地跑，`llm_router` 的 review 模型 `qwen3.7-max-2026-06-08` 配额耗尽、
+`aliyun_a` 熔断器打开 —— **T3 完全不可用**。结果：
+
+```
+哪个供应商报价最贵 |     43ms | B-诚实缺数据 RESTAURANT_OPS_DATA_GAP
+其余 14 条         | 50-6600ms| D-反问
+```
+
+这正是 goal 里 G3 想要的那种阴性对照，而且是**真实发生**的、不是我造的 stub：
+**LLM 整个挂掉时，确定性那条路照样在 43ms 内给出正确答案**，而依赖 T3 的问句
+诚实地退化成反问 —— 没有一条编造答案。
+
+🔑 由此也说明「缺口判定提到路由之前」这个改动的价值不只是稳：它把一类问题
+**从「LLM 可用性」的依赖里摘了出来**。该问句在 4 轮不同 LLM 状态下都是 B/43-122ms/0 token。
+
+⚠️ 因为这个配额限制，剩余 D 的干净复测要等配额恢复；那一轮的 A/D 计数**不能当测量值**。
