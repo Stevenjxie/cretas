@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.service.finding.FindingNavigation;
 import com.cretas.aims.service.finding.FindingService;
 import com.cretas.aims.service.finding.FindingTextRenderer;
 import io.swagger.v3.oas.annotations.Operation;
@@ -66,6 +67,9 @@ public class FindingController {
         data.put("skippedRules", result.skippedRules());
         data.put("failedRules", result.failedRules());
         data.put("complete", result.complete());
+        // 第 ⑤ 块的非对话出口: 每条发现自带「下一步去哪」, 落地页直接渲染成入口。
+        // ⛔ 映射只在 FindingNavigation 里有一份 —— 前端不许自己按 code 拼路径。
+        data.put("nextSteps", FindingNavigation.nextSteps(result.findings()));
 
         log.info("发现层查询: factoryId={}, domain={}, findings={}, checked={}, skipped={}, failed={}",
                 factoryId, resolvedDomain, result.findings().size(), result.checkedRules().size(),

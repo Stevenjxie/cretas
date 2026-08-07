@@ -169,6 +169,26 @@ export interface RestaurantFindingsResponse {
   skippedRules: RestaurantSkippedRule[];
   failedRules: string[];
   complete: boolean;
+  /**
+   * 第 ⑤ 块：每条发现的「下一步去哪」。
+   *
+   * ⛔ code → 路径的映射只在后端 `FindingNavigation` 里有一份，前端**不许**
+   * 自己按 code 拼路径 —— 那会成为第二处定义，页面路径一改就出现
+   * 「对话里跳对了、卡片上跳 404」。
+   *
+   * ⚠️ 渲染前必须两道守卫：`permissionStore.canAccess(module)` 且
+   * `router.resolve(target).matched` 非空。给不出的入口宁可不给。
+   */
+  nextSteps: RestaurantFindingNextStep[];
+}
+
+/** 一条可执行的下一步。自带 subjectName，不靠与 digestLines 按下标对齐。 */
+export interface RestaurantFindingNextStep {
+  code: string;
+  subjectName: string;
+  label: string;
+  target: string;
+  module: string;
 }
 
 // ⚠️ query 必须放在 axios config 的 `params` 下。直接传 { domain } 会被当成

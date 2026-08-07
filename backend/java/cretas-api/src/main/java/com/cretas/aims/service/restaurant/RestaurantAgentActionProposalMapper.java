@@ -2,6 +2,7 @@ package com.cretas.aims.service.restaurant;
 
 import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionProposalContext;
+import com.cretas.aims.service.finding.FindingNavigation;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionProposalContext.EvidenceReference;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionWorkflowResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentEventV1;
@@ -36,7 +37,12 @@ public class RestaurantAgentActionProposalMapper {
     public static final String EXECUTION_MODE = "READ_ONLY_PROPOSAL";
     public static final String STATEMENT_CODE = "GROSS_MARGIN_DECLINE_OBSERVED";
     public static final String WORKFLOW_KEY = "restaurant.dish-cost-data-review.v1";
-    public static final String NAVIGATION_TARGET = "/restaurant/recipes";
+    /**
+     * ⛔ 引用 {@link FindingNavigation#DISH_COST_REVIEW_TARGET}, 不要写回字面量。
+     * 发现层卡片上的「去核对配方与成本」与本提案批准后的跳转是**同一个落点**,
+     * 各写一份就会出现「对话里跳对了、卡片上跳 404」。
+     */
+    public static final String NAVIGATION_TARGET = FindingNavigation.DISH_COST_REVIEW_TARGET;
 
     private static final Pattern SAFE_ID = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
     private static final Pattern SAFE_CODE = Pattern.compile("^[A-Z][A-Z0-9_]{0,127}$");

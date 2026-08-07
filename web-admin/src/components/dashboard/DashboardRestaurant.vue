@@ -134,6 +134,28 @@ const commandLinks = computed(() => [
 const visibleActions = computed(() => experience.value.actions.filter(
   (action) => permissionStore.canAccess(action.module),
 ));
+/**
+ * 第 ⑤+⑥ 块：今天先做什么，由**当天的发现**决定，而不是写死的清单。
+ *
+ * ⑤ 的真实形状：仓里唯一的动作提案是 READ_ONLY_PROPOSAL，从不写数据，批准后
+ * 交给用户的就是一个跳转目标 —— 而 preview/confirm 都以 runId 为键，不先开口
+ * 说话就根本调不到。所以非对话出口 = 让发现自己带上同一个落点。
+ *
+ * ⑥「动态办公室」= 工作台入口随数据变化：有发现时它排在固定清单之前。
+ *
+ * ⛔ 两道守卫缺一不可，且**都不能省成一个**：
+ *   canAccess  —— 没权限就别渲染，否则是个点进去 403 的入口；
+ *   router.resolve().matched 非空 —— 后端登记的路径在前端**可能压根不存在**
+ *     （本轮已实测到三个「路由了但够不着」的页面）。两者是不同的失败模式。
+ */
+const nextSteps = computed(() => (findings.value?.nextSteps ?? []).filter((step) => {
+  if (!step?.target || !step?.module) return false;
+  if (!permissionStore.canAccess(step.module)) return false;
+  return router.resolve(step.target).matched.length > 0;
+}));
+
+const hasNextSteps = computed(() => nextSteps.value.length > 0);
+
 const primaryAction = computed(() => visibleActions.value.find((action) => action.emphasis === 'primary'));
 const secondaryActions = computed(() => visibleActions.value.filter((action) => action !== primaryAction.value));
 const aiEntryPath = computed(() => (
@@ -383,6 +405,23 @@ onBeforeUnmount(() => {
           class="finding-card__item"
         >{{ line }}</li>
       </ul>
+
+      <!--
+        ⑤ 非对话出口 / ⑥ 动态办公室。
+        ⚠️ 不与上面的摘要行按下标配对 —— 每个按钮自带对象名, 能独立读懂。
+        (本轮在行动建议里已经栽过一次同型的归因错: 把两条无关发现串成一句。)
+      -->
+      <div v-if="hasNextSteps" class="finding-card__next" data-testid="finding-next-steps">
+        <span class="finding-card__next-label">今天先做</span>
+        <button
+          v-for="step in nextSteps"
+          :key="step.code + step.target"
+          type="button"
+          class="finding-card__next-btn"
+          :data-code="step.code"
+          @click="router.push(step.target)"
+        >{{ step.subjectName }} · {{ step.label }} →</button>
+      </div>
     </section>
 
     <section
@@ -624,6 +663,44 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
+/* ⑤ 非对话出口 / ⑥ 动态办公室：今天先做什么，随当天发现变化。 */
+.finding-card__next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--color-border, #d9dee7);
+}
+
+.finding-card__next-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #5a6b82);
+}
+
+.finding-card__next-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--color-primary, #1a6fd4);
+  cursor: pointer;
+  background: var(--color-primary-bg, #eef5ff);
+  border: 1px solid var(--color-primary-border, #b8d4f5);
+  border-radius: 16px;
+  transition: background 0.15s ease;
+}
+
+.finding-card__next-btn:hover {
+  background: var(--color-primary-bg-hover, #dceaff);
+}
+
+.finding-card__next-btn:focus-visible {
+  outline: 2px solid var(--color-primary, #1a6fd4);
+  outline-offset: 2px;
+}
+
 .restaurant-home {
   display: flex;
   flex-direction: column;
