@@ -113,10 +113,10 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
 
 
 def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
-    assert "另一个页面或模块的筛选不保证自动带入" in SYSTEM_PROMPT
+    assert "跨页面筛选不保证自动带入" in SYSTEM_PROMPT
     assert "【预测排班】" in SYSTEM_PROMPT
     assert "确定性预测 FactBook" in SYSTEM_PROMPT
-    assert "门店和时间都缺少时一次问全" in SYSTEM_PROMPT
+    assert "默认查询全部门店并在答案显式披露" in SYSTEM_PROMPT
     assert "固定为 21 个维度" in SYSTEM_PROMPT
     assert "真实、代理、模拟或缺失证据" in SYSTEM_PROMPT
     assert "不得拿演示值冒充真实租户事实" in SYSTEM_PROMPT
@@ -377,24 +377,32 @@ def test_factory_start_batch_reporting_and_receipt_stay_on_one_execution_chain()
     assert "PENDING_WAREHOUSE_RECEIPT" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
 
 
-def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
+def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contract():
     equivalent_questions = (
-        "门店菜品不同月份继续追问时怎么保持时间范围？",
-        "换一家店再看这道菜时，上下文会沿用哪个周期？",
-        "全部门店的菜品分析追问会保持原来的时间范围吗？",
+        "首轮没说门店时是默认全部门店还是一定先反问？",
+        "最近30天总营收没写门店时会怎么处理？",
+        "点名不存在的门店、澄清延续轮和缺时间时分别怎么处理？",
     )
     assert all(
         _needs_restaurant_context_scope_guard(q) for q in equivalent_questions
     )
-    assert "只在当前连续会话里保留" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
-    assert "“全部门店”保持聚合范围" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
-    assert "另一个页面或模块上的筛选不保证自动带入" in (
+    assert "同一连续会话中已确认且与新问题兼容" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
-    assert "门店和时间都缺少时，系统会一次问全" in (
+    assert "“全部门店”始终是聚合范围" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "另一个页面或模块的筛选不保证自动带入" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
-    assert "全部门店 最近30天" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "系统默认查询全部门店" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "范围：全部门店合计" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "不存在、改名或停用的门店时必须澄清" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "属于新的收窄问题，系统会按新问题重新规划" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
 
 
 def test_restaurant_metric_and_entity_questions_use_current_axes():
@@ -877,7 +885,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-full-chain-sop.html": (
             "21 个综合分析维度",
             "跨页面或跨模块不会自动继承筛选",
-            "门店和时间都缺少时，系统会一次问全",
+            "默认查询全部门店",
+            "范围：全部门店合计",
             "指定区间、繁体范围词与输出偏好",
             "月度经营报告：预览、导出与数据截至时间",
             "AI 飞轮、菜品别名与人审边界",
@@ -896,7 +905,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
             "全部门店是聚合范围",
-            "门店和时间都缺少时一次问全",
+            "默认查询全部门店",
+            "范围：全部门店合计",
             "精确日期、范围词与输出偏好",
             "月度经营报告",
             "AI 飞轮运营台与菜品别名治理",
@@ -945,7 +955,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "RN 仓库角色与 Web 业务边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
-    assert "门店范围继承与一次问全" in ai_assist
+    assert "默认全店与范围澄清" in ai_assist
+    assert "范围：全部门店合计" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
