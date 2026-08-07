@@ -725,6 +725,7 @@ import {
   pickOwningProductId,
 } from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
+import type { WorkflowMaterialBinding } from './types';
 import {
   allowsInjection,
   allowsPotRatio,
@@ -2112,6 +2113,7 @@ async function loadBomOverlayData(): Promise<void> {
     });
 
     const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
+    const materialBindingsByProcess: Record<string, WorkflowMaterialBinding[]> = {};
     const recipeIdByProcess: Record<string, string> = {};
     const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
     // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
@@ -2128,6 +2130,19 @@ async function loadBomOverlayData(): Promise<void> {
         // 简化: 不同 recipe 对同一工序理应配同一批辅料, 若确有分歧只展示/编辑先命中的那份。
         if (auxiliaryByProcess[nodeId]) return;
         recipeIdByProcess[nodeId] = recipeId;
+        // 阶段 3: 把**权威字段**收下来, 稍后 hydrate 进工序节点的 data.materialBindings。
+        // 上面 rows 里那份是展示用的(dosageText 已经拼成字符串, 丢了数值), 不能拿来当数据。
+        materialBindingsByProcess[nodeId] = process.bindings
+          .filter((binding) => binding.materialTypeId != null && binding.materialTypeId !== '')
+          .map((binding) => ({
+            materialTypeId: String(binding.materialTypeId),
+            materialName: binding.name || binding.materialName || null,
+            dosagePerKgG: binding.dosagePerKgG,
+            ...(binding.subsequentPotRatio != null
+              ? { subsequentPotRatio: binding.subsequentPotRatio }
+              : {}),
+            ...(binding.unit ? { unit: binding.unit } : {}),
+          }));
         auxiliaryByProcess[nodeId] = {
           usageSupported: process.standardUsageSupported === true,
           rows: process.bindings.map((binding): AuxiliaryCellRow => ({
@@ -2160,6 +2175,7 @@ async function loadBomOverlayData(): Promise<void> {
 
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
+    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess);
     bomOverlayProductIdByRecipe.value = productIdByRecipe;
     bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
@@ -2488,6 +2504,43 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
     edges: stripBomOverlayEdges(flowEdges.value).map(serializeFlowEdge),
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
   };
+}
+
+/**
+ * 阶段 3(版本合一): 把投入明细从 BOM 表 hydrate 进工艺定义的工序节点。
+ *
+ * ## ⛔ 为什么这里【绝对不能】走 mutate()
+ * mutate() 会置 dirty 并 bump editSeq —— 那意味着**用户只是打开一张图就变成"有未保存改动"**,
+ * 保存后还会造出一个内容与旧版完全等价的新工艺版本。版本线会因为"看了一眼"而增长,
+ * 这跟方案 B「改画布才产生新版本」正好相反。
+ *
+ * 所以这是一次**幂等的加载期投影**: 只在数值真的不同时才写, 写完不置 dirty。
+ * 判据: 连开两次同一张图, `dirty` 必须仍是 false(见 materialBindingsHydration.spec.ts)。
+ *
+ * ## 为什么写在节点上而不是继续放浮层
+ * 浮层是从 BOM 表派生的展示物, 不进 nodesJson 也就不进 revisionHash ——
+ * 改克数因此不会产生新版本。方案 B 要的正好相反。
+ */
+function hydrateMaterialBindingsIntoDefinition(
+  bindingsByProcess: Record<string, WorkflowMaterialBinding[]>,
+): void {
+  let changed = false;
+  flowNodes.value.forEach((node) => {
+    if (node.type !== 'process') return;
+    const next = bindingsByProcess[node.id] ?? [];
+    const data = node.data as ProcessNodeData;
+    const current = Array.isArray(data.materialBindings) ? data.materialBindings : [];
+    // 逐字比对(而不是"有就覆盖"): 相同就不写, 否则每次加载都在制造无意义的对象身份变化,
+    // 而 vue 的响应式会把它当成真改动传播出去。
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    if (current.length === 0 && next.length === 0) return;
+    data.materialBindings = next;
+    changed = true;
+  });
+  if (changed) {
+    // 只刷新派生视图, ⛔ 不置 dirty、不 bump editSeq —— 见上面的注释。
+    refreshBomOverlay();
+  }
 }
 
 function serializeFlowNode(node: Node): ProductProcessWorkflowNode {
