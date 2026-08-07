@@ -55,6 +55,13 @@ export const financeManagerMenu: MenuItem[] = [
 
 const rawMenuConfig: MenuItem[] = [
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard', hideForFactoryTypes: ['LOGISTICS'] },
+  // 🔴 2026-08-07: 这一项此前**只有路由没有菜单入口** —— `router/index.ts` 里
+  // `dashboard/ai-value` 声明齐全(title/icon/module 都有)，但 menuConfig 里零命中，
+  // 于是用户**点不到它**。小蓝店长第 ③ 块「AI 价值汇总」的页面一直在，却够不着。
+  //
+  // 判据(本轮反复用到的那条): **「代码在那儿」不等于「用户到得了」**。
+  // 判可达性要从菜单/路由两侧一起看 —— 只看路由会以为它通了。
+  { path: '/dashboard/ai-value', title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' },
   {
     path: '/workdesk',
     title: '工作台',
