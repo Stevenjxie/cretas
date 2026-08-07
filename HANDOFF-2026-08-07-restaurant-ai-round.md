@@ -1079,3 +1079,40 @@ RBAC 修复被并发 session 覆盖，总营收回归 ¥0）。**账号恢复前
 | 时间窗默认部署 | ⛔ 同上 |
 | `各门店对比` 答案契约 | ❌ 未修，需查 `required_elements` 与 resolver 实际产出的差集 |
 | `供应商报价` 路由稳定性 | ❌ 未修，需让「已知缺口」判定早于 T3 路由 |
+
+---
+
+## ⛔ 上线通道穷尽验证（不是我保守，是机械上不通）
+
+已逐条试过，四条路全断：
+
+| 通道 | 结果 |
+|---|---|
+| `git push` HTTPS → origin | `remote: Your account is suspended` / 403 |
+| `ssh -T git@github.com` | `Permission denied (publickey)` —— 无 key |
+| `gh` CLI（PR/API） | `HTTP 403: Sorry. Your account was suspended` |
+| `git fetch origin main` | 同 403 —— **连读都读不到** |
+
+🔑 **发布脚本自己就先拒了**：`release-cretas.sh:191-193` 要求
+`HEAD == origin/main`，而 `git fetch` 失败意味着本地 `origin/main` ref 是过期的、
+且我的 4 个 commit 不在它上面 → 闸会直接
+`ERROR: deployment requires clean exact origin/main` 退出。
+**所以「先部署、回头补 push」在这条流水线上根本执行不了**，不存在绕过与否的选择。
+
+仓里另有一个 `server-mirror`（`ssh://root@47.100.235.168/.../code/.git`），但**不能拿它顶替**：
+铁律里 origin/main 是多 session 的**唯一汇合点**。从一个别的分叉点部署 prod，正是
+2026-05-30 事故的形状（共享 jar 路径 last-write-wins，另一个 session 一部署就把我的
+改动静默覆盖，总营收回归 ¥0）。goal 自己的红线也写着「worktree 隔离且只从 main 部署 prod」。
+
+### 待部署的四个本地 commit（按序）
+
+| commit | 内容 |
+|---|---|
+| `8a16cf8989` | ⑤⑥ 发现自带「下一步去哪」+ 工作台随数据变化 |
+| `c5aab1f680` | ④ 确定性 409 修复 + 缺时间窗就反问 |
+| `83764906e6` | planner 自造指标要求 + 缺口判定提到路由之前 |
+| `59245e2c31` / 本条 | 交接与交付物 |
+
+账号恢复后：`git push -u origin codex/claude-finding-next-steps` → PR → 合 main →
+`git checkout main && git pull` → `release-cretas.sh --phase deploy` （Java + Python +
+web-admin 三侧）→ 按上面「G5 实测」那节逐条回验。
