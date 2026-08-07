@@ -543,7 +543,14 @@ async function openCustomerReceive(task: CustomerSuppliedReceivingTask) {
     selectedCustomerTask.value = task;
     customerAttachmentRefreshKey.value = 0;
     customerAttachmentQueue.value = { pending: 0, failed: 0 };
-    customerIdempotencyKey.value = `warehouse-customer-receipt-${task.taskId}-${Date.now()}`;
+    // 🔴 2026-08-07 走客供料全流程时撞到的硬阻断: 后端 @Size(max = 64), 而原来这里是
+    //   `warehouse-customer-receipt-` (28) + taskId(UUID 36) + `-` (1) + Date.now() (13) = 78
+    //   —— taskId 恒为 UUID, 所以**每一次**客户来料收货都必然 400「幂等键不能超过64个字符」,
+    //   这条路上没有任何人收得了货。(前端零校验, 后端拒得也晚, 用户只看到一个红字。)
+    // 改法: 前缀缩短 + 只取 taskId 去掉横线的后 24 位(仍足够唯一) + 时间戳转 36 进制。
+    //   'wcr-' (4) + 24 + '-' (1) + ≤9 = 38 字符, 稳在 64 内; 同一次弹窗内保持不变 → 幂等仍成立。
+    customerIdempotencyKey.value =
+      `wcr-${String(task.taskId).replace(/-/g, '').slice(-24)}-${Date.now().toString(36)}`;
     customerForm.value = {
       receivedQuantity: Number(line.remainingReceivableQuantity),
       externalBatchNumber: '',
