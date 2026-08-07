@@ -7692,6 +7692,144 @@ async def resolve_channel_mix(
     )
 
 
+async def resolve_daypart_performance(
+    smartbi_pool, factory_id: str, days: int = 30, *,
+    role: Optional[str] = None, query: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+) -> OpsAnswer:
+    """历史时段表现 —— 「哪个时段生意最好」。
+
+    🔴 2026-08-07 之前这句问句拿不到答案。链路是: T3 给
+    `SALES_SUMMARY + dimensions=('time',)`, 而该 resolver 只声明 `{store}`,
+    执行前被拦成「查询维度超出计划 resolver 的能力范围」; 把路由修到排班
+    resolver 之后, 它又**正确地**拒绝(「不能把它偷换成明天的预测排班」) ——
+    预测排班只做未来。**缺的一直是这个终点。**
+
+    ⛔ 时段边界用 `daypart.DAYPART_CASE_SQL`, 不在这里再写一份 —— 预测排班用的
+    是同一段, 两处各写会让「晚市」在两个页面上是两段不同的时间。
+
+    ⚠️ `agg_daily_order_type_meal.meal_period` **不能用**: 实测 MOCK_REST 近 30 天
+    该列全是「未分类」(ETL 没物化时段)。这里从 `fact_pos_transaction` 按时间戳现算。
+
+    ⚠️ `time IS NOT NULL` 不能省: `EXTRACT(HOUR FROM NULL)` 返回 NULL, 会整批落进
+    ELSE 被算成「夜宵」—— 那不是夜宵, 是没时间戳。没时间戳的单量如实披露, 不摊派。
+
+    金额是价格权限数据 —— 非价格角色只出单量与占比(与 resolve_channel_mix 同规矩)。
+    """
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    from smartbi.gold.restaurant.daypart import DAYPART_CASE_SQL
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+
+    exact_start = date_range[0] if date_range else None
+    exact_end = date_range[1] if date_range else None
+
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id
+            )
+            rows = await conn.fetch(
+                f"""
+                SELECT {DAYPART_CASE_SQL} AS daypart,
+                       COUNT(*)::int                              AS bills,
+                       SUM(COALESCE(gross_amount,0))::float       AS revenue,
+                       SUM(COALESCE(customer_count,0))::int       AS guests,
+                       MIN(date) AS window_start, MAX(date) AS window_end
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND time IS NOT NULL
+                   AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+                   AND date <= COALESCE($4::date, CURRENT_DATE)
+                 GROUP BY 1
+                """,
+                factory_id, days, exact_start, exact_end,
+            )
+            untimed = await conn.fetchrow(
+                """
+                SELECT COUNT(*)::int AS n FROM fact_pos_transaction
+                 WHERE factory_id = $1 AND time IS NULL
+                   AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+                   AND date <= COALESCE($4::date, CURRENT_DATE)
+                """,
+                factory_id, days, exact_start, exact_end,
+            )
+
+    untimed_bills = int((untimed or {}).get("n") or 0)
+    if not rows:
+        requested = (
+            _range_text(exact_start, exact_end)
+            if exact_start and exact_end else f"近 {days} 天"
+        )
+        # ⛔ 有未带时间戳的单时必须说出来 —— 否则「没有数据」会被读成「没有生意」。
+        tail = (
+            f"（另有 {untimed_bills:,} 单没有下单时间，无法归入任何时段）"
+            if untimed_bills else ""
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_DAYPART_PERFORMANCE",
+            title=f"时段表现（{requested}）",
+            answer_text=(
+                f"{requested}没有带下单时间的订单，无法按时段拆分，"
+                f"也不会用全天合计替代。{tail}"
+            ),
+            charts=[], kpis=[],
+            meta={"no_data": True, "untimed_bills": untimed_bills},
+        )
+
+    window_start = min(r["window_start"] for r in rows)
+    window_end = max(r["window_end"] for r in rows)
+    window_label = (
+        _range_text(exact_start, exact_end)
+        if exact_start and exact_end
+        else _actual_window_text(window_start, window_end, days)
+    )
+    total_bills = sum(int(r["bills"]) for r in rows)
+    total_rev = sum(float(r["revenue"]) for r in rows)
+    # 排序按业务量: 能看金额时按营收, 否则按单量 —— 否则非价格角色看到的「最好」
+    # 会是按一个他看不见的量排的。
+    ordered = sorted(
+        rows,
+        key=(lambda r: float(r["revenue"])) if can_see_money else (lambda r: int(r["bills"])),
+        reverse=True,
+    )
+
+    lines = [f"**各时段表现（{window_label}）：**", ""]
+    kpis = []
+    for r in ordered:
+        name = r["daypart"]
+        bills = int(r["bills"])
+        rev = float(r["revenue"])
+        bill_pct = bills / total_bills * 100 if total_bills else 0.0
+        if can_see_money:
+            rev_pct = rev / total_rev * 100 if total_rev else 0.0
+            avg = rev / bills if bills else 0.0
+            lines.append(
+                f"- {name}：¥{rev:,.0f}（营收占 **{rev_pct:.1f}%**），"
+                f"{bills:,} 单，客单价 ¥{avg:,.1f}"
+            )
+        else:
+            lines.append(f"- {name}：{bills:,} 单（单量占 **{bill_pct:.1f}%**）")
+        kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
+
+    top = ordered[0]["daypart"]
+    if untimed_bills:
+        lines.append("")
+        lines.append(f"> 另有 {untimed_bills:,} 单没有下单时间，不在以上拆分内。")
+    lines.append("")
+    lines.append(
+        f"生意最好的是**{top}**。时段差距大时先看排班与备货是否跟着时段走；"
+        "弱时段适合用套餐或时段价拉客流，不必按全天平均去配人。"
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_DAYPART_PERFORMANCE",
+        title=f"时段表现（{window_label}）",
+        answer_text="\n".join(lines),
+        charts=[], kpis=kpis,
+        meta={"window_label": window_label, "untimed_bills": untimed_bills,
+              "top_daypart": top, "scope_matches_request": True},
+    )
+
+
 # ── 涉钱答案的角色闸 (2026-08-01) ─────────────────────────────────────────
 #
 # 2026-08-01 prod 实拍(MOCK_REST, 同一问句只换角色):
@@ -7720,6 +7858,7 @@ async def resolve_channel_mix(
 # 全部**可能吐出金额**的 intent。这张表是唯一的登记处, 完整性由
 # test_every_resolver_is_classified 强制 —— 新增 resolver 不分类就红。
 _MONEY_BEARING_INTENTS: frozenset = frozenset({
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
     "RESTAURANT_OPS_GROSS_MARGIN",
@@ -7741,6 +7880,8 @@ _MONEY_BEARING_INTENTS: frozenset = frozenset({
 #    silently ignore role"), 也就不可能脱敏 —— 那正是 2026-08-01 泄露的形态:
 #    声明了「我自己会处理」而实际上处理不了。
 _MONEY_SELF_MASKING_INTENTS: frozenset = frozenset({
+    # 签名里有 role, 非价格角色只出单量与占比(与 resolve_channel_mix 同规矩)。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
     "RESTAURANT_OPS_GROSS_MARGIN",
@@ -7796,6 +7937,7 @@ def _role_may_see_money(role: Optional[str]) -> bool:
 
 
 _RESOLVERS = {
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": resolve_daypart_performance,
     "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
     "RESTAURANT_OPS_CAPABILITIES": resolve_capabilities,
     "RESTAURANT_OPS_OUT_OF_DOMAIN": resolve_out_of_domain,
