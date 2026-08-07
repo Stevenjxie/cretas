@@ -1,0 +1,199 @@
+[
+  {
+    "query": "加权毛利率是多少",
+    "plan": {
+      "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": true,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "gross_margin"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "哪个菜卖得好",
+    "plan": {
+      "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": false,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "sales_volume"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [
+        "dish"
+      ],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "哪个菜卖得最好",
+    "plan": {
+      "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": false,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "sales_volume"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [
+        "dish"
+      ],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "哪个菜最好卖",
+    "plan": {
+      "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": false,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "sales_volume"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [
+        "dish"
+      ],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "毛利最低的菜品有哪些",
+    "plan": {
+      "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": true,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "gross_margin"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [
+        "dish"
+      ],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "最近损耗情况怎么样",
+    "plan": {
+      "intent": "RESTAURANT_OPS_WASTAGE_TOP",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": false,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "wastage"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  },
+  {
+    "query": "营收趋势怎么样",
+    "plan": {
+      "intent": "RESTAURANT_OPS_TREND_ANALYSIS",
+      "time_range": {
+        "type": "relative",
+        "unit": "day",
+        "count": 30
+      },
+      "wants_margin": false,
+      "asks_profitability": false,
+      "requested_metrics": [
+        "revenue"
+      ],
+      "analysis_action": "lookup",
+      "dimensions": [],
+      "dish": null,
+      "store": null,
+      "stores": [],
+      "store_scope": "all",
+      "confidence": 1.0,
+      "clarification_needed": false,
+      "missing_fields": [],
+      "clarification_question": null,
+      "clarification_options": []
+    }
+  }
+]
