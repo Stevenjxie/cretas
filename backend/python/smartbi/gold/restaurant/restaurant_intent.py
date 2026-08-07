@@ -2343,6 +2343,18 @@ def _build_spec(
     if (
         require_explicit_time
         and code in _TIME_SCOPED_INTENTS
+        # 🔴 2026-08-07 prod 实测「最近损耗情况怎么样」: T3 **自己给了**
+        #    time_range=最近30天(落到 time_phrase, effective_query 因此已带窗口),
+        #    却仍被这道闸问「你想看哪个时间范围？」—— 因为它重新解析**原句**,
+        #    而原句里确实没有时间词。窗口已经有了还在问 = 自相矛盾: 用户答完
+        #    「最近30天」拿到的是同一个答案。
+        # 🔑 判据: **已经有人给了时间就别再问**。time_phrase 的三种来源都是合法窗口
+        #    (T3 的 time_range / 澄清延续带回的选择 / 代码补的默认), 重新解析原句
+        #    等于把这三种来源全丢掉。
+        # ⚠️ 收窄成 `not time_phrase`, 不改成看 window_label —— 后者会让
+        #    「可信上下文修复」(llm_trusted_context_repair)那条路不再触发,
+        #    那是没打算引入的行为改变(既有测试当场抓到)。
+        and not time_phrase
         and _resolve_sales_date_range(query)[1] == "全部历史"
         and not clarification_needed
         # 上面已经补了默认窗口并会显式披露 —— 再反问就是明知故问。

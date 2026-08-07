@@ -120,3 +120,40 @@ def test_baseline_phrasings_are_the_ones_that_matter(query):
     """
     assert "最近30天" not in query
     assert "门店" not in query
+
+
+def test_resolved_window_wins_over_t3_missing_time():
+    """🔴 时间已经解析出来了就别再问 —— 否则是自相矛盾。
+
+    prod 实测「最近损耗情况怎么样」：T3 **自己给了** `time_range=最近30天`
+    （落到 `time_phrase`，窗口因此解析成「最近30天」），**同时**又说
+    `clarification_needed=True / missing_slot='time'` —— 矛盾在 T3 自己的输出里。
+    结果用户被问「你想看哪个时间范围？」，答完「最近30天」拿到的是同一个答案。
+
+    🔑 判据：**确定性解析出的窗口优先于 T3 的「缺时间」判断。**
+
+    ⚠️ 这条测试必须**真的执行到那个分支**。第一版实现放在 `window_label` 赋值
+    之前，靠 `and` 短路侥幸没炸 —— 1100 个测试全绿，只是因为没有一条走到那里。
+    「闸绿可能是因为它没跑」的活标本。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _build_spec
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_WASTAGE_TOP",
+        "最近损耗情况怎么样",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+        # ⚠️ T3 **没有**发起澄清 —— prod 里那句反问是**确定性时间闸**发的
+        #    (问句逐字等于 TIME_CLARIFICATION_QUESTION 常量, T3 自撰的措辞每次都不同)。
+        #    第一版把 clarification_needed 设成 True, 于是闸根本没走到, 测试量的是
+        #    另一件事。**搭复现场景时要先确认「是谁发的那句话」。**
+        clarification_needed=False,
+        time_phrase="最近30天",   # ← T3 给的 time_range 落到这里; 正是它让窗口已知
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.window_label != "全部历史", "前提: time_phrase 应让窗口已知, 否则这条没量到东西"
+    assert spec.clarification_needed is False, "时间已知却仍反问 = 自相矛盾"
+    assert spec.missing_slot is None
