@@ -571,13 +571,44 @@ Tool 侧**仍固定 inventory** —— 它的 name/description 都写着「库�
 
 ## ⛔ 还欠的
 
-### ⑤ 对话改价改品
-功能本来就有，缺的是让店长在菜品页面直接做。**未调研**。
-⚠️ 动手前先按 ② 的判据查一遍：菜品页面可能已经有编辑入口，
-那样这块就和 ② 一样是「已满足，别造第二处」。
+### ⑤ 对话改价改品 —— REST 出口**已经存在**，缺的是 UI
 
-### ⑥ 动态办公室
-前端没做，须过 `ux-flow` 闸。**未开始**。
+`RestaurantAgentRunController`（`/api/mobile/{factoryId}/restaurant-agent/runs`）
+已经有一套**通用的 preview → confirm 框架**：
+
+```
+POST /{runId}/action-proposals/{proposalCode}/preview   -> 预览(不落库)
+POST /{runId}/action-proposals/{proposalCode}/...       -> 凭 previewToken 执行
+```
+
+`proposalCode` / `actionCode` 是**动态**的（不是枚举），所以框架本身不限定动作类型。
+
+🔑 **这和 ② 是同一个形状**：接口层已经有承载，缺的是前端入口。
+再写一个 `POST /dishes/{id}/price` 就是给「改价」造第二处写入口，而且会**绕过**
+已有的 preview→confirm 契约（仓里 `_READ_ONLY_ACTION_WARNING` 的原话：
+「如需执行，请切换到操作模式，**先生成预览，确认后再执行**」）。
+
+**接手要做的**：在菜品页面接上面那两个端点，而不是新造写接口。
+⛔ 这是**写路径**（改价格、下架菜品），按 CLAUDE.md 的 UX Flow Gate 必须先过
+`ux-flow` skill —— 低技术素养用户 + 不可逆的价格改动，误点代价很高。
+
+### ⑥ 动态办公室 —— 未开工
+
+后端已被 ③ 覆盖（`system_ai_value_summary` + `AiValueSummary.vue` 独立页），
+再写一份会违反「一个指标只能有一个定义」。剩纯前端，**须过 `ux-flow` 闸**。
+
+### 🔑 ②⑤ 两次得出同一个结论，值得单独记
+
+我在本轮**两次**准备「补一个非对话出口」，两次都在动手前发现**承载已经存在**：
+
+| 块 | 我以为缺的 | 实际已有 | 真正缺的 |
+|---|---|---|---|
+| ② 岗位入口 | 餐饮五部门的 workdesk | `departmentConfig.ts` + `DepartmentDashboard.vue` + 5 条路由 | 采购部长的权限（**本轮已修**） |
+| ⑤ 改价改品 | 菜品写接口 | `RestaurantAgentRunController` 的 preview→confirm | 菜品页面上的入口（前端） |
+
+**判据：交接里写「❌ 只活在对话里」时，先去 controller 目录数一遍，再决定要不要新建。**
+造第二处定义的代价比缺一个入口高 —— 而且新造的那个多半会绕过老的那套约束
+（⑤ 就会绕过 preview→confirm）。
 
 ### B 类归宿完全缺失（G1 暴露的独立缺陷，未修）
 15 个代表性问句里 **B=0** —— 系统**从不**说「这项数据没采集，缺的是 X 表」，
