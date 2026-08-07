@@ -269,7 +269,11 @@ interface SegmentNode {
 
 function formatSegmentOptionLabel(option: { segmentCode: string; segmentLabel?: string; label?: string }): string {
   const label = String(option.segmentLabel || option.label || '').trim();
-  return `${label || '未命名分类'}（分类码 ${option.segmentCode}）`;
+  const code = String(option.segmentCode || '').trim();
+  // 无分段字典的工厂, 类别选项来自平台枚举 + 存量取值, 本来就没有分类码 ——
+  // 再拼一个空括号会渲染成「原料（分类码 ）」, 让人以为这里漏了个值。
+  if (!code) return label || '未命名分类';
+  return `${label || '未命名分类'}（分类码 ${code}）`;
 }
 
 function materialDisplayCode(row: TableRow): string {
@@ -1112,7 +1116,16 @@ async function handleSave() {
   try {
     let materialId: string;
     const materialPayload: Record<string, unknown> = { ...form.value };
-    delete materialPayload.code;
+    // 🔴 2026-08-07 真机验证抓到: 这里原本**无条件** `delete materialPayload.code`。
+    // 有字典时那是对的(code 由后端按分段生成, 传上去也会被覆盖); 但无字典时 code 就是
+    // 用户刚填的料号、是唯一编码来源 —— 删掉等于把「料号」输入框和后端消费 dto.getCode()
+    // 的那条分支**从中间掐断**: 两头各自都对, 中间没接上。
+    // 实测 POST body 里一个 code 字段都没有, 后端如实回 400「请填写物料料号」,
+    // 而 el-message 3 秒自动消失, 页面上只表现为「点保存没反应」。
+    // 编辑态仍然删: 料号不允许改。
+    if (editingId.value || hasSegmentDictionary.value) {
+      delete materialPayload.code;
+    }
     if (!canViewPrice.value) {
       delete materialPayload.taxTreatment;
       delete materialPayload.taxRate;
