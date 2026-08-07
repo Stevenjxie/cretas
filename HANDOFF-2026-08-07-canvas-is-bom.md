@@ -1,7 +1,7 @@
-# 画布即 BOM（方案 B）—— 阶段 1/5/2/4 + 3-1 完成，阶段 3 剩两项
+# 画布即 BOM（方案 B）—— 阶段 1/5/2/4 + 3-1/3-3 完成，3-2 只剩一处判读
 
 **日期**: 2026-08-07
-**本地 main**: `d4ac283780 merge: 画布即 BOM 阶段 3-1(投入明细进工艺定义)`
+**本地 main**: `401e48c90d merge: 画布即 BOM 阶段 3-3(删 ACTIVE_BOM_REQUIRED 前置 + 从画布投影 BOM)`
 **设计定稿**: `docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md`（分支 `codex/claude-bom-canvas-spec`）
 **GitHub 仍不可用** → 全部走本地 main 汇合（见 `.claude/rules/worktree-and-main-only-deploy.md` 的「🔌 GitHub 不可用时」）
 **未部署 prod**（owner 未下指令）
@@ -17,9 +17,10 @@
 | 2 副产改真实节点 | `58a4f55b8a` | `codex/claude-canvas-bom-p2` | 浮层 → 工序派生的真实产出节点 |
 | 4 画布 AI 扩能 | `ecbe6ec1b8` | `codex/claude-canvas-bom-p4` | 两条 AI 路径 + 五条硬约束 |
 | **3-1** 投入明细进定义 | `e651628447` | `codex/claude-canvas-bom-p3` | 改克数 → 换 revisionHash → 新工艺版本 |
-| **合并** | `077f049ae7` + `d4ac283780` | `main`（worktree `cretas-rest-ai`） | — |
+| **3-3** 删前置 + 投影 | `f4fe42fc35` | `codex/claude-canvas-bom-p3` | 没有生效 BOM 时从画布投影一份，不再拦发布 |
+| **合并** | `077f049ae7` → `d4ac283780` → `401e48c90d` | `main`（worktree `cretas-rest-ai`） | — |
 
-分支是**链式**的（p1 ← p5 ← p2 ← p4），合 p4 一次即全部合入。
+分支是**链式**的（p1 ← p5 ← p2 ← p4 ← p3），合 p3 一次即全部合入。
 
 ---
 
@@ -47,9 +48,11 @@
 | 项 | 结果 |
 |---|---|
 | `vue-tsc -b --force`（合后 main） | 0 error |
-| `vitest` 全量（合后 main） | 350 files / 2675 passed / 5 skipped / **0 failed** |
+| `vitest` 全量（合后 main） | 350 files / 2676 passed / 5 skipped / **0 failed** |
 | 后端 `MaterialBindingsInRevisionHashTest`（3-1 机制证明） | 4 用例全绿（含阴性对照：hash 必须覆盖整个 data，而不是只算 id/kind） |
 | 前端 `materialBindingsHydration.spec.ts` | 8 用例全绿 |
+| 后端 `WorkflowBomProjectionTest`（3-3） | 7 用例全绿（含「绝不编主料用量」「跳过没绑 SKU 的节点」「投影是纯函数式，不查库」） |
+| 后端基线比对（宽 scope：`*Bom*Test,ProductProcessWorkflow*Test,*Readiness*Test`） | 基线 **59** 失败 / 本次 **59** 失败，**逐条同名一致，新增 0**（该 scope 在 origin/main 上本来就有 23 Failures + 36 Errors —— 比计数没有意义，必须比集合） |
 | 后端 `ProductProcessWorkflowConfigToolBomFieldsTest` | 17 用例全绿 |
 | 前端 `seasoningProcessCategory.spec.ts` | 12 用例全绿 |
 | 后端基线比对（`ProductProcessWorkflow*Test,CanvasAI*Test`） | 失败集合**逐条同名一致，新增 0**（3 条在 origin/main 上本来就红） |
@@ -90,19 +93,44 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 仍是派生展示物，持久化等于往图里塞重复数据（加载时还会重新派生）。数据本身已搬到真实
 工序节点上、已进定义、已进 hash。若你的读法不同，改的是这一处判读，不影响 3-1 的其余部分。
 
-### 🔴 3-2 / 3-3 未做，且**卡在一个设计缺口上**（不是实现难度）
+### ✅ 3-3 已做：删掉 `WORKFLOW_ACTIVE_BOM_REQUIRED`，改为从画布投影（commit `f4fe42fc35`）
 
-- **删除 `WORKFLOW_ACTIVE_BOM_REQUIRED` 前置**
-  消费点：`service/bom/WorkflowBomSynchronizationService.java:54`（preflight）、
-  `BomRecipeServiceImpl.java:682-686`（同步时直接抛）、
-  `workflow/workflowApi.ts:22`、`ProductProcessWorkflowEditor.vue:3971`。
-- **`synchronizeActiveBomToWorkflowRevision` 降级为「从画布投影出 BOM 快照」**
-  （`BomRecipeService.java:54` / `BomRecipeServiceImpl.java:663` / `WorkflowBomSynchronizationService.java:323`）
+没有生效 BOM 时不再拦发布，改为 `projectActiveBomFromRevision`：把画布上绑了 SKU 的
+`RAW_MATERIAL` 节点投影成 BOM 的 RAW 明细行，创建并激活。
 
-**❌ 我先前写在这里的「卡在设计缺口」是错的，已订正。**
+**只在「该产品还没有任何 ACTIVE BOM」时触发** ⇒ 没有既有数据可被覆盖 ⇒
+没有 BOM 就没有生产计划钉过它 ⇒ 已排产批次的快照不可能受影响。
+有 ACTIVE BOM 时走的仍是原来的「克隆 + 重绑」，一个字没改。
 
-原话是：「激活 BOM 要求主料用量，而画布上没有主料用量，所以投影不出可激活的 BOM」。
-错在**读了提示语没读代码**——去查实际判据后：
+⛔ **投影不编主料用量**。2026-08-05 那份「主料用量为空的 ACTIVE BOM」之所以有害，
+不是因为空，**是因为它是编的**（有人为了让画布能发布手工凑了一份）。空用量在这条
+口径下是合法且诚实的表达 —— 有一条测试专门钉它（`neverInventsAMainMaterialQuantity`）。
+
+同理只投影 RAW：辅料/包材/副产各自已有写入路径，用户在画布上配好后照常落库。
+这里只负责把「BOM 存在」这件事补上，不去猜用户还没配的东西。
+
+**改了三处承载点**（一个规则两处承载，只改一处 = 后端通了前端仍被挡）：
+`BomRecipeServiceImpl#synchronizeActiveBomToWorkflowRevision`（抛 → 投影）、
+`WorkflowBomSynchronizationService#preflight`（USER_INPUT_REQUIRED → AUTO_MIGRATABLE）、
+前端 `workflowApi.ts` + `ProductProcessWorkflowEditor.vue` 的已知错误码清单（删死条目）。
+
+**撞到的闸（翻转，不删除）**：`workflowApi.spec.ts` 两处断言列着旧错误码清单。
+原意图「发布路径要显式列出它自己处理的失败态」保留 —— 不是删掉那行了事，而是
+**加了反向断言钉住「它不许再回到清单里」**，并做了阴性对照（把那行加回去 → 当场变红）。
+
+### ⏳ 3-2 唯一剩项：`stripBomOverlay` 的判读（已判，未再动代码）
+
+见上一节的判读：strip 的**理由**没了（改克数现在就该产生新版本），但**机制**要留
+（辅料/包材 cell 仍是派生展示物，持久化 = 往图里塞重复数据）。数据本身已搬到真实
+工序节点、已进定义、已进 hash，所以 strip 不再承载任何数据。
+**若 owner 的读法是「连机制一起去掉、把浮层节点也持久化进图」**，那是另一种图结构，
+需要先决定辅料/包材 cell 在图里的身份（子节点？端口？），再动手。
+
+### 📌 一条值得记的判据（3-3 差点被我自己判死）
+
+我先前在这份文档里写过「3-3 卡在设计缺口：激活 BOM 要求主料用量，而画布上没有主料用量，
+所以投影不出可激活的 BOM」，并据此停手。**那是错的**，错在**读了提示语没读代码**——
+去查实际判据后：
 
 | 闸 | 提示语 | 实际判什么 |
 |---|---|---|
@@ -122,7 +150,7 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 📌 判据（值得记）：**判一道闸要不要满足，去 grep 它实际比较的字段，不要读它的提示文案。**
 提示语是写给用户的近似说法，和代码里的判据可以差很远 —— 这次就差了「有没有行」vs「有没有值」。
 
-### 硬闸（3-1 已跑，结果在这里；做 3-2/3-3 时照样再跑一次）
+### 硬闸（3-1 已跑，结果在这里）
 
 **3-1 的实测结果**（prod，F006 只读打开两次）：
 
@@ -141,7 +169,7 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 `materialBindingsHydration.spec.ts`（8 用例）覆盖，**未做真机**。
 要补真机，得先在 F006 建一份带调料的 BOM。
 
-### 硬闸基线（改前快照，做 3-2/3-3 时逐条比对）
+### 硬闸基线（改前快照；将来再动版本合一时照此逐条比对）
 
 `production_plans` 共 9 条，导出在
 `D:\Temp\claude\...\scratchpad\p3-plans-before.txt`，也抄一份在这里防丢：
@@ -194,8 +222,8 @@ git push origin codex/claude-bom-canvas-spec   # 设计定稿
 
 ## 六、未处置项
 
-- **阶段 3-2 / 3-3**（见 §三的「卡点」）—— 需要 owner 在两条路里选一条，
-  两条都改变已拍板口径，属定稿 §5 的停手条件，未替 owner 选。
+- **阶段 3-2**：`stripBomOverlay` 的判读我已自行拍板（机制留、理由没了），未再动代码。
+  若 owner 的读法是「连机制一起去掉」，那是另一种图结构，需先定辅料/包材 cell 在图里的身份。
 - `干式熟成鸡 400g` BOM v3 是 ACTIVE 但主料 `standard_quantity` 为 NULL
   （0 个生产计划用过它）。定稿认为这正是 `WORKFLOW_ACTIVE_BOM_REQUIRED` 逼出来的产物——
   阶段 3 删掉那个前置后应一并清理。**需 owner 确认后再动。**
