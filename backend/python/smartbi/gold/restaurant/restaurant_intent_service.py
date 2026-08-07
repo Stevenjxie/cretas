@@ -966,6 +966,22 @@ async def tiered_answer(
             store_dish=store_dish,
         )
         if mismatch:
+            # 🔴 这道闸会把一个用户问题挡成反问, 却**一行日志都不留** ——
+            # 2026-08-07 排查 G1 里两条 D(「哪个时段生意最好」/「食材成本占营收
+            # 多少」)时, 用户侧只看得到「查询维度超出计划 resolver 的能力范围」,
+            # 服务端查不到是哪个意图、哪个维度超了, 离线也复现不了(要真 T3)。
+            #
+            # 判据: **会拦下用户问题的闸, 必须留下它拦的是什么**。否则下一个人
+            # 只能靠猜, 或者靠放宽能力表 —— 而 `_RESOLVER_DIMENSIONS` 是能力
+            # **声明**, resolver 不支持却放宽, 等于用错粒度回答, 比反问更糟。
+            logger.warning(
+                "[restaurant-intent] 执行前拦截(维度/口径不匹配): reason=%s "
+                "intent=%s planned=%s dimensions=%s metrics=%s "
+                "dish=%r store=%r store_dish=%r query=%r",
+                mismatch, spec.intent, tuple(plan), tuple(spec.dimensions),
+                tuple(spec.requested_metrics), dish_mention, store_mention,
+                store_dish, (query or "")[:60],
+            )
             mismatch_result = {
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
