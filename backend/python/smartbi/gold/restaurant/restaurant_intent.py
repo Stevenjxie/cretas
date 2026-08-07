@@ -1916,6 +1916,9 @@ def _build_spec(
     clarification_options: Sequence[str] = (),
     planner_authority: Optional[str] = None,
     require_explicit_time: bool = False,
+    #: 允不允许「缺时间就补默认窗口」。零 token 回放传 False ——
+    #: 晋升授予的是**意图**, 不是发明默认月份的许可(见 _semantic_spec_from_t3)。
+    allow_time_default: bool = True,
     llm_semantics_authoritative: bool = False,
     allow_explicit_slot_repair: bool = True,
 ) -> RestaurantQuerySpec:
@@ -1968,6 +1971,7 @@ def _build_spec(
     #    「只有在我们真读懂了句子时, 才有资格替用户选口径」。
     if (
         not time_phrase
+        and allow_time_default
         and require_explicit_time
         and code in _TIME_SCOPED_INTENTS
         and not clarification_needed
@@ -2857,7 +2861,7 @@ async def _load_promoted_routes(
                 )
                 rows = await conn.fetch(
                     """
-                    SELECT normalized_phrase, plan_json
+                    SELECT normalized_phrase, plan_json, routing_fingerprint
                       FROM ai_promoted_routes
                      WHERE domain = $1
                        AND plan_version = $2
@@ -2878,6 +2882,8 @@ async def _load_promoted_routes(
         return ()
 
     routes: List[Tuple[str, str, Dict[str, Any]]] = []
+    current_fp = _routing_rules_fingerprint()
+    stale_fingerprint: List[str] = []
     for row in rows or ():
         phrase = _normalize_exact_phrase(row["normalized_phrase"] or "")
         if not phrase:
@@ -2899,8 +2905,30 @@ async def _load_promoted_routes(
         if not isinstance(plan, dict) or plan.get("intent") not in _VALID_CODES:
             # A row whose resolver was retired must not authorize anything.
             continue
+        # 🔴 2026-08-07 消除与计划缓存的不对称: 缓存的键里并进了路由规则指纹
+        #    (源于 #2043 事故 —— 改了指标编译规则、没人 bump 版本号, 部署几小时后
+        #    仍在重放修复前的计划)。晋升表此前**没有**这个保护, 而它比缓存更严重:
+        #    永久、跨重启、跨 worker。
+        # ⛔ 不符即跳过, 不是「标记待复审但继续服务」: 存的是**完整计划**, 规则变了
+        #    意味着这个计划可能本来就是错的 —— 与缓存失效的理由完全相同。人审保护
+        #    不了这一点, 因为人是在**旧规则下**审的。跳过的代价有界(回落 planner,
+        #    答案仍对、只是慢), 而继续服务的代价是零 token 端出一个可能错的答案。
+        # ⚠️ NULL 也跳过: 没有指纹就无法证明它是在当前规则下审的。
+        row_fp = row["routing_fingerprint"]
+        if row_fp != current_fp:
+            stale_fingerprint.append(phrase)
+            continue
         routes.append(
             (phrase, json.dumps(plan, ensure_ascii=False, sort_keys=True), plan)
+        )
+
+    if stale_fingerprint:
+        # ⚠️ 大声, 不静默: 跳过是安全的一侧, 但「人审过的晋升突然不生效了」
+        #    必须有人知道 —— 否则表现只是「变慢变贵了」, 没人会去查为什么。
+        logger.warning(
+            "[restaurant-intent] %d 条晋升因路由规则指纹不符被跳过(回落 planner), "
+            "当前指纹=%s 需重新人审: %s",
+            len(stale_fingerprint), current_fp, stale_fingerprint[:5],
         )
 
     frozen = tuple(routes)
@@ -3029,6 +3057,12 @@ def _replay_plan_spec(
         query,
         available_stores=available_stores,
         suggested_stores=suggested_stores,
+        # ⛔ 零 token 回放**不许发明默认窗口**。人审批准的是「这句话 → 这个意图」，
+        #    没有批准「并且按最近30天算」——替人审多批一个窗口，等于偷偷放大授权。
+        #    2026-08-07 实测: 我的时间窗默认在这条路径上生效了，撞坏了
+        #    test_promoted_route_still_enforces_the_deterministic_time_gate，
+        #    而那条测试**不在我当时跑的任何套件里**，改动因此带着回归上了 prod。
+        allow_time_default=False,
     )
     authorities = _REPLAYABLE_PLAN_AUTHORITIES.get(spec.planner_authority)
     if authorities is None:
@@ -5104,8 +5138,18 @@ def _semantic_spec_from_t3(
     available_stores: Sequence[str] = (),
     suggested_stores: Sequence[str] = (),
     is_continuation: bool = False,
+    allow_time_default: bool = True,
 ) -> RestaurantQuerySpec:
-    """Compile validated LLM semantics into the immutable execution contract."""
+    """Compile validated LLM semantics into the immutable execution contract.
+
+    ⛔ `allow_time_default=False` 用于**零 token 回放**(晋升表 / 计划缓存)。
+       2026-08-07 实测回归: 我加的「缺时间补默认窗口」在回放路径上也生效了,
+       撞坏了 `test_promoted_route_still_enforces_the_deterministic_time_gate`。
+       那条测试的判据是对的 ——
+       **「晋升授予的是意图, 不是发明一个默认月份的许可」**:
+       人审批准的是「哪个菜卖得好 → 毛利意图」, 没有批准「并且按最近30天算」。
+       替人审多批一个窗口, 等于把人审的授权范围偷偷放大。
+    """
     required_fields = {
         "intent",
         "time_range",
@@ -5195,6 +5239,9 @@ def _semantic_spec_from_t3(
             llm_analysis_action="lookup",
             planner_authority="llm_contract_incomplete",
             require_explicit_time=True,
+            # 回放路径传 False —— 见本函数 docstring: 晋升授予的是意图, 不是
+            # 发明默认窗口的许可。
+            allow_time_default=allow_time_default,
             llm_semantics_authoritative=True,
             allow_explicit_slot_repair=False,
             is_continuation=is_continuation,
@@ -5413,6 +5460,10 @@ def _semantic_spec_from_t3(
             else "llm"
         ),
         require_explicit_time=True,
+        # ⚠️ 本函数有**两个** _build_spec 返回点, 两处都要传 ——
+        # 我第一版只改了前一个, 探针打出 allow_time_default=<默认True> 才发现
+        # 实际走的是这一个。判据: 改函数出口前先数清它有几个 return。
+        allow_time_default=allow_time_default,
         llm_semantics_authoritative=True,
     )
 

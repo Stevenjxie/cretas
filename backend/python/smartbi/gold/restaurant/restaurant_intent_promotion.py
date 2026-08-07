@@ -547,6 +547,17 @@ def _plan_rejection_reason(plan: Any, phrase: str) -> Optional[str]:
     return None
 
 
+def _current_routing_fingerprint() -> str:
+    """当前路由规则的指纹。懒 import：`restaurant_intent` 反过来也用本模块。
+
+    ⛔ 与计划缓存用的是**同一个函数**——两处各算一份就会出现「缓存失效了、晋升
+    没失效」这种半吊子状态，而那正是本次要消除的不对称。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _routing_rules_fingerprint
+
+    return _routing_rules_fingerprint()
+
+
 async def apply_route_promotions(
     pool,
     entries: List[Dict[str, Any]],
@@ -627,14 +638,15 @@ async def apply_route_promotions(
                         """
                         INSERT INTO ai_promoted_routes
                             (domain, normalized_phrase, plan_json, plan_version,
-                             source, scope, reviewed_by)
-                        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+                             source, scope, reviewed_by, routing_fingerprint)
+                        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
                         ON CONFLICT (domain, normalized_phrase) DO UPDATE
-                           SET plan_json    = EXCLUDED.plan_json,
-                               plan_version = EXCLUDED.plan_version,
-                               source       = EXCLUDED.source,
-                               scope        = EXCLUDED.scope,
-                               reviewed_by  = EXCLUDED.reviewed_by
+                           SET plan_json           = EXCLUDED.plan_json,
+                               plan_version        = EXCLUDED.plan_version,
+                               source              = EXCLUDED.source,
+                               scope               = EXCLUDED.scope,
+                               reviewed_by         = EXCLUDED.reviewed_by,
+                               routing_fingerprint = EXCLUDED.routing_fingerprint
                         """,
                         domain,
                         item["phrase"],
@@ -643,6 +655,10 @@ async def apply_route_promotions(
                         source,
                         scope,
                         reviewed_by,
+                        # 🔴 记下**批准时**的路由规则指纹。规则一改, 这行就与当前
+                        #    指纹不符 -> 读取时跳过 -> 回落 planner。
+                        #    人是在旧规则下审的, 人审保护不了「规则变了计划就错了」。
+                        _current_routing_fingerprint(),
                     )
                     written.append({
                         "query": item["query"],

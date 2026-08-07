@@ -170,8 +170,22 @@ class _FakeConn:
             assert self.active_factory == FACTORY, (
                 "promoted-route read must pin the questioner's tenant"
             )
+            # ⚠️ 假行的形状必须跟真 SQL 一致。2026-08-07 补了
+            # `routing_fingerprint`（规则一改, 晋升行即失效, 与计划缓存对齐），
+            # 这里默认填**当前指纹**表示「在当前规则下审过的行」。
+            # 指纹不符的场景由 `test_stale_fingerprint_route_is_skipped` 单独覆盖。
+            from smartbi.gold.restaurant.restaurant_intent import (
+                _routing_rules_fingerprint,
+            )
+
             return [
-                _Row(normalized_phrase=phrase, plan_json=json.dumps(plan))
+                _Row(
+                    normalized_phrase=phrase,
+                    plan_json=json.dumps(plan),
+                    routing_fingerprint=self.owner.promoted_fingerprint
+                    if self.owner.promoted_fingerprint is not _UNSET
+                    else _routing_rules_fingerprint(),
+                )
                 for phrase, plan in self.owner.promoted_rows
             ]
         if "FROM dim_store" in sql or "fact_pos_item" in sql:
@@ -179,9 +193,17 @@ class _FakeConn:
         raise AssertionError(f"unexpected fetch SQL: {sql}")
 
 
+#: 「没显式指定指纹」的哨兵 —— 与 None 区分开: None 是「行里指纹为空」这个
+#: 真实场景(历史行未回填), 也必须被跳过。
+_UNSET = object()
+
+
 class _FakePool:
-    def __init__(self, *, promoted_rows=(), stores=("A店", "B店")):
+    def __init__(self, *, promoted_rows=(), stores=("A店", "B店"),
+                 promoted_fingerprint=_UNSET):
         self.promoted_rows = list(promoted_rows)
+        # `_UNSET` = 用当前指纹（模拟「在当前规则下审过」）；显式传值 = 模拟规则已变。
+        self.promoted_fingerprint = promoted_fingerprint
         self.stores = list(stores)
         self.pending = {}
         self.tenant_gate_calls = 0
@@ -804,3 +826,43 @@ def test_history_time_slot_predicate_is_narrow():
     assert ri._plan_time_slot_came_from_history(llm_time, "本月营收多少", hist) is False
     # allowed: planner supplied no window
     assert ri._plan_time_slot_came_from_history(no_time, "营收多少", hist) is False
+
+
+async def test_stale_fingerprint_route_is_skipped():
+    """🔴 路由规则一改，晋升行即失效（回落 planner），与计划缓存对齐。
+
+    背景：计划缓存的键里并进了 `_routing_rules_fingerprint()` —— 源于 #2043
+    实测事故（改了指标编译规则、没人 bump 版本号，部署几小时后仍在重放修复前的
+    计划）。晋升表此前**没有**这个保护，而它比缓存更严重：永久、跨重启、跨 worker。
+
+    ⛔ 不符即跳过，不是「标记待复审但继续服务」：存的是**完整计划**，规则变了
+    意味着这个计划可能本来就是错的。人审保护不了这一点 —— 人是在**旧规则下**审的。
+    跳过的代价有界（回落 planner，答案仍对、只是慢）。
+    """
+    pool = _FakePool(promoted_rows=SEED_ROWS, promoted_fingerprint="deadbeef")
+    with patch.object(
+        ri, "_t3_llm_parse", new=AsyncMock(return_value=_revenue_plan())
+    ) as planner:
+        await parse_restaurant_query(
+            "哪个菜卖得好", pool, factory_id=FACTORY, semantic_first=True,
+        )
+
+    assert pool.promoted_route_reads == 1, "表还是要读的（跳过发生在行级）"
+    assert planner.call_count == 1, "指纹不符 -> 必须回落 planner，而不是零 token 回放"
+
+
+async def test_null_fingerprint_route_is_skipped_too():
+    """NULL 也跳过：没有指纹就无法证明它是在当前规则下审的。
+
+    历史行（本列上线前写入的）就是 NULL —— 它们必须重新过一遍人审，
+    而不是因为「以前是人审过的」就继续享有零 token 授权。
+    """
+    pool = _FakePool(promoted_rows=SEED_ROWS, promoted_fingerprint=None)
+    with patch.object(
+        ri, "_t3_llm_parse", new=AsyncMock(return_value=_revenue_plan())
+    ) as planner:
+        await parse_restaurant_query(
+            "哪个菜卖得好", pool, factory_id=FACTORY, semantic_first=True,
+        )
+
+    assert planner.call_count == 1, "NULL 指纹不该授权任何东西"
