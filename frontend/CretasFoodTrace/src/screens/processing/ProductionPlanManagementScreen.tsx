@@ -834,7 +834,9 @@ export default function ProductionPlanManagementScreen() {
                     <List.Icon icon="store" style={styles.icon} />
                     <View style={styles.infoContent}>
                       <Text style={styles.infoLabel}>客户</Text>
-                      <Text style={styles.infoValue}>{plan.customer?.name || '未指定'}</Text>
+                      <Text style={styles.infoValue}>
+                        {plan.sourceCustomerName || plan.customerName || plan.customer?.name || '未指定'}
+                      </Text>
                     </View>
                   </View>
 
