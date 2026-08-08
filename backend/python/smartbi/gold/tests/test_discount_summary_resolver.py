@@ -144,7 +144,17 @@ async def test_never_claims_discounts_caused_revenue(summary):
         if any(c in s for c in causal) and not any(n in s for n in negation)
     ]
     assert not offenders, f"有句子在做因果断言: {offenders}"
-    assert "不能据此说" in got.answer_text, "必须主动声明这条边界"
+
+    # ⛔ 按**登记的必含标记**判，不搜某一句字面。
+    #    收尾句 2026-08-08 起按天轮换措辞；第一版这里写死「不能据此说」，
+    #    换成另一条同样带边界的变体后当场红 —— 那是在量措辞不是量行为。
+    #    真正要保证的是「边界被声明了」, 而不是「用哪句话声明的」。
+    from smartbi.gold.restaurant.phrasing import REQUIRED_TOKENS
+
+    markers = REQUIRED_TOKENS["DISCOUNT_CLOSING"]
+    assert any(m in got.answer_text for m in markers), (
+        f"必须主动声明这条边界(需含 {markers} 之一)"
+    )
 
 
 @pytest.mark.asyncio

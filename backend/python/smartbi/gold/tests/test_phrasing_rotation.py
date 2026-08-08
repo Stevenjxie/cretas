@@ -113,3 +113,78 @@ def test_disclosure_still_names_the_window(monkeypatch):
         text = _time_range_disclosure(_Spec())
         assert DEFAULT_TIME_PHRASE in text, f"第 {idx} 个变体漏掉了窗口值"
         assert text.startswith("\n\n")
+
+
+# ─── 收尾建议句的轮换 + 免责义务 ────────────────────────────────────────────
+
+def test_every_variant_in_a_pool_carries_its_required_marker():
+    """🔴 承重的一条：**说法可以变，「说了这件事」不可以省**。
+
+    折扣的收尾句背着「不能据此说折扣带来了增量营收」这条边界；
+    比价的背着「价差不等于能省」。轮换措辞时如果某一条变体漏了这句话，
+    那一天的老板就会读到一段**没有边界声明**的结论 —— 而且因为按天轮换，
+    这种漏会**间歇性出现**，最难被发现。
+    """
+    from smartbi.gold.restaurant import phrasing
+
+    for pool_name, tokens in phrasing.REQUIRED_TOKENS.items():
+        pool = getattr(phrasing, pool_name)
+        assert pool, f"{pool_name} 是空的"
+        for i, variant in enumerate(pool):
+            assert any(t in variant for t in tokens), (
+                f"{pool_name}[{i}] 缺少必含标记 {tokens}: {variant[:40]}"
+            )
+
+
+def test_closing_pools_rotate_across_days_and_hold_within_a_day():
+    """同一天同一问句必须同一句；跨天要真的换过。"""
+    import datetime as dt
+
+    from smartbi.gold.restaurant import phrasing
+
+    for pool_name in ("DISH_MARGIN_CLOSING", "CHANNEL_MIX_CLOSING",
+                      "DISCOUNT_CLOSING", "SUPPLIER_PRICE_CLOSING"):
+        pool = getattr(phrasing, pool_name)
+        key = f"{pool_name}|毛利最低的菜品有哪些"
+        day = dt.date(2026, 8, 8)
+        first = phrasing.pick_variant(pool, key, today=day)
+        assert phrasing.pick_variant(pool, key, today=day) == first, "同日必须稳定"
+
+        seen = {phrasing.pick_variant(pool, key, today=day + dt.timedelta(days=d))
+                for d in range(30)}
+        assert len(seen) > 1, f"{pool_name} 30 天里一次都没换过说法"
+
+
+def test_closing_pools_never_leak_numbers():
+    """⛔ 变体里不许出现裸数字 —— 数字只能来自事实，不能来自措辞。
+
+    唯一允许的是占位符（{n}/{scope}/{window}）和单位示例里的「7天」这类。
+    """
+    import re
+
+    from smartbi.gold.restaurant import phrasing
+
+    for pool_name in ("DISH_MARGIN_CLOSING", "CHANNEL_MIX_CLOSING",
+                      "DISCOUNT_CLOSING", "SUPPLIER_PRICE_CLOSING"):
+        for variant in getattr(phrasing, pool_name):
+            stripped = re.sub(r"\{[a-z_]+\}", "", variant)
+            assert not re.search(r"\d", stripped), (
+                f"{pool_name} 变体里出现了数字: {variant[:50]}"
+            )
+
+
+def test_resolver_closing_helper_is_deterministic_and_llm_free():
+    """resolver 侧的 `_closing` 必须纯查表：不连库、不调模型。"""
+    import inspect
+
+    from smartbi.gold.restaurant import restaurant_ops_router as R
+
+    # ⚠️ 只看**代码体**，不看 docstring —— docstring 里正写着「不调 LLM」，
+    #    连它一起搜就是在量措辞而不是量行为（第一版就这么写，当场自己红了）。
+    src = inspect.getsource(R._closing)
+    body = src.split('"""')[-1] if src.count('"""') >= 2 else src
+    for banned in ("call_chain", "llm_router", "await ", "acquire("):
+        assert banned not in body.lower(), f"_closing 代码体里出现了 {banned}"
+    a = R._closing("DISCOUNT_CLOSING", "折扣力度多大")
+    assert a and a == R._closing("DISCOUNT_CLOSING", "折扣力度多大")
+    assert R._closing("这个池不存在", "x") == "", "取不到池要 fail-open 返回空串"
