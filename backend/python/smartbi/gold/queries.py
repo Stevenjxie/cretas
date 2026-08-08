@@ -1706,6 +1706,95 @@ async def dish_margin(
     }
 
 
+async def supplier_price_spread(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """同一食材下不同供应商的单价差 —— 「哪个供应商报价最贵」。
+
+    ⛔ 口径判断写在这里, 因为问题本身有歧义: **跨食材比供应商报价是无意义的**
+       (A 家卖牛肉、B 家卖米, 绝对单价没有可比性)。有意义、且能落到行动的是
+       **同一食材下不同供应商的价差** —— 所以本函数按 `normalized_name` 分组,
+       只在**同一食材内**比较, 并要求该食材至少有 2 家供应商才纳入。
+
+    ⚠️ 单价可比的前提是**单位相同**。同一食材若出现多个 `unit`(kg / 箱 / 件),
+       跨单位比价会给出荒谬结论 —— 因此按 (食材, 单位) 分组, 单位不同视为
+       不可比, 不合并。
+
+    每条返回: 食材 / 单位 / 供应商数 / 最高价及其供应商 / 最低价及其供应商 /
+    价差百分比。按价差百分比降序 —— 价差越大, 换供应商的空间越大。
+
+    ⛔ DESCRIPTIVE only: 只报「同一食材各家报价差多少」, **不声称换供应商能省下
+       多少钱** —— 那需要用量假设与供货能力, 这张表里都没有。
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    async with tenant_conn(pool, factory_id) as conn:
+        rows = await conn.fetch(
+            """
+            WITH priced AS (
+                SELECT normalized_name,
+                       MAX(ingredient_name)                       AS ingredient_name,
+                       unit,
+                       COALESCE(supplier_name, supplier_id)       AS supplier,
+                       AVG(unit_price)::numeric(18,4)             AS avg_price
+                  FROM agg_supplier_price
+                 WHERE factory_id = $1
+                   AND unit_price IS NOT NULL
+                   AND unit_price > 0
+                   AND COALESCE(supplier_name, supplier_id) IS NOT NULL
+                   AND ($2::date IS NULL OR delivery_date >= $2::date)
+                   AND ($3::date IS NULL OR delivery_date <= $3::date)
+                 GROUP BY normalized_name, unit, COALESCE(supplier_name, supplier_id)
+            ),
+            ranked AS (
+                SELECT p.*,
+                       COUNT(*)      OVER w AS supplier_count,
+                       MAX(avg_price) OVER w AS hi,
+                       MIN(avg_price) OVER w AS lo,
+                       FIRST_VALUE(supplier) OVER (
+                           PARTITION BY normalized_name, unit ORDER BY avg_price DESC
+                       ) AS hi_supplier,
+                       FIRST_VALUE(supplier) OVER (
+                           PARTITION BY normalized_name, unit ORDER BY avg_price ASC
+                       ) AS lo_supplier
+                  FROM priced p
+                WINDOW w AS (PARTITION BY normalized_name, unit)
+            )
+            SELECT DISTINCT
+                   ingredient_name, unit, supplier_count,
+                   hi, hi_supplier, lo, lo_supplier,
+                   ((hi - lo) / NULLIF(lo, 0) * 100)::numeric(18,1) AS spread_pct
+              FROM ranked
+             WHERE supplier_count >= 2
+             ORDER BY spread_pct DESC NULLS LAST
+             LIMIT $4
+            """,
+            factory_id, start, end, int(top_n),
+        )
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "items": [
+            {
+                "ingredient_name": _clean_display_name(r["ingredient_name"]),
+                "unit": r["unit"],
+                "supplier_count": int(r["supplier_count"]),
+                "highest_price": float(r["hi"]),
+                "highest_supplier": _clean_display_name(r["hi_supplier"]),
+                "lowest_price": float(r["lo"]),
+                "lowest_supplier": _clean_display_name(r["lo_supplier"]),
+                "spread_pct": float(r["spread_pct"]) if r["spread_pct"] is not None else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 async def supplier_price_coverage(
     pool: asyncpg.Pool,
     factory_id: str,

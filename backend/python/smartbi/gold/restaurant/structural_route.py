@@ -183,6 +183,7 @@ _METRIC_SERVERS: dict = {
     }),
     "wastage": frozenset({"RESTAURANT_OPS_WASTAGE_TOP"}),
     "discount": frozenset({"RESTAURANT_OPS_DISCOUNT_SUMMARY"}),
+    "supplier_price": frozenset({"RESTAURANT_OPS_SUPPLIER_PRICE"}),
     "staffing": frozenset({"RESTAURANT_OPS_STAFFING_ADVICE"}),
 }
 

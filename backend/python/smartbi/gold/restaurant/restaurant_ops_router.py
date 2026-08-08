@@ -7692,6 +7692,109 @@ async def resolve_channel_mix(
     )
 
 
+async def resolve_supplier_price(
+    smartbi_pool, factory_id: str, days: int = 90, *,
+    role: Optional[str] = None, query: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+) -> OpsAnswer:
+    """供应商比价 —— 「哪个供应商报价最贵」。
+
+    🔴 存在的理由: 这句话此前落到 `OUT_OF_DOMAIN`(与天气、股票同一档), 意思是
+       「这不属于餐饮经营数据」—— 那是**错的**。供应商报价当然属于餐饮经营,
+       只是没有终点。2026-08-08 的飞轮候选里它出现 10 次, 差点被晋升成
+       OUT_OF_DOMAIN 而**对所有租户永久关门**。
+
+    ⛔ 口径见 `gold.queries.supplier_price_spread`: 跨食材比供应商是无意义的,
+       只在**同一食材同一单位内**比较。这里不重复那套判断。
+
+    ⚠️ 2026-08-08 实测: `agg_supplier_price` **全库 0 行**(0 个租户接入过)。
+       所以今天这个 resolver 对任何租户都会走「没有数据」那条路 —— 那正是它的
+       价值所在: 把一个**错误答案**换成**正确答案**, 并说清缺的是哪份数据。
+       ⛔ 不许因为没数据就退回 OUT_OF_DOMAIN。
+
+    金额是价格权限数据 —— 非价格角色只出价差百分比, 不出绝对单价。
+    """
+    from smartbi.gold.queries import supplier_price_coverage, supplier_price_spread
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+    end = date_range[1] if date_range else None
+    start = date_range[0] if date_range else None
+    if start is None or end is None:
+        end = date.today()
+        start = end - timedelta(days=max(int(days), 1) - 1)
+
+    coverage = await supplier_price_coverage(smartbi_pool, factory_id, (start, end))
+    if int(coverage.get("observation_count") or 0) == 0:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_SUPPLIER_PRICE",
+            title="供应商比价",
+            answer_text=(
+                "还没有供应商报价数据，因此比不了价。\n\n"
+                "这不是「不归我管」——供应商报价属于经营数据，缺的是**采购单据里的"
+                "供应商单价还没有接入**（数据表 `agg_supplier_price` 目前为空）。\n"
+                "接入之后这里可以回答：同一食材各家供应商的报价差多少、"
+                "哪家最贵哪家最便宜。"
+            ),
+            charts=[], kpis=[],
+            meta={"no_data": True, "missing_source": "agg_supplier_price"},
+        )
+
+    result = await supplier_price_spread(smartbi_pool, factory_id, (start, end))
+    items = result.get("items") or []
+    window_label = _range_text(start, end)
+    if not items:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_SUPPLIER_PRICE",
+            title=f"供应商比价（{window_label}）",
+            answer_text=(
+                f"{window_label}有供应商报价数据，但**没有任何一种食材同时来自两家以上"
+                "供应商**，因此没有可比的对象。单一供应商的价格高低无从比较，"
+                "不会拿不同食材的单价互相比。"
+            ),
+            charts=[], kpis=[],
+            meta={"window_label": window_label, "comparable_items": 0},
+        )
+
+    lines = [f"**同一食材的供应商报价差（{window_label}）：**", ""]
+    kpis = []
+    for it in items[:5]:
+        name, unit = it["ingredient_name"], it["unit"]
+        spread = it.get("spread_pct")
+        if can_see_money:
+            lines.append(
+                f"- {name}（{unit}）：最贵 {it['highest_supplier']} ¥{it['highest_price']:,.2f}，"
+                f"最便宜 {it['lowest_supplier']} ¥{it['lowest_price']:,.2f}，"
+                f"差 **{spread:.1f}%**（{it['supplier_count']} 家供应商）"
+            )
+        else:
+            lines.append(
+                f"- {name}（{unit}）：最贵 {it['highest_supplier']}，"
+                f"最便宜 {it['lowest_supplier']}，差 **{spread:.1f}%**"
+                f"（{it['supplier_count']} 家供应商）"
+            )
+    top = items[0]
+    kpis.append({"title": "最大价差食材", "value": top["ingredient_name"]})
+    if top.get("spread_pct") is not None:
+        kpis.append({"title": "最大价差", "value": f"{top['spread_pct']:.1f}%",
+                     "rawValue": top["spread_pct"]})
+
+    lines.append("")
+    lines.append(
+        "说明：只在**同一食材、同一单位**内比价 —— 不同食材的单价没有可比性，"
+        "同一食材不同单位（kg / 箱）也不合并。价差大不等于换供应商就能省下这个比例，"
+        "还要看用量、供货能力和品质，这些数据这里没有。"
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_SUPPLIER_PRICE",
+        title=f"供应商比价（{window_label}）",
+        answer_text="\n".join(lines),
+        charts=[], kpis=kpis,
+        meta={"window_label": window_label, "comparable_items": len(items),
+              "scope_matches_request": True},
+    )
+
+
 async def resolve_discount_summary(
     smartbi_pool, factory_id: str, days: int = 30, *,
     role: Optional[str] = None, query: Optional[str] = None,
@@ -7979,6 +8082,7 @@ _MONEY_BEARING_INTENTS: frozenset = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_CHANNEL_MIX",
     "RESTAURANT_OPS_DISCOUNT_SUMMARY",
+    "RESTAURANT_OPS_SUPPLIER_PRICE",
     "RESTAURANT_OPS_RECIPE_COST",
     "RESTAURANT_OPS_REQUISITION_TREND",
     "RESTAURANT_OPS_WASTAGE_TOP",
@@ -8003,6 +8107,7 @@ _MONEY_SELF_MASKING_INTENTS: frozenset = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_CHANNEL_MIX",
     "RESTAURANT_OPS_DISCOUNT_SUMMARY",
+    "RESTAURANT_OPS_SUPPLIER_PRICE",
 })
 
 # 剩下这些**整个答案就是钱**(领料总额/盘亏金额/损耗金额/菜品成本), 没有可保留的
@@ -8060,6 +8165,7 @@ _RESOLVERS = {
     "RESTAURANT_OPS_STORE_DIRECTORY": resolve_store_directory,
     "RESTAURANT_OPS_CHANNEL_MIX": resolve_channel_mix,
     "RESTAURANT_OPS_DISCOUNT_SUMMARY": resolve_discount_summary,
+    "RESTAURANT_OPS_SUPPLIER_PRICE": resolve_supplier_price,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
     "RESTAURANT_OPS_RECIPE_COST": resolve_recipe_cost,
