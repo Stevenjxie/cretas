@@ -1,6 +1,10 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -54,6 +58,12 @@ class ProductionPlanRepinAuthorityTest {
         field.setAccessible(true);
         field.set(service, rowRepo);
         return service;
+    }
+
+    private void inject(Object target, String fieldName, Object value) throws Exception {
+        Field field = ProductionPlanServiceImpl.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 
     private ProductionPlan plan() {
@@ -157,6 +167,37 @@ class ProductionPlanRepinAuthorityTest {
         assertThat(reason)
                 .as("菜单判据必须自己也查 rowStatus, 不能只依赖 hasRealProductionActivity")
                 .isEqualTo(ProductionPlanServiceImpl.REPIN_BLOCKED_STARTED);
+    }
+
+    /**
+     * 🔴 真机抓到的半成品: 计划指针搬了, 批次冻结的运行时实例没搬。
+     *
+     * <p>2026-08-09 PLAN-1786184738975 实测 —— 计划从 154/v2/rev264 重钉到 158/v4/rev272 后,
+     * 批次 10721 的实例(id=71)仍是 154/v2, nodes_json 冻结着旧图。界面却说「已更新到当前
+     * 生效配方」。宁可不给这个入口, 也不给假的。
+     */
+    @Test
+    @DisplayName("🔴 已物化出运行时实例 → 拒绝(报工读的是批次冻结的旧图, 只改计划指针是骗人的)")
+    void rejectsWhenWorkflowInstanceAlreadyCompiled() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of());
+        ProductionPlanServiceImpl service = newService(planRepo, rowRepo);
+
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(10721L);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(batch));
+        ProductionWorkflowInstanceRepository instanceRepo =
+                mock(ProductionWorkflowInstanceRepository.class);
+        when(instanceRepo.findByFactoryIdAndProductionBatchId(FACTORY, 10721L))
+                .thenReturn(Optional.of(mock(ProductionWorkflowInstance.class)));
+        inject(service, "productionBatchRepository", batchRepo);
+        inject(service, "productionWorkflowInstanceRepository", instanceRepo);
+
+        assertThat(service.repinBlockedReason(FACTORY, PLAN_ID, false, () -> false))
+                .isEqualTo(ProductionPlanServiceImpl.REPIN_BLOCKED_MATERIALIZED);
     }
 
     @Test
