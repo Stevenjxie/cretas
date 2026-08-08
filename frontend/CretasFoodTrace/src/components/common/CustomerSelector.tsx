@@ -4,6 +4,7 @@ import { TextInput, List, Divider, Button, Text, Searchbar, ActivityIndicator, S
 import { useTranslation } from 'react-i18next';
 import { customerApiClient, Customer } from '../../services/api/customerApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
+import { customerMatchesQuery } from './customerSelectorSearch';
 
 interface CustomerSelectorProps {
   value: string;
@@ -59,10 +60,8 @@ export const CustomerSelector: React.FC<CustomerSelectorProps> = ({
     }
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.contactPerson?.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredCustomers = customers.filter((customer) =>
+    customerMatchesQuery(customer, searchQuery)
   );
 
   // 重置Modal状态到初始状态
