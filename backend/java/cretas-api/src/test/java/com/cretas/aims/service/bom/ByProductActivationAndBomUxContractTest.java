@@ -36,6 +36,44 @@ class ByProductActivationAndBomUxContractTest {
         return src.substring(start, end);
     }
 
+    /**
+     * 🔴 2026-08-09 真机事故: 「生效该草稿」激活了属于旧工艺版本线的草稿, 之后
+     * 建计划 409 / 发布按钮禁用 / 另存报错 —— 三条路全堵死且页面无告警, 只能改库救回。
+     *
+     * <p>⚠️ 这是**结构契约**不是行为测试(同本类其余用例: activateRecipe 在深层私有路径上,
+     * 语义用例需要完整 Spring/JPA 且相关测试类在 main 上本就是红的)。它能保证闸还在、
+     * 位置还在校验之前、判据仍是 activeWorkflowId; 它**不能**证明运行期真的拦得住。
+     */
+    @Test
+    @DisplayName("🔴 激活前必须校验草稿钉的工艺 = 当前启用的工艺(否则激活出一个建不了计划的状态)")
+    void activationMustRejectStaleWorkflowLineage() throws Exception {
+        String src = bom();
+
+        assertThat(src)
+                .as("activateRecipe 必须调用版本线校验")
+                .contains("requireDraftMatchesEnabledWorkflow(factoryId, family);");
+        assertThat(src)
+                .as("判据必须是「当前启用的工艺记录」activeWorkflowId, 不是别的")
+                .contains("getActiveWorkflowId()");
+        assertThat(src)
+                .as("必须给出可执行的出口(回画布重新发布), 而不是只报错")
+                .contains("BOM_DRAFT_STALE_WORKFLOW_LINEAGE");
+
+        // ⛔ 必须把范围限定在 activateRecipe 方法体内再比位置:
+        //    validateFamilyContracts 在本文件出现 3 次, 裸 indexOf 会命中**更靠前**的那个,
+        //    于是「闸在校验之前」这条断言恒假 —— 我第一版正是这么写的, 当场红在自己的锚点上。
+        int methodStart = src.indexOf("public BomRecipe activateRecipe(");
+        assertThat(methodStart).as("应能定位到 activateRecipe").isGreaterThan(0);
+        String method = src.substring(methodStart);
+        int guardAt = method.indexOf("requireDraftMatchesEnabledWorkflow(factoryId, family);");
+        int validateAt = method.indexOf("validateFamilyContracts(factoryId, family);");
+        assertThat(guardAt).as("应能在 activateRecipe 内定位到版本线闸").isGreaterThan(0);
+        assertThat(validateAt).as("应能在 activateRecipe 内定位到 family 校验").isGreaterThan(0);
+        assertThat(guardAt)
+                .as("版本线闸必须在校验/落库之前 —— 放后面就等于先把坏状态写进去再说")
+                .isLessThan(validateAt);
+    }
+
     @Test
     @DisplayName("🔴 P4: 副产品成员必须跳过<b>两道</b>闸 —— 只豁免一道仍然激活不了")
     void byProductSkipsBothActivationGates() throws Exception {

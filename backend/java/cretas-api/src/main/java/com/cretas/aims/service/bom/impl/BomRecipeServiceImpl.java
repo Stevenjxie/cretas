@@ -17,6 +17,7 @@ import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -101,6 +102,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
     private final BomSeasoningItemRepository seasoningItemRepo;
     private final BomProcessInjectionConfigRepository processInjectionConfigRepo;
+    /** 🔴 2026-08-09: 激活 BOM 前要确认它钉的工艺就是当前启用的那条(见 requireDraftMatchesEnabledWorkflow)。 */
+    private final ProductProcessWorkflowActivationRepository workflowActivationRepo;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -379,6 +382,19 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                 bomWorkflowRevisionService.upgradeToLatestCompatibleDraft(factoryId, member);
             }
         }
+        // 🔴 2026-08-09 真机事故: 「生效该草稿」不校验版本线, 激活后系统进入不可用且无出口的状态。
+        //
+        // 上面的 findNewerCompatibleDraft 只在**同一条 workflow 记录内**找更新的修订。而改画布会按设计
+        // 分叉出新的 workflow 记录(154 → 157 → 158), 于是遗留草稿仍钉着旧记录, 升级逻辑找不到、
+        // 也不报错, 就带着旧钉子激活了。后果(真机复现):
+        //   · 建生产计划 → 409 No active BOM family covers the exact Workflow revision and terminal set
+        //   · 画布上发布按钮禁用(无改动)、另存为版本报「没有可另存的草稿」、页面无任何告警
+        //   → 三条路全堵死, 只能改库救回来。
+        //
+        // 判据取 activation.activeWorkflowId(该产品当前启用的工艺记录), 与草稿钉的 workflowId 比对。
+        // ⛔ fail closed: 宁可在这里拦住(用户还能回画布重新发布), 也不要激活出一个建不了计划的状态。
+        requireDraftMatchesEnabledWorkflow(factoryId, family);
+
         // Also repair same-revision legacy drafts before validation. This is deterministic only:
         // exact stable tuple, a unique deleted predecessor, or a unique material+unit slot.
         reconcileUpgradedInputSkeletons(factoryId, family);
@@ -1079,6 +1095,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * row between family-shared and output-exclusive ownership is not guessed:
      * it requires an explicit topology correction before retrying the upgrade.
      */
+    /**
+     * 待激活的 BOM Family 必须钉在**当前启用的那条 workflow 记录**上。
+     *
+     * <p>没有启用记录(冷启动 / Workflow 已停用)时不拦 —— 那时不存在「版本线错位」这回事。
+     */
+    private void requireDraftMatchesEnabledWorkflow(String factoryId, List<BomRecipe> family) {
+        for (BomRecipe member : family) {
+            Long pinnedWorkflowId = member.getWorkflowId();
+            if (pinnedWorkflowId == null) {
+                continue;
+            }
+            Long enabledWorkflowId = workflowActivationRepo
+                    .findByFactoryIdAndProductTypeId(factoryId, member.getProductTypeId())
+                    .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
+                    .map(row -> row.getActiveWorkflowId())
+                    .orElse(null);
+            if (enabledWorkflowId == null || enabledWorkflowId.equals(pinnedWorkflowId)) {
+                continue;
+            }
+            throw bomError(409,
+                    "这份 BOM 草稿属于旧的工艺版本线，生效后将无法建生产计划",
+                    "BOM_DRAFT_STALE_WORKFLOW_LINEAGE",
+                    "请回到画布点「自动同步并发布」——系统会把配方迁移到当前启用的工艺版本上再生效",
+                    "workflow");
+        }
+    }
+
     private void reconcileUpgradedInputSkeletons(String factoryId, List<BomRecipe> family) {
         BomRecipe main = family.stream()
                 .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.MAIN)

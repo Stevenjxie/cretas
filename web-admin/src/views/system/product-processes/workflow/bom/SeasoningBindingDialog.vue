@@ -388,7 +388,23 @@ async function refreshSelectedMaterialPrice() {
           <el-button link type="primary" data-testid="refresh-seasoning-price" @click="refreshSelectedMaterialPrice">重新读取价格</el-button>
         </template>
       </el-alert>
-      <el-form-item label="成本核算"><el-switch v-model="form.countInSeasoning" active-text="计入" inactive-text="不计入" /></el-form-item>
+      <!--
+        🔴 2026-08-09: 标签原为「成本核算」, 只说了一半。这个开关(countInSeasoning)同时管两件事:
+          · RecipeCostCalculator —— 关掉后这条不计入调料成本;
+          · ProcessSheetServiceImpl —— 关掉后这条**根本不产生投料需求, 报工时一克都不扣**。
+        用户看到「成本核算」会以为只是不算钱, 实际库存也不动 —— 真机上我就是照这个读法去关它,
+        想绕过库存不足, 结果等于把这条辅料从生产里整个抹掉。
+        实体注释写着本意: 「老汤/高汤 = false (熟制段不计入调料)」—— 反复使用的底料不按批扣,
+        这是对的; 错的是界面没把「不扣料」这一半说出来。
+      -->
+      <el-form-item label="计入调料">
+        <div>
+          <el-switch v-model="form.countInSeasoning" active-text="计入" inactive-text="不计入" />
+          <div class="seasoning-count-hint">
+            不计入 = 既不算调料成本，<strong>也不会按它扣料</strong>；用于老汤/高汤这类反复使用的底料。
+          </div>
+        </div>
+      </el-form-item>
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
     <template #footer>
@@ -408,6 +424,7 @@ async function refreshSelectedMaterialPrice() {
 .dosage-contract__input { display: flex; align-items: center; gap: 8px; }
 .dosage-contract__input :deep(.el-input-number) { width: 130px; }
 .dosage-contract__unit { min-width: 52px; color: var(--el-text-color-regular); font-weight: 600; }
+.seasoning-count-hint { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
 .dosage-preview { width: 100%; margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
 .automatic-price { display: flex; align-items: center; gap: 8px; width: 100%; }
 .automatic-price :deep(.el-input) { flex: 1; }
