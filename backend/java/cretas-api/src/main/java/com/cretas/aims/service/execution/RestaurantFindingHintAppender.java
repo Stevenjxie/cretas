@@ -62,6 +62,7 @@ public class RestaurantFindingHintAppender {
         }
         try {
             FindingService.Result result = findingService.detectInline(factoryId, DOMAINS);
+            result = dropWhatTheAnswerAlreadySaid(result, answer);
             String hint = findingTextRenderer.renderInline(result);
             if (hint.isEmpty()) {
                 return answer;
@@ -77,5 +78,48 @@ public class RestaurantFindingHintAppender {
                     factoryId, e);
             return answer;
         }
+    }
+
+    /**
+     * 去掉**答案里已经讲过**的发现。
+     *
+     * <p>🔴 Steve 2026-08-08 定的判据：「得确保 AI 知道当前是不是在问这个问题，
+     * 如果是的话那就不用提示，如果不是的话就可以提示一下。」
+     *
+     * <p>顺带提示的价值**只在于说答案没说的**。老板问「损耗怎么样」，答案已经
+     * 把变质损耗的金额摆出来了，末尾再挂一条「变质损耗占比过高」——他刚读完的
+     * 那段话里就有这个数字，重复一遍只会让他觉得这套提示不长眼。
+     *
+     * <p>⛔ 判据用的是**发现指向的对象名**（subjectName，如「罗氏虾」「变质」）
+     * 是否出现在答案正文里，不是域匹配：
+     * <ul>
+     *   <li>域匹配会误杀 —— 问营收时挂「折扣侵蚀」是跨域的，但它恰恰改变了
+     *       老板对刚才那个营收数字的理解，最该说。</li>
+     *   <li>域匹配也会漏杀 —— 同域但答案已详列的，照样重复。</li>
+     * </ul>
+     * 对象名在不在答案里，是「这件事他刚才读到没有」的直接证据。
+     *
+     * <p>⚠️ 全部被去掉时返回**发现为空但 checkedRules 保留**的结果 ——
+     * 渲染层会照常说「已检查 X，均正常」。这不是假话：那些发现确实已经在
+     * 答案里说过了，不是被隐瞒。⛔ 不能连 checkedRules 一起清空，那会让
+     * 「查过了」退化成「什么都没查」，三态又塌回两态。
+     */
+    private FindingService.Result dropWhatTheAnswerAlreadySaid(
+            FindingService.Result result, String answer) {
+        if (result.findings().isEmpty()) {
+            return result;
+        }
+        java.util.List<com.cretas.aims.service.finding.Finding> kept =
+                result.findings().stream()
+                        .filter(f -> f.subjectName() == null
+                                || f.subjectName().isBlank()
+                                || !answer.contains(f.subjectName()))
+                        .toList();
+        if (kept.size() == result.findings().size()) {
+            return result;
+        }
+        return new FindingService.Result(
+                kept, result.checkedRules(), result.totalCount(),
+                result.countsByCode(), result.failedRules(), result.skippedRules());
     }
 }
