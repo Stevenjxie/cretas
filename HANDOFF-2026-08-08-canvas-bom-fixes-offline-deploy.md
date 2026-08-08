@@ -141,3 +141,30 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 6. **我把「backend 要走 PR」套到离线期，自己把部署路堵死了好几轮** —— 规则里
    「🔌 GitHub 不可用时」一节写着完整的离线部署流程，而且交接第 0 节就点了名。
    **判据：说「做不了」之前，先回去把相关规则那一节读完。**
+
+## 2026-08-09 离线部署台账 (B: 未开工计划跟上新配方)
+
+| 项 | 值 |
+|---|---|
+| 本地 main | `f12a24f2e0` (merge `codex/claude-canvas-bom-e2e`: `027f0df8db` + `8784c6d0fa`) |
+| Java | `v20260809_020325` → `v20260809_022620` (蓝绿现落 **10020** 槽) |
+| web-admin | `02:08:51` 四路 hash 一致 `ca7f0666…` |
+| 运行 jar 核对 | `repinBlockedReason`/`PRODUCTION_PLAN_ALREADY_STARTED` ×2, `canRepinAuthority` ×5, `PRODUCTION_PLAN_WORKFLOW_MATERIALIZED` ×1 |
+
+### 做了什么
+
+- `POST /production-plans/{planId}/repin-authority` —— 复用**新建计划同一个** `resolvePlanUnitAuthority` / `applyPlanUnitAuthority`。
+- 能力由后端下发 (`canRepinAuthority` + `repinBlockedReason`)，前端只消费：字段缺失 fail closed，`false` 时项仍在但灰显直接显示后端给的原因。
+- 🔴 菜单与端点走**同一个** `repinBlockedReason`。第一版栽在这：菜单用 `hasRealProductionActivity`(它**不查** `rowStatus`)、端点用三信号 → 「只有 `rowStatus=SUBMITTED`」的计划菜单显示可点、点下去 409。
+
+### ⚠️ 真机抓到的半成品 (未做完，需拍板)
+
+`PLAN-1786184738975` 重钉到 158/v4/rev272 后，其批次 10721 的 `production_workflow_instances`(id=71) **仍是 154/v2**，`nodes_json` 冻结着旧图(没副产、没调料绑定)；`production_batches` 10721 自己那份权威也还是 154/2/264。`materializeIfActive` 见实例已存在就直接返回，**永不重编译**。
+
+→ 已把该计划的数据改回与批次一致(154/2/264, recipe `2137487a` v2)，并把能力**收窄**：一旦物化出实例就 fail closed。
+→ 现状：F006 的 9 个在途计划里 **3 个**仍能用这个入口(尚未物化实例)，其余 6 个灰显讲原因。
+→ 剩余工作(未做)：重钉时**连批次权威一起搬 + 丢掉陈旧实例/任务/端口让它重编译**。属删运行时行，需 owner 拍板。
+
+### 闸
+
+`ProductionPlanRepinAuthorityTest` 8 项 + `productionMoreActions.spec` 6 项新增；三信号各去掉一个 → `Failures: 1`；菜单判据退回只信 `hasActivity` → 新闸红在「菜单判据必须自己也查 rowStatus」；去掉实例判据 → 只有 `rejectsWhenWorkflowInstanceAlreadyCompiled` 红。
