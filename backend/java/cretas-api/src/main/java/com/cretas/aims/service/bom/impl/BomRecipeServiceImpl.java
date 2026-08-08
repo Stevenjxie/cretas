@@ -1668,35 +1668,20 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             String productTypeId,
             ProductProcessWorkflowRevision targetRevision,
             Long operatorId) {
-        // 复用既有的产品加载 + 产出元数据校验(单位/规格), 不另立一套判据
-        ProductType product = loadProductForUpdate(factoryId, productTypeId);
-        validateProductOutputMetadata(product);
-
-        List<CreateBomRecipeRequest.BomRecipeItemDTO> items =
-                bomWorkflowRevisionService.projectRawMaterialItems(targetRevision);
-        if (items.isEmpty()) {
-            // 画布上一个原料 Cell 都没有 —— 这在 publish 校验里本来就过不去
-            // (BOUNDARY_REQUIRED: 至少一个原料 Cell 和一个成品 Cell)。走到这里说明
-            // 调用方绕过了画布校验, 明确报错而不是造一份空 BOM。
-            throw bomError(409,
-                    "画布上没有原料 Cell, 无法投影出可用的 BOM",
-                    "WORKFLOW_RAW_MATERIAL_REQUIRED",
-                    "请先在画布上添加入口原料 Cell 并绑定 SKU",
-                    "workflow");
-        }
-
-        CreateBomRecipeRequest request = new CreateBomRecipeRequest();
-        request.setProductTypeId(productTypeId);
-        request.setProductName(product.getName());
-        request.setOutputQuantityPerUnit(BigDecimal.ONE);
-        request.setOutputUnit(product.getUnit());
-        request.setSourceType(BomRecipe.SourceType.MANUAL);
-        request.setItems(items);
-        request.setNotes("由产品-工序画布自动投影生成(阶段 3-3)。画布是权威, 本 BOM 是投影。");
-
-        BomRecipe draft = createRecipe(factoryId, request);
-        log.info("Projected BOM from workflow revision: factory={}, product={}, revision={}, rawItems={}",
-                factoryId, productTypeId, targetRevision.getId(), items.size());
+        // ⛔ 复用 ensureDraft 而不是自己 createRecipe —— 两个理由:
+        //
+        // 1) **多产出**: 联合生产时一张图有多个终端 FINISHED_GOOD, 而
+        //    validateFinishedOutputBoms 要求**每一个**都有 ACTIVE BOM。ensureDraft 一次
+        //    为整个家族建草稿(真机实测: 一次调用建出 BOM-001/BOM-002 两份), 自己
+        //    createRecipe 只能建主产出那一份, 副产出仍然过不了闸。
+        // 2) **收敛**: ensureDraft 本来就会从画布播 RAW 行。我原来另写了一份
+        //    projectRawMaterialItems, 同一件事两处实现, 早晚漂移 —— 已删除。
+        //
+        // 传 targetRevision.getId() 把草稿钉在这一版画布上, 而不是让它自己去猜。
+        BomRecipe draft = ensureDraft(factoryId, productTypeId, targetRevision.getId());
+        log.info("Projected BOM family from workflow revision: factory={}, product={}, revision={}, draft={}",
+                factoryId, productTypeId, targetRevision.getId(), draft.getId());
+        // activateRecipe 按家族激活(见其 family 循环), 所以联产的每个终端产出都会拿到 ACTIVE BOM。
         return activateRecipe(factoryId, draft.getId(), operatorId);
     }
 

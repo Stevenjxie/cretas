@@ -26,6 +26,15 @@ export interface MaterialNodeData extends Record<string, unknown> {
   baseUnit?: string;
   bound?: boolean;
   /**
+   * 这个终端产出用的包材(2026-08-08)。与工序上的 `materialBindings` 同一口径:
+   * 进节点 data ⇒ 进 nodesJson ⇒ 进 revisionHash ⇒ **改包材也产生新工艺版本**。
+   *
+   * 🔴 补的是一个真机测出来的口径漏洞: 阶段 3-1 只把辅料/调料搬进了定义, 包材没搬 ——
+   * 于是改辅料版本会跳、改包材不会跳。「画布是什么样 BOM 就是什么样, 只有一个版本号」
+   * 在包材这一维上不成立。
+   */
+  packagingBindings?: WorkflowPackagingBinding[];
+  /**
    * 这个产出 Cell 是副产(2026-08-07 阶段 2)。
    *
    * ⛔ 副产**不是** `ProductProcessNodeKind` 的第 5 个值。设计定稿的原话:
@@ -91,6 +100,15 @@ export interface WorkflowMaterialBinding {
   dosagePerKgG: number;
   /** 后续锅调料比例 0–100。⛔ 只在熟制类工序上有意义，见 seasoningProcessCategory.ts。 */
   subsequentPotRatio?: number | null;
+  unit?: string | null;
+}
+
+/** 一行包材投入 —— 挂在终端产出节点上。用量是确定性消耗, 必须 > 0(激活闸要求)。 */
+export interface WorkflowPackagingBinding {
+  materialTypeId: string;
+  materialName?: string | null;
+  /** 每 1 份成品用多少。⛔ 包材与主料不同: 它不许为空(见 validateActivatableItems)。 */
+  standardQuantity: number;
   unit?: string | null;
 }
 

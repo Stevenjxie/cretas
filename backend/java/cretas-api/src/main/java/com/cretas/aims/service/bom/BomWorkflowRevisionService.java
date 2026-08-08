@@ -886,41 +886,6 @@ public class BomWorkflowRevisionService {
     }
 
     /** Exact terminal output contract of one immutable Workflow revision. */
-    /**
-     * 阶段 3-3: 把画布上的入口原料 Cell 投影成 BOM 的 RAW 明细行。
-     *
-     * <p>⚠️ <b>用量刻意留空</b>。主料按报工实际重量走 —— 这是既有口径, 不是遗漏:
-     * {@code BomRecipeServiceImpl#validateActivatableItems} 的注释写着
-     * 「原料与工序辅料的 BOM 行表达资格/关系, 固定用量可留空」, 而
-     * {@code ProductConfigurationReadinessService} 的完整性判据只数 RAW 行的
-     * <b>行数</b>(rawCount &gt; 0), 不看 standardQuantity。
-     * 编一个用量出来才是危险的 —— 那会被下游当成用户的真实意图。
-     *
-     * <p>只取绑定了 SKU 的节点: 没绑 SKU 的节点在画布的 publish 校验里本来就过不去
-     * (SKU_REQUIRED), 这里再滤一次是防止调用方绕过校验时投出无效外键。
-     */
-    public List<CreateBomRecipeRequest.BomRecipeItemDTO> projectRawMaterialItems(
-            ProductProcessWorkflowRevision revision) {
-        ProductProcessWorkflowDTO definition = revisionSnapshotService.definition(revision);
-        List<CreateBomRecipeRequest.BomRecipeItemDTO> items = new ArrayList<>();
-        int sortOrder = 0;
-        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
-            if (!"RAW_MATERIAL".equals(node.getKind())) continue;
-            Map<String, Object> data = node.getData() == null ? Map.of() : node.getData();
-            Object skuId = data.get("skuId");
-            if (!(skuId instanceof String materialTypeId) || materialTypeId.isBlank()) continue;
-            CreateBomRecipeRequest.BomRecipeItemDTO item = new CreateBomRecipeRequest.BomRecipeItemDTO();
-            item.setMaterialTypeId(materialTypeId);
-            item.setMaterialCategory("RAW");
-            item.setStandardQuantity(null);   // ⛔ 见方法注释: 刻意留空, 不许编
-            Object baseUnit = data.get("baseUnit");
-            if (baseUnit instanceof String unit && !unit.isBlank()) item.setUnit(unit);
-            item.setSortOrder(sortOrder++);
-            items.add(item);
-        }
-        return items;
-    }
-
     public static List<TerminalOutput> resolveTerminalOutputs(ProductProcessWorkflowDTO definition) {
         Map<String, ProductProcessWorkflowDTO.Node> nodesById = definition.getNodes().stream()
                 .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId, Function.identity(),

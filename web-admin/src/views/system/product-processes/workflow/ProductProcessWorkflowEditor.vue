@@ -725,7 +725,7 @@ import {
   pickOwningProductId,
 } from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
-import type { WorkflowMaterialBinding } from './types';
+import type { WorkflowMaterialBinding, WorkflowPackagingBinding } from './types';
 import {
   allowsInjection,
   allowsPotRatio,
@@ -2092,6 +2092,17 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
         // #Task1: 包材编辑弹窗的 row prop 需要完整原始行(materialTypeId/standardQuantity/
         // 替代关系等), 不是上面 rows 里那份只供展示用的 PackagingCellRow。
         packagingRawByOutput[target.nodeId] = packagingItems;
+        // 2026-08-08: 包材的**权威数值**收下来, 稍后 hydrate 进终端产出节点。
+        // 同 materialBindings: rows 里那份是展示串(dosageText), 数值已经丢了, 不能当数据。
+        packagingBindingsByOutput[target.nodeId] = packagingItems
+          .filter((item) => item.materialTypeId != null && item.materialTypeId !== ''
+            && typeof item.standardQuantity === 'number')
+          .map((item) => ({
+            materialTypeId: String(item.materialTypeId),
+            materialName: item.materialName || null,
+            standardQuantity: item.standardQuantity as number,
+            ...(item.unit ? { unit: item.unit } : {}),
+          }));
       });
     });
 
@@ -2121,6 +2132,7 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
 
     const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
     const materialBindingsByProcess: Record<string, WorkflowMaterialBinding[]> = {};
+    const packagingBindingsByOutput: Record<string, WorkflowPackagingBinding[]> = {};
     const recipeIdByProcess: Record<string, string> = {};
     const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
     // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
@@ -2182,7 +2194,7 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
 
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
-    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess, options);
+    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess, packagingBindingsByOutput, options);
     bomOverlayProductIdByRecipe.value = productIdByRecipe;
     bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
@@ -2534,9 +2546,21 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
  */
 function hydrateMaterialBindingsIntoDefinition(
   bindingsByProcess: Record<string, WorkflowMaterialBinding[]>,
+  packagingByOutput: Record<string, WorkflowPackagingBinding[]>,
   options: { afterUserEdit?: boolean } = {},
 ): void {
   let changed = false;
+  // 包材挂终端产出节点 —— 与辅料同一套 dirty 口径, 改了就该产生新工艺版本。
+  flowNodes.value.forEach((node) => {
+    if (node.type !== 'material') return;
+    const next = packagingByOutput[node.id] ?? [];
+    const data = node.data as MaterialNodeData;
+    const current = Array.isArray(data.packagingBindings) ? data.packagingBindings : [];
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    if (current.length === 0 && next.length === 0) return;
+    data.packagingBindings = next;
+    changed = true;
+  });
   flowNodes.value.forEach((node) => {
     if (node.type !== 'process') return;
     const next = bindingsByProcess[node.id] ?? [];
