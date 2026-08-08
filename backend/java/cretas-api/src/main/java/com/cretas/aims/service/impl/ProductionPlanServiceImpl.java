@@ -89,6 +89,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductionBatchRepository productionBatchRepository;
+
+    /**
+     * 已编译的运行时实例 —— 只用来判「这个计划还能不能换配方」。
+     *
+     * <p>实例是批次物化时按<b>批次自己那份</b>权威冻结的图(nodes_json), 之后不会跟着计划的
+     * 指针走。所以计划一旦物化出实例, 光改计划指针是骗人的: 报工单读的还是旧图。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository
+            productionWorkflowInstanceRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -461,6 +471,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             "已投料/已报工，保持原配方快照；如需按新配方生产请新建计划";
     static final String REPIN_BLOCKED_LOCKED = "计划已锁定";
 
+    static final String REPIN_BLOCKED_MATERIALIZED =
+            "已生成生产批次，报工按批次冻结的工艺图走；如需按新配方生产请新建计划";
+
     /**
      * 「能不能更新到当前配方」的<b>唯一</b>判据 —— 菜单灰显与端点拒绝都走这里。
      *
@@ -479,7 +492,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (hasActivity != null && hasActivity.getAsBoolean()) {
             return REPIN_BLOCKED_STARTED;
         }
+        if (hasCompiledWorkflowInstance(factoryId, planId)) {
+            return REPIN_BLOCKED_MATERIALIZED;
+        }
         return locked ? REPIN_BLOCKED_LOCKED : null;
+    }
+
+    /**
+     * 批次已经物化出运行时实例 → 只改计划指针是<b>骗人的</b>。
+     *
+     * <p>真机实测(2026-08-09, PLAN-1786184738975): 把计划指针从 154/v2/rev264 重钉到
+     * 158/v4/rev272 之后, 该计划批次 10721 的 production_workflow_instances(id=71) 仍然是
+     * 154/v2, nodes_json 还冻结着旧图(没有副产、没有调料绑定) —— 操作工报的还是旧工艺,
+     * 而界面已经告诉他「已更新到当前生效配方」。宁可不给, 不给假的。
+     */
+    private boolean hasCompiledWorkflowInstance(String factoryId, String planId) {
+        if (productionWorkflowInstanceRepository == null || productionBatchRepository == null) {
+            return false;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        return batches != null && batches.stream().anyMatch(batch -> batch.getId() != null
+                && productionWorkflowInstanceRepository
+                        .findByFactoryIdAndProductionBatchId(factoryId, batch.getId()).isPresent());
     }
 
     /** 三信号判据: rowStatus / submissionStatus / interimSettledAt 任一命中即视为已开工。 */
@@ -501,10 +536,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (reason == null) {
             return;
         }
-        boolean lockedOnly = REPIN_BLOCKED_LOCKED.equals(reason);
-        throw new BusinessException(409,
-                lockedOnly ? "该计划已锁定，不能更换配方版本" : "该计划已经开工，不能更换配方版本")
-                .withCode(lockedOnly ? "PRODUCTION_PLAN_LOCKED" : "PRODUCTION_PLAN_ALREADY_STARTED")
+        String message;
+        String code;
+        if (REPIN_BLOCKED_LOCKED.equals(reason)) {
+            message = "该计划已锁定，不能更换配方版本";
+            code = "PRODUCTION_PLAN_LOCKED";
+        } else if (REPIN_BLOCKED_MATERIALIZED.equals(reason)) {
+            message = "该计划已生成生产批次，不能更换配方版本";
+            code = "PRODUCTION_PLAN_WORKFLOW_MATERIALIZED";
+        } else {
+            message = "该计划已经开工，不能更换配方版本";
+            code = "PRODUCTION_PLAN_ALREADY_STARTED";
+        }
+        throw new BusinessException(409, message)
+                .withCode(code)
                 .withHint(reason)
                 .withSeverity("warning");
     }
