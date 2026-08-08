@@ -125,14 +125,22 @@ public class WorkflowRevisionSnapshotService {
         try {
             return revisionRepository.saveAndFlush(revision);
         } catch (DataIntegrityViolationException race) {
-            ProductProcessWorkflowRevision winner = revisionRepository
-                    .findByWorkflowIdAndRevisionHash(workflow.getId(), hash)
-                    .orElseThrow(() -> race);
-            if (sameDefinition(workflow, winner)
-                    && Objects.equals(winner.getRevisionHash(), hash(winner))) {
-                return winner;
-            }
-            throw invalidStoredRevision(hash, winner.getId());
+            // ⛔ 这里【不能】再发任何 JPA 查询去找"竞态赢家"。
+            //
+            // 原代码正是那么写的(findByWorkflowIdAndRevisionHash), 而 saveAndFlush 失败后
+            // persistence context 里留着一个 id 为 null 的实体; 任何后续查询都会触发 auto-flush,
+            // Hibernate 当场抛
+            //   AssertionFailure: null id ... (don't flush the Session after an exception occurs)
+            // —— 于是这个**恢复分支构造上永远走不通**, 只会把一个可恢复的竞态翻译成给用户看的 500
+            // (真机实测: 两次重试, 两个不同追踪码, 都是 500「系统处理异常」)。
+            //
+            // 真要恢复必须换一个新事务/新 session, 那是另一层机制; 在本方法内能做且诚实的做法是
+            // 抛一个语义明确、可重试的冲突错误。调用方 captureDraft 在插入之前已经按 hash 查过一次,
+            // 所以走到这里只剩两种情况: 真并发, 或取号与约束口径不一致(后者已在
+            // findMaxRevisionNumber 处根治 —— 它现在按物理表取号, 含软删行)。
+            throw new BusinessException(409, "工艺版本正在被另一处保存，请重试")
+                    .withCode("WORKFLOW_REVISION_CONCURRENT_WRITE")
+                    .withSeverity("RETRYABLE");
         }
     }
 

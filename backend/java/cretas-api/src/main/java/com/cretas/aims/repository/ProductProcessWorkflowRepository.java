@@ -40,12 +40,25 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String factoryId,
             String lastPublishIdempotencyKey);
 
-    @Query("""
-            select max(workflow.definitionVersion)
-              from ProductProcessWorkflow workflow
-             where workflow.factoryId = :factoryId
-               and workflow.productTypeId = :productTypeId
-            """)
+    /**
+     * ⛔ 同 findMaxRevisionNumber:必须 native、必须把软删行数进来。
+     *
+     * <p>唯一索引 {@code uk_product_process_workflow_version
+     * UNIQUE (factory_id, product_type_id, status, definition_version)} **没有**
+     * {@code WHERE deleted_at IS NULL} 谓词(同表的 uk_product_process_workflow_active_draft /
+     * uk_ppw_publish_idempotency_factory_key 都有,唯独这条漏了),所以软删行仍占着版本号;
+     * 而实体上有 {@code @Where(deleted_at IS NULL)},JPQL 的 max 看不见它们。
+     *
+     * <p>这是 2026-08-08 revision 取号事故(见 ProductProcessWorkflowRevisionRepository)的
+     * **同因兄弟**,当时全库 soft-deleted workflow 数为 0 所以尚未爆;一旦有人软删一条 workflow,
+     * 下一次发布取到的版本号就会撞这条唯一索引,复现同一个 500。潜伏期修掉,不等它炸。
+     */
+    @Query(value = """
+            select max(definition_version)
+              from product_process_workflows
+             where factory_id = :factoryId
+               and product_type_id = :productTypeId
+            """, nativeQuery = true)
     Optional<Integer> findMaxDefinitionVersion(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId);
