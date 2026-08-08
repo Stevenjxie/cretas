@@ -5011,13 +5011,14 @@ async def resolve_store_margin(
                 -- Scalar-subquery form so COALESCE short-circuits: when the
                 -- caller pins an exact end date the expensive MAX scan over
                 -- the full fact join is never executed.
+                -- ⚡ 语义不变、耗时 4331ms -> 索引反扫(2026-08-08 实测)。
+                -- COALESCE 短路保留(给了显式 end date 就不跑扫描), 但**没给时**
+                -- 原式仍要 MAX 全扫 94.7 万行明细。改成 ORDER BY date DESC LIMIT 1:
+                -- 走 idx_fact_pos_txn_factory_store_date 反扫, 命中即停。
+                -- 「最后一天有菜品明细的交易日」这个语义逐字保留。
                 SELECT COALESCE($4::date, (
-                    SELECT MAX(t2.date)
-                      FROM fact_pos_item i2
-                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                      JOIN dim_product p2
-                        ON p2.product_id = i2.product_id
-                       AND p2.factory_id = i2.factory_id
+                    SELECT t2.date
+                      FROM fact_pos_transaction t2
                       JOIN (
                         SELECT DISTINCT store_id
                           FROM agg_daily
@@ -5033,11 +5034,21 @@ async def resolve_store_margin(
                       JOIN dim_store s2
                         ON s2.store_id = t2.store_id
                        AND s2.factory_id = t2.factory_id
-                     WHERE i2.factory_id = $1
-                       AND t2.factory_id = $1
+                     WHERE t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
                        AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
+                       AND EXISTS (
+                             SELECT 1
+                               FROM fact_pos_item i2
+                               JOIN dim_product p2
+                                 ON p2.product_id = i2.product_id
+                                AND p2.factory_id = i2.factory_id
+                              WHERE i2.transaction_id = t2.id
+                                AND i2.factory_id = $1
+                           )
+                     ORDER BY t2.date DESC
+                     LIMIT 1
                 )) AS end_date
             )
             SELECT s.store_id, s.name AS store_name,
@@ -5085,21 +5096,32 @@ async def resolve_store_margin(
             WITH anchor AS (
                 -- Scalar-subquery form: the MAX scan only runs when no exact
                 -- end date was supplied (see the dish query above).
+                -- ⚡ 语义不变、耗时 4331ms -> 索引反扫(2026-08-08 实测)。
+                -- COALESCE 短路保留(给了显式 end date 就不跑扫描), 但**没给时**
+                -- 原式仍要 MAX 全扫 94.7 万行明细。改成 ORDER BY date DESC LIMIT 1:
+                -- 走 idx_fact_pos_txn_factory_store_date 反扫, 命中即停。
+                -- 「最后一天有菜品明细的交易日」这个语义逐字保留。
                 SELECT COALESCE($4::date, (
-                    SELECT MAX(t2.date)
-                      FROM fact_pos_item i2
-                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                      JOIN dim_product p2
-                        ON p2.product_id = i2.product_id
-                       AND p2.factory_id = i2.factory_id
+                    SELECT t2.date
+                      FROM fact_pos_transaction t2
                       JOIN dim_store s2
                         ON s2.store_id = t2.store_id
                        AND s2.factory_id = t2.factory_id
-                     WHERE i2.factory_id = $1
-                       AND t2.factory_id = $1
+                     WHERE t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
                        AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
+                       AND EXISTS (
+                             SELECT 1
+                               FROM fact_pos_item i2
+                               JOIN dim_product p2
+                                 ON p2.product_id = i2.product_id
+                                AND p2.factory_id = i2.factory_id
+                              WHERE i2.transaction_id = t2.id
+                                AND i2.factory_id = $1
+                           )
+                     ORDER BY t2.date DESC
+                     LIMIT 1
                 )) AS end_date
             ), scope AS (
                 SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
