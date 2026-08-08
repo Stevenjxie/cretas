@@ -23,9 +23,12 @@ export type ProductionMoreCommand =
   | 'reverse-interim-settle'
   | 'stop-production'
   | 'cancel'
-  | 'stop-blocked';
+  | 'stop-blocked'
+  | 'repin-authority';
 
 export interface ProductionMoreActionRow {
+  canRepinAuthority?: unknown;
+  repinBlockedReason?: unknown;
   status?: unknown;
   sourceType?: unknown;
   isLocked?: unknown;
@@ -119,6 +122,13 @@ export function productionMoreCommands(row: ProductionMoreActionRow): Production
   // canStop / canCancel 一律以后端 enrichWithTerminalActionCapabilities 下发的为准,
   // 前端不自己推断 (字段缺失时 fail closed)。
   if (safetyStock && row.canStop === true) commands.push('stop-production');
+  // 🔴 2026-08-09 (Steve 拍板): 已生产的坚决不影响; 未开工但已建计划的必须能用上新配方。
+  // 判据在后端(报工行三信号 rowStatus / submissionStatus / interimSettledAt), 前端只消费
+  // 下发的 canRepinAuthority —— 与 canStop / canCancel 同一规矩, 前端不自己推断,
+  // 字段缺失时 fail closed(不给入口), 免得菜单说可以点而后端 409。
+  // 后端下发了这个能力才出现(老后端没有该字段 → fail closed 不给入口);
+  // 下发 false 时**仍然出现但灰显讲原因**(防呆 Rule 1), 不是整条消失。
+  if (typeof row.canRepinAuthority === 'boolean') commands.push('repin-authority');
   if (row.canCancel === true) commands.push('cancel');
   if (safetyStock && row.canStop !== true && stopBlockedReason) commands.push('stop-blocked');
   return commands;
@@ -129,4 +139,15 @@ export function hasProductionMoreCommand(
   command: ProductionMoreCommand,
 ): boolean {
   return productionMoreCommands(row).includes(command);
+}
+
+/**
+ * 「更新到当前配方」不可点时的原因 —— 一律用后端下发的 repinBlockedReason。
+ *
+ * <p>前端不自己编原因: 判据(报工行三信号)在后端, 编一份必然与真正的拒绝理由对不上。
+ */
+export function repinAuthorityBlockedReason(row: ProductionMoreActionRow): string {
+  if (row.canRepinAuthority === true) return '';
+  const reason = typeof row.repinBlockedReason === 'string' ? row.repinBlockedReason.trim() : '';
+  return reason || '当前状态不可更新配方';
 }
