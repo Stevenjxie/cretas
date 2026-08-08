@@ -369,7 +369,21 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         assertCurrentVersion(lockVersion, draft);
         ProductProcessWorkflowDTO definition = toDTO(draft);
         validator.validateForPublish(definition);
-        catalogValidator.validateForPublish(factoryId, productTypeId, definition);
+        // 🔴 2026-08-08: 这里【必须】按 synchronizeBom 分叉, 否则 3-3 的 BOM 投影是空转的。
+        //
+        // catalogValidator.validateForPublish 内含 validateFinishedOutputBoms ——
+        // 要求每个成品 Cell 都已有 ACTIVE BOM。而 BOM 同步/投影发生在下面几行之后。
+        // 闸在投影前面 ⇒ 投影永远跑不到 ⇒ 「没有生效 BOM 也能发布」根本不成立。
+        // (2026-08-08 真机实测发现: 3-3 部署后仍被这道闸拦下, 报的是另一个错误码,
+        //  所以第一眼看不出是同一条规则的第三个承载点。)
+        //
+        // synchronizeBom=true 时先只做结构/目录校验, BOM 那半交给同步; 同步完成后
+        // 再跑一次完整校验兜底 —— 见下方。
+        if (synchronizeBom) {
+            catalogValidator.validateForBomConfiguration(factoryId, productTypeId, definition);
+        } else {
+            catalogValidator.validateForPublish(factoryId, productTypeId, definition);
+        }
         unitValidator.validateForPublish(factoryId, definition);
         ProductProcessWorkflowRevision revision = requireCurrentRevision(draft);
         if (!Boolean.TRUE.equals(revision.getStructurallyComplete())) {
@@ -380,6 +394,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         if (synchronizeBom) {
             workflowBomSynchronizationService.synchronizeForPublish(
                     factoryId, productTypeId, revision, operatorId);
+            // ⛔ 兜底, 不能省: 同步/投影之后 BOM 必须真的到位。少了这一句, 投影失败
+            //    会被静默放过 —— 发布出一个没有 BOM 的 Workflow, 报工时无料可扣。
+            catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         }
         bomWorkflowRevisionService.requireActiveBomPinsRevision(factoryId, productTypeId, revision);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);

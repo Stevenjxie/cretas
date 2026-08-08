@@ -76,6 +76,44 @@ describe('materialBindings hydration 不得把「打开」变成「改动」', (
   });
 });
 
+/**
+ * 🔴 2026-08-08 补的口径漏洞：包材也要进定义。
+ *
+ * 真机实测发现：改**辅料**克数 → 版本跳；改**包材**用量 → BOM 表变了，版本不跳。
+ * 因为阶段 3-1 只把辅料/调料搬进了工艺定义，包材没搬 —— 于是
+ * 「画布是什么样 BOM 就是什么样，只有一个版本号」在包材这一维上不成立。
+ */
+describe('包材同样进工艺定义（否则改包材不产生新版本）', () => {
+  const fn = (() => {
+    const at = EDITOR.indexOf('function hydrateMaterialBindingsIntoDefinition');
+    return EDITOR.slice(at, EDITOR.indexOf('function serializeFlowNode', at));
+  })();
+
+  it('hydrate 包材到终端产出节点', () => {
+    expect(fn).toContain('packagingBindings');
+    expect(fn).toMatch(/node\.type !== 'material'/);
+    expect(fn).toMatch(/data\.packagingBindings = next/);
+  });
+
+  it('包材与辅料共用同一套 dirty 口径 —— 同一个 changed 标志', () => {
+    // ⛔ 不许给包材单开一条不置 dirty 的路径, 那就是把漏洞换个地方留着。
+    const packAt = fn.indexOf('data.packagingBindings = next');
+    const dirtyAt = fn.indexOf('dirty.value = true');
+    expect(packAt).toBeGreaterThan(-1);
+    expect(packAt).toBeLessThan(dirtyAt);
+    expect(fn.slice(packAt, packAt + 80)).toMatch(/changed = true/);
+  });
+
+  it('权威数值取 standardQuantity，不取展示串', () => {
+    const at = EDITOR.indexOf('packagingBindingsByOutput[target.nodeId] = packagingItems');
+    expect(at).toBeGreaterThan(-1);
+    const block = EDITOR.slice(at, at + 600);
+    expect(block).toContain('standardQuantity: item.standardQuantity');
+    expect(block).not.toContain('dosageText');
+    expect(block).not.toContain('naturalHint');
+  });
+});
+
 describe('权威数值来自原始字段，不是展示字符串', () => {
   it('materialBindings 读 dosagePerKgG / subsequentPotRatio，不读 dosageText', () => {
     const at = EDITOR.indexOf('materialBindingsByProcess[nodeId] = process.bindings');
