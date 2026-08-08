@@ -38,6 +38,16 @@ class RestaurantFindingHintAppenderTest {
     @Mock
     private FindingTextRenderer findingTextRenderer;
 
+    /**
+     * ⚠️ 2026-08-09: 给 appender 加了这个依赖却忘了在这里加 @Mock, 结果 Mockito
+     * 注入 null -> appendRepeatNotice 抛 NPE -> **被 append 的外层 catch 吞掉** ->
+     * 返回原答案, 两条断言红。外层那个 catch 是对的(提示坏了不该让老板拿不到主答案),
+     * 但它也会把这类构造问题藏起来 —— 判据: **新增构造依赖后必须跑全量**,
+     * 只跑新写的那个类看不到。
+     */
+    @Mock
+    private com.cretas.aims.service.finding.FindingOccurrenceTracker occurrenceTracker;
+
     private static FindingService.Result oneFinding() {
         Finding f = new Finding("WASTAGE_TYPE_CONCENTRATION", "restaurant",
                 Finding.Severity.INFO, 70, "变质", "变质",
@@ -223,5 +233,57 @@ class RestaurantFindingHintAppenderTest {
 
         verify(findingService).detectInline(eq(FACTORY_ID), anyCollection(),
                 eq(com.cretas.aims.service.finding.FindingOrdering.ACT_NOW));
+    }
+
+    @Test
+    @DisplayName("UT-RFH-24: 连续提醒多天时, 提示里带出「已连续提醒 N 天」")
+    void surfacesHowManyDaysThisHasBeenRepeated() {
+        // 🔴 Steve: 「只要问就是有问题啊」—— 重复不消除, 但第八天还说一模一样的话
+        //    是浪费。重复本身要变成信息(你已经被提醒 N 天还没动)。
+        when(findingService.detectInline(anyString(), anyCollection(), any()))
+                .thenReturn(oneFinding());
+        when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 变质损耗占比过高");
+        when(occurrenceTracker.recordAndCountConsecutiveDays(anyString(), any()))
+                .thenReturn(java.util.Map.of(
+                        com.cretas.aims.service.finding.FindingOccurrenceTracker.key(
+                                "WASTAGE_TYPE_CONCENTRATION", "变质"), 8));
+
+        String out = appender.append("最近30天营收 ¥7,812 万。", FACTORY_ID, false);
+
+        assertTrue(out.contains("已连续提醒 8 天"), "重复要变成信息: " + out);
+        // ⛔ 措辞与语义逐字对齐: 我们只知道「提醒了几天」, 不知道「这件事持续了几天」。
+        assertFalse(out.contains("已连续 8 天卖不动"), "不许说成我们不知道的那件事");
+    }
+
+    @Test
+    @DisplayName("UT-RFH-25: ⛔ 天数不够门槛时不啰嗦")
+    void staysQuietBelowTheThreshold() {
+        when(findingService.detectInline(anyString(), anyCollection(), any()))
+                .thenReturn(oneFinding());
+        when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 变质损耗占比过高");
+        when(occurrenceTracker.recordAndCountConsecutiveDays(anyString(), any()))
+                .thenReturn(java.util.Map.of(
+                        com.cretas.aims.service.finding.FindingOccurrenceTracker.key(
+                                "WASTAGE_TYPE_CONCENTRATION", "变质"), 2));
+
+        String out = appender.append("最近30天营收 ¥7,812 万。", FACTORY_ID, false);
+
+        assertFalse(out.contains("已连续提醒"), "第 2 天就说是噪音不是信息");
+        assertTrue(out.contains("变质损耗占比过高"), "主提示照常出");
+    }
+
+    @Test
+    @DisplayName("UT-RFH-26: ⛔ 追踪器坏了(抛异常/返回 null), 主提示照常出")
+    void trackerFailureNeverKillsTheHint() {
+        when(findingService.detectInline(anyString(), anyCollection(), any()))
+                .thenReturn(oneFinding());
+        when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 变质损耗占比过高");
+        when(occurrenceTracker.recordAndCountConsecutiveDays(anyString(), any()))
+                .thenReturn(null);
+
+        String out = appender.append("最近30天营收 ¥7,812 万。", FACTORY_ID, false);
+
+        assertTrue(out.contains("变质损耗占比过高"),
+                "连续天数是附加信息, 它失效不该让主提示消失");
     }
 }

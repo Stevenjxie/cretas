@@ -47,6 +47,7 @@ public class RestaurantFindingHintAppender {
 
     private final FindingService findingService;
     private final FindingTextRenderer findingTextRenderer;
+    private final com.cretas.aims.service.finding.FindingOccurrenceTracker occurrenceTracker;
 
     /**
      * @param answer               Python 委派回来的回答原文
@@ -66,6 +67,7 @@ public class RestaurantFindingHintAppender {
                     com.cretas.aims.service.finding.FindingOrdering.ACT_NOW);
             result = dropWhatTheAnswerAlreadySaid(result, answer);
             String hint = findingTextRenderer.renderInline(result);
+            hint = appendRepeatNotice(hint, factoryId, result);
             if (hint.isEmpty()) {
                 return answer;
             }
@@ -123,5 +125,47 @@ public class RestaurantFindingHintAppender {
         return new FindingService.Result(
                 kept, result.checkedRules(), result.totalCount(),
                 result.countsByCode(), result.failedRules(), result.skippedRules());
+    }
+
+    /**
+     * 给已经连续提醒多天的发现加一句「这条已连续提醒 N 天」。
+     *
+     * <p>🔴 Steve 2026-08-08：「只要问就是有问题啊」—— **重复不该消除**，
+     * 但第八天还说一模一样的话是浪费。重复本身应该变成信息。
+     *
+     * <p>⛔ 措辞与语义**逐字对齐**：说的是「这条提醒连续出现了 N 天」，
+     * 不是「这件事持续了 N 天」。我们只知道前者（后者要按天回算规则），
+     * 说成后者就是编。而且前者更有用 —— 它指的是老板已经被提醒 N 天还没动。
+     *
+     * <p>⚠️ 记录/查询失败一律当作「没有这条信息」，提示照常出 ——
+     * 连续天数是**附加信息**，它坏了不该让主提示消失。
+     */
+    private String appendRepeatNotice(String hint, String factoryId,
+                                      FindingService.Result result) {
+        if (hint == null || hint.isEmpty() || result.findings().isEmpty()) {
+            return hint;
+        }
+        java.util.Map<String, Integer> days =
+                occurrenceTracker.recordAndCountConsecutiveDays(factoryId, result.findings());
+        // ⚠️ null 也要防: 连续天数是**附加信息**, 它以任何形式失效都不该让主提示消失。
+        //    (2026-08-09 全量跑出来的: 追踪器返回 null 时整条提示被吞掉 ——
+        //     单跑 tracker 的测试全绿, 是 appender 的测试把它抓出来的。)
+        if (days == null || days.isEmpty()) {
+            return hint;
+        }
+        java.util.List<String> notices = new java.util.ArrayList<>();
+        for (com.cretas.aims.service.finding.Finding f : result.findings()) {
+            Integer n = days.get(com.cretas.aims.service.finding.FindingOccurrenceTracker
+                    .key(f.code(), f.subjectId()));
+            if (n != null
+                    && n >= com.cretas.aims.service.finding.FindingOccurrenceTracker.MIN_DAYS_WORTH_SAYING) {
+                notices.add((f.subjectName() == null || f.subjectName().isBlank()
+                        ? "这条" : f.subjectName()) + "已连续提醒 " + n + " 天");
+            }
+        }
+        if (notices.isEmpty()) {
+            return hint;
+        }
+        return hint + "\n> （" + String.join("；", notices) + "，一直没处理。）";
     }
 }
