@@ -5007,34 +5007,35 @@ async def resolve_store_margin(
         # cost correctly (dish-level food_cost × qty sold at each store).
         store_dish_rows = await conn.fetch(
             """
-            WITH anchor AS (
+            WITH anchor_scope AS MATERIALIZED (
+                -- ⚡ 二次优化(2026-08-08): 上一版把 MAX 改成倒序取第一条后,
+                -- 这一条**仍要 808ms** —— EXPLAIN 显示 `JOIN scope` 逼出嵌套循环,
+                -- 扫完 236,954 行、`Rows Removed by Join Filter: 1,066,466`,
+                -- 倒序短路完全失效。把 scope 提成 MATERIALIZED CTE(先算成 10 行)
+                -- 再用 IN, 外层就能沿 date 索引反扫、命中即停。实测 828ms -> 0ms。
+                -- ⛔ 试过 `= ANY(array_agg(...))`: 2100ms 更差, 数组比较挡住索引。
+                SELECT DISTINCT store_id
+                  FROM agg_daily
+                 WHERE factory_id = $1
+                UNION
+                SELECT DISTINCT store_id
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM agg_daily WHERE factory_id = $1
+                   )
+            ), anchor AS (
                 -- Scalar-subquery form so COALESCE short-circuits: when the
-                -- caller pins an exact end date the expensive MAX scan over
-                -- the full fact join is never executed.
-                -- ⚡ 语义不变、耗时 4331ms -> 索引反扫(2026-08-08 实测)。
-                -- COALESCE 短路保留(给了显式 end date 就不跑扫描), 但**没给时**
-                -- 原式仍要 MAX 全扫 94.7 万行明细。改成 ORDER BY date DESC LIMIT 1:
-                -- 走 idx_fact_pos_txn_factory_store_date 反扫, 命中即停。
+                -- caller pins an exact end date the expensive scan is skipped.
                 -- 「最后一天有菜品明细的交易日」这个语义逐字保留。
                 SELECT COALESCE($4::date, (
                     SELECT t2.date
                       FROM fact_pos_transaction t2
-                      JOIN (
-                        SELECT DISTINCT store_id
-                          FROM agg_daily
-                         WHERE factory_id = $1
-                        UNION
-                        SELECT DISTINCT store_id
-                          FROM fact_pos_transaction
-                         WHERE factory_id = $1
-                           AND NOT EXISTS (
-                             SELECT 1 FROM agg_daily WHERE factory_id = $1
-                           )
-                      ) scope ON scope.store_id = t2.store_id
                       JOIN dim_store s2
                         ON s2.store_id = t2.store_id
                        AND s2.factory_id = t2.factory_id
-                     WHERE t2.factory_id = $1
+                     WHERE t2.store_id IN (SELECT store_id FROM anchor_scope)
+                       AND t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
                        AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
@@ -5051,41 +5052,47 @@ async def resolve_store_margin(
                      LIMIT 1
                 )) AS end_date
             )
+            -- ⚡ 先聚合再关联维表(2026-08-08 实测 3489ms -> 2346ms, 结果集逐行相同)。
+            -- 原式把 dim_store / dim_product 直接 JOIN 进 94.7 万行的明细扫描里,
+            -- EXPLAIN 显示 **dim_product 只有 10 行却被读了 262 万次缓冲**
+            -- (嵌套循环逐行回表), fact_pos_transaction 336 万、fact_pos_item 98 万。
+            -- 先按 (门店, 菜品ID) 聚合成 ~100 行, 再去关联两张小维表 —— 维表只查一遍。
+            -- ⛔ 门店过滤($5/$6/$7)必须留在**外层**: 它按 dim_store.name 过滤,
+            --    而内层只有 store_id, 挪进去会拿不到名字。
+            , agg AS (
+                SELECT t.store_id, i.product_id,
+                       SUM(i.qty)::float AS qty,
+                       SUM(i.amount)::float AS revenue,
+                       COUNT(DISTINCT i.transaction_id)::int AS bills,
+                       MIN(t.date) AS window_start,
+                       MAX(t.date) AS window_end
+                  FROM fact_pos_item i
+                  JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                  CROSS JOIN anchor
+                 WHERE i.factory_id = $1 AND t.factory_id = $1
+                   AND anchor.end_date IS NOT NULL
+                   AND t.store_id IN (SELECT store_id FROM anchor_scope)
+                   AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+                   AND t.date <= COALESCE($4::date, anchor.end_date)
+                 GROUP BY t.store_id, i.product_id
+            )
             SELECT s.store_id, s.name AS store_name,
                    p.name AS dish_name, p.normalized_name,
-                   SUM(i.qty)::float AS qty,
-                   SUM(i.amount)::float AS revenue,
-                   COUNT(DISTINCT i.transaction_id)::int AS bills,
-                   MIN(t.date) AS window_start,
-                   MAX(t.date) AS window_end
-              FROM fact_pos_item i
-              JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                   SUM(a.qty)::float AS qty,
+                   SUM(a.revenue)::float AS revenue,
+                   SUM(a.bills)::int AS bills,
+                   MIN(a.window_start) AS window_start,
+                   MAX(a.window_end) AS window_end
+              FROM agg a
               JOIN dim_product p
-                ON p.product_id = i.product_id
-               AND p.factory_id = i.factory_id
-              JOIN (
-                SELECT DISTINCT store_id
-                  FROM agg_daily
-                 WHERE factory_id = $1
-                UNION
-                SELECT DISTINCT store_id
-                  FROM fact_pos_transaction
-                 WHERE factory_id = $1
-                   AND NOT EXISTS (
-                     SELECT 1 FROM agg_daily WHERE factory_id = $1
-                   )
-              ) scope ON scope.store_id = t.store_id
+                ON p.product_id = a.product_id
+               AND p.factory_id = $1
               JOIN dim_store s
-                ON s.store_id = t.store_id
-               AND s.factory_id = t.factory_id
-              CROSS JOIN anchor
-             WHERE i.factory_id = $1 AND t.factory_id = $1
-               AND anchor.end_date IS NOT NULL
-               AND ($5::text IS NULL OR s.store_id::text = $5::text)
+                ON s.store_id = a.store_id
+               AND s.factory_id = $1
+             WHERE ($5::text IS NULL OR s.store_id::text = $5::text)
                AND ($6::text IS NULL OR s.name = $6::text)
                AND ($7::text[] IS NULL OR s.name = ANY($7::text[]))
-               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
-               AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
             factory_id, days, exact_start, exact_end, store_id, store_name,
