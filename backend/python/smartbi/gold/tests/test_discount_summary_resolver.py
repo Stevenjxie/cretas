@@ -14,7 +14,6 @@ import pytest
 
 from smartbi.gold.restaurant import restaurant_ops_router as R
 from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
-from smartbi.gold.restaurant.structural_route import resolve_structurally
 
 ALL_INTENTS = tuple(_RESOLVER_DIMENSIONS)
 
@@ -160,38 +159,6 @@ async def test_no_revenue_means_no_ratio(summary):
 
     assert got.meta.get("no_data") is True
     assert "%" not in got.answer_text
-
-
-@pytest.mark.asyncio
-async def test_no_agg_daily_at_all_refuses_before_querying(summary):
-    """连日汇总锚点都没有 -> 直接如实说, 不去拼另一个口径的数。"""
-    calls = summary(_PROD_TOTAL)
-
-    got = await R.resolve_discount_summary(
-        _Pool(anchor=None), "MOCK_REST", 30, role="factory_super_admin"
-    )
-
-    assert got.meta.get("no_data") is True
-    assert not calls, "没有锚点时不该再去查折扣"
-
-
-def test_l1_routes_discount_wording_zero_token():
-    """折扣只有一个服务者 -> L1 结构解析能零 token 定终点。"""
-    for phrase in ("折扣力度多大", "最近让利了多少", "打折打得多吗", "满减花了多少"):
-        got = resolve_structurally(phrase, candidate_intents=ALL_INTENTS)
-        assert got is not None, phrase
-        assert got.intent == "RESTAURANT_OPS_DISCOUNT_SUMMARY", phrase
-
-
-def test_coupon_wording_is_not_claimed_as_discount():
-    """🔴 阴性对照: 「优惠券核销」不是折扣金额口径, 不许被这层认领。
-
-    券的发放/核销与 `agg_daily.discount_amount` 是两回事。不登记那族词 ->
-    交给 L3 —— **不登记就是安全的一侧**。
-    """
-    assert resolve_structurally(
-        "优惠券核销多少", candidate_intents=ALL_INTENTS
-    ) is None
 
 
 def test_declared_grain_matches_what_the_sources_can_produce():

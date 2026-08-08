@@ -18,7 +18,6 @@ import pytest
 
 from smartbi.gold.restaurant import restaurant_ops_router as R
 from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
-from smartbi.gold.restaurant.structural_route import resolve_structurally
 
 ALL_INTENTS = tuple(_RESOLVER_DIMENSIONS)
 
@@ -139,23 +138,16 @@ async def test_never_promises_savings(sources):
         assert not offenders, f"承诺了节省: {offenders}"
 
 
-def test_l1_routes_supplier_price_wording():
-    for phrase in ("哪个供应商报价最贵", "最近30天哪个供应商报价最贵", "进价涨了吗"):
-        got = resolve_structurally(phrase, candidate_intents=ALL_INTENTS)
-        assert got is not None, phrase
-        assert got.intent == "RESTAURANT_OPS_SUPPLIER_PRICE", phrase
-
-
 def test_bare_purchase_wording_stays_with_requisition():
-    """🔴 阴性对照:「采购花了多少钱」是**领料花费**(#2043 修过的口径), 不是供应商报价。
+    """🔴「采购花了多少钱」是**领料花费**(#2043 修过的口径), 不是供应商报价。
 
-    所以词表刻意不收裸「采购」。收了就会把一个已经修对的口径重新抢走 ——
-    那次事故的形态是「同一个问题换个说法就时灵时不灵」。
+    这张词表现在只喂给契约校验与 LLM 提示, **不再授权任何执行**
+    (关键词层已于 2026-08-08 整体撤除)。但收进裸「采购」仍然有害:
+    它会让契约校验以为用户问的是供应商报价, 从而把一个已经修对的口径判成不符。
     """
     from smartbi.gold.restaurant.answer_contract import _REQUEST_TEXT_TOKENS
 
     assert "采购" not in _REQUEST_TEXT_TOKENS["supplier_price"]
-    assert resolve_structurally("采购花了多少钱", candidate_intents=ALL_INTENTS) is None
 
 
 def test_declared_grain_is_ingredient_only():
