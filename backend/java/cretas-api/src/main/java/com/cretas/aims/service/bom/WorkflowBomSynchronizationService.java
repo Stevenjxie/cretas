@@ -79,20 +79,22 @@ public class WorkflowBomSynchronizationService {
                     .canCompleteAutomatically(true)
                     .build();
         }
-        if (!Objects.equals(active.getWorkflowId(), target.getWorkflowId())) {
-            return WorkflowBomSyncPreflightResponse.builder()
-                    .classification(WorkflowBomSyncPreflightResponse.Classification.CONFLICT)
-                    .activeBomVersion(active.getVersion())
-                    .activeBomWorkflowRevisionId(active.getWorkflowRevisionId())
-                    .targetWorkflowRevisionId(target.getId())
-                    .conflicts(List.of(issue(
-                            "BOM_WORKFLOW_LINEAGE_CONFLICT",
-                            null, null, null, "workflowId",
-                            "当前生效 BOM 与待发布 Workflow 不属于同一工艺版本线",
-                            "请明确选择正确的 BOM 或 Workflow 版本")))
-                    .canCompleteAutomatically(false)
-                    .build();
-        }
+        // 🔴 2026-08-08 移除:这里曾按 workflow **记录 id** 相等来判「同一工艺版本线」,
+        // 不等就直接 CONFLICT + canCompleteAutomatically=false。
+        //
+        // 它挡死的是最普通的维护动作:改画布(改辅料克数 / 加副产)时,saveDraft 会**按设计**
+        // 分叉出一条新的 workflow 记录(definitionVersion +1,真机实测 154 → 157),
+        // 而生效 BOM 仍钉着旧记录 → 从第二次编辑起,发布必然撞这条闸。UI 提供的补救
+        // 「生效该草稿」也解不开(activate 不重钉 workflowId,实测 activeBomVersion 1→2 而
+        // activeBomWorkflowRevisionId 仍是 264)。结果:配方一旦生效过,就再也改不动。
+        //
+        // 而这里根本不需要这条闸:
+        //  1. active 是用 resolveMainOutputProductTypeId(target) 反查出来的,与 target
+        //     天然同厂同产品 —— 走到这里的「workflowId 不等」只可能是版本分叉,不存在"张冠李戴";
+        //  2. 下面那台迁移引擎按**产出 productTypeId + 投入槽位**做映射,全程不引用 workflowId,
+        //     并且自带三态定级:能映射→AUTO_MIGRATABLE / 有料对不上→USER_INPUT_REQUIRED /
+        //     产出被删→CONFLICT(BOM_FAMILY_OUTPUT_REMOVED)。真正的安全网在它那里,
+        //     这条闸只是把它挡在门外,让本可自动完成的迁移变成死路。
         if (Objects.equals(active.getWorkflowRevisionId(), target.getId())
                 && Objects.equals(active.getWorkflowRevisionHash(), target.getRevisionHash())) {
             try {

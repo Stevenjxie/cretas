@@ -118,6 +118,55 @@ class WorkflowBomSynchronizationServiceTest {
                 .containsExactlyInAnyOrder("terminal:new-main", "terminal:new-co");
     }
 
+    /**
+     * 🔴 2026-08-08 真机死路的回归:改画布会按设计分叉出一条新的 workflow 记录
+     * (definitionVersion +1,实测 154 → 157),生效 BOM 仍钉着旧记录。
+     * 旧实现在这里直接 BOM_WORKFLOW_LINEAGE_CONFLICT + 不可自动完成 ⇒
+     * **配方一旦生效过就再也改不动**(UI 的「生效该草稿」也解不开)。
+     * 分叉本身不是冲突,该由下面的迁移引擎按内容定级。
+     */
+    @Test
+    @DisplayName("forked workflow record is a version advance, not a lineage conflict")
+    void forkedWorkflowRecordIsNotALineageConflict() {
+        target.setWorkflowId(11L); // 生效 BOM 钉的是 10L —— 编辑已发布画布时分叉出来的新记录
+        stubMultiOutputFamily(
+                List.of(item(1L, main.getId()), item(2L, coProduct.getId())));
+
+        WorkflowBomSyncPreflightResponse result =
+                service.preflight(FACTORY, OWNER, target);
+
+        assertThat(result.getConflicts())
+                .extracting(WorkflowBomSyncPreflightResponse.SyncIssue::getCode)
+                .doesNotContain("BOM_WORKFLOW_LINEAGE_CONFLICT");
+        assertThat(result.getClassification())
+                .isEqualTo(WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE);
+        assertThat(result.isCanCompleteAutomatically()).isTrue();
+    }
+
+    /**
+     * ⛔ 放宽上面那条闸不等于放弃保护:跨记录时,迁移引擎自己的拒绝能力必须仍然生效。
+     * 否则就是把"发布时挡住"换成了"配错 BOM"。
+     */
+    @Test
+    @DisplayName("forked workflow record still blocks a removed output")
+    void forkedWorkflowRecordStillBlocksRemovedOutput() {
+        target.setWorkflowId(11L);
+        outputs = List.of(output(
+                "terminal:new-main", MAIN_PRODUCT, BomRecipe.OutputRole.MAIN, "100"));
+        stubMultiOutputFamily(List.of(item(1L, main.getId())));
+
+        WorkflowBomSyncPreflightResponse result =
+                service.preflight(FACTORY, OWNER, target);
+
+        assertThat(result.getClassification())
+                .isEqualTo(WorkflowBomSyncPreflightResponse.Classification.CONFLICT);
+        assertThat(result.isCanCompleteAutomatically()).isFalse();
+        assertThat(result.getConflicts())
+                .extracting(WorkflowBomSyncPreflightResponse.SyncIssue::getCode)
+                .containsExactly("BOM_FAMILY_OUTPUT_REMOVED");
+        verifyNoInteractions(recipeService);
+    }
+
     @Test
     @DisplayName("missing co-product scoped input is reported by preflight before synchronization")
     void missingCoProductInputIsBlockedBeforeActualSynchronization() {
