@@ -609,6 +609,61 @@ class BomSeasoningWorkspaceServiceTest {
         assertEquals("box", process.getStandardBasisUnit(), "基准应取主产出单位, 不受副产 kg 影响");
     }
 
+    /**
+     * 🔴 复现 prod: 副产节点**不在目标切片里**。
+     *
+     * <p>PinnedWorkflowGraph 是按目标产品切出来的子图(ancestors/terminals), 兄弟终端(副产、
+     * 联产)通常不在 graph.nodes() 里。于是「按 materialNodeId 去 nodesById 查 isByproduct」
+     * 查不到 → 判不出是副产 → 它的 kg 照样混进 outputUnits → size!=1 → 整道工序仍然
+     * 「标准用量不可用」。真机实证: 修订 272 端口数据完全正常, 但 workspace 返回
+     * basisUnit=null / supported=false。
+     *
+     * <p>判据: 端口的 materialNode **不在切片里**就不参与本目标的基准 —— 不能依赖节点存在。
+     */
+    @Test
+    void byproductPortOutsideTheTargetSliceStillMustNotBreakTheBasis() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithByproductPortButNodeOutsideSlice(recipe, "p1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "分切")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        var process = response.getProcesses().get(0);
+        assertTrue(process.isStandardUsageSupported(),
+                "副产节点不在切片里时也不该毁掉基准(prod 就是这个形态)");
+        assertEquals("box", process.getStandardBasisUnit());
+    }
+
+    /** 端口指向副产, 但副产节点**不在** graph.nodes() 里 —— 与 prod 的目标切片一致。 */
+    private void pinWithByproductPortButNodeOutsideSlice(BomRecipe recipe, String processId) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("ports", List.of(
+                Map.of("direction", "OUTPUT", "unit", "box",
+                        "materialNodeId", "fg-1", "materialKind", "FINISHED_GOOD"),
+                Map.of("direction", "OUTPUT", "unit", "kg",
+                        "materialNodeId", "byp-outside", "materialKind", "SEMI_FINISHED")));
+        Map<String, Object> fgData = new LinkedHashMap<>();
+        fgData.put("baseUnit", "box");
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("fg-1", "FINISHED_GOOD",
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), fgData));
+        List<ProductProcessWorkflowDTO.Edge> edges = List.of(
+                new ProductProcessWorkflowDTO.Edge("e-fg", "node-" + processId, "output", "fg-1", "input"));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
+                        nodes, edges));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
+    }
+
     /** 一道工序: 主产出 box + 副产 kg —— 与画布「+ 副产」建出来的形状一致。 */
     private void pinWithByproductAlongsideFinished(BomRecipe recipe, String processId) {
         Map<String, Object> processData = new LinkedHashMap<>();

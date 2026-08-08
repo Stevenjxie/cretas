@@ -503,7 +503,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                 // 把它算进来会让 outputUnits = {盒, kg} → size != 1 → 整道工序判为「缺少可用的产出基准」,
                 // 后果是**这道工序的辅料从此再也改不了**(弹窗里"当前不能保存", 而按钮不禁用, 点了没反应)。
                 // 即: 加一个副产 = 永久丧失辅料可配置性, 而两件事在业务上毫无关系。
-                if (isByproductPort(port, nodesById)) {
+                if (isExcludedFromBasis(port, nodesById)) {
                     continue;
                 }
                 addCanonicalUnit(portUnits, port.get("unit"));
@@ -629,10 +629,32 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         return candidate.getStatus();
     }
 
-    /** 该 OUTPUT 端口指向的物料节点是不是副产 —— 副产不参与基准单位判定。 */
-    private boolean isByproductPort(
+    /**
+     * 该 OUTPUT 端口要不要排除出「标准用量基准」的单位判定。
+     *
+     * <p>两种都排除:
+     * <ol>
+     *   <li>指向的节点**明确标了副产**;</li>
+     *   <li>指向的节点<b>根本不在本切片里</b> —— 🔴 这条才是 prod 的真实形态。
+     *       {@link PinnedWorkflowGraph} 是按目标产品切出来的子图(ancestors/terminals),
+     *       兄弟终端(副产、联产)通常**不在** graph.nodes() 里, 于是「按 materialNodeId 查
+     *       isByproduct」永远查不到 → 判不出副产 → 它的 kg 照样混进 outputUnits → size!=1 →
+     *       整道工序「标准用量不可用」, 辅料从此改不了。
+     *       我的第一版修复只判了第 1 条, 单测(节点在图里)绿、真机(节点不在图里)照挂 ——
+     *       判据不能依赖「节点恰好存在」。</li>
+     * </ol>
+     *
+     * <p>语义上也站得住: 基准回答的是「本配方的目标产出每一单位配多少辅料」, 不在本目标路径上的
+     * 产出(副产/兄弟终端)本就不该参与这个分母。
+     */
+    private boolean isExcludedFromBasis(
             Map<?, ?> port, Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
-        return isByproductNode(nodesById.get(Objects.toString(port.get("materialNodeId"), null)));
+        String materialNodeId = Objects.toString(port.get("materialNodeId"), null);
+        if (materialNodeId == null) {
+            return false;   // 没声明目标节点 → 按老路径参与判定, 不改变既有行为
+        }
+        ProductProcessWorkflowDTO.Node target = nodesById.get(materialNodeId);
+        return target == null || isByproductNode(target);
     }
 
     /**
