@@ -121,6 +121,8 @@ class KeruyunAdapter:
             gross_cents=_i(raw["grossAmount"], "grossAmount"),
             discount_cents=_i(raw["discountAmount"], "discountAmount"),
             net_cents=_i(raw["netAmount"], "netAmount"),
+            # 老平台不给这个字段时按 0 —— 不是编 0, 是「这个渠道没有抽佣」的真值。
+            platform_fee_cents=_i(raw.get("platformFee", 0), "platformFee"),
             guest_count=_i(raw.get("guestCount", 1), "guestCount"),
             items=[
                 NormalizedItem(

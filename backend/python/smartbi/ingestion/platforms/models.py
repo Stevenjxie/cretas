@@ -38,7 +38,12 @@ class NormalizedOrder:
     gross_cents: int
     discount_cents: int
     net_cents: int
-    guest_count: int
+    #: 渠道侧成本(外卖平台抽佣 / 团购券核销费), 按实付净额抽。堂食为 0。
+    #: ⛔ 与 discount_cents 分开: 折扣是让给顾客的, 抽佣是付给平台的,
+    #:    两者的处置动作完全不同(调价格策略 vs 谈费率/引流私域)。
+    #: 默认 0 —— 老适配器不给这个字段时行为逐字不变。
+    platform_fee_cents: int = 0
+    guest_count: int = 1
     items: List[NormalizedItem] = field(default_factory=list)
     payments: List[NormalizedPayment] = field(default_factory=list)
 

@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS "order" (
     discount_cents INTEGER NOT NULL DEFAULT 0 CHECK(typeof(discount_cents) = 'integer'),
     net_cents      INTEGER NOT NULL CHECK(typeof(net_cents) = 'integer'),
     guest_count    INTEGER NOT NULL DEFAULT 1 CHECK(typeof(guest_count) = 'integer'),
+    -- 🔴 2026-08-09 补的建模缺口: **渠道侧成本**。
+    -- 此前订单只有「毛额 - 折扣 = 净额」, 没有任何渠道成本 ——
+    -- 于是三个渠道算出来的毛利率一模一样(67.66/67.68/67.81), 因为成本只跟
+    -- 菜品配方走、与渠道无关。而真实餐饮里「外卖做得越大越不赚钱」恰恰来自
+    -- 平台抽佣: 那是**渠道毛利倒挂**这条发现规则唯一的判据来源, 缺了它规则
+    -- 写出来也永远产出 0 条。
+    -- ⛔ 单独存, 不并进 discount_cents: 折扣是让给顾客的, 抽佣是付给平台的,
+    --    两者的处置动作完全不同(前者调价格策略, 后者谈费率/引流到私域)。
+    platform_fee_cents INTEGER NOT NULL DEFAULT 0
+                       CHECK(typeof(platform_fee_cents) = 'integer'),
     seq            INTEGER NOT NULL CHECK(typeof(seq) = 'integer')        -- 全局单调游标
 );
 

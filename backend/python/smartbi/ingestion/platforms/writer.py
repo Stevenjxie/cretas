@@ -221,8 +221,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                     "INSERT INTO fact_pos_transaction "
                     "(factory_id, store_id, source_type, source_bill_no, date, time, "
                     " gross_amount, discount_amount, net_amount, customer_count, "
-                    " item_count, order_type, has_discount, meal_period, staff_id) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,"
+                    " item_count, order_type, has_discount, meal_period, platform_fee_amount, staff_id) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,"
                     "        (SELECT d.staff_id FROM dim_staff d JOIN dim_store s"
                     "            ON s.store_id = d.store_id AND s.factory_id = $1"
                     "          WHERE d.factory_id = $1 AND d.role = 'cashier'"
@@ -238,6 +238,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                     order.channel,
                     (order.discount_cents or 0) > 0,
                     daypart,
+                    # 渠道侧成本(外卖抽佣/团购券核销费)。堂食恒为 0 —— 那是真值不是缺失。
+                    _yuan(getattr(order, "platform_fee_cents", 0) or 0),
                 )
                 if txn_row is None:
                     # 已存在(幂等命中): 明细也不必重写。不计入 written。

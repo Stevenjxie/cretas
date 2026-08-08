@@ -179,6 +179,8 @@ def page_orders(conn, *, since_seq: int, limit: int):
             "grossAmount": r["gross_cents"],
             "discountAmount": r["discount_cents"],
             "netAmount": r["net_cents"],
+            # 渠道侧成本(平台抽佣/券核销费)。堂食恒为 0。
+            "platformFee": r["platform_fee_cents"],
             "guestCount": r["guest_count"],
             "items": [
                 {"dishName": i["name"], "dishCategory": i["category"],
