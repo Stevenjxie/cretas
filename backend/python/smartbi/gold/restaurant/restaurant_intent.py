@@ -3790,13 +3790,24 @@ def _trusted_context_dish_followup_spec(
         candidate_code = match_restaurant_ops(query)
     except Exception:
         return None
-    # The initial keyword code is only a candidate. A diagnosis such as
-    # "为什么销量低" may have no ranking/report keyword at all; typed
-    # server-restored dish+metric+time+store slots still compile through the
-    # scoped unit-economics resolver. The strict checks below authorize only
-    # the final sealed dish plan, never this raw hint.
+    # 🔴 2026-08-08 移除「关键词没认出来就默认成菜品毛利」。
+    #
+    # 原代码是 `if candidate_code is None: candidate_code = GROSS_MARGIN`,
+    # 理由是「后面 16 道严格检查只授权最终封装的计划, 不授权这个 raw hint」。
+    # 那个理由是**真的**(检查确实很严), 但它答的不是被问的问题:
+    #
+    #   缺证据时给一个默认值, 等于在**没有任何东西指向毛利**的情况下,
+    #   把「毛利」当成起点往下走。后面的检查只能验「这个计划自洽吗」,
+    #   验不了「用户问的是不是这个」—— 那个信息在这一步已经被默认值抹掉了。
+    #
+    # ⇒ 判据(Steve 定的): 确定性层只能**认得**, 不能**猜**。认不出来就交给 LLM。
+    #    `_TRUSTED_CONTEXT_DISH_INTENTS` 有三个成员, 无证据时挑其中一个就是猜。
+    #
+    # prod 实测(近两周 961 条 trusted_context): 933 条由关键词认出,
+    # **28 条靠这个默认值兜**。去掉后这 28 条回落 planner —— 慢一点、贵一点,
+    # 但不再有「没认出来也给了个答案」。
     if candidate_code is None:
-        candidate_code = "RESTAURANT_OPS_GROSS_MARGIN"
+        return None
 
     spec = _build_spec(
         candidate_code,

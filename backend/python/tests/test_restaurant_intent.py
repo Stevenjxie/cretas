@@ -2821,6 +2821,37 @@ def test_trusted_context_dish_plan_still_rejects_unsafe_shapes(query):
     assert _trusted_context_dish_followup_spec(query) is None
 
 
+def test_trusted_context_never_defaults_to_an_intent_without_evidence(monkeypatch):
+    """🔴 关键词认不出意图时**返回 None**, ⛔ 不许默认成菜品毛利。
+
+    2026-08-08 之前这里写的是 `candidate_code = "RESTAURANT_OPS_GROSS_MARGIN"`,
+    理由是「后面 16 道严格检查只授权最终封装的计划」。那个理由是真的, 但它答的
+    不是被问的问题 —— **缺证据时给一个默认值, 后面的检查只能验「这个计划自洽吗」,
+    验不了「用户问的是不是这个」**, 那个信息在默认那一步已经被抹掉了。
+
+    ⇒ 判据: 确定性层只能认得, 不能猜。`_TRUSTED_CONTEXT_DISH_INTENTS` 有三个成员,
+      无证据时挑其中一个就是猜。prod 实测近两周 961 条 trusted_context 里,
+      933 条由关键词认出, **28 条靠这条默认兜**。
+
+    ⚠️ 这里必须把 `match_restaurant_ops` 打哑来隔离那一步, 不能靠构造句子:
+       16 道检查要求 metrics 非空, 而**句子里一旦有指标词, 关键词就认出来了** ——
+       天然样本里两个条件凑不到一起, 第一版就因此写成了一条测不到该路径的假断言
+       (变异把默认值放回去它照样绿)。
+    """
+    import smartbi.gold.restaurant.restaurant_intent as RI
+
+    # 槽位齐全、关键词本来认得出的句子 —— 保证 16 道检查能过。
+    typed = "最近7天全部门店抖音松叶蟹368套餐的毛利"
+    assert _trusted_context_dish_followup_spec(typed) is not None, (
+        "前提: 这句话在关键词正常时能编译出计划(否则测的是别的东西)"
+    )
+
+    monkeypatch.setattr(RI, "match_restaurant_ops", lambda q: None)
+    assert _trusted_context_dish_followup_spec(typed) is None, (
+        "关键词认不出意图就必须交给 planner, 不许自己挑一个"
+    )
+
+
 @pytest.mark.parametrize("action", ("销量为什么是这样", "销量怎么优化"))
 def test_trusted_context_dish_plan_accepts_typed_diagnosis_and_optimization(action):
     spec = _trusted_context_dish_followup_spec(
