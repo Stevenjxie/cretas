@@ -81,9 +81,9 @@ uvicorn main:app --port 8083     # 启动服务
 1. 仍然在独立 `codex/*` worktree 开发、审查和测试，禁止从 feature 分支或脏工作区直接部署。
 2. 合入前先确认本地 `main` 工作区干净、没有其他 session 的未提交改动，并记录离线基线 SHA、候选 commit、目标测试和 diff scope；发现主工作区脏或来源不明时停止，不得覆盖、暂存或夹带用户改动。
 3. 只允许把已审查且适用门禁通过的候选 commit 合入本地 `main`；本地 `main` 是封控期间唯一发布真值。并发候选必须由一个协调者串行合入，禁止多个 session 各自维护“本地 main”。
-4. 发布必须从 clean、exact local `main` 的专用 release worktree/快照执行，并锁定该本地 main SHA。若现有发布脚本仍硬性要求 `HEAD == origin/main`，不得手工删除或绕过保护；先使用/实现带显式确认、exact-local-main 校验和结构化回执的离线入口，再发布。
+4. 发布必须从 clean、exact local `main` SHA 创建的 detached release worktree 执行。现有 Java/Web 组件脚本使用已审计的 `SKIP_GIT_CHECK=1` 离线逃生门：脚本必须打印 `HEAD != origin/main` 警告并继续保留制品、蓝绿、回滚、健康和 Web 哈希门禁；该逃生门只允许用于已经合入本地 `main` 的 detached 快照，禁止用于 feature 分支。离线期间不调用仍会强制 fetch/exact-origin-main 的统一入口，也不得改写 `refs/remotes/origin/main` 伪装远端已前进。
 5. commit、合入本地 main、部署、迁移、服务验收和业务验收继续分开报告；“已合入本地 main”不等于已部署。
-6. GitHub 恢复后，先只读比较 local main 与 `origin/main`，通过普通 merge/rebase 解决差异并推送，禁止 force push；恢复在线真值后自动回到本文件的常规 PR/fastlane 与 exact `origin/main` 发布规则。
+6. GitHub 恢复后，各 feature 分支分别 push、开 PR、走 CI 并正常进入 `origin/main`；全部核销后再让本地 `main` 对齐 `origin/main`。禁止把离线累积的本地 `main` 整体直推、force push，或用一次大 PR 绕过逐批审查。恢复在线真值后自动回到本文件的常规 PR/fastlane 与 exact `origin/main` 发布规则。
 
 本节与下方所有“必须先推 `origin/main`”条款冲突时，仅在 Steve 已确认的 GitHub 封控窗口内以本节为准；GitHub 可用或封控窗口结束后，下方常规规则恢复最高优先级。
 
