@@ -62,6 +62,39 @@ class WorkflowReportingUnitResolverTest {
                 productTypeRepository, rawMaterialTypeRepository, unitContractService);
     }
 
+    /**
+     * 🔴 2026-08-08 真机: 副产的 SKU 在**物料档案**里, 不在 product_types
+     * (系统里「副产」这个身份只有物料档案能表达 —— product_types 连 byproduct 标记列都没有)。
+     * 产出节点查不到产品时若不回落到物料档案, 副产在报工链路上恒定解析不出单位:
+     *   409 Workflow reporting unit cannot be resolved for SEMI_FINISHED SKU RMT_...
+     */
+    @Test
+    void byproductOutputResolvesUnitFromMaterialArchive() {
+        byproductMaterial("RMT-FAT", "kg", true);
+
+        assertEquals("kg", resolver.resolve("F006", "SEMI_FINISHED", "RMT-FAT", "kg"));
+    }
+
+    /** ⛔ 回落只认**标了副产**的物料 —— 普通原料错绑到产出 Cell 仍要 fail closed。 */
+    @Test
+    void unmarkedMaterialOnOutputCellStillFailsClosed() {
+        byproductMaterial("RMT-PLAIN", "kg", false);
+
+        assertThrows(BusinessException.class,
+                () -> resolver.resolve("F006", "SEMI_FINISHED", "RMT-PLAIN", "kg"));
+    }
+
+    private void byproductMaterial(String id, String unit, boolean marked) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId("F006");
+        material.setUnit(unit);
+        material.setIsByproduct(marked);
+        when(productTypeRepository.findByIdAndFactoryId(id, "F006")).thenReturn(Optional.empty());
+        when(rawMaterialTypeRepository.findByIdAndFactoryId(id, "F006"))
+                .thenReturn(Optional.of(material));
+    }
+
     private void rawMaterial(String id, String unit) {
         RawMaterialType material = new RawMaterialType();
         material.setId(id);

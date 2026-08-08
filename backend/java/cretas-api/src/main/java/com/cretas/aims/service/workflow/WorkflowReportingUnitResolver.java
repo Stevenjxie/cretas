@@ -50,9 +50,28 @@ public class WorkflowReportingUnitResolver {
         }
         if (SEMI_FINISHED.equals(materialKind) || FINISHED_GOOD.equals(materialKind)) {
             ProductType product = productTypeRepository.findByIdAndFactoryId(skuId, factoryId)
-                    .orElseThrow(() -> unresolved(materialKind, skuId,
-                            "SKU was not found in the factory"));
-            return massAwareUnit(factoryId, materialKind, skuId, product.getUnit());
+                    .orElse(null);
+            if (product != null) {
+                return massAwareUnit(factoryId, materialKind, skuId, product.getUnit());
+            }
+            // 🔴 2026-08-08: 副产的 SKU 在**物料档案**里, 不在 product_types。
+            //
+            // 画布把副产建成「产出节点(kind 多为 SEMI_FINISHED) + isByproduct 标记」, 选料下拉
+            // 从 raw_material_types 按标记筛; 而系统里「副产」这个身份**只有物料档案能表达**
+            // (product_types 连 byproduct 标记列都没有)。所以产出节点的 SKU 查不到产品时,
+            // 必须再查一次物料档案, 否则副产在报工链路上恒定解析不出单位。
+            //
+            // ⛔ 只接受**确实标了副产**的物料 —— 普通原料被错绑到产出 Cell 时仍要 fail closed,
+            //    否则这里就成了「什么都能绑」的后门。
+            String byproductUnit = rawMaterialTypeRepository.findByIdAndFactoryId(skuId, factoryId)
+                    .filter(material -> Boolean.TRUE.equals(material.getIsByproduct()))
+                    .map(RawMaterialType::getUnit)
+                    .filter(unit -> unit != null && !unit.isBlank())
+                    .orElse(null);
+            if (byproductUnit != null) {
+                return massAwareUnit(factoryId, materialKind, skuId, byproductUnit);
+            }
+            throw unresolved(materialKind, skuId, "SKU was not found in the factory");
         }
         return canonical(factoryId, declaredUnit, materialKind, skuId);
     }
