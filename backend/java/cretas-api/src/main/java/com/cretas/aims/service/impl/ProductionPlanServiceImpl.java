@@ -422,6 +422,93 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .orElse(null);
     }
 
+    /**
+     * 把**尚未开工**的计划重钉到当前生效的工艺修订 + BOM(Steve 2026-08-09 拍板)。
+     *
+     * <p>计划在创建那一刻就把工艺修订与 BOM 钉成快照, 之后改配方/发新版本都不影响它 ——
+     * 这条对**已生产**的批次是刚性要求(食品溯源: 这批货当时按什么配方做的必须说得清)。
+     * 但对「今天建了计划、明天改了配方、还一克料没投」的计划, 快照就成了枷锁: 用不上新配方,
+     * 只能删了重建。本方法只解这一半。
+     *
+     * <p>🔴 「有没有开工」的判据不能看计划状态, 也不能看有没有批次 —— 真机样本
+     * PLAN-1786184738975(状态 IN_PROGRESS + 已有 1 个生产批次, 却一克料都没扣)会被这两者
+     * 双双误判成"已生产"而拒绝更新。正确判据是报工行的**三个信号全干净**:
+     *   · rowStatus        != SUBMITTED   (未物化成批次)
+     *   · submissionStatus != SUBMITTED   (未正式提交)
+     *   · interimSettledAt == null        (未被生产小结扣过料)
+     * 任一命中 ⇒ 这个计划已经动过真库存 ⇒ 一律不动。草稿行(SAVED/DRAFT)不算开工。
+     *
+     * <p>⛔ 判定在写入的**同一个事务**里做 —— 列清单到点确认之间计划可能刚好开工,
+     * 只信列表那一刻的快照就会把已开工的计划改掉。
+     */
+    @Override
+    @Transactional
+    public ProductionPlan repinPlanToCurrentAuthority(String factoryId, String planId, Long operatorId) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在")
+                        .withCode("PRODUCTION_PLAN_NOT_FOUND"));
+        requirePlanNotStarted(factoryId, planId, plan);
+
+        PlanUnitAuthority authority = resolvePlanUnitAuthority(
+                factoryId, plan.getProductTypeId(), plan.getTargetFinishedGoodIds());
+        // 与新建计划走**同一个** applyPlanUnitAuthority —— 不另写一套赋值,
+        // 否则两处口径迟早分叉(本仓最常见的缺陷形态)。
+        applyPlanUnitAuthority(plan, authority);
+        return productionPlanRepository.save(plan);
+    }
+
+    static final String REPIN_BLOCKED_STARTED =
+            "已投料/已报工，保持原配方快照；如需按新配方生产请新建计划";
+    static final String REPIN_BLOCKED_LOCKED = "计划已锁定";
+
+    /**
+     * 「能不能更新到当前配方」的<b>唯一</b>判据 —— 菜单灰显与端点拒绝都走这里。
+     *
+     * <p>⛔ 不要在别处再写一份。第一版就栽在这上面: 菜单用了
+     * {@code hasRealProductionActivity}(它<b>不查</b> rowStatus), 端点用三信号,
+     * 于是「只有 rowStatus=SUBMITTED」的计划菜单显示可点、点下去 409 —— 两处口径打架。
+     *
+     * @param hasActivity 惰性求值: 报工行三信号已命中时不必再查一次库
+     * @return 不能重钉的人话原因; 可以重钉时返回 null
+     */
+    String repinBlockedReason(String factoryId, String planId, boolean locked,   // 包内可见: 供闸测直接调
+                                      java.util.function.BooleanSupplier hasActivity) {
+        if (startedByProcessSheetRows(factoryId, planId)) {
+            return REPIN_BLOCKED_STARTED;
+        }
+        if (hasActivity != null && hasActivity.getAsBoolean()) {
+            return REPIN_BLOCKED_STARTED;
+        }
+        return locked ? REPIN_BLOCKED_LOCKED : null;
+    }
+
+    /** 三信号判据: rowStatus / submissionStatus / interimSettledAt 任一命中即视为已开工。 */
+    private boolean startedByProcessSheetRows(String factoryId, String planId) {
+        if (processSheetRowRepository == null) {
+            return false;
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        return rows != null && rows.stream()
+                .anyMatch(row -> ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
+                        || "SUBMITTED".equals(row.getRowStatus())
+                        || row.getInterimSettledAt() != null);
+    }
+
+    private void requirePlanNotStarted(String factoryId, String planId, ProductionPlan plan) {
+        String reason = repinBlockedReason(factoryId, planId,
+                Boolean.TRUE.equals(plan.getIsLocked()),
+                () -> hasRealProductionActivity(factoryId, planId));
+        if (reason == null) {
+            return;
+        }
+        boolean lockedOnly = REPIN_BLOCKED_LOCKED.equals(reason);
+        throw new BusinessException(409,
+                lockedOnly ? "该计划已锁定，不能更换配方版本" : "该计划已经开工，不能更换配方版本")
+                .withCode(lockedOnly ? "PRODUCTION_PLAN_LOCKED" : "PRODUCTION_PLAN_ALREADY_STARTED")
+                .withHint(reason)
+                .withSeverity("warning");
+    }
+
     private void applyPlanUnitAuthority(ProductionPlan plan, PlanUnitAuthority authority) {
         plan.setPlannedUnit(authority.unit());
         plan.setWorkflowOutputUnit(authority.workflowOutputUnit());
@@ -6171,6 +6258,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             dto.setHasUnsettledProduction(false);
             dto.setCanCancel(false);
             dto.setCanStop(false);
+            dto.setCanRepinAuthority(false);
+            dto.setRepinBlockedReason("计划已结束");
             dto.setStopBlockedReason("计划已结束");
             dto.setNextAction(status == ProductionPlanStatus.COMPLETED ? "查看生产档案" : "无需操作");
             return;
@@ -6189,6 +6278,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         dto.setHasUnsettledProduction(hasUnsettled);
         dto.setCanCancel(!hasActivity && !locked);
         dto.setCanStop(stoppableStatus && safetyStock && hasActivity && !hasUnsettled);
+
+        // 未开工才允许「更新到当前配方」。判据与 repinPlanToCurrentAuthority 里的三信号同源:
+        // hasRealProductionActivity 已经在判「有没有真的动过生产」, 这里复用它而不是另写一套,
+        // 免得菜单说可以点、后端又 409(两处口径打架是本仓最常见的缺陷形态)。
+        // ⛔ 与端点走同一个 repinBlockedReason —— 前端只消费下发结果, 不自己推断。
+        String repinBlocked = repinBlockedReason(
+                plan.getFactoryId(), plan.getId(), locked, () -> hasActivity);
+        dto.setCanRepinAuthority(repinBlocked == null);
+        dto.setRepinBlockedReason(repinBlocked);
 
         if (!stoppableStatus) {
             dto.setStopBlockedReason("仅待执行或进行中的计划支持停产");

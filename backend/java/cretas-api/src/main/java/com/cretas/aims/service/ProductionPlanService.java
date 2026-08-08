@@ -1,6 +1,7 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.dto.common.ImportResult;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
@@ -28,6 +29,17 @@ import java.util.Map;
  * @since 2025-01-09
  */
 public interface ProductionPlanService {
+
+    /**
+     * 把**尚未开工**的计划重钉到当前生效的工艺修订 + BOM。
+     *
+     * <p>Steve 2026-08-09 拍板: 已生产的坚决不影响; 未开工但已建计划的必须能用上新配方。
+     *
+     * @return 重钉后的计划
+     * @throws com.cretas.aims.exception.BusinessException 409 该计划已经开工(见实现里的三信号判据)
+     */
+    ProductionPlan repinPlanToCurrentAuthority(String factoryId, String planId, Long operatorId);
+
     /**
      * 创建生产计划
      */

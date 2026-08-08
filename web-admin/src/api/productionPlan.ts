@@ -297,6 +297,17 @@ export function interimSettle(factoryId: string, planId: string) {
   return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/interim-settle`)
 }
 
+/**
+ * 未开工的计划跟上新配方: 把计划重钉到当前生效的工艺修订 + BOM。
+ * POST /{factoryId}/production-plans/{planId}/repin-authority
+ *
+ * 已开工(有 SUBMITTED 报工行, 或已被生产小结扣过料)时后端返回 409
+ * PRODUCTION_PLAN_ALREADY_STARTED —— 前端不自己判开工, 免得与后端口径漂移。
+ */
+export function repinPlanAuthority(factoryId: string, planId: string) {
+  return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/repin-authority`)
+}
+
 /** 撤销小结申请/审批记录。 */
 export interface InterimSettleReversalRequest {
   id: string

@@ -26,6 +26,7 @@ import {
   confirmProductionWarehouseReceipt,
   clearProductionTransitLedger,
   interimSettle,
+  repinPlanAuthority,
   requestReverseInterimSettle,
   approveReversalRequest,
   rejectReversalRequest,
@@ -113,6 +114,7 @@ import {
   planEditMenuLabel,
   planEditScope,
   productionMoreCommands,
+  repinAuthorityBlockedReason,
   type PlanEditScope,
 } from './productionMoreActions';
 
@@ -412,6 +414,7 @@ function openArchiveYieldCost() {
 }
 
 type ProductionActionCommand =
+  | 'repin-authority'
   | 'complete'
   | 'interim-settle'
   | 'process-entry'
@@ -533,6 +536,9 @@ function handleProductionActionCommand(command: ProductionActionCommand, row: Ta
       break;
     case 'stop-production':
       void handleStopProduction(row);
+      break;
+    case 'repin-authority':
+      void handleRepinAuthority(row);
       break;
     case 'cancel':
       void handleCancel(row);
@@ -3041,6 +3047,39 @@ const interimSettleLoadingId = ref<string | null>(null);
 const reverseInterimSettleLoadingId = ref<string | null>(null);
 const stopProductionLoadingId = ref<string | null>(null);
 
+/**
+ * 「更新到当前配方」—— 未开工的计划跟上新配方 (Steve 2026-08-09 拍板)。
+ *
+ * ⛔ 前端**不判**「有没有开工」: 判据是报工行的三个信号 (rowStatus / submissionStatus /
+ * interimSettledAt), 在后端同一个事务里判。前端复制一份必然与后端漂移, 而且列清单到点确认
+ * 之间计划可能刚好开工 —— 只信前端那一刻的快照就会把已开工的计划改掉。
+ * 已开工时后端返回 409 PRODUCTION_PLAN_ALREADY_STARTED, 直接把它的话显示给用户。
+ */
+async function handleRepinAuthority(row: TableRow) {
+  const planId = String(row.id)
+  const planNumberLabel = String(row.planNumber || planId)
+  try {
+    await ElMessageBox.confirm(
+      `把「${planNumberLabel}」更新到当前生效的工艺版本与配方？仅未开工的计划可以更新；已投料/已报工的计划会被后端拒绝并保持原样。`,
+      '更新到当前配方',
+      { type: 'warning', confirmButtonText: '更新', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await repinPlanAuthority(factoryId.value, planId)
+    if (res.success) {
+      ElMessage.success(res.message || '已更新到当前生效配方')
+      await loadData()
+    } else {
+      ElMessage.error(res.message || '更新失败')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '更新失败')
+  }
+}
+
 async function handleInterimSettle(row: TableRow) {
   const planId = String(row.id);
   if (interimSettleLoadingId.value) return;
@@ -4159,6 +4198,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     command="stop-production"
                     :disabled="stopProductionLoadingId === String(row.id)"
                   >停产</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="hasProductionMoreCommand(row, 'repin-authority')"
+                    command="repin-authority"
+                    divided
+                    :disabled="actionLoading || row.canRepinAuthority !== true"
+                    :title="repinAuthorityBlockedReason(row)"
+                  >{{ row.canRepinAuthority === true
+                    ? '更新到当前配方'
+                    : `更新到当前配方（${repinAuthorityBlockedReason(row)}）` }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'cancel')"
                     command="cancel"

@@ -5,6 +5,7 @@ import {
   planEditMenuLabel,
   planEditScope,
   productionMoreCommands,
+  repinAuthorityBlockedReason,
   type ProductionMoreActionRow,
 } from '../productionMoreActions';
 
@@ -156,6 +157,40 @@ describe('planEditBlockedReason / planEditMenuLabel', () => {
     expect(planEditMenuLabel({ status: 'PAUSED' })).toBe('编辑排产信息');
     expect(planEditMenuLabel({ status: 'COMPLETED' })).toBe('编辑（已完成）');
     expect(planEditMenuLabel({ status: 'IN_PROGRESS', isLocked: true })).toBe('编辑（已锁定）');
+  });
+
+  // 🔴 2026-08-09: 「更新到当前配方」只消费后端下发的 canRepinAuthority。
+  // 判据(报工行三信号)在后端, 前端复制一份必然与后端漂移 —— 与 canStop / canCancel 同一规矩。
+  it('未开工(后端下发 canRepinAuthority=true) → 出现「更新到当前配方」', () => {
+    expect(hasProductionMoreCommand(
+      { status: 'IN_PROGRESS', canRepinAuthority: true }, 'repin-authority')).toBe(true);
+  });
+
+  it('已开工(false) → 项仍在但灰显, 且原因用后端下发的那句', () => {
+    const row = {
+      status: 'IN_PROGRESS',
+      canRepinAuthority: false,
+      repinBlockedReason: '已投料/已报工，保持原配方快照；如需按新配方生产请新建计划',
+    };
+    expect(hasProductionMoreCommand(row, 'repin-authority')).toBe(true);
+    expect(repinAuthorityBlockedReason(row)).toBe(row.repinBlockedReason);
+  });
+
+  it('可点时不显示任何原因', () => {
+    expect(repinAuthorityBlockedReason(
+      { status: 'PENDING', canRepinAuthority: true })).toBe('');
+  });
+
+  it('后端没给原因时也要有话说, 不能灰一个空括号', () => {
+    expect(repinAuthorityBlockedReason(
+      { status: 'PENDING', canRepinAuthority: false })).toBe('当前状态不可更新配方');
+  });
+
+  it('⛔ 字段缺失 → fail closed 不给入口(老后端/字段没下发时不能默认可点)', () => {
+    expect(hasProductionMoreCommand({ status: 'PENDING' }, 'repin-authority')).toBe(false);
+    expect(hasProductionMoreCommand(
+      { status: 'PENDING', canRepinAuthority: 'true' }, 'repin-authority'))
+      .toBe(false);   // 字符串 'true' 不算 —— 只认真正的布尔 true
   });
 
   it('不可编辑时「编辑」项仍然出现 (灰显讲原因), 而不是整条消失', () => {

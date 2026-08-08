@@ -545,6 +545,29 @@ public class ProductionPlanController {
 
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
+    @PostMapping("/{planId}/repin-authority")
+    @Operation(summary = "未开工计划跟上新配方",
+            description = "把尚未开工的计划重钉到当前生效的工艺修订 + BOM。已开工(有 SUBMITTED 报工行或已被生产小结扣料)的计划返回 409, 保持原快照不动。")
+    public ApiResponse<Map<String, Object>> repinAuthority(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        log.info("计划重钉配方版本: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        ProductionPlan plan = productionPlanService.repinPlanToCurrentAuthority(factoryId, planId, userId);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("planId", plan.getId());
+        data.put("selectedWorkflowRevisionId", plan.getSelectedWorkflowRevisionId());
+        data.put("selectedBomRecipeId", plan.getSelectedBomRecipeId());
+        data.put("selectedBomVersion", plan.getSelectedBomVersion());
+        return ApiResponse.success("已更新到当前生效配方", data);
+    }
+
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
     @PostMapping("/{planId}/interim-settle")
     @Operation(summary = "存货生产小结", description = "存货生产 (sourceType=SAFETY_STOCK): 对自上次小结以来的增量分批入库(半成品/成品)+实时扣减原料, 会话幂等, 不关闭计划")
     public ApiResponse<Map<String, Object>> interimSettle(

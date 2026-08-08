@@ -350,6 +350,17 @@ public class ProductionPlanDTO {
     private Boolean canStop;
 
     @Schema(description = "停产被阻断的原因")
+    /**
+     * 未开工的计划能不能「更新到当前配方」(2026-08-09)。
+     *
+     * <p>⛔ 由后端下发, 前端不得自己推断 —— 判据是报工行三信号(rowStatus / submissionStatus /
+     * interimSettledAt), 前端复制一份必然与后端漂移。字段缺失时前端 fail closed(不显示入口)。
+     */
+    private Boolean canRepinAuthority;
+
+    /** canRepinAuthority=false 时的人话原因, 供菜单灰显直接显示(防呆 Rule 1)。 */
+    private String repinBlockedReason;
+
     private String stopBlockedReason;
 
     @Schema(description = "建议执行的下一步")
