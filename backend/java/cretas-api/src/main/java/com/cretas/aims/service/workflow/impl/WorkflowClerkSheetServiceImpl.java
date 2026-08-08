@@ -425,6 +425,12 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         }
         return productTypeRepository.findByIdAndFactoryId(skuId, factoryId)
                 .map(WorkflowClerkSheetServiceImpl::fromProductType)
+                // 🔴 2026-08-08: 副产的 SKU 在物料档案里(product_types 连 byproduct 标记都没有),
+                // 产出节点查不到产品时要再查一次物料, 否则副产在报工单上恒为 unresolved(无名无单位)。
+                // ⛔ 只认**标了副产**的物料, 普通原料错绑仍走 unresolved。
+                .or(() -> rawMaterialTypeRepository.findByIdAndFactoryId(skuId, factoryId)
+                        .filter(material -> Boolean.TRUE.equals(material.getIsByproduct()))
+                        .map(WorkflowClerkSheetServiceImpl::fromRawMaterial))
                 .orElse(SkuLookup.unresolved());
     }
 
