@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 /**
@@ -31,6 +32,14 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
 
     /** 按主键取, 但保留工厂隔离 —— 跨租户读原料主数据一律走这条而不是裸 findById。 */
     Optional<RawMaterialType> findByIdAndFactoryId(String id, String factoryId);
+
+    /**
+     * 批量按主键取(工厂隔离由调用方逐行校验) —— 供画布发布校验一次性拉齐副产 SKU。
+     *
+     * <p>副产在本系统里是**物料**不是产品(库存落 material_batches, 该表有 byproduct_unit_price),
+     * 所以画布上带 isByproduct 标记的产出节点要查这里, 而不是 product_types。
+     */
+    List<RawMaterialType> findByIdIn(Collection<String> ids);
      /**
      * 查找工厂的所有原材料类型
       */

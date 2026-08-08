@@ -2,10 +2,12 @@ package com.cretas.aims.service.validation;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
@@ -36,6 +38,7 @@ public class ProductProcessWorkflowCatalogValidator {
 
     private final WorkProcessRepository workProcessRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final BomRecipeRepository bomRecipeRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
 
@@ -272,6 +275,83 @@ public class ProductProcessWorkflowCatalogValidator {
             skuIds.add(skuId);
         }
 
+        // 🔴 2026-08-08: 副产走**物料档案**, 不查 product_types。
+        //
+        // 画布对副产的建模是「普通产出节点 + isByproduct 标记」(刻意没有 kind:'BYPRODUCT',
+        // 见 MaterialNodeData.isByproduct 注释: 「副产只看物料上的 isByproduct 标记, 与材质正交」),
+        // 选料下拉据此从 raw_material_types 里筛。而这里原本对**所有**产出一律
+        // productTypeRepository.findByIdIn ⇒ 任何从界面选出来的副产必报「产出 SKU 不存在」,
+        // 副产整条功能不可用(真机: RMT_1785513705730「验收-副产-肥油」在 raw_material_types 有、
+        // 在 product_types count=0)。
+        //
+        // 权威在物料侧: 副产库存落 material_batches(该表有 byproduct_unit_price 列),
+        // 即副产在模型里是「物料」不是「产品」—— 所以是这条校验查错了表, 不是数据错。
+        List<OutputBinding> byproductBindings = outputBindings.stream()
+                .filter(binding -> isByproductNode(binding.materialNode()))
+                .toList();
+        List<OutputBinding> productBindings = outputBindings.stream()
+                .filter(binding -> !isByproductNode(binding.materialNode()))
+                .toList();
+        validateByproductOutputSkus(factoryId, byproductBindings);
+        validateProductOutputSkus(factoryId, productTypeId, productBindings);
+    }
+
+    /** 画布上带 `isByproduct` 标记的产出节点 —— 与 kind 正交, 故只认这个标记。 */
+    private boolean isByproductNode(ProductProcessWorkflowDTO.Node materialNode) {
+        Object flag = data(materialNode).get("isByproduct");
+        return Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(asString(flag));
+    }
+
+    /**
+     * 副产产出 SKU 校验 —— 查物料档案。
+     *
+     * <p>⛔ 三条都要判, 缺一条就会把「选错东西」放到发布之后才炸:
+     * 存在 / 属于当前工厂 / **确实标了副产**。第三条尤其不能省 —— 否则任何普通原料
+     * 都能被塞进副产 Cell, 而下游报工按副产口径处理它。
+     */
+    private void validateByproductOutputSkus(String factoryId, List<OutputBinding> byproductBindings) {
+        if (byproductBindings.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<String> ids = byproductBindings.stream()
+                .map(binding -> asString(data(binding.materialNode()).get("skuId")))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, RawMaterialType> materialsById = rawMaterialTypeRepository.findByIdIn(new ArrayList<>(ids))
+                .stream()
+                .collect(Collectors.toMap(RawMaterialType::getId, Function.identity(), (left, right) -> left));
+        for (OutputBinding binding : byproductBindings) {
+            ProductProcessWorkflowDTO.Node materialNode = binding.materialNode();
+            String skuId = asString(data(materialNode).get("skuId"));
+            RawMaterialType material = materialsById.get(skuId);
+            if (material == null) {
+                mismatch(materialNode, "副产物料不存在: " + skuId, "请重新选择有效的副产物料");
+            }
+            if (!factoryId.equals(material.getFactoryId())) {
+                mismatch(materialNode, "副产物料不属于当前工厂: " + skuId,
+                        "请改选当前工厂的副产物料");
+            }
+            if (!Boolean.TRUE.equals(material.getIsByproduct())) {
+                mismatch(materialNode,
+                        "该物料未标记为副产: " + displayName(material.getName(), skuId),
+                        "请在物料档案里把它标记为副产, 或改选已标记的副产物料");
+            }
+        }
+    }
+
+    private String displayName(String name, String fallbackId) {
+        return isBlank(name) ? fallbackId : name;
+    }
+
+    private void validateProductOutputSkus(
+            String factoryId,
+            String productTypeId,
+            List<OutputBinding> outputBindings) {
+        if (outputBindings.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<String> skuIds = outputBindings.stream()
+                .map(binding -> asString(data(binding.materialNode()).get("skuId")))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         List<ProductType> productRows = productTypeRepository.findByIdIn(new ArrayList<>(skuIds));
         Map<String, ProductType> productsById = indexProducts(factoryId, skuIds, outputBindings, productRows);
         for (OutputBinding binding : outputBindings) {
