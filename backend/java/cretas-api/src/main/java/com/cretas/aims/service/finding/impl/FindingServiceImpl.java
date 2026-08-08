@@ -2,6 +2,7 @@ package com.cretas.aims.service.finding.impl;
 
 import com.cretas.aims.service.finding.Finding;
 import com.cretas.aims.service.finding.FindingNotApplicableException;
+import com.cretas.aims.service.finding.FindingOrdering;
 import com.cretas.aims.service.finding.FindingProvider;
 import com.cretas.aims.service.finding.FindingService;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,12 @@ public class FindingServiceImpl implements FindingService {
 
     @Override
     public Result detectInline(String factoryId, java.util.Collection<String> domains) {
+        return detectInline(factoryId, domains, FindingOrdering.IMPACT_FIRST);
+    }
+
+    @Override
+    public Result detectInline(String factoryId, java.util.Collection<String> domains,
+                               FindingOrdering ordering) {
         List<Finding> all = new ArrayList<>();
         List<String> checked = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -74,7 +81,7 @@ public class FindingServiceImpl implements FindingService {
             countsByCode.merge(f.code(), 1, Integer::sum);
         }
 
-        all.sort(Comparator.comparingInt(Finding::rankScore).reversed());
+        all.sort(ordering.comparator());
         int total = all.size();
         List<Finding> top = total > inlineMax ? all.subList(0, inlineMax) : all;
 

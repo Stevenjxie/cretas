@@ -61,7 +61,9 @@ public class RestaurantFindingHintAppender {
             return answer;
         }
         try {
-            FindingService.Result result = findingService.detectInline(factoryId, DOMAINS);
+            FindingService.Result result = findingService.detectInline(
+                    factoryId, DOMAINS,
+                    com.cretas.aims.service.finding.FindingOrdering.ACT_NOW);
             result = dropWhatTheAnswerAlreadySaid(result, answer);
             String hint = findingTextRenderer.renderInline(result);
             if (hint.isEmpty()) {

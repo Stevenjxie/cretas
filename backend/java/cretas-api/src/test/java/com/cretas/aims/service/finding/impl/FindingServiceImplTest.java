@@ -264,4 +264,76 @@ class FindingServiceImplTest {
         return new Finding(code, "inventory", Finding.Severity.WARNING, rankScore,
                 "id-" + code, code, Map.of());
     }
+
+    @Test
+    @DisplayName("UT-FSI-12: 🔴 ACT_NOW 让「今天还来得及」压过「已经无可挽回」")
+    void actNowPutsWhatYouCanStillFixFirst() {
+        // 🔴 这是原 rankScore 的结构性缺陷: severity 3/2/1 × 100 + actionability 0-99
+        //    => **最高的 WARNING 是 299, 最低的 CRITICAL 是 300**。
+        //    任何 CRITICAL 永远压过所有 WARNING, 不管可行动性差多少。
+        //    而「已经发生完的事」(食材已过期、钱已经亏了)最容易被评成 CRITICAL:
+        //    损失确凿。结果是**已无可挽回的事稳定霸占同步提示那 2 个名额**,
+        //    把今天动手还来得及的挤掉 —— 与顺带提示的目的正好相反。
+        Finding expired = new Finding("EXPIRED", "inventory",
+                Finding.Severity.CRITICAL, 0, "s1", "已过期的三文鱼", Map.of());
+        Finding nearExpiry = new Finding("NEAR_EXPIRY", "inventory",
+                Finding.Severity.WARNING, 90, "s2", "还剩2天的牛腩", Map.of());
+
+        // 旧口径: 已过期(300) 压过 临期(290)
+        assertTrue(expired.rankScore() > nearExpiry.rankScore(),
+                "前提: 旧口径下已过期确实压过临期");
+
+        FindingServiceImpl service = new FindingServiceImpl(
+                List.of(stub("inventory", "库存", expired, nearExpiry)), 1);
+
+        assertEquals(List.of("还剩2天的牛腩"),
+                service.detectInline(FACTORY_ID, List.of("inventory"),
+                        com.cretas.aims.service.finding.FindingOrdering.ACT_NOW)
+                        .findings().stream().map(Finding::subjectName).toList(),
+                "同步提示只有 1 个名额时, 该给今天还能救的那条");
+
+        assertEquals(List.of("已过期的三文鱼"),
+                service.detectInline(FACTORY_ID, List.of("inventory"),
+                        com.cretas.aims.service.finding.FindingOrdering.IMPACT_FIRST)
+                        .findings().stream().map(Finding::subjectName).toList(),
+                "复盘出口反过来: 已经漏掉的钱才是要说的");
+    }
+
+    @Test
+    @DisplayName("UT-FSI-13: ⛔ ACT_NOW 不是纯按可行动性 —— 严重度仍要参与")
+    void actNowStillWeighsSeverity() {
+        // 纯按可行动性排会让「很容易做但无关紧要」压过「既严重又还来得及」。
+        // 乘法让两者都参与, 谁也不绝对主导。
+        Finding trivialEasy = new Finding("TRIVIAL", "inventory",
+                Finding.Severity.INFO, 95, "s1", "小事一桩", Map.of());
+        Finding severeDoable = new Finding("SEVERE", "inventory",
+                Finding.Severity.CRITICAL, 70, "s2", "大事还来得及", Map.of());
+
+        FindingServiceImpl service = new FindingServiceImpl(
+                List.of(stub("inventory", "库存", trivialEasy, severeDoable)), 1);
+
+        assertEquals(List.of("大事还来得及"),
+                service.detectInline(FACTORY_ID, List.of("inventory"),
+                        com.cretas.aims.service.finding.FindingOrdering.ACT_NOW)
+                        .findings().stream().map(Finding::subjectName).toList(),
+                "3x70=210 > 1x95=95");
+    }
+
+    @Test
+    @DisplayName("UT-FSI-14: ⛔ 不传排序的重载, 行为与既有逐字一致")
+    void defaultOrderingIsUnchanged() {
+        // 现存 5 个调用点(物料工具/损耗工具/REST 端点/行动方案/顺带提示之外的)
+        // 都没传排序, 它们的顺序不该因为这次改动而变。
+        Finding a = new Finding("A", "inventory", Finding.Severity.CRITICAL, 0, "s1", "甲", Map.of());
+        Finding b = new Finding("B", "inventory", Finding.Severity.WARNING, 99, "s2", "乙", Map.of());
+        FindingServiceImpl service = new FindingServiceImpl(
+                List.of(stub("inventory", "库存", a, b)), 5);
+
+        assertEquals(
+                service.detectInline(FACTORY_ID, List.of("inventory"),
+                        com.cretas.aims.service.finding.FindingOrdering.IMPACT_FIRST)
+                        .findings().stream().map(Finding::code).toList(),
+                service.detectInline(FACTORY_ID, List.of("inventory"))
+                        .findings().stream().map(Finding::code).toList());
+    }
 }

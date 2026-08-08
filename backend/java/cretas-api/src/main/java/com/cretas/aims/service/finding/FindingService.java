@@ -29,6 +29,16 @@ public interface FindingService {
     Result detectInline(String factoryId, java.util.Collection<String> domains);
 
     /**
+     * 指定排序口径。⛔ **排序由出口选, 不记在发现上** —— 见 {@link FindingOrdering}。
+     *
+     * <p>不传的两个重载一律走 {@link FindingOrdering#IMPACT_FIRST}(既有行为),
+     * 所以现存 5 个调用点(物料工具/损耗工具/REST 端点/行动方案/顺带提示)
+     * 逐字不变, 只有主动选 ACT_NOW 的才改变顺序。
+     */
+    Result detectInline(String factoryId, java.util.Collection<String> domains,
+                        FindingOrdering ordering);
+
+    /**
      * @param findings     已排序并截断到 inline 上限的发现（可能为空）
      * @param checkedRules **实际成功跑完**的规则名。抛异常的规则不在此列——
      *                     否则 UI 会说出「已检查 X，均正常」这种假话。
