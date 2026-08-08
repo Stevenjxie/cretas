@@ -196,6 +196,23 @@ public class ProductProcessWorkflowCatalogValidator {
                     && !bomRecipeItemRepository.findCurrentByProduct(factoryId, skuId).isEmpty()) {
                 continue;
             }
+            // 🔴 2026-08-08: 联合生产的第二个产出**本来就没有自己的明细** —— 投入挂在家族的
+            // MAIN 上, 它以 BY_PRODUCT 身份共享。BomRecipeServiceImpl 的激活循环就是这么写的
+            // (`if (member.getOutputRole() == BY_PRODUCT) continue;` —— 刻意跳过明细校验)。
+            //
+            // 这里原来不认 output role, 于是同一件事两处口径打架:
+            //   家族说「联产副产不需要自己的明细」, 这道闸说「每个成品都必须有明细」。
+            // 表现: 一张联产图永远发布不了, 除非有人手工给第二个产出凑一份 BOM ——
+            // 那正是 2026-08-05 那份「主料用量为空的 ACTIVE BOM」的由来。
+            //
+            // 判据: **判「该不该有明细」要先问它在家族里是什么角色**, 不能一刀切。
+            if (bomRecipeRepository
+                    .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                            factoryId, skuId, BomRecipe.Status.ACTIVE)
+                    .map(recipe -> recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                    .orElse(false)) {
+                continue;
+            }
             ProductProcessWorkflowDTO.Node materialNode = outputBindings.stream()
                     .map(OutputBinding::materialNode)
                     .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
