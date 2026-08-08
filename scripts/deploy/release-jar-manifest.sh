@@ -94,6 +94,34 @@ release_manifest_require_clean_worktree() {
     [ -z "$(git -C "$repo_root" status --porcelain --untracked-files=normal 2>/dev/null)" ] || return 1
 }
 
+# Select the immutable source ref used by deploy-time manifest validation.
+# Online releases keep the existing exact-origin/main contract. During the
+# explicitly authorised offline window, SKIP_GIT_CHECK=1 may anchor validation
+# on HEAD only when that HEAD is detached, clean, and exactly equals the local
+# main ref. This prevents the escape hatch from making feature branches or
+# arbitrary detached commits deployable while GitHub is unavailable.
+release_manifest_validation_ref() {
+    local repo_root=$1
+    local head_sha local_main_sha current_branch
+
+    if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
+        release_manifest_require_clean_exact_origin_main "$repo_root" || return 1
+        printf '%s\n' 'origin/main'
+        return 0
+    fi
+
+    head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
+    local_main_sha=$(git -C "$repo_root" rev-parse refs/heads/main 2>/dev/null) || return 1
+    current_branch=$(git -C "$repo_root" branch --show-current 2>/dev/null) || return 1
+    [ -z "$current_branch" ] || return 1
+    [ "$head_sha" = "$local_main_sha" ] || return 1
+    release_manifest_require_clean_worktree "$repo_root" || return 1
+
+    printf '%s\n' \
+        'WARNING: SKIP_GIT_CHECK=1; validating trusted JAR against clean detached exact local main HEAD' >&2
+    printf '%s\n' 'HEAD'
+}
+
 release_manifest_verify_jar() {
     local jar_path=$1
 
@@ -107,10 +135,10 @@ release_manifest_validate() {
     local destination=${3:-}
     local format success build_commit backend_tree jar_sha jar_relative
     local jdk_vendor jdk_version maven_command target_tests
-    local current_tree built_tree manifest_dir jar_path actual_sha destination_tmp
+    local validation_ref current_tree built_tree manifest_dir jar_path actual_sha destination_tmp
 
     [ -f "$manifest" ] || return 1
-    release_manifest_require_clean_exact_origin_main "$repo_root" || return 1
+    validation_ref=$(release_manifest_validation_ref "$repo_root") || return 1
 
     format=$(release_manifest_field "$manifest" format) || return 1
     success=$(release_manifest_field "$manifest" success) || return 1
@@ -132,7 +160,7 @@ release_manifest_validate() {
     [ -n "$jdk_vendor" ] && [ -n "$jdk_version" ] || return 1
     [ -n "$maven_command" ] && [ -n "$target_tests" ] || return 1
 
-    current_tree=$(git -C "$repo_root" rev-parse "origin/main:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    current_tree=$(git -C "$repo_root" rev-parse "$validation_ref:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
     [ "$backend_tree" = "$current_tree" ] || return 1
     git -C "$repo_root" cat-file -e "${build_commit}^{commit}" 2>/dev/null || return 1
     built_tree=$(git -C "$repo_root" rev-parse "${build_commit}:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
