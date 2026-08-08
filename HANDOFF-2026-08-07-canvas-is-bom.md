@@ -202,6 +202,46 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 
 ---
 
+## 九、2026-08-08 第二轮：真机验证揪出 3-3 是空转的
+
+**判据（最该记的一条）**：改一条规则时，要问的不是「**我改了几处**」，
+而是「**这条链路上还有谁在判同一件事**」。
+
+3-3 我改了两处（synchronize + preflight），部署上 prod、jar 也核对过含修复 ——
+**但它是空转的**。真机一发布仍被拦，报的是**完全不同的错误码**：
+
+| 轮次 | 现象 | 真因 |
+|---|---|---|
+| 第 1 轮 | 发布报「成品产出 Cell … 尚未配置并激活新版 BOM 配方」 | 同一规则的**第三个承载点** `CatalogValidator#validateFinishedOutputBoms`，且它跑在 BOM 投影**前面** ⇒ 投影永远跑不到 |
+| 第 2 轮 | 换成报**联产的第二个成品** | 家族机制说「BY_PRODUCT 不需要自己的明细」，catalog 闸说「每个成品都必须有明细」—— **两处口径正好相反** |
+| 第 3 轮 | `200`「Workflow 与 BOM 已自动同步、发布并生效」 | ✅ |
+
+三处改动（均已部署）：
+1. `publishAndActivate` 按 `synchronizeBom` 分叉——先只做结构校验，同步后**再跑一次完整校验兜底**
+   （兜底不能省：少了它，投影失败会被静默放过，发布出没有 BOM 的 Workflow）
+2. 投影改为复用 `ensureDraft`（按家族建草稿 + 播 RAW 行），删掉重复的 `projectRawMaterialItems`
+3. `validateFinishedOutputBoms` 认 output role：BY_PRODUCT 家族成员不要求自己的明细
+
+**第 3 轮真机结果**（F006 拓扑成品C，联产 2 个成品）：
+
+```
+BOM-20260808-001  产品C  ACTIVE  MAIN        rev=264  items=1  主料用量=空(没编)
+BOM-20260808-002  产品D  ACTIVE  BY_PRODUCT  rev=264  items=0
+revision 264: DRAFT → PUBLISHED
+```
+
+另修：**包材也进工艺定义**（`MaterialNodeData.packagingBindings`）。
+此前改辅料版本会跳、改包材不会跳 —— 因为 3-1 只搬了辅料/调料。
+
+**全程零影响**：6 个被生产计划钉住的 revision + 9 条计划，三轮下来逐字未变；
+测试数据已全部还原，六膳门 9 条 recipe 一条没动。
+
+📌 附带订正：先前把「干式熟成鸡 400g 的 ACTIVE BOM 主料用量为空」列为待处置问题
+——**那是常态不是毛病**。六膳门 3 个 ACTIVE BOM 里 2 个主料用量都是空的，
+激活闸只数行数不看用量，主料按报工实际重量走。已从待办划掉。
+
+---
+
 ## 八、离线部署台账（GitHub 上查不到，必须逐条核销）
 
 按 `.claude/rules/worktree-and-main-only-deploy.md` 的「离线期间的账要写下来」。
