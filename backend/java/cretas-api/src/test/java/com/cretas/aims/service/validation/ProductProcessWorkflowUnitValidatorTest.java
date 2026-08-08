@@ -1,6 +1,7 @@
 package com.cretas.aims.service.validation;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.workflow.WorkflowUnitValidationResult;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
@@ -156,6 +157,30 @@ class ProductProcessWorkflowUnitValidatorTest {
         row.setVersion(version);
         row.setEffectiveFrom(LocalDateTime.now().minusDays(1));
         return row;
+    }
+
+    /**
+     * 🔴 2026-08-08 真机: 副产 SKU 要去**物料档案**取主单位。
+     *
+     * <p>副产节点的 kind 是 SEMI_FINISHED(画布刻意不设 kind:'BYPRODUCT', 只打 isByproduct 标记),
+     * 若本校验按 kind 分桶就会去 product_types 查 ⇒ 查不到 ⇒ 报
+     * 「绑定的物料不存在、跨工厂或缺少主单位」⇒ 发布仍然过不去。
+     * 这是同一件事的第 3 个承载点(前两个是选料下拉与 CatalogValidator), 判据 ②: 改一条规则
+     * 要先问「这条链路上还有谁在判同一件事」。
+     */
+    @Test
+    void byproductOutputTakesPrimaryUnitFromMaterialArchive() {
+        ProductProcessWorkflowDTO definition =
+                workflow("SEMI_FINISHED", "RMT-1", "g", "g", "g", null, null);
+        definition.getNodes().stream()
+                .filter(node -> "mat-1".equals(node.getId()))
+                .forEach(node -> node.getData().put("isByproduct", Boolean.TRUE));
+
+        WorkflowUnitValidationResult result = validator.validate("F006", definition);
+
+        assertThat(result.errors())
+                .extracting(com.cretas.aims.dto.workflow.WorkflowUnitIssueDTO::code)
+                .doesNotContain("SKU_UNIT_UNKNOWN");
     }
 
     private ProductProcessWorkflowDTO workflow(
