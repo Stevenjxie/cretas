@@ -123,6 +123,24 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("salesOrderId") String salesOrderId);
 
     /**
+     * Customer-specific finished stock produced before a formal sales order existed.
+     * The batch keeps {@code sourceSalesOrderId = null}; formal-order ownership is represented
+     * by {@code FgReservationLedger}, never by rewriting batch lineage.
+     */
+    @Query("SELECT f FROM FinishedGoodsBatch f JOIN FactoryWarehouse w ON f.warehouseId = w.id " +
+           "WHERE f.factoryId = :factoryId AND f.productTypeId = :productTypeId " +
+           "AND f.status = 'AVAILABLE' AND f.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND f.ownerCustomerId = :customerId AND f.sourceSalesOrderId IS NULL " +
+           "AND (f.producedQuantity - f.shippedQuantity - f.reservedQuantity) > 0 " +
+           "AND (w.code IS NULL OR w.code <> :excludedWarehouseCode) " +
+           "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
+    List<FinishedGoodsBatch> findAvailableUnassignedCustomerOwnedBatchesAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludedWarehouseCode") String excludedWarehouseCode,
+            @Param("customerId") String customerId);
+
+    /**
      * R6 #6 (2026-06-22): 发货可出库批次 (FEFO) —— 过滤条件用<b>物理未发量</b>
      * {@code (producedQuantity - shippedQuantity) > 0}, <b>不</b>减 reservedQuantity。
      *
@@ -166,6 +184,38 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
            "AND (w.code IS NULL OR w.code <> :excludedWarehouseCode) " +
            "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
     List<FinishedGoodsBatch> findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludedWarehouseCode") String excludedWarehouseCode,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
+    /** Shippable PRESTOCKED batches are visible only when this order has an ACTIVE reservation ledger row. */
+    @Query("SELECT DISTINCT f FROM FinishedGoodsBatch f, FgReservationLedger l " +
+           "WHERE l.finishedGoodsBatchId = f.id AND l.salesOrderId = :salesOrderId AND l.status = 'ACTIVE' " +
+           "AND f.factoryId = :factoryId AND f.productTypeId = :productTypeId " +
+           "AND f.warehouseId = :warehouseId AND f.status = 'AVAILABLE' " +
+           "AND f.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND f.ownerCustomerId = :customerId AND f.sourceSalesOrderId IS NULL " +
+           "AND (f.producedQuantity - f.shippedQuantity) > 0 " +
+           "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
+    List<FinishedGoodsBatch> findShippablePrestockedBatchesByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
+    @Query("SELECT DISTINCT f FROM FinishedGoodsBatch f, FgReservationLedger l, FactoryWarehouse w " +
+           "WHERE l.finishedGoodsBatchId = f.id AND l.salesOrderId = :salesOrderId AND l.status = 'ACTIVE' " +
+           "AND f.warehouseId = w.id AND f.factoryId = :factoryId AND f.productTypeId = :productTypeId " +
+           "AND f.status = 'AVAILABLE' " +
+           "AND f.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND f.ownerCustomerId = :customerId AND f.sourceSalesOrderId IS NULL " +
+           "AND (f.producedQuantity - f.shippedQuantity) > 0 " +
+           "AND (w.code IS NULL OR w.code <> :excludedWarehouseCode) " +
+           "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
+    List<FinishedGoodsBatch> findShippablePrestockedBatchesAllWarehousesExcluding(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
             @Param("excludedWarehouseCode") String excludedWarehouseCode,

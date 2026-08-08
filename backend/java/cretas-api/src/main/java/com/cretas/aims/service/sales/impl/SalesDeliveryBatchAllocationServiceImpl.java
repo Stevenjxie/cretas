@@ -15,6 +15,8 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
+import com.cretas.aims.service.inventory.FgReservationLedgerService;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +43,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     private final WarehouseResolver warehouseResolver;
     private final ProductTypeRepository productTypeRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final FgReservationLedgerService reservationLedgerService;
 
     @Override
     @Transactional
@@ -97,6 +100,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             }
         }
         SalesOrder salesOrder = resolveSalesOrder(factoryId, item);
+        boolean prestockedCustomerStock = isPrestockedCustomerStock(salesOrder);
 
         List<SalesDeliveryItemBatchAllocation> current = allocationRepository
                 .findByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
@@ -158,8 +162,16 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 throw new BusinessException(403, "成品批次不属于当前工厂: " + dto.getFinishedGoodsBatchId())
                         .withHint("跨工厂调用被拒绝, 请选择本工厂的成品批次").withHintTarget("finishedGoodsBatchId");
             }
+            BigDecimal orderReservedNative = prestockedCustomerStock
+                    ? reservationLedgerService.getActiveReservedForOrderAndBatch(
+                            salesOrder.getId(), batch.getId())
+                    : BigDecimal.ZERO;
             SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
-                    salesOrder, batch, "finishedGoodsBatchId");
+                    salesOrder,
+                    batch,
+                    !prestockedCustomerStock
+                            || orderReservedNative.compareTo(BigDecimal.ZERO) > 0,
+                    "finishedGoodsBatchId");
             // T4-D5 (#572) + 🔴 G1: warehouse guard.
             if (hasExplicitSource) {
                 // EXPLICIT source → batch must be in that exact warehouse (409 guard preserved).
@@ -176,9 +188,13 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         .withHint("研发/中试批次不混入可售库存, 请选择其他仓库的成品批次")
                         .withHintTarget("finishedGoodsBatchId");
             }
-            BigDecimal availableNative = batch.getProducedQuantity()
-                    .subtract(batch.getShippedQuantity() == null ? BigDecimal.ZERO : batch.getShippedQuantity())
-                    .subtract(batch.getReservedQuantity() == null ? BigDecimal.ZERO : batch.getReservedQuantity());
+            BigDecimal availableNative = prestockedCustomerStock
+                    ? orderReservedNative
+                    : batch.getProducedQuantity()
+                            .subtract(batch.getShippedQuantity() == null
+                                    ? BigDecimal.ZERO : batch.getShippedQuantity())
+                            .subtract(batch.getReservedQuantity() == null
+                                    ? BigDecimal.ZERO : batch.getReservedQuantity());
             BigDecimal activeAllocatedNative = activeAllocatedNativeExcludingCurrent(
                     factoryId, batch, deliveryItemId, item.getProductTypeId(), gramsPerUnit);
             BigDecimal allocatableNative = availableNative.subtract(activeAllocatedNative).max(BigDecimal.ZERO);
@@ -277,6 +293,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             }
         }
         SalesOrder salesOrder = resolveSalesOrder(factoryId, deliveryItem);
+        boolean prestockedCustomerStock = isPrestockedCustomerStock(salesOrder);
 
         // T4-D5 (#572) + 🔴 G1 (2026-07-03): warehouse discovery.
         //   - EXPLICIT sourceWarehouseCode → FIFO within that warehouse (respect explicit choice).
@@ -287,14 +304,22 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         List<FinishedGoodsBatch> batches;
         if (hasExplicitSource) {
             String warehouseId = warehouseResolver.resolveId(factoryId, sourceWarehouseCode);
-            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+            batches = prestockedCustomerStock
+                    ? finishedGoodsBatchRepository.findShippablePrestockedBatchesByWarehouse(
+                            factoryId, productTypeId, warehouseId,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
                     ? finishedGoodsBatchRepository.findAvailableCustomerOwnedBatchesByWarehouse(
                             factoryId, productTypeId, warehouseId,
                             salesOrder.getCustomerId(), salesOrder.getId())
                     : finishedGoodsBatchRepository.findAvailableBatchesFifoByWarehouse(
                             factoryId, productTypeId, warehouseId);
         } else {
-            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+            batches = prestockedCustomerStock
+                    ? finishedGoodsBatchRepository.findShippablePrestockedBatchesAllWarehousesExcluding(
+                            factoryId, productTypeId, WarehouseCodes.WH_RD,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
                     ? finishedGoodsBatchRepository.findAvailableCustomerOwnedBatchesFefoAllWarehousesExcluding(
                             factoryId, productTypeId, WarehouseCodes.WH_RD,
                             salesOrder.getCustomerId(), salesOrder.getId())
@@ -308,7 +333,10 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
 
         for (var batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
-            BigDecimal availableNative = batch.getAvailableQuantity();
+            BigDecimal availableNative = prestockedCustomerStock
+                    ? reservationLedgerService.getActiveReservedForOrderAndBatch(
+                            salesOrder.getId(), batch.getId())
+                    : batch.getAvailableQuantity();
             if (availableNative.compareTo(BigDecimal.ZERO) <= 0) continue;
 
             // 🔴 C1: convert this batch's native available quantity into targetUnit BEFORE it's
@@ -364,6 +392,12 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
         }
         return order;
+    }
+
+    private boolean isPrestockedCustomerStock(SalesOrder order) {
+        return order != null
+                && order.getCustomerStockFulfillmentMode()
+                == CustomerStockFulfillmentMode.PRESTOCKED;
     }
 
     /**

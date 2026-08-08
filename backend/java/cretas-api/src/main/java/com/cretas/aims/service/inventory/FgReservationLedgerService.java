@@ -118,6 +118,22 @@ public class FgReservationLedgerService {
         return released;
     }
 
+    @Transactional(readOnly = true)
+    public BigDecimal getActiveReservedForOrderAndBatch(String salesOrderId, String batchId) {
+        if (salesOrderId == null || batchId == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal quantity = ledgerRepository.sumActiveReservedBySalesOrderAndBatch(
+                salesOrderId, batchId);
+        return quantity != null ? quantity : BigDecimal.ZERO;
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasActiveReservation(String salesOrderId, String batchId) {
+        return getActiveReservedForOrderAndBatch(salesOrderId, batchId)
+                .compareTo(BigDecimal.ZERO) > 0;
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** 从给定 ACTIVE 行列表中削减 remaining, 削尽的行置 RELEASED。返回未削完的余量。 */

@@ -112,6 +112,7 @@ export default function ProductionPlanManagementScreen() {
     productTypeCode: '',
     customerId: '',
     customerName: '',
+    inventoryOwnership: 'COMPANY_OWNED' as 'COMPANY_OWNED' | 'CUSTOMER_OWNED',
     plannedQuantity: '',
     plannedDate: new Date().toISOString().split('T')[0], // 今天
     expectedCompletionDate: getDefaultCompletionDate(),   // 明天 (默认+1天)
@@ -418,6 +419,7 @@ export default function ProductionPlanManagementScreen() {
       productTypeCode: '',
       customerId: '',
       customerName: '',
+      inventoryOwnership: 'COMPANY_OWNED',
       plannedQuantity: '',
       plannedDate: new Date().toISOString().split('T')[0],
       expectedCompletionDate: getDefaultCompletionDate(),
@@ -487,8 +489,17 @@ export default function ProductionPlanManagementScreen() {
   };
 
   const handleSave = async () => {
-    if (!formData.productTypeId || !formData.customerId || !formData.plannedQuantity) {
+    const isInventoryProduction = formData.planType === 'FROM_INVENTORY';
+    const isCustomerInventory = isInventoryProduction
+      && formData.inventoryOwnership === 'CUSTOMER_OWNED';
+    if (!formData.productTypeId
+      || (!isInventoryProduction && !formData.plannedQuantity)
+      || ((!isInventoryProduction || isCustomerInventory) && !formData.customerId)) {
       Alert.alert(t('common.hint', { defaultValue: '提示' }), t('productionPlan.validation.requiredFields'));
+      return;
+    }
+    if (formData.plannedQuantity && parseFloat(formData.plannedQuantity) <= 0) {
+      Alert.alert('提示', '计划产量必须大于 0；库存生产也可以留空，按实际报工。');
       return;
     }
 
@@ -515,9 +526,15 @@ export default function ProductionPlanManagementScreen() {
     try {
       const response = await productionPlanApiClient.createProductionPlan({
         planType: formData.planType,
+        sourceType: isInventoryProduction ? 'SAFETY_STOCK' : 'MANUAL',
         productTypeId: formData.productTypeId,
-        customerId: formData.customerId,
-        plannedQuantity: parseFloat(formData.plannedQuantity),
+        customerId: (!isInventoryProduction || isCustomerInventory)
+          ? formData.customerId
+          : undefined,
+        outputOwnership: isCustomerInventory ? 'CUSTOMER_OWNED' : 'COMPANY_OWNED',
+        plannedQuantity: formData.plannedQuantity
+          ? parseFloat(formData.plannedQuantity)
+          : undefined,
         plannedDate: formData.plannedDate,
         expectedCompletionDate: formData.expectedCompletionDate,
         notes: formData.notes || undefined,
@@ -721,6 +738,7 @@ export default function ProductionPlanManagementScreen() {
                 <Text style={styles.statLabel}>{t('productionPlan.stats.completed')}</Text>
               </View>
             </View>
+
           </Card.Content>
         </Card>
 
@@ -1031,6 +1049,31 @@ export default function ProductionPlanManagementScreen() {
               </Text>
             </View>
 
+            {formData.planType === 'FROM_INVENTORY' && (
+              <View style={styles.planTypeSection}>
+                <Text style={styles.sectionLabel}>库存归属 *</Text>
+                <SegmentedButtons
+                  value={formData.inventoryOwnership}
+                  onValueChange={(value) => setFormData({
+                    ...formData,
+                    inventoryOwnership: value as 'COMPANY_OWNED' | 'CUSTOMER_OWNED',
+                    customerId: value === 'COMPANY_OWNED' ? '' : formData.customerId,
+                    customerName: value === 'COMPANY_OWNED' ? '' : formData.customerName,
+                  })}
+                  buttons={[
+                    { value: 'COMPANY_OWNED', label: '公司库存', icon: 'warehouse' },
+                    { value: 'CUSTOMER_OWNED', label: '客户专属库存', icon: 'account-lock' },
+                  ]}
+                  style={styles.planTypeButtons}
+                />
+                <Text style={styles.planTypeHint}>
+                  {formData.inventoryOwnership === 'CUSTOMER_OWNED'
+                    ? '只会领用所选客户尚未绑定销售订单的原料，产出的成品也归该客户。'
+                    : '沿用现有公司库存生产，不需要选择客户。'}
+                </Text>
+              </View>
+            )}
+
             {/* 产品类型选择 */}
             <ProductTypeSelector
               value={formData.productTypeName}
@@ -1048,7 +1091,7 @@ export default function ProductionPlanManagementScreen() {
 
             {/* Planned Quantity */}
             <TextInput
-              label="计划产量 (kg) *"
+              label={formData.planType === 'FROM_INVENTORY' ? '计划产量 (kg，可选)' : '计划产量 (kg) *'}
               value={formData.plannedQuantity}
               onChangeText={(text) => setFormData({ ...formData, plannedQuantity: text })}
               mode="outlined"
@@ -1120,19 +1163,22 @@ export default function ProductionPlanManagementScreen() {
               </Card>
             )}
 
-            {/* 目标商家选择 */}
-            <CustomerSelector
-              value={formData.customerName}
-              onSelect={(id, name) => {
-                setFormData({
-                  ...formData,
-                  customerId: id,
-                  customerName: name,
-                });
-              }}
-              label="目标商家(客户)"
-              placeholder="选择客户"
-            />
+            {/* 公司库存生产不绑定客户；未来计划沿用原有目标客户字段。 */}
+            {(formData.planType !== 'FROM_INVENTORY'
+              || formData.inventoryOwnership === 'CUSTOMER_OWNED') && (
+              <CustomerSelector
+                value={formData.customerName}
+                onSelect={(id, name) => {
+                  setFormData({
+                    ...formData,
+                    customerId: id,
+                    customerName: name,
+                  });
+                }}
+                label={formData.planType === 'FROM_INVENTORY' ? '归属客户 *' : '目标商家(客户)'}
+                placeholder="选择客户"
+              />
+            )}
 
             {/* AI建议字段: 生产线 / 预估工人数 / 主管 */}
             <Card style={styles.aiSuggestionCard}>
@@ -1171,7 +1217,8 @@ export default function ProductionPlanManagementScreen() {
             </Card>
 
             {/* 原材料批次区域 - 仅基于库存类型显示 */}
-            {formData.planType === 'FROM_INVENTORY' ? (
+            {formData.planType === 'FROM_INVENTORY'
+              && formData.inventoryOwnership === 'COMPANY_OWNED' ? (
             <Card style={styles.batchSectionCard}>
               <Card.Content>
                 <Text style={styles.batchSectionTitle}>原材料批次</Text>
@@ -1271,6 +1318,15 @@ export default function ProductionPlanManagementScreen() {
                 )}
               </Card.Content>
             </Card>
+            ) : formData.planType === 'FROM_INVENTORY' ? (
+              <Card style={styles.batchSectionCard}>
+                <Card.Content>
+                  <Text style={styles.batchSectionTitle}>客户专属原料</Text>
+                  <Text style={styles.planTypeHint}>
+                    系统提交时会按归属客户自动校验，只允许选择该客户且尚未绑定销售订单的可用批次。
+                  </Text>
+                </Card.Content>
+              </Card>
             ) : (
               /* 未来计划类型 - 显示自动匹配说明 */
               <Card style={styles.futurePlanInfoCard}>

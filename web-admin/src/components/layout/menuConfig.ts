@@ -63,6 +63,13 @@ const rawMenuConfig: MenuItem[] = [
   // 判可达性要从菜单/路由两侧一起看 —— 只看路由会以为它通了。
   { path: '/dashboard/ai-value', title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' },
   {
+    path: '/operations', title: '运营协同', icon: 'Connection', module: 'operations',
+    hideForFactoryTypes: ['RESTAURANT'],
+    children: [
+      { path: '/operations/customer-material-arrivals', title: '客户来料预告', icon: '', module: 'operations' },
+    ],
+  },
+  {
     path: '/workdesk',
     title: '工作台',
     icon: 'Odometer',

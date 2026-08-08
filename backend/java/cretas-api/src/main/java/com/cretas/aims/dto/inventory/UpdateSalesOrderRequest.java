@@ -3,6 +3,7 @@ package com.cretas.aims.dto.inventory;
 import com.cretas.aims.dto.sales.ExtraFeeItem;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -45,6 +46,8 @@ public class UpdateSalesOrderRequest {
 
     @NotNull(message = "物料供应方式不能为空")
     private MaterialSupplyMode materialSupplyMode;
+
+    private CustomerStockFulfillmentMode customerStockFulfillmentMode;
 
     /**
      * Null preserves existing customer-supplied requirements; a non-null list replaces them.

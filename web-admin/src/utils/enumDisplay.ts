@@ -67,6 +67,7 @@ export const ROLE_LABELS: Record<string, string> = {
   department_admin: '部门管理员',
   procurement_manager: '采购主管',
   sales_manager: '销售主管',
+  operations_coordinator: '运营协调员',
   production_manager: '生产主管',
   dispatcher: '生产调度员',
   workshop_supervisor: '车间主管',

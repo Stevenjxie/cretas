@@ -167,6 +167,29 @@ public class SupplyChainOrchestrator {
                 return;
             }
             if (sourceOrder.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+                if (sourceOrder.getCustomerStockFulfillmentMode()
+                        == CustomerStockFulfillmentMode.PRESTOCKED) {
+                    StockCheckResult result = inventoryMatchingService.checkAvailability(
+                            event.getFactoryId(), event.getSalesOrderId());
+                    if (result == null || result.getLineItems() == null) {
+                        log.warn("客户已有库存检查返回空结果: SO={}", event.getSalesOrderId());
+                        return;
+                    }
+                    for (LineItemMatch match : result.getLineItems()) {
+                        if (!match.isFullySatisfied()) {
+                            log.warn("客户已有成品库存不足，不占用公司库存且不自动生产: SO={}, product={}, shortfall={}",
+                                    event.getSalesOrderId(), match.getProductTypeId(), match.getShortfallQuantity());
+                            continue;
+                        }
+                        inventoryMatchingService.reserveStock(
+                                event.getFactoryId(),
+                                event.getSalesOrderId(),
+                                match.getSalesOrderItemId(),
+                                match.getProductTypeId(),
+                                match.getRequiredQuantity());
+                    }
+                    return;
+                }
                 // 客供料由仓储统一待收货任务驱动。这里禁止占用公司成品库存、自动生成
                 // 采购建议或公司应付；后续生产计划必须从该销售订单显式创建并冻结归属。
                 log.info("客供料销售订单跳过公司库存/采购联动，等待仓储客供收货: SO={}",

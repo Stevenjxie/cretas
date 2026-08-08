@@ -19,6 +19,7 @@ describe('sales order supply contract', () => {
     expect(newSalesOrderSupplyContract()).toEqual({
       processingMode: 'STANDARD_SALE',
       materialSupplyMode: 'FACTORY_SUPPLIED',
+      customerStockFulfillmentMode: 'ORDER_DRIVEN',
     });
   });
 
@@ -26,8 +27,13 @@ describe('sales order supply contract', () => {
     expect(supplyContractValidationError({
       processingMode: 'STANDARD_SALE',
       materialSupplyMode: 'CUSTOMER_SUPPLIED',
+      customerStockFulfillmentMode: 'ORDER_DRIVEN',
     })).toContain('普通销售不能选择客户自带原料');
-    const contract = { processingMode: 'TOLL_PROCESSING' as const, materialSupplyMode: 'CUSTOMER_SUPPLIED' as const };
+    const contract = {
+      processingMode: 'TOLL_PROCESSING' as const,
+      materialSupplyMode: 'CUSTOMER_SUPPLIED' as const,
+      customerStockFulfillmentMode: 'ORDER_DRIVEN' as const,
+    };
     expect(suppliedMaterialsValidationError(contract, [])).toContain('至少添加一项');
     expect(suppliedMaterialsValidationError(contract, [{
       materialTypeId: 'm1', materialName: '原料A', expectedQuantity: 5, unit: 'kg',
@@ -37,6 +43,16 @@ describe('sales order supply contract', () => {
       { materialTypeId: 'm1', materialName: '原料A', expectedQuantity: 5, unit: 'kg', expectedArrivalAt: '2026-07-23', targetWarehouseId: 'w1' },
       { materialTypeId: 'm1', materialName: '原料A', expectedQuantity: 2, unit: 'kg', expectedArrivalAt: '2026-07-24', targetWarehouseId: 'w1' },
     ])).toContain('不能重复添加');
+
+    expect(supplyContractValidationError({
+      processingMode: 'STANDARD_SALE',
+      materialSupplyMode: 'FACTORY_SUPPLIED',
+      customerStockFulfillmentMode: 'PRESTOCKED',
+    })).toContain('只适用于');
+    expect(suppliedMaterialsValidationError({
+      ...contract,
+      customerStockFulfillmentMode: 'PRESTOCKED',
+    }, [])).toBeNull();
   });
 
   it('uses Chinese labels and explicit legacy fallbacks', () => {
@@ -66,6 +82,7 @@ describe('sales order supply contract', () => {
   it('persists create and edit values and keeps customer receiving read-only in sales', () => {
     expect(listSource).toContain('v-model="form.processingMode"');
     expect(listSource).toContain('v-model="form.materialSupplyMode"');
+    expect(listSource).toContain('v-model="form.customerStockFulfillmentMode"');
     expect(listSource).toContain('suppliedMaterials: suppliedMaterialsPayload()');
     expect(listSource).toContain('value-format="YYYY-MM-DDTHH:mm:ss"');
     expect(listSource).toContain('expectedArrivalAt: row.expectedArrivalAt.length === 10');

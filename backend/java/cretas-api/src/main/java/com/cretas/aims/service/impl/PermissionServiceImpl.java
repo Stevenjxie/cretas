@@ -57,7 +57,7 @@ public class PermissionServiceImpl implements PermissionService {
             "dashboard", "production", "warehouse", "quality",
             "procurement", "sales", "hr", "equipment", "finance", "system", "analytics",
             "scheduling", "work_report", "inventory", "report",
-            "rd", "restaurant"
+            "rd", "restaurant", "operations"
     );
 
     /**
@@ -237,6 +237,19 @@ public class PermissionServiceImpl implements PermissionService {
         salesPerms.put("report", "read");
         salesPerms.put("rd", "read_write");  // 销售驱动 RD 需求/样品
         PERMISSION_MATRIX.put(FactoryUserRole.sales_manager, salesPerms);
+
+        // operations_coordinator: 只写运营协调单；其它业务模块只读，不获得库存/订单/生产执行权。
+        Map<String, String> operationsPerms = new HashMap<>();
+        operationsPerms.put("dashboard", "read");
+        operationsPerms.put("operations", "read_write");
+        operationsPerms.put("warehouse", "read");
+        operationsPerms.put("inventory", "read");
+        operationsPerms.put("production", "read");
+        operationsPerms.put("procurement", "read");
+        operationsPerms.put("sales", "read");
+        operationsPerms.put("analytics", "read");
+        operationsPerms.put("report", "read");
+        PERMISSION_MATRIX.put(FactoryUserRole.operations_coordinator, operationsPerms);
 
         // finance_manager: 财务主管 - SmartBI完整权限（含上传Excel）
         Map<String, String> financePerms = new HashMap<>();

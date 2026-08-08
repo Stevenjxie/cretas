@@ -664,6 +664,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             return materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
                     factoryId, materialTypeId, warehouseId);
         }
+        if (isBlank(plan.getSourceOrderId())) {
+            return materialBatchRepository
+                    .findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouse(
+                            factoryId, materialTypeId, warehouseId, plan.getCustomerId());
+        }
         return materialBatchRepository
                 .findAvailableCustomerSuppliedBatchesFEFOByWarehouse(
                         factoryId, materialTypeId, warehouseId,
@@ -788,6 +793,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
         ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(
                 plan, "生产报工投料");
+        if (isBlank(plan.getSourceOrderId())) {
+            return materialBatchRepository
+                    .findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouseForUpdate(
+                            factoryId, materialTypeId, warehouseId, plan.getCustomerId());
+        }
         return materialBatchRepository
                 .findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
                         factoryId,
@@ -806,6 +816,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         return planItemId == null || planItemId.isBlank()
                 || batchItemId == null || batchItemId.isBlank()
                 || Objects.equals(planItemId, batchItemId);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private void validateInput(String factoryId, ProcessSheetRowRequest.MaterialInputTotal input) {

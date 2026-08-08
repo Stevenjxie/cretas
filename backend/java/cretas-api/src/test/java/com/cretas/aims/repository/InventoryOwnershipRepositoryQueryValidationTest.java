@@ -3,9 +3,16 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.CustomerMaterialArrivalNotice;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.inventory.FgReservationLedgerRepository;
+import com.cretas.aims.repository.inventory.CustomerMaterialArrivalNoticeRepository;
+import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDateTime;
+import java.util.EnumSet;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +38,9 @@ class InventoryOwnershipRepositoryQueryValidationTest {
     @Autowired private MaterialBatchRepository materialBatchRepository;
     @Autowired private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Autowired private ProductionPlanRepository productionPlanRepository;
+    @Autowired private SalesOrderRepository salesOrderRepository;
+    @Autowired private FgReservationLedgerRepository fgReservationLedgerRepository;
+    @Autowired private CustomerMaterialArrivalNoticeRepository arrivalNoticeRepository;
     @Autowired private EntityManager entityManager;
 
     @Test
@@ -39,6 +49,9 @@ class InventoryOwnershipRepositoryQueryValidationTest {
         assertNotNull(materialBatchRepository);
         assertNotNull(finishedGoodsBatchRepository);
         assertNotNull(productionPlanRepository);
+        assertNotNull(salesOrderRepository);
+        assertNotNull(fgReservationLedgerRepository);
+        assertNotNull(arrivalNoticeRepository);
 
         var material = entityManager.getMetamodel().entity(MaterialBatch.class);
         assertThat(material.getAttribute("ownership")).isNotNull();
@@ -55,6 +68,13 @@ class InventoryOwnershipRepositoryQueryValidationTest {
         assertThat(finished.getAttribute("ownerCustomerId")).isNotNull();
         assertThat(finished.getAttribute("sourceSalesOrderId")).isNotNull();
         assertThat(finished.getAttribute("sourceSalesOrderItemId")).isNotNull();
+
+        var salesOrder = entityManager.getMetamodel().entity(SalesOrder.class);
+        assertThat(salesOrder.getAttribute("customerStockFulfillmentMode")).isNotNull();
+
+        var arrivalNotice = entityManager.getMetamodel().entity(CustomerMaterialArrivalNotice.class);
+        assertThat(arrivalNotice.getAttribute("customerId")).isNotNull();
+        assertThat(arrivalNotice.getAttribute("status")).isNotNull();
 
         var plan = entityManager.getMetamodel().entity(ProductionPlan.class);
         assertThat(plan.getAttribute("customerId")).isNotNull();
@@ -83,6 +103,12 @@ class InventoryOwnershipRepositoryQueryValidationTest {
                     "F006", "MAT-1", "WH-WKS");
             materialBatchRepository.findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
                     "F006", "MAT-1", "WH-WKS", "CUSTOMER-1", "SO-1");
+            materialBatchRepository.findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouseForUpdate(
+                    "F006", "MAT-1", "WH-WKS", "CUSTOMER-1");
+            materialBatchRepository.sumAvailableUnassignedCustomerOwnedRawStock(
+                    "F006", "MAT-1", "CUSTOMER-1");
+            materialBatchRepository.findUnassignedCustomerOwnedRawStockUnits(
+                    "F006", "MAT-1", "CUSTOMER-1");
             materialBatchRepository.findAllAvailableInWarehouse("F006", "WH-WKS");
             materialBatchRepository.countLowStockMaterials("F006");
 
@@ -98,6 +124,16 @@ class InventoryOwnershipRepositoryQueryValidationTest {
                     "F006", "SKU-1", "WH-LOG", "CUSTOMER-1", "SO-1");
             finishedGoodsBatchRepository.findShippableCustomerOwnedBatchesAllWarehousesExcluding(
                     "F006", "SKU-1", "WH-RD", "CUSTOMER-1", "SO-1");
+            finishedGoodsBatchRepository.findAvailableUnassignedCustomerOwnedBatchesAllWarehousesExcluding(
+                    "F006", "SKU-1", "WH-RD", "CUSTOMER-1");
+            finishedGoodsBatchRepository.findShippablePrestockedBatchesByWarehouse(
+                    "F006", "SKU-1", "WH-LOG", "CUSTOMER-1", "SO-1");
+            finishedGoodsBatchRepository.findShippablePrestockedBatchesAllWarehousesExcluding(
+                    "F006", "SKU-1", "WH-RD", "CUSTOMER-1", "SO-1");
+            fgReservationLedgerRepository.sumActiveReservedBySalesOrderAndBatch("SO-1", "FG-1");
+            arrivalNoticeRepository.findByFactoryIdAndStatusInOrderByExpectedArrivalAtAscCreatedAtAsc(
+                    "F006", EnumSet.of(CustomerMaterialArrivalStatus.OPEN));
+            arrivalNoticeRepository.findByIdAndFactoryIdForUpdate("NOTICE-1", "F006");
         });
     }
 }

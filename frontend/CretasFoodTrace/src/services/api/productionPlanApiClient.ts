@@ -75,6 +75,8 @@ export interface ProductionPlan {
   // 计划类型 (v1.1新增)
   planType?: PlanType;
   planTypeDisplayName?: string;
+  sourceType?: 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK' | 'MANUAL' | 'URGENT_INSERT';
+  outputOwnership?: 'COMPANY_OWNED' | 'CUSTOMER_OWNED';
 
   // 转换率配置状态 (v1.1新增)
   conversionRateConfigured?: boolean;
@@ -227,8 +229,10 @@ export interface ImportResult<T = any> {
 export interface CreateProductionPlanRequest {
   planType?: 'FUTURE' | 'FROM_INVENTORY';
   productTypeId: string;
-  customerId: string;
-  plannedQuantity: number;
+  customerId?: string;
+  plannedQuantity?: number;
+  sourceType?: 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK' | 'MANUAL' | 'URGENT_INSERT';
+  outputOwnership?: 'COMPANY_OWNED' | 'CUSTOMER_OWNED';
   plannedDate?: string;
   expectedCompletionDate?: string;
   notes?: string;

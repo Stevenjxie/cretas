@@ -77,10 +77,11 @@ describe('白名单邀请页的角色名', () => {
         expect(enumLabel('warehouse_manager')).toBe('仓储主管');
     });
 
-    it('可邀请清单仍是 11 个码 —— 委托权威表不该顺手增删角色', () => {
+    it('可邀请清单包含新增运营协调员在内的 12 个码', () => {
         const c = code(source);
         const block = c.match(/const INVITABLE_ROLE_CODES = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
         expect(block).not.toBe('');
-        expect((block.match(/'/g) ?? []).length / 2).toBe(11);
+        expect((block.match(/'/g) ?? []).length / 2).toBe(12);
+        expect(block).toContain("'operations_coordinator'");
     });
 });

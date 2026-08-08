@@ -158,6 +158,7 @@ const roleOptions = [
   { value: 'hr_admin', label: 'HR管理员' },
   { value: 'procurement_manager', label: '采购主管' },
   { value: 'sales_manager', label: '销售主管' },
+  { value: 'operations_coordinator', label: '运营协调员' },
   { value: 'dispatcher', label: '调度' },
   { value: 'warehouse_manager', label: '仓储主管' },
   { value: 'equipment_admin', label: '设备管理员' },

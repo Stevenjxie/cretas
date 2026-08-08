@@ -11,6 +11,7 @@ import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.CustomerMaterialArrivalNoticeService;
 import com.cretas.aims.service.inventory.SalesOrderSuppliedMaterialRequirementService;
 import org.junit.jupiter.api.Test;
 
@@ -69,7 +70,7 @@ class WarehouseReceivingCustomerSuppliedControllerTest {
                 .thenReturn(List.of(customer));
 
         List<PurchaseReceivingTaskResponse> tasks =
-                controller.getTasks("F006", null, null, null, null, null).getData();
+                controller.getTasks("F006", null, null, null, null, null, null).getData();
 
         assertThat(tasks).hasSize(2);
         assertThat(tasks.get(0))
@@ -134,7 +135,7 @@ class WarehouseReceivingCustomerSuppliedControllerTest {
                 mobileService,
                 mock(WarehouseResolver.class),
                 mock(FactoryWarehouseRepository.class),
-                requirementService);
+                requirementService,
+                mock(CustomerMaterialArrivalNoticeService.class));
     }
 }
-
