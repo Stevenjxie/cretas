@@ -8,6 +8,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -354,6 +355,46 @@ class InterimSettleServiceTest {
         assertThat(rX.getInterimSettledAt()).isNotNull();
         // QC 生产门: 无 FAILED 生产批次 → 成品 AVAILABLE (正常可售)
         assertThat(fgCap.getValue().getStatus()).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    @DisplayName("客户归属存货生产小结: 成品继承同客户归属且不虚构销售订单来源")
+    void customerOwnedStockPlanCarriesOwnershipIntoInterimFinishedGoods() {
+        ProductionPlan customerPlan = stockPlan(InventoryOwnership.CUSTOMER_OWNED, "CUSTOMER-1");
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(customerPlan));
+        ProcessSheetRow finished = row(23L, 1, "CLK-B-CUSTOMER", reqFinished(
+                1, "CLK-B-CUSTOMER", new BigDecimal("2"), new BigDecimal("1.6"), null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(finished));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(fgCap.capture());
+        FinishedGoodsBatch batch = fgCap.getValue();
+        assertThat(batch.getOwnership()).isEqualTo(InventoryOwnership.CUSTOMER_OWNED);
+        assertThat(batch.getOwnerCustomerId()).isEqualTo("CUSTOMER-1");
+        assertThat(batch.getSourceSalesOrderId()).isNull();
+        assertThat(batch.getSourceSalesOrderItemId()).isNull();
+    }
+
+    @Test
+    @DisplayName("公司存货生产小结: 即使计划残留 customerId 也不得污染成品归属")
+    void companyOwnedStockPlanKeepsCompanyOwnershipAndClearsCustomerOwner() {
+        ProductionPlan companyPlan = stockPlan(InventoryOwnership.COMPANY_OWNED, "STALE-CUSTOMER");
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(companyPlan));
+        ProcessSheetRow finished = row(25L, 1, "CLK-B-COMPANY", reqFinished(
+                1, "CLK-B-COMPANY", new BigDecimal("3"), new BigDecimal("2.4"), null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(finished));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(fgCap.capture());
+        FinishedGoodsBatch batch = fgCap.getValue();
+        assertThat(batch.getOwnership()).isEqualTo(InventoryOwnership.COMPANY_OWNED);
+        assertThat(batch.getOwnerCustomerId()).isNull();
+        assertThat(batch.getSourceSalesOrderId()).isNull();
+        assertThat(batch.getSourceSalesOrderItemId()).isNull();
     }
 
     @Test
@@ -987,6 +1028,18 @@ class InterimSettleServiceTest {
         row.setRowStatus("SAVED");
         row.setRowPayload(toJson(req));
         return row;
+    }
+
+    private ProductionPlan stockPlan(InventoryOwnership ownership, String customerId) {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY);
+        plan.setPlanNumber("PP-001");
+        plan.setProductTypeId(PRODUCT_TYPE);
+        plan.setSourceType(PlanSourceType.SAFETY_STOCK);
+        plan.setOutputOwnership(ownership);
+        plan.setCustomerId(customerId);
+        return plan;
     }
 
     private ProcessSheetRowRequest reqNonFinished(int order, String batchNumber, BigDecimal output,
