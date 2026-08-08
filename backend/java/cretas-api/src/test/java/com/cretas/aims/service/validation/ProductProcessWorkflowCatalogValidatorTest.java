@@ -2,12 +2,14 @@ package com.cretas.aims.service.validation;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -47,6 +49,9 @@ class ProductProcessWorkflowCatalogValidatorTest {
     private ProductTypeRepository productTypeRepository;
 
     @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    @Mock
     private BomRecipeItemRepository bomItemRepository;
 
     @Mock
@@ -57,7 +62,8 @@ class ProductProcessWorkflowCatalogValidatorTest {
     @BeforeEach
     void setUp() {
         validator = new ProductProcessWorkflowCatalogValidator(
-                workProcessRepository, productTypeRepository, bomRecipeRepository, bomItemRepository);
+                workProcessRepository, productTypeRepository, rawMaterialTypeRepository,
+                bomRecipeRepository, bomItemRepository);
         lenient().when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                         anyString(), anyString(), org.mockito.ArgumentMatchers.eq(BomRecipe.Status.ACTIVE)))
                 .thenReturn(true);
@@ -530,6 +536,80 @@ class ProductProcessWorkflowCatalogValidatorTest {
 
         new ProductProcessWorkflowValidator().validateForPublish(definition);
         assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+    }
+
+    /**
+     * 🔴 2026-08-08 真机: 副产整条不可用。
+     *
+     * <p>画布把副产建成「普通产出节点 + isByproduct 标记」(刻意不设 kind:'BYPRODUCT',
+     * 「副产只看物料上的 isByproduct 标记, 与材质正交」), 选料下拉据此从 raw_material_types 筛;
+     * 而本校验原先对**所有**产出一律查 product_types ⇒ 任何从界面选出来的副产必报
+     * 「产出 SKU 不存在」。真机实证: RMT_1785513705730「验收-副产-肥油」在 raw_material_types
+     * 存在、在 product_types count=0。
+     *
+     * <p>权威在物料侧(副产库存落 material_batches, 该表有 byproduct_unit_price 列)。
+     */
+    @Test
+    void acceptsByproductOutputBoundToMaterialArchive() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-CUT")))
+                .thenReturn(List.of(workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED)));
+        when(rawMaterialTypeRepository.findByIdIn(List.of("RMT-FAT")))
+                .thenReturn(List.of(byproductMaterial("RMT-FAT", FACTORY_ID, true)));
+
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                byproductWorkflow("WP-CUT", "RMT-FAT")));
+
+        // ⛔ 副产不许再去查产品目录 —— 查了就等于旧行为还在。
+        verify(productTypeRepository, org.mockito.Mockito.never()).findByIdIn(List.of("RMT-FAT"));
+    }
+
+    /** 放宽不等于放弃保护: 没标副产的普通原料被塞进副产 Cell, 必须拦住。 */
+    @Test
+    void rejectsByproductCellBoundToMaterialNotMarkedAsByproduct() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-CUT")))
+                .thenReturn(List.of(workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED)));
+        when(rawMaterialTypeRepository.findByIdIn(List.of("RMT-PLAIN")))
+                .thenReturn(List.of(byproductMaterial("RMT-PLAIN", FACTORY_ID, false)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        byproductWorkflow("WP-CUT", "RMT-PLAIN")));
+
+        assertTrue(error.getMessage().contains("未标记为副产"), error.getMessage());
+    }
+
+    /** 跨租户拦截同样要保留。 */
+    @Test
+    void rejectsByproductFromAnotherFactory() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-CUT")))
+                .thenReturn(List.of(workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED)));
+        when(rawMaterialTypeRepository.findByIdIn(List.of("RMT-OTHER")))
+                .thenReturn(List.of(byproductMaterial("RMT-OTHER", "F999", true)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        byproductWorkflow("WP-CUT", "RMT-OTHER")));
+
+        assertTrue(error.getMessage().contains("不属于当前工厂"), error.getMessage());
+    }
+
+    private RawMaterialType byproductMaterial(String id, String factoryId, boolean marked) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId(factoryId);
+        material.setName("验收-副产-肥油");
+        material.setIsByproduct(marked);
+        return material;
+    }
+
+    /** 一道工序 + 一个带 isByproduct 标记的半成品产出 Cell —— 与画布「+ 副产」建出来的形状一致。 */
+    private ProductProcessWorkflowDTO byproductWorkflow(String workProcessId, String skuId) {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                workProcessId, "SEMI_FINISHED", skuId);
+        definition.getNodes().stream()
+                .filter(node -> "material:output".equals(node.getId()))
+                .forEach(node -> node.getData().put("isByproduct", Boolean.TRUE));
+        return definition;
     }
 
     private ProductProcessWorkflowDTO workflowWithPrimaryOutput(
