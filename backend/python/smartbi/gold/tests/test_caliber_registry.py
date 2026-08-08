@@ -121,3 +121,46 @@ def test_authority_of_maps_subordinates_back():
     assert C.authority_of("discount_breakdown") == "discount_summary"
     assert C.authority_of("discount_summary") is None
     assert C.authority_of("完全没登记的函数") is None
+
+
+# ─── 全局闸：确定性层不许靠置信度/相似度授权 ────────────────────────────────
+
+def test_no_confidence_threshold_authorizes_execution():
+    """🔴 扫全部餐饮模块：**没有任何地方拿置信度/相似度当授权依据**。
+
+    Steve 定的规矩：
+      · 确定性层只能「认得」，不能「猜」
+      · 只有 100% 和 0%，没有中间态
+      · 置信度不作授权依据 —— 相似度是连续量、不可证伪：
+        「一段很长的话里只有一个字不一样(高 vs 低)，整体相似度还是很高的」，
+        而那一个字正是意图的全部差别。
+
+    ⛔ 允许存在的两类比较（它们方向相反，是**拒绝**不是**授权**）：
+      1. `confidence < 阈值` -> 拒绝/反问（低置信不放行）
+      2. 晋升候选的 SQL 预过滤（只加宽读取范围，不排除任何东西）
+
+    🔴 2026-08-08 实测抓到的真实违规（已撤除）：
+       `should_delegate` 里 `spec.source_tier == "vector" and spec.confidence >= 0.85`
+       —— 向量高分直通执行。prod 历史 17k 条里 vector tier 有 63 条，是活的。
+    """
+    import pathlib
+    import re
+
+    import smartbi.gold.restaurant as pkg
+
+    root = pathlib.Path(pkg.__file__).parent
+    # 「>= 阈值」形式的比较 = 分数越高越放行 = 用置信度授权
+    pattern = re.compile(
+        r"(confidence|similarity|_sim|score)\s*(>=|>)\s*[\d_]*\.?\d+", re.I)
+    offenders = []
+    for f in sorted(root.glob("*.py")):
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("--"):
+                continue          # 注释里写着「曾经有过」是可以的
+            if pattern.search(line):
+                offenders.append(f"{f.name}:{i}: {stripped[:78]}")
+    assert not offenders, (
+        "有地方拿「置信度/相似度高于阈值」当放行条件（= 用置信度授权）:\n  "
+        + "\n  ".join(offenders)
+    )

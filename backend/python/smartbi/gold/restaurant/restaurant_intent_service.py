@@ -1618,11 +1618,19 @@ def should_delegate(
     # (1) T2 向量层置信弱, 仍须经上面的显式规则 (选错意图会答错域);
     # (2) 2026-07-08 审计 A-3: 盈亏问落在不懂盈亏的 resolver 上会挂永久
     #     免责声明, 比 Java 原答案更差 — 该组合仍不直通。
-    tier_trusted = spec.source_tier in ("keyword", "llm") or (
-        # R24: T2 向量层高置信 (≥0.85 相似度) 也走规格即路由; 低于阈值仍走
-        # 上面的显式规则 — 向量选错意图会答错域, 只给高分直通。
-        spec.source_tier == "vector" and spec.confidence >= 0.85
-    )
+    # 🔴 2026-08-08 撤除向量层的高置信直通(R24 那条 `vector and confidence>=0.85`)。
+    #
+    # ⇒ 判据(Steve 定的): **置信度不作授权依据。** 相似度是连续量、不可证伪 ——
+    #   「一段很长的话里只有一个字不一样(高 vs 低), 整体相似度还是很高的」,
+    #   而那一个字正是意图的全部差别。0.85 这个数挡不住那种情况。
+    #
+    # 📌 这条不是新规矩, 是**回到 R24 之前**: 同一段注释里原本就把向量列为
+    #   保留例外「T2 向量层置信弱, 仍须经上面的显式规则(选错意图会答错域)」,
+    #   R24 又给它开了个高分口子。现在把口子关上, 向量 tier 一律走显式规则。
+    #
+    # prod 历史 17k 条里 vector tier 有 63 条(0.4%) —— 影响面小, 但它是活的,
+    # 不是死代码; 而「向量从不授权」这条要成立就不能有例外。
+    tier_trusted = spec.source_tier in ("keyword", "llm")
     if tier_trusted and not spec.clarification_needed:
         profit_ask = spec.asks_profitability or spec.wants_margin
         if not (profit_ask and spec.intent not in _MARGIN_CAPABLE_INTENTS):
