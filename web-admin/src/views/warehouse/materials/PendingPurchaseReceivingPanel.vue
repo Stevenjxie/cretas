@@ -655,7 +655,7 @@ async function openArrivalReceive(task: CustomerMaterialArrivalTask) {
       receivedQuantity: 0, unit: '', productionDate: '', expireDate: '',
       externalBatchNumber: '', contractNumber: '', factoryNumber: '',
       boxCount: undefined, originPlace: '', notes: '', completeNotice: true,
-      idempotencyKey: `warehouse-arrival-${task.taskId}-${Date.now()}`,
+      idempotencyKey: `arrival-${task.taskId}-${Date.now().toString(36)}`,
     };
     arrivalDialogVisible.value = true;
   } finally {
