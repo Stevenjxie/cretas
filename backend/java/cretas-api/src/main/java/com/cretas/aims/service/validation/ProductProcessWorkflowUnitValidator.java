@@ -51,7 +51,7 @@ public class ProductProcessWorkflowUnitValidator {
             String skuId = text(data(node).get("skuId"));
             if (blank(skuId)) {
                 warnings.add(issue("SKU_UNIT_UNKNOWN", "物料 Cell 尚未绑定主数据单位", node.getId(), null, null, null));
-            } else if ("RAW_MATERIAL".equals(node.getKind())) {
+            } else if ("RAW_MATERIAL".equals(catalogKind(node))) {
                 rawIds.add(skuId);
             } else {
                 productIds.add(skuId);
@@ -75,7 +75,7 @@ public class ProductProcessWorkflowUnitValidator {
                         material.getId(), null, null, null));
                 continue;
             }
-            String expected = primaryUnits.get(primaryKey(material.getKind(), skuId));
+            String expected = primaryUnits.get(primaryKey(catalogKind(material), skuId));
             if (expected == null) {
                 errors.add(issue("SKU_UNIT_UNKNOWN", "绑定的物料不存在、跨工厂或缺少主单位", material.getId(), null, null, null));
                 continue;
@@ -139,7 +139,7 @@ public class ProductProcessWorkflowUnitValidator {
         ProductProcessWorkflowDTO.Node material = materials.get(text(port.get("materialNodeId")));
         if (material == null) return;
         String skuId = text(data(material).get("skuId"));
-        String expectedRaw = primaryUnits.get(primaryKey(material.getKind(), skuId));
+        String expectedRaw = primaryUnits.get(primaryKey(catalogKind(material), skuId));
         String expected = canonical(factoryId, expectedRaw);
         String current = canonical(factoryId, text(port.get("unit")));
         if (current == null || expected == null) {
@@ -221,6 +221,23 @@ public class ProductProcessWorkflowUnitValidator {
             result.put(row.getId(), row);
         }
         return result;
+    }
+
+    /**
+     * 该物料节点的 SKU 应当去**哪个目录**里找 —— 副产走物料档案。
+     *
+     * <p>🔴 2026-08-08: 画布把副产建成「普通产出节点(kind 多为 SEMI_FINISHED) + isByproduct 标记」,
+     * 选料下拉从 raw_material_types 按标记筛。若这里仍按 kind 分桶, 副产会被丢进产品桶 ⇒
+     * product_types 里查不到 ⇒ 报「绑定的物料不存在、跨工厂或缺少主单位」, 发布照样过不去。
+     *
+     * <p>⛔ 判据收敛在这一个方法里: 本类原有**三处**各自写 `node.getKind()`(分桶 + 两处取 key),
+     * 任何一处漏改都会让副产在另一条分支上再挂一次 —— 同一条规则不要留多个承载点。
+     */
+    private String catalogKind(ProductProcessWorkflowDTO.Node node) {
+        if ("RAW_MATERIAL".equals(node.getKind())) return "RAW_MATERIAL";
+        Object flag = data(node).get("isByproduct");
+        boolean byproduct = Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(text(flag));
+        return byproduct ? "RAW_MATERIAL" : node.getKind();
     }
 
     private String primaryKey(String kind, String id) {
