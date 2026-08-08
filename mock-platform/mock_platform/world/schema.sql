@@ -136,6 +136,34 @@ CREATE TABLE IF NOT EXISTS stocktaking (
     UNIQUE (biz_date, store_id, ingredient_id)
 );
 
+-- 折扣构成 (2026-08-09)
+--
+-- 🔴 补的是一个**建模缺口**: 订单上一直只有一个标量 discount_cents ——
+--    「让了多少利」有，「因为哪个活动让的」没有。而下游 gold 层的
+--    `agg_discount` / `fact_pos_discount` 正是按活动分组的，于是
+--    「哪个活动让利最多」「团购券划不划算」这类问题在结构上就答不出来，
+--    折扣构成端点对 MOCK_REST 恒返回 ¥0（不是算错，是源头没有这一维）。
+--
+-- ⛔ 只做**归属**，不改金额: discount_cents 的算法一个字不动。
+--    金额已经过验证，这里只回答「这笔让利记在哪个活动头上」。
+CREATE TABLE IF NOT EXISTS discount_campaign (
+    id                 INTEGER PRIMARY KEY,
+    code               TEXT NOT NULL UNIQUE,
+    name               TEXT NOT NULL,
+    kind               TEXT NOT NULL,   -- groupon_voucher / platform_promo
+    channel            TEXT NOT NULL,   -- 只投放在这个渠道
+    face_value_cents   INTEGER NOT NULL DEFAULT 0 CHECK(typeof(face_value_cents) = 'integer'),
+    actual_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(typeof(actual_price_cents) = 'integer')
+);
+
+CREATE TABLE IF NOT EXISTS order_discount (
+    id           INTEGER PRIMARY KEY,
+    order_id     INTEGER NOT NULL REFERENCES "order"(id) ON DELETE CASCADE,
+    campaign_id  INTEGER NOT NULL REFERENCES discount_campaign(id),
+    amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents) = 'integer')
+);
+CREATE INDEX IF NOT EXISTS idx_order_discount_order ON order_discount(order_id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_order_seq ON "order"(seq);
 CREATE INDEX IF NOT EXISTS idx_order_store_date ON "order"(store_id, biz_date);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_requisition_seq ON requisition(seq);

@@ -179,6 +179,14 @@ async def refresh_gold_incremental(
         out["agg_product"] = product.rows_upserted
         out["product_month"] = str(month)
         out["product_seconds"] = round(elapsed, 2)
+
+        # 折扣构成: 与 agg_product 同为**月**粒度、同走慢档。
+        # 🔴 2026-08-09 之前这里漏调, 而它是 agg_discount 的**唯一**刷新入口 ——
+        #    于是那张表对所有靠实时同步的租户恒为空, 折扣构成端点永远返回 ¥0。
+        #    ⛔ 判据: 新增一个 materialize_* 就要问「谁来调它」——
+        #       写了物化函数没接调度, 等于写了一个永不执行的重算。
+        discount = await m.materialize_discount(month)
+        out["agg_discount"] = discount.rows_upserted
         if elapsed >= PRODUCT_SLOW_WARN_SECONDS:
             logger.warning(
                 "[platform-sync] agg_product 耗时 %.1fs (factory=%s month=%s) —— "

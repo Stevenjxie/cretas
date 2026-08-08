@@ -34,6 +34,27 @@ _DISHES = [
 ]
 
 
+# ── 折扣活动种子 (2026-08-09) ───────────────────────────────────────
+# (code, name, kind, channel, face_value_cents, actual_price_cents)
+#
+# ⛔ 每个活动**绑死一个渠道**: 团购券只在团购渠道核销, 外卖满减只在外卖发放。
+#    跨渠道乱投放会让「哪个渠道的让利来自哪个活动」这个问题失去意义 ——
+#    而那正是老板问「团购划不划算」时真正想知道的。
+#
+# ⚠️ face_value / actual_price 只对**预售型团购券**有意义(卖 88 元的 128 元套餐券)。
+#    平台满减是即时立减, 没有票面价 —— 那两列留 0 表示「这个活动没有票面」,
+#    不是「不知道」。
+_DISCOUNT_CAMPAIGNS = [
+    # 团购: 预售套餐券, 有票面价与实售价
+    ("GP_DIANPING_2P", "大众点评双人餐券", "groupon_voucher", "groupon", 12800, 8800),
+    ("GP_MEITUAN_SET", "美团团购套餐券", "groupon_voucher", "groupon", 9800, 6800),
+    ("GP_DOUYIN_4P", "抖音四人聚餐券", "groupon_voucher", "groupon", 25800, 19900),
+    # 外卖: 即时立减, 无票面
+    ("TA_FULL_CUT", "外卖满50减8", "platform_promo", "takeaway", 0, 0),
+    ("TA_NEW_USER", "新客首单立减", "platform_promo", "takeaway", 0, 0),
+    ("TA_SUBSIDY", "平台补贴红包", "platform_promo", "takeaway", 0, 0),
+]
+
 # ── 后厨供应链种子 (2026-07-29) ─────────────────────────────────────
 # (name, category, unit, unit_price_cents, shelf_life_days, storage_type)
 # 单价是「每单位」的价, 单位见 unit 列。鸡腿肉 2400 分/kg = 24 元/kg, 合理量级。
@@ -187,6 +208,15 @@ def seed_world(conn: sqlite3.Connection, store_count: int) -> None:
             "category=excluded.category, price_cents=excluded.price_cents, "
             "cost_cents=excluded.cost_cents, groupon_eligible=excluded.groupon_eligible",
             (name, cat, price, cost, groupon),
+        )
+    for code, name, kind, channel, face, actual in _DISCOUNT_CAMPAIGNS:
+        conn.execute(
+            "INSERT INTO discount_campaign(code, name, kind, channel, "
+            "face_value_cents, actual_price_cents) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(code) DO UPDATE SET name=excluded.name, kind=excluded.kind, "
+            "channel=excluded.channel, face_value_cents=excluded.face_value_cents, "
+            "actual_price_cents=excluded.actual_price_cents",
+            (code, name, kind, channel, face, actual),
         )
     # 菜种完了才能种配方(配方要按菜名查 id)。
     seed_supply_chain(conn)

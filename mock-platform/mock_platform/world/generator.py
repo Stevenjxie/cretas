@@ -247,6 +247,10 @@ def _generate_orders_inner(conn, *, store_id: int, biz_date: str,
     dishes = conn.execute("SELECT id, price_cents, groupon_eligible FROM dish").fetchall()
     if not dishes:
         raise RuntimeError("菜品表为空，先跑 seed_world")
+    # 每渠道可投放的活动 id。一次查完 —— 这是主数据, 每单查一次纯属浪费。
+    campaigns: dict = {}
+    for row in conn.execute("SELECT id, channel FROM discount_campaign").fetchall():
+        campaigns.setdefault(row["channel"], []).append(row["id"])
     seq = _next_seq(conn)
     placed_base = datetime.datetime.fromisoformat(biz_date).replace(
         hour=minute_of_day // 60, minute=minute_of_day % 60
@@ -289,6 +293,22 @@ def _generate_orders_inner(conn, *, store_id: int, biz_date: str,
             "VALUES (?,?,?,?,?)",
             [(order_id, d, q, p, a) for d, q, p, a in lines],
         )
+        # 折扣归属: 让利记在哪个活动头上。
+        # ⛔ 不改金额 —— 整笔 discount 原样落到一个活动上, 合计恒等于
+        #    order.discount_cents。拆成两个活动会让「构成加总 = 订单折扣」
+        #    这条最容易被下游依赖的恒等式变成近似, 不值得。
+        if discount > 0:
+            pool_c = campaigns.get(channel) or []
+            if not pool_c:
+                # 禁降级: 有折扣却没有可归属的活动 = 种子没种全, 说清楚而不是丢掉。
+                raise RuntimeError(
+                    f"渠道 {channel} 有折扣 {discount} 却没有任何投放活动 —— "
+                    "检查 seed._DISCOUNT_CAMPAIGNS 的 channel 列")
+            conn.execute(
+                "INSERT INTO order_discount(order_id, campaign_id, amount_cents) "
+                "VALUES (?,?,?)",
+                (order_id, rng.choice(pool_c), discount),
+            )
         method = rng.choice(_PAY_BY_CHANNEL[channel])
         conn.execute(
             "INSERT INTO payment(order_id, method, amount_cents) VALUES (?,?,?)",

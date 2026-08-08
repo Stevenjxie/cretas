@@ -28,6 +28,24 @@ class NormalizedPayment:
 
 
 @dataclass(frozen=True)
+class NormalizedDiscount:
+    """折扣构成的一行：这笔让利记在哪个活动头上。
+
+    ⛔ 与 `NormalizedOrder.discount_cents`(标量总额)的关系是**归属而非重复**：
+       构成各行 amount_cents 之和恒等于订单的 discount_cents。下游据此把
+       「让了多少」拆成「因为哪个活动让的」——「团购券划不划算」问的就是这个。
+
+    ⚠️ face_value / actual_price 只对**预售型团购券**有意义(卖 88 元的 128 元套餐券)。
+       平台即时满减没有票面，两列为 0 表示「这个活动没有票面」，**不是**「不知道」。
+    """
+    name: str
+    discount_type: str
+    amount_cents: int
+    face_value_cents: int = 0
+    actual_price_cents: int = 0
+
+
+@dataclass(frozen=True)
 class NormalizedOrder:
     platform: str
     platform_order_no: str
@@ -46,6 +64,8 @@ class NormalizedOrder:
     guest_count: int = 1
     items: List[NormalizedItem] = field(default_factory=list)
     payments: List[NormalizedPayment] = field(default_factory=list)
+    #: 折扣构成。空列表 = 这笔订单没有折扣(或平台不给构成), **不是**「不知道」。
+    discounts: List[NormalizedDiscount] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

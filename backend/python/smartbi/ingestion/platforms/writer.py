@@ -201,6 +201,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
     # 每批一份菜品缓存: 同一批里重复出现的菜只解析一次。刻意不做成模块级 ——
     # 那会跨租户串 product_id, 也会在 dim_product 被外部改动后发陈旧值。
         product_cache: dict = {}
+        # 折扣活动同理: 一批里重复出现的活动只认领一次。
+        discount_cache: dict = {}
         # set_config(..., true) 是**事务级**的: asyncpg 上不开显式事务从不生效,
         # RLS 会靠连接池残留碰运气。这层 transaction 不能省。
         async with conn.transaction():
@@ -218,16 +220,29 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                 #    ⛔ 不在这里另写一套 CASE —— 否则「晚市」会有两段不同的时间。
                 daypart = _daypart_of(order.placed_at)
                 txn_row = await conn.fetchrow(
+                    # ⛔ $1 / $14 上的 `::text` 不是装饰, 去掉这条语句就 **prepare 不了**:
+                    #    `varchar = varchar` 在 PostgreSQL 里实际解析成 `text = text`
+                    #    (varchar 二进制兼容 text, 没有独立的 varchar 等号操作符),
+                    #    于是子查询里的 `d.factory_id = $1` 把 $1 推断成 text,
+                    #    而 VALUES 的列位置按 fact_pos_transaction.factory_id 推断成
+                    #    character varying —— 同一个参数两种推断, 服务端直接报
+                    #    `inconsistent types deduced for parameter $1`。$14 同理:
+                    #    它既是 meal_period 列值(varchar), 又进 `||` 拼接(text)。
+                    #
+                    # 🔴 2026-08-09 实测: 这条语句部署后**一次都没执行过** —— 当时游标
+                    #    已在末尾, 没有新订单可拉, 所以「写入路径是坏的」这件事被
+                    #    "同步中, 0 条" 完整掩盖, 直到重灌演示数据才炸出来。
+                    #    判据: 改了写入 SQL, 必须真触发一次写入, 不能只看同步不报错。
                     "INSERT INTO fact_pos_transaction "
                     "(factory_id, store_id, source_type, source_bill_no, date, time, "
                     " gross_amount, discount_amount, net_amount, customer_count, "
                     " item_count, order_type, has_discount, meal_period, platform_fee_amount, staff_id) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,"
+                    "VALUES ($1::text,$2::int,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::text,$15,"
                     "        (SELECT d.staff_id FROM dim_staff d JOIN dim_store s"
-                    "            ON s.store_id = d.store_id AND s.factory_id = $1"
-                    "          WHERE d.factory_id = $1 AND d.role = 'cashier'"
-                    "            AND d.store_id = $2"
-                    "            AND d.name = s.name || $14 || '收银')) "
+                    "            ON s.store_id = d.store_id AND s.factory_id = $1::text"
+                    "          WHERE d.factory_id = $1::text AND d.role = 'cashier'"
+                    "            AND d.store_id = $2::int"
+                    "            AND d.name = s.name || $14::text || '收银')) "
                     "ON CONFLICT (factory_id, source_type, store_id, source_bill_no) "
                     "DO NOTHING "
                     "RETURNING id",
@@ -248,6 +263,7 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                 written += 1
                 await _write_items(conn, factory_id, txn_id, order, product_cache)
                 await _write_payments(conn, factory_id, txn_id, order)
+                await _write_discounts(conn, factory_id, txn_id, order, discount_cache)
     logger.info("[platform-sync] 写入 %d/%d 笔订单 (factory=%s)",
                 written, len(orders), factory_id)
     return written
@@ -327,6 +343,58 @@ async def _write_items(conn, factory_id: str, txn_id: int, order: NormalizedOrde
             "VALUES ($1,$2,$3,$4,$5,$6,$7)",
             txn_id, factory_id, product_id, item.dish_name, item.qty,
             _yuan(item.price_cents), _yuan(item.amount_cents),
+        )
+
+
+async def _write_discounts(conn, factory_id: str, txn_id: int,
+                           order: NormalizedOrder, discount_cache: dict) -> None:
+    """折扣构成落库：dim_discount(活动) + fact_pos_discount(这一单摊到多少)。
+
+    🔴 补的是**「让了多少」有、「因为哪个活动让的」没有**这个缺口：
+       在此之前 MOCK_REST 的 fact_pos_discount 一行都没有，于是 agg_discount
+       物化出来恒为空，折扣构成端点对这个租户永远返回 ¥0 —— 不是算错，
+       是这一维在源头就不存在。
+
+    ⛔ 恒等式：本单各行 amount 之和 == fact_pos_transaction.discount_amount。
+       归属不改总额，下游可以放心把构成加总当作校验。
+
+    ⚠️ 没有构成(空列表)时**一行都不写**，而不是写一条「其他」兜底 ——
+       编一个不存在的活动名会让「哪个活动让利最多」答出一个假冠军。
+    """
+    for disc in order.discounts:
+        discount_id = discount_cache.get(disc.name)
+        if discount_id is None:
+            # 活动是主数据: 先按 (factory_id, name) 认领, 没有再建。
+            # ⛔ 用 uq_dim_discount_factory_name 兜住并发 —— 两个 worker 同时
+            #    见到同一个新活动时, DO NOTHING 那侧要能读回既有 id 而不是崩。
+            row = await conn.fetchrow(
+                "INSERT INTO dim_discount "
+                "(factory_id, name, discount_type, platform, face_value, "
+                " actual_price, parsed_ok) "
+                "VALUES ($1::text,$2::text,$3,$4,$5,$6,TRUE) "
+                "ON CONFLICT (factory_id, name) DO UPDATE SET "
+                "  discount_type = EXCLUDED.discount_type, "
+                "  platform = EXCLUDED.platform, "
+                "  face_value = EXCLUDED.face_value, "
+                "  actual_price = EXCLUDED.actual_price, "
+                "  updated_at = NOW() "
+                "RETURNING discount_id",
+                factory_id, disc.name, disc.discount_type or None, order.platform,
+                _yuan(disc.face_value_cents) if disc.face_value_cents else None,
+                _yuan(disc.actual_price_cents) if disc.actual_price_cents else None,
+            )
+            if row is None:
+                raise RuntimeError(
+                    f"折扣活动认领失败: factory={factory_id} name={disc.name!r} "
+                    f"—— DO UPDATE 本应总是 RETURNING 一行"
+                )
+            discount_id = row["discount_id"]
+            discount_cache[disc.name] = discount_id
+        await conn.execute(
+            "INSERT INTO fact_pos_discount "
+            "(transaction_id, factory_id, discount_id, quantity, amount) "
+            "VALUES ($1,$2,$3,1,$4)",
+            txn_id, factory_id, discount_id, _yuan(disc.amount_cents),
         )
 
 
