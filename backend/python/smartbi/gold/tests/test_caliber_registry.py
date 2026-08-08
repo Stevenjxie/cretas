@@ -142,25 +142,64 @@ def test_no_confidence_threshold_authorizes_execution():
     🔴 2026-08-08 实测抓到的真实违规（已撤除）：
        `should_delegate` 里 `spec.source_tier == "vector" and spec.confidence >= 0.85`
        —— 向量高分直通执行。prod 历史 17k 条里 vector tier 有 63 条，是活的。
+
+    ⚠️ 第一版这道闸只匹配「>= **数字**」，而 `t3_confidence >= _T3_MIN_CONFIDENCE`
+       用的是**常量名** —— 闸扫不到它，**而好代码恰恰都这么写**。
+       现在两种都匹配，靠下面的登记表放行合法的那几处；
+       **登记必须写理由**，与 `caliber_registry` 同一个规矩。
     """
     import pathlib
     import re
 
     import smartbi.gold.restaurant as pkg
 
+    #: 允许存在的「分数越高越放行」——每条必须说清**为什么它不是在猜**。
+    ALLOWED = {
+        "_T3_MIN_CONFIDENCE": (
+            "T3 是 LLM，是设计上**唯一被允许猜的那一层**。这个阈值判的是"
+            "「模型自己说它没把握」时不采信它的解析 —— 是对权威方的安全过滤，"
+            "不是拿相似度替代证据。去掉它会变成「模型说不确定也照答」，更差。"
+        ),
+        "_T2_HIGH_CONFIDENCE": (
+            "只给**提示**分档，从不授权。`_t2_vector_match` 高分返回 "
+            "`(code, sim, None)`、低分返回 `(None, sim, (code, sim))`，而两个消费点"
+            "都写成 `(t2_code, t2_sim) if t2_code else t2_hint` —— **两条分支拿到的"
+            "是同一个 `(code, sim)` 元组**，随后一律喂给 T3。也就是说这个阈值今天"
+            "对结果零影响，更不是在猜；留着是因为删它要动向量层的返回契约。"
+        ),
+    }
+
     root = pathlib.Path(pkg.__file__).parent
-    # 「>= 阈值」形式的比较 = 分数越高越放行 = 用置信度授权
+    # 「>= 阈值」= 分数越高越放行 = 用置信度授权。阈值可以是数字或常量名。
     pattern = re.compile(
-        r"(confidence|similarity|_sim|score)\s*(>=|>)\s*[\d_]*\.?\d+", re.I)
+        r"(confidence|similarity|_sim\b|score)\s*(>=|>)\s*([\w.]+)", re.I)
     offenders = []
     for f in sorted(root.glob("*.py")):
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("--"):
                 continue          # 注释里写着「曾经有过」是可以的
-            if pattern.search(line):
-                offenders.append(f"{f.name}:{i}: {stripped[:78]}")
+            m = pattern.search(line)
+            if not m:
+                continue
+            if m.group(3) in ALLOWED:
+                continue
+            offenders.append(f"{f.name}:{i}: {stripped[:78]}")
     assert not offenders, (
-        "有地方拿「置信度/相似度高于阈值」当放行条件（= 用置信度授权）:\n  "
+        "有地方拿「置信度/相似度高于阈值」当放行条件（= 用置信度授权）。"
+        "确实合法的请登记进 ALLOWED 并写清为什么不是在猜:\n  "
         + "\n  ".join(offenders)
+    )
+
+
+def test_the_confidence_allowlist_states_why_each_entry_is_not_guessing():
+    """⛔ 白名单每条都要有理由 —— 没理由的豁免下次会被随手加长。"""
+    import inspect
+
+    src = inspect.getsource(test_no_confidence_threshold_authorizes_execution)
+    body = src[src.index("ALLOWED = {"):src.index("root = pathlib")]
+    entries = body.count('": (')
+    assert entries >= 1
+    assert body.count("不是在猜") + body.count("安全过滤") >= entries, (
+        "白名单里有条目没写清为什么它不是在猜"
     )
