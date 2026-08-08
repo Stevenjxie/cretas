@@ -30,6 +30,7 @@ interface ModulePermissions {
   dashboard: PermissionLevel;
   production: PermissionLevel;
   warehouse: PermissionLevel;
+  operations?: PermissionLevel;
   quality: PermissionLevel;
   procurement: PermissionLevel;
   sales: PermissionLevel;
@@ -97,6 +98,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   // Level 0 - 工厂总监 (最高权限，全模块读写)
   factory_super_admin: {
     dashboard: 'rw',
+    operations: 'rw',
     production: 'rw',
     warehouse: 'rw',
     quality: 'rw',
@@ -115,6 +117,12 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     restaurantFinance: 'rw',
     restaurantProcurement: 'rw',
     rd: 'rw'
+  },
+
+  operations_coordinator: {
+    dashboard: 'r', operations: 'rw', production: 'r', warehouse: 'r',
+    quality: '-', procurement: 'r', sales: 'r', hr: '-', equipment: '-',
+    finance: '-', system: '-', analytics: 'r', scheduling: '-', restaurant: '-', rd: '-'
   },
 
   // Level 10 - 职能部门经理
@@ -345,7 +353,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
 
   // 平台管理员
   platform_admin: {
-    dashboard: 'rw', production: 'rw', warehouse: 'rw', quality: 'rw',
+    dashboard: 'rw', operations: 'rw', production: 'rw', warehouse: 'rw', quality: 'rw',
     procurement: 'rw', sales: 'rw', hr: 'rw', equipment: 'rw',
     finance: 'rw', system: 'rw', analytics: 'rw', scheduling: 'rw', restaurant: 'rw',
     rd: 'rw'
@@ -659,7 +667,7 @@ export const usePermissionStore = defineStore('permission', () => {
   function getAccessibleModules(): ModuleName[] {
     const modules: ModuleName[] = [
       'dashboard', 'production', 'warehouse', 'quality',
-      'procurement', 'sales', 'hr', 'equipment', 'finance', 'system', 'analytics', 'scheduling', 'restaurant'
+      'operations', 'procurement', 'sales', 'hr', 'equipment', 'finance', 'system', 'analytics', 'scheduling', 'restaurant'
     ];
     return modules.filter(m => canAccess(m));
   }

@@ -34,15 +34,22 @@ public final class ProductionInventoryOwnershipGuard {
         if (plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
             requireCustomerSuppliedPlanLineage(plan, hintTarget);
             boolean sameCustomer = Objects.equals(plan.getCustomerId(), batch.getOwnerCustomerId());
-            boolean sameSalesOrder = Objects.equals(plan.getSourceOrderId(), batch.getSourceSalesOrderId());
+            boolean inventoryProduction = isBlank(plan.getSourceOrderId());
+            boolean sameSalesOrder = inventoryProduction
+                    ? isBlank(batch.getSourceSalesOrderId())
+                    : Objects.equals(plan.getSourceOrderId(), batch.getSourceSalesOrderId());
             boolean sameSalesOrderItem = isBlank(plan.getSourceOrderItemId())
                     || isBlank(batch.getSourceSalesOrderItemId())
                     || Objects.equals(plan.getSourceOrderItemId(), batch.getSourceSalesOrderItemId());
             if (batch.getOwnership() != InventoryOwnership.CUSTOMER_OWNED
                     || !sameCustomer || !sameSalesOrder || !sameSalesOrderItem) {
-                throw new BusinessException(409, "客供料只能用于同一客户、同一销售订单的生产计划")
+                throw new BusinessException(409, inventoryProduction
+                        ? "客户专属库存生产只能领用该客户尚未绑定销售订单的原料"
+                        : "客供料只能用于同一客户、同一销售订单的生产计划")
                         .withCode("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH")
-                        .withHint("请使用该销售订单对应的客户来料批次")
+                        .withHint(inventoryProduction
+                                ? "请选择归属该客户且来源销售订单为空的原料批次"
+                                : "请使用该销售订单对应的客户来料批次")
                         .withHintTarget(hintTarget);
             }
             return;
@@ -57,10 +64,10 @@ public final class ProductionInventoryOwnershipGuard {
     }
 
     public static void requireCustomerSuppliedPlanLineage(ProductionPlan plan, String hintTarget) {
-        if (plan == null || isBlank(plan.getCustomerId()) || isBlank(plan.getSourceOrderId())) {
-            throw new BusinessException(409, "客供料生产计划缺少客户或销售订单归属快照")
+        if (plan == null || isBlank(plan.getCustomerId())) {
+            throw new BusinessException(409, "客户所有库存生产计划缺少客户归属快照")
                     .withCode("CUSTOMER_SUPPLIED_PLAN_LINEAGE_INCOMPLETE")
-                    .withHint("请从已完成审批且已明确客供料的销售订单创建生产计划")
+                    .withHint("销售订单生产需从已审批订单创建；库存生产需明确选择归属客户")
                     .withHintTarget(hintTarget);
         }
     }

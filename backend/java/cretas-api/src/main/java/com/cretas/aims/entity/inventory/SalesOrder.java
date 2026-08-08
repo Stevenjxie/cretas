@@ -7,6 +7,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.dto.sales.ExtraFeeItem;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -290,6 +291,16 @@ public class SalesOrder extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "material_supply_mode", length = 32)
     private MaterialSupplyMode materialSupplyMode;
+
+    /**
+     * Customer-owned stock source. Relevant only to toll processing with customer-supplied material.
+     * Historical and normal order-driven flows keep ORDER_DRIVEN.
+     */
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "customer_stock_fulfillment_mode", nullable = false, length = 32)
+    private CustomerStockFulfillmentMode customerStockFulfillmentMode =
+            CustomerStockFulfillmentMode.ORDER_DRIVEN;
 
     // ==================== 关联 ====================
 

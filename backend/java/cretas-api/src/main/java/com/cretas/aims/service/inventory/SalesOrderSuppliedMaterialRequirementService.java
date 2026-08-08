@@ -14,6 +14,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesOrderSuppliedMaterialRequirementStatus;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
@@ -98,9 +99,9 @@ public class SalesOrderSuppliedMaterialRequirementService {
                 requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(order.getId());
 
         assertPayloadContract(order, requests, true);
-        if (!isCustomerSuppliedTollOrder(order)) {
+        if (!requiresOrderDrivenRequirements(order)) {
             if (existing.stream().anyMatch(this::hasReceiptFact)) {
-                throw new BusinessException(409, "已有客供料收货事实，不能切换为非客供料模式")
+                throw new BusinessException(409, "已有客供料收货事实，不能切换供料来源")
                         .withCode("CUSTOMER_SUPPLIED_REQUIREMENT_RECEIVED_IMMUTABLE")
                         .withHint("请保留原订单供料契约；系统不会删除或重建已收货任务");
             }
@@ -186,12 +187,12 @@ public class SalesOrderSuppliedMaterialRequirementService {
 
         List<SalesOrderSuppliedMaterialRequirement> sourceRequirements =
                 requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(source.getId());
-        if (isCustomerSuppliedTollOrder(source) && sourceRequirements.isEmpty()) {
+        if (requiresOrderDrivenRequirements(source) && sourceRequirements.isEmpty()) {
             throw new BusinessException(409, "源销售订单缺少客供物料需求，不能复制")
                     .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_MISSING_ON_COPY")
                     .withHint("请先编辑源草稿并补全客供物料需求");
         }
-        if (!isCustomerSuppliedTollOrder(source) && !sourceRequirements.isEmpty()) {
+        if (!requiresOrderDrivenRequirements(source) && !sourceRequirements.isEmpty()) {
             throw new BusinessException(409, "源销售订单存在与供料模式冲突的客供物料需求")
                     .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_MODE_CONFLICT");
         }
@@ -556,7 +557,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
             SalesOrder order,
             List<CreateSalesOrderRequest.SuppliedMaterialRequirementDTO> requests,
             boolean nullMeansPreserve) {
-        boolean customerSupplied = isCustomerSuppliedTollOrder(order);
+        boolean customerSupplied = requiresOrderDrivenRequirements(order);
         boolean hasPayload = requests != null && !requests.isEmpty();
         if (customerSupplied && (!nullMeansPreserve || requests != null) && !hasPayload) {
             throw missingRequirements();
@@ -572,6 +573,13 @@ public class SalesOrderSuppliedMaterialRequirementService {
     private boolean isCustomerSuppliedTollOrder(SalesOrder order) {
         return order.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING
                 && order.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED;
+    }
+
+    private boolean requiresOrderDrivenRequirements(SalesOrder order) {
+        return isCustomerSuppliedTollOrder(order)
+                && (order.getCustomerStockFulfillmentMode() == null
+                || order.getCustomerStockFulfillmentMode()
+                == CustomerStockFulfillmentMode.ORDER_DRIVEN);
     }
 
     private void softDelete(List<SalesOrderSuppliedMaterialRequirement> existing) {

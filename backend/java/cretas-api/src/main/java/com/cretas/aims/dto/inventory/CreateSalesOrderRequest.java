@@ -3,6 +3,7 @@ package com.cretas.aims.dto.inventory;
 import com.cretas.aims.dto.sales.ExtraFeeItem;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -80,8 +81,16 @@ public class CreateSalesOrderRequest {
     private MaterialSupplyMode materialSupplyMode;
 
     /**
+     * ORDER_DRIVEN: this order defines later customer-material receipts.
+     * PRESTOCKED: allocate already-produced, unassigned finished goods owned by this customer.
+     */
+    private CustomerStockFulfillmentMode customerStockFulfillmentMode =
+            CustomerStockFulfillmentMode.ORDER_DRIVEN;
+
+    /**
      * Structured customer-supplied raw-material requirements. Required only for
-     * {@code TOLL_PROCESSING + CUSTOMER_SUPPLIED}; forbidden for every other mode.
+     * Required only for order-driven {@code TOLL_PROCESSING + CUSTOMER_SUPPLIED};
+     * forbidden for PRESTOCKED and every other mode.
      */
     @Valid
     private List<SuppliedMaterialRequirementDTO> suppliedMaterials;

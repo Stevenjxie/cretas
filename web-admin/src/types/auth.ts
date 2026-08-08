@@ -24,6 +24,7 @@ export const FACTORY_ROLES = {
   HR_ADMIN: 'hr_admin',
   PROCUREMENT_MANAGER: 'procurement_manager',
   SALES_MANAGER: 'sales_manager',
+  OPERATIONS_COORDINATOR: 'operations_coordinator',
   DISPATCHER: 'dispatcher',  // 调度 - 生产调度、数据分析、趋势监控
   WAREHOUSE_MANAGER: 'warehouse_manager',
   EQUIPMENT_ADMIN: 'equipment_admin',
@@ -75,6 +76,7 @@ export const ROLE_METADATA: Record<string, RoleMetadata> = {
   hr_admin: { displayName: 'HR管理员', description: '人事管理、考勤、薪资', level: 10, department: 'hr' },
   procurement_manager: { displayName: '采购主管', description: '供应商、采购、成本', level: 10, department: 'procurement' },
   sales_manager: { displayName: '销售主管', description: '客户、订单、出货', level: 10, department: 'sales' },
+  operations_coordinator: { displayName: '运营协调员', description: '跨部门来源单与履约协调', level: 10, department: 'operations' },
   dispatcher: { displayName: '调度', description: '生产调度、数据分析、趋势监控', level: 10, department: 'dispatch' },
   warehouse_manager: { displayName: '仓储主管', description: '库存、出入库、盘点', level: 10, department: 'warehouse' },
   equipment_admin: { displayName: '设备管理员', description: '设备维护、保养、告警', level: 10, department: 'equipment' },

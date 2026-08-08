@@ -164,7 +164,7 @@ public class CreateProductionPlanRequest {
     @Schema(description = "供料模式快照（服务端从销售订单覆盖）", accessMode = Schema.AccessMode.READ_ONLY)
     private MaterialSupplyMode materialSupplyMode;
 
-    @Schema(description = "产出库存归属快照（服务端按销售处理模式派生）", accessMode = Schema.AccessMode.READ_ONLY)
+    @Schema(description = "产出库存归属。客户订单由服务端派生；SAFETY_STOCK 库存生产可显式选择 COMPANY_OWNED/CUSTOMER_OWNED")
     private InventoryOwnership outputOwnership;
 
     @Schema(description = "客户名称")

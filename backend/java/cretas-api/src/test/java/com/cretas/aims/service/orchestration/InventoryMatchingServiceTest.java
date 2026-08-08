@@ -7,6 +7,7 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -179,5 +180,51 @@ class InventoryMatchingServiceTest {
         // 验证 NO 全 warehouse legacy method 调用
         verify(finishedGoodsBatchRepository, never())
                 .findAvailableBatches(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("PRESTOCKED 客户订单只检查并预留同客户未绑定订单的成品")
+    void prestockedCustomerOrder_usesUnassignedCustomerOwnedFinishedGoods() {
+        SalesOrderItem item = new SalesOrderItem();
+        item.setId(99L);
+        item.setProductTypeId(PRODUCT_TYPE_ID);
+        item.setProductName("客户预生产产品");
+        item.setQuantity(new BigDecimal("20"));
+        item.setDeliveredQuantity(BigDecimal.ZERO);
+        item.setUnit("kg");
+
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-PRESTOCKED");
+        order.setFactoryId(FACTORY_ID);
+        order.setCustomerId("CUSTOMER-1");
+        order.setCustomerStockFulfillmentMode(CustomerStockFulfillmentMode.PRESTOCKED);
+        order.setItems(List.of(item));
+
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId("FG-CUSTOMER-1");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setBatchNumber("FG-CUSTOMER-1");
+        batch.setProductTypeId(PRODUCT_TYPE_ID);
+        batch.setProducedQuantity(new BigDecimal("25"));
+        batch.setShippedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit("kg");
+
+        when(salesOrderRepository.findById("SO-PRESTOCKED")).thenReturn(Optional.of(order));
+        when(finishedGoodsBatchRepository
+                .findAvailableUnassignedCustomerOwnedBatchesAllWarehousesExcluding(
+                        FACTORY_ID, PRODUCT_TYPE_ID, WarehouseCodes.WH_RD, "CUSTOMER-1"))
+                .thenReturn(List.of(batch));
+
+        StockCheckResult result = service.checkAvailability(FACTORY_ID, "SO-PRESTOCKED");
+        assertTrue(result.isAllSatisfied());
+
+        service.reserveStock(
+                FACTORY_ID, "SO-PRESTOCKED", "99", PRODUCT_TYPE_ID, new BigDecimal("20"));
+
+        verify(reservationLedgerService).reserve(
+                FACTORY_ID, "SO-PRESTOCKED", "99", batch, new BigDecimal("20"));
+        verify(finishedGoodsBatchRepository, never())
+                .findAvailableBatchesByWarehouse(anyString(), anyString(), anyString());
     }
 }

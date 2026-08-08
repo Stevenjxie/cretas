@@ -6,6 +6,7 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -109,7 +110,27 @@ public class InventoryMatchingService {
             //   - flag=true (A5):       all factories + WH-LOG (group pool, still total warehouse only).
             //   WH-WKS (鲜棉仓, 当天清仓) 从不参与销售匹配.
             BigDecimal available;
-            if (productTypeRepository == null) {
+            if (isPrestockedCustomerOrder(so)) {
+                List<FinishedGoodsBatch> candidateBatches = finishedGoodsBatchRepository
+                        .findAvailableUnassignedCustomerOwnedBatchesAllWarehousesExcluding(
+                                factoryId,
+                                item.getProductTypeId(),
+                                WarehouseCodes.WH_RD,
+                                so.getCustomerId());
+                BigDecimal gramsPerUnit = productTypeRepository == null
+                        ? null
+                        : productTypeRepository.findById(item.getProductTypeId())
+                                .map(com.cretas.aims.entity.ProductType::getGramsPerUnit)
+                                .orElse(null);
+                available = BigDecimal.ZERO;
+                for (FinishedGoodsBatch batch : candidateBatches) {
+                    BigDecimal converted = convertBatchToUnit(
+                            batch.getAvailableQuantity(), batch, matchingUnit, gramsPerUnit);
+                    if (converted != null) {
+                        available = available.add(converted);
+                    }
+                }
+            } else if (productTypeRepository == null) {
                 // Legacy isolated tests use the original aggregate query path.
                 if (crossFactoryEnabled) {
                     available = finishedGoodsBatchRepository
@@ -201,8 +222,18 @@ public class InventoryMatchingService {
                              String productTypeId, BigDecimal quantity) {
         // D1: warehouse strategy per PR #310 §5 — sales reserve from WH-LOG fixed (D5).
         // D5 (2026-05-11 PR #316): cross-factory FEFO 预留也只取 WH-LOG 批次.
+        SalesOrder sourceOrder = salesOrderId == null
+                ? null
+                : salesOrderRepository.findById(salesOrderId).orElse(null);
         List<FinishedGoodsBatch> batches;
-        if (crossFactoryEnabled) {
+        if (isPrestockedCustomerOrder(sourceOrder)) {
+            batches = finishedGoodsBatchRepository
+                    .findAvailableUnassignedCustomerOwnedBatchesAllWarehousesExcluding(
+                            factoryId,
+                            productTypeId,
+                            WarehouseCodes.WH_RD,
+                            sourceOrder.getCustomerId());
+        } else if (crossFactoryEnabled) {
             batches = finishedGoodsBatchRepository
                     .findAvailableBatchesAllFactoriesByWarehouseCode(
                             productTypeId, WarehouseCodes.WH_LOG);
@@ -281,6 +312,12 @@ public class InventoryMatchingService {
                 && item.getPackagingBaseUnit() != null
                 && item.getPackagingFactor() != null
                 && item.getPackagingFactor().signum() > 0;
+    }
+
+    private boolean isPrestockedCustomerOrder(SalesOrder order) {
+        return order != null
+                && order.getCustomerStockFulfillmentMode()
+                == CustomerStockFulfillmentMode.PRESTOCKED;
     }
 
     private BigDecimal convertBatchToUnit(

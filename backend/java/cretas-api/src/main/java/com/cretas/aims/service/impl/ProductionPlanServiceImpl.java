@@ -101,6 +101,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private final ExcelUtil excelUtil;
     private final SalesOrderRepository salesOrderRepository;
     private final SalesOrderItemRepository salesOrderItemRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CustomerRepository customerRepository;
     /** Sprint 3 Track-F: unified cross-business link service (double-write w/ sourceOrderId). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
@@ -900,8 +902,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                 String materialTypeId) {
         if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
             requireCustomerSuppliedPlanLineage(plan, "原料库存");
-            return materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
-                    factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+            return isBlank(plan.getSourceOrderId())
+                    ? materialBatchRepository.sumAvailableUnassignedCustomerOwnedRawStock(
+                            factoryId, materialTypeId, plan.getCustomerId())
+                    : materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
+                            factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
         }
         // Repository contract excludes customer-owned inventory while retaining
         // null ownership only for read-compatible legacy company stock.
@@ -918,8 +923,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             java.util.List<String> units;
             if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
                 requireCustomerSuppliedPlanLineage(plan, "原料库存单位");
-                units = materialBatchRepository.findCustomerSuppliedRawStockUnits(
-                        factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+                units = isBlank(plan.getSourceOrderId())
+                        ? materialBatchRepository.findUnassignedCustomerOwnedRawStockUnits(
+                                factoryId, materialTypeId, plan.getCustomerId())
+                        : materialBatchRepository.findCustomerSuppliedRawStockUnits(
+                                factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
             } else {
                 units = materialBatchRepository.findRawStockUnitsByMaterialType(factoryId, materialTypeId);
             }
@@ -952,8 +960,39 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void validateAndEnrichSalesOrderSource(String factoryId, CreateProductionPlanRequest request) {
         if (request.getSourceType() != PlanSourceType.CUSTOMER_ORDER) {
-            // Request snapshot fields are never authoritative. New non-sales plans
-            // always produce ordinary company-owned inventory.
+            boolean customerOwnedInventoryProduction = request.getSourceType() == PlanSourceType.SAFETY_STOCK
+                    && request.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED;
+            if (customerOwnedInventoryProduction) {
+                if (isBlank(request.getCustomerId())) {
+                    throw new BusinessException(400, "客户专属库存生产必须选择归属客户")
+                            .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_REQUIRED")
+                            .withHintTarget("customerId");
+                }
+                if (!isBlank(request.getSourceOrderId()) || !isBlank(request.getSourceOrderItemId())) {
+                    throw new BusinessException(400, "客户专属库存生产不能同时关联销售订单")
+                            .withCode("CUSTOMER_INVENTORY_PRODUCTION_ORDER_FORBIDDEN")
+                            .withHint("如已有销售订单，请改用销售订单生产")
+                            .withHintTarget("sourceOrderId");
+                }
+                if (customerRepository == null) {
+                    throw new BusinessException(500, "客户资料校验服务不可用，不能创建客户专属库存生产")
+                            .withCode("CUSTOMER_VALIDATION_UNAVAILABLE");
+                }
+                var customer = customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
+                        .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
+                        .orElseThrow(() -> new BusinessException(400, "归属客户不存在、已停用或不属于当前工厂")
+                                .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_INVALID")
+                                .withHintTarget("customerId"));
+                request.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+                request.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+                request.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+                request.setSourceOrderId(null);
+                request.setSourceOrderItemId(null);
+                request.setSourceOrderIds(new java.util.ArrayList<>());
+                request.setSourceCustomerName(customer.getName());
+                return;
+            }
+            // Every other non-sales plan remains ordinary company-owned inventory.
             request.setCustomerId(null);
             request.setProcessingMode(null);
             request.setMaterialSupplyMode(null);
