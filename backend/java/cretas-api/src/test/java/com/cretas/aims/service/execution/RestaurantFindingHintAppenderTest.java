@@ -6,6 +6,7 @@ import com.cretas.aims.service.finding.FindingTextRenderer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -15,7 +16,9 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** Unit tests for {@link RestaurantFindingHintAppender}. */
@@ -45,7 +48,7 @@ class RestaurantFindingHintAppenderTest {
     @Test
     @DisplayName("UT-RFH-01: 把顺带提示拼到回答末尾，原回答逐字保留")
     void appendsHintAfterAnswer() {
-        when(findingService.detectInline(FACTORY_ID, "restaurant")).thenReturn(oneFinding());
+        when(findingService.detectInline(eq(FACTORY_ID), anyCollection())).thenReturn(oneFinding());
         when(findingTextRenderer.renderInline(any()))
                 .thenReturn("⚠️ 顺带 1 件事：\n · 变质损耗近7天 ¥265047.0，占全店损耗 37.1%");
 
@@ -57,14 +60,24 @@ class RestaurantFindingHintAppenderTest {
     }
 
     @Test
-    @DisplayName("UT-RFH-02: 用 restaurant 这个 domain 查发现层")
-    void usesRestaurantDomain() {
-        when(findingService.detectInline(anyString(), anyString())).thenReturn(oneFinding());
+    @DisplayName("UT-RFH-02: 查发现层时**同时**带上 restaurant 与 inventory 两个域")
+    void usesRestaurantAndInventoryDomains() {
+        // 🔴 2026-08-08 改: 原来只查 "restaurant" 单域, 而低库存发现由
+        //    LowStockFindingProvider 提供、domain 是 "inventory",
+        //    FindingServiceImpl 又是逐字 equals 比对 ——
+        //    **库存异常永远到不了店长眼前**。能力在、数据通道在, 只差这根线。
+        // ⛔ 一次调用传两个域, 不是调两次: inline 上限要在合并后的全集上截断,
+        //    分别截断会让两个域各占名额, 把真正最要紧的那条挤掉。
+        when(findingService.detectInline(anyString(), anyCollection())).thenReturn(oneFinding());
         when(findingTextRenderer.renderInline(any())).thenReturn("x");
 
         appender.append(ANSWER, FACTORY_ID, false);
 
-        verify(findingService).detectInline(FACTORY_ID, "restaurant");
+        ArgumentCaptor<java.util.Collection<String>> captor =
+                ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(findingService).detectInline(eq(FACTORY_ID), captor.capture());
+        assertTrue(captor.getValue().contains("restaurant"), "缺 restaurant 域");
+        assertTrue(captor.getValue().contains("inventory"), "缺 inventory 域(库存异常带不出来)");
     }
 
     @Test
@@ -82,7 +95,7 @@ class RestaurantFindingHintAppenderTest {
     @Test
     @DisplayName("UT-RFH-04: 渲染出空串时不留下尾随空行")
     void emptyHintLeavesAnswerUntouched() {
-        when(findingService.detectInline(anyString(), anyString())).thenReturn(
+        when(findingService.detectInline(anyString(), anyCollection())).thenReturn(
                 new FindingService.Result(List.of(), List.of(), 0, Map.of(), List.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("");
 
@@ -100,7 +113,7 @@ class RestaurantFindingHintAppenderTest {
     @Test
     @DisplayName("UT-RFH-06: 🔴 发现层炸了不能拖垮主回答 —— 原回答必须原样送达")
     void findingFailureNeverBreaksTheAnswer() {
-        when(findingService.detectInline(anyString(), anyString()))
+        when(findingService.detectInline(anyString(), anyCollection()))
                 .thenThrow(new IllegalStateException("boom"));
 
         assertEquals(ANSWER, appender.append(ANSWER, FACTORY_ID, false),
@@ -110,7 +123,7 @@ class RestaurantFindingHintAppenderTest {
     @Test
     @DisplayName("UT-RFH-07: 规则失败的话术由 renderer 负责，appender 不吞它")
     void ruleFailureTextIsForwarded() {
-        when(findingService.detectInline(anyString(), anyString())).thenReturn(
+        when(findingService.detectInline(anyString(), anyCollection())).thenReturn(
                 new FindingService.Result(List.of(), List.of(), 0, Map.of(),
                         List.of("损耗类型集中度"), List.of()));
         when(findingTextRenderer.renderInline(any()))
@@ -120,5 +133,31 @@ class RestaurantFindingHintAppenderTest {
 
         assertTrue(out.contains("检查失败"),
                 "规则失败必须说出来, 静默吞掉就是把失败渲染成正常: " + out);
+    }
+
+    @Test
+    @DisplayName("顺带提示覆盖的域, 必须包含店长会关心的每一类发现")
+    void hintDomainsCoverEveryProviderTheBossCaresAbout() throws Exception {
+        // 🔴 2026-08-08 实测的真实缺口: LowStockFindingProvider 早就存在,
+        //    但它的 domain 是 "inventory", 而这里写死 "restaurant" 单域,
+        //    `FindingServiceImpl` 又是逐字 equals 比对 ——
+        //    **库存异常永远到不了店长眼前**。能力在、数据通道在, 只差这根线。
+        //
+        // ⛔ 这条闸判的是**接线**, 不是数据: MOCK_REST 的 material_batches 今天
+        //    是 0 行, 所以接上之后依然不会有提示 —— 那是对的(没异常就不带),
+        //    但线必须先接上, 数据来了才会自动生效。
+        //
+        // ⇒ 判据: 新增一个店长会关心的 FindingProvider 时, 如果它的 domain
+        //   不在这张表里, 这条直接红 —— 不靠谁记得。
+        java.lang.reflect.Field f =
+                RestaurantFindingHintAppender.class.getDeclaredField("DOMAINS");
+        f.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.List<String> domains = (java.util.List<String>) f.get(null);
+
+        assertTrue(domains.contains("restaurant"),
+                "缺 restaurant 域: 谜题菜品/损耗集中/损耗占比突增都取不到");
+        assertTrue(domains.contains("inventory"),
+                "缺 inventory 域: 店长问任何问题都该看到食材快没了");
     }
 }

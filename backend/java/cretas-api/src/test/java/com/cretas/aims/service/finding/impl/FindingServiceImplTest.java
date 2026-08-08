@@ -217,4 +217,51 @@ class FindingServiceImplTest {
         assertEquals(List.of("损耗类型集中度"), r.failedRules());
         assertFalse(r.complete());
     }
+
+    @Test
+    @DisplayName("UT-FSI-10: 多域调用把两个域的发现合并后再排序截断")
+    void multiDomainMergesBeforeCapping() {
+        // 🔴 2026-08-08: 餐饮「顺带提示」原本写死单域 "restaurant", 而低库存发现
+        //    由 LowStockFindingProvider 提供、domain 是 "inventory" ——
+        //    域对不上, **库存异常永远到不了店长眼前**。能力在、数据通道在,
+        //    只差这一根线。这条钉住多域合并本身。
+        // ⛔ 不能用「调两次再拼」代替: inline 上限要在**合并后的全集**上截断,
+        //    分别截断会让两个域各占名额, 把真正最要紧的那条挤掉 ——
+        //    下面 cap=2 时必须是全局 top2(90/80), 而不是每域各一条。
+        FindingServiceImpl service = new FindingServiceImpl(List.of(
+                stub("restaurant", "rest-rule", ranked("REST_HIGH", 80), ranked("REST_LOW", 10)),
+                stub("inventory", "stock-rule", ranked("STOCK_TOP", 90), ranked("STOCK_LOW", 20))
+        ), 2);
+
+        FindingService.Result r = service.detectInline(FACTORY_ID, List.of("restaurant", "inventory"));
+
+        assertEquals(List.of("STOCK_TOP", "REST_HIGH"),
+                r.findings().stream().map(Finding::code).toList(),
+                "必须是合并后的全局 top2, 不是每域各一条");
+        assertEquals(4, r.totalCount());
+        assertEquals(java.util.Set.of("rest-rule", "stock-rule"),
+                java.util.Set.copyOf(r.checkedRules()));
+    }
+
+    @Test
+    @DisplayName("UT-FSI-11: 单域重载与只传一个域的多域调用行为一致")
+    void singleDomainOverloadStillWorks() {
+        FindingServiceImpl service = new FindingServiceImpl(List.of(
+                stub("restaurant", "rest-rule", ranked("REST_HIGH", 80)),
+                stub("inventory", "stock-rule", ranked("STOCK_TOP", 90))
+        ), 5);
+
+        assertEquals(List.of("REST_HIGH"),
+                service.detectInline(FACTORY_ID, "restaurant")
+                        .findings().stream().map(Finding::code).toList());
+        assertEquals(List.of("REST_HIGH"),
+                service.detectInline(FACTORY_ID, List.of("restaurant"))
+                        .findings().stream().map(Finding::code).toList());
+    }
+
+    /** 指定 rankScore 的发现, 用来验证排序是在合并之后做的。 */
+    private static Finding ranked(String code, int rankScore) {
+        return new Finding(code, "inventory", Finding.Severity.WARNING, rankScore,
+                "id-" + code, code, Map.of());
+    }
 }

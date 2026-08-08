@@ -25,8 +25,25 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RestaurantFindingHintAppender {
 
-    /** 发现层领域名。与两个餐饮 provider 的 {@code domain()} 逐字一致。 */
-    private static final String DOMAIN = "restaurant";
+    /**
+     * 顺带提示要覆盖的发现域。
+     *
+     * <p>🔴 2026-08-08 补上 {@code "inventory"}：低库存发现由
+     * {@code LowStockFindingProvider} 提供，而它声明的 domain 是 inventory，
+     * 与餐饮那三条(谜题菜品/损耗集中/损耗占比突增)不同域。此前这里写死
+     * {@code "restaurant"} 单域，`FindingServiceImpl` 又是
+     * {@code provider.domain().equals(domain)} 逐字比对 —— **库存异常因此
+     * 永远到不了店长眼前**。能力在、数据通道在，只差这一根线。
+     *
+     * <p>⛔ 店长关心的「库存」就是食材库存，与工厂端读的是同一套
+     * material_batches / raw_material_types，口径无需另立。
+     *
+     * <p>⚠️ 没有异常时 provider 自然返回空、或抛
+     * {@code FindingNotApplicableException} 被诚实跳过 —— **不带出来是对的**，
+     * 不是失效。
+     */
+    private static final java.util.List<String> DOMAINS =
+            java.util.List.of("restaurant", "inventory");
 
     private final FindingService findingService;
     private final FindingTextRenderer findingTextRenderer;
@@ -44,7 +61,7 @@ public class RestaurantFindingHintAppender {
             return answer;
         }
         try {
-            FindingService.Result result = findingService.detectInline(factoryId, DOMAIN);
+            FindingService.Result result = findingService.detectInline(factoryId, DOMAINS);
             String hint = findingTextRenderer.renderInline(result);
             if (hint.isEmpty()) {
                 return answer;
