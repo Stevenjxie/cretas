@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
@@ -22,6 +23,7 @@ import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.production.ProductionMaterialReturnRepository;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
+import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -446,6 +448,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     public FactoryMaterialRequisition transferToFactory(String factoryId, String id, Long operatorId) {
         FactoryMaterialRequisition mr = getById(factoryId, id);
         assertStatus(mr, Status.PICKING);
+        ProductionPlan plan = productionPlanRepository
+                .findByIdAndFactoryId(mr.getProductionPlanId(), factoryId)
+                .orElseThrow(() -> new BusinessException(409, "领料调拨失败: 关联生产计划不存在或不属于当前工厂")
+                        .withCode("PRODUCTION_REQUISITION_PLAN_NOT_FOUND")
+                        .withHint("请刷新物料需求单并核对关联生产计划")
+                        .withHintTarget(mr.getProductionPlanId())
+                        .withSeverity("BLOCKING"));
 
         // 防呆 (Rule 4 幂等 + 反假成功): 调拨前必须已「确认领料」录入实际拣货数量。若所有行 picked_qty
         // 均为 null/0, 说明仓管跳过了确认领料直接点调拨 → 之前会静默把状态推到 TRANSFERRED 并返 200
@@ -494,8 +503,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         String targetWarehouseId = resolveWorkshopWarehouseId(factoryId, mr);
         // 防呆 (客户原话「你告诉他这个东西你要收多少就行了」): 仓管确认领料只录数量, 系统按 FEFO 从
         // 原料仓自动分配领料批次。若某行确认时已带批次 (前端预选/老单) 则不动。
-        autoAllocatePickedBatchesIfMissing(factoryId, mr);
-        relocatePickedMaterialToWorkshop(factoryId, mr, targetWarehouseId, operatorId);
+        autoAllocatePickedBatchesIfMissing(factoryId, mr, plan);
+        relocatePickedMaterialToWorkshop(factoryId, mr, plan, targetWarehouseId, operatorId);
 
         mr.setStatus(Status.TRANSFERRED);
         mr.setTransferredBy(operatorId);
@@ -544,7 +553,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * 供 {@link #relocatePickedMaterialToWorkshop} 逐批划出。已带批次的行 (前端预选 / 老单) 跳过。
      * 库存不足 → loud-fail (honest, 不静默少领), 明确告诉仓管缺口。
      */
-    private void autoAllocatePickedBatchesIfMissing(String factoryId, FactoryMaterialRequisition mr) {
+    private void autoAllocatePickedBatchesIfMissing(String factoryId,
+                                                     FactoryMaterialRequisition mr,
+                                                     ProductionPlan plan) {
         if (materialBatchRepository == null) {
             return; // relocate 会再报 UNAVAILABLE
         }
@@ -559,15 +570,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 continue; // 已选批次 (前端预选或老单), 尊重之
             }
             String materialTypeId = it.getMaterialTypeId();
-            List<MaterialBatch> candidates = Collections.emptyList();
-            if (sourceWarehouseId != null && !sourceWarehouseId.isBlank()) {
-                candidates = materialBatchRepository
-                        .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, sourceWarehouseId);
-            }
-            // 源仓无该物料可用批次 → 回退工厂全仓 FEFO (兼容批次未标 warehouse 的老数据)
-            if (candidates.isEmpty()) {
-                candidates = materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId);
-            }
+            List<MaterialBatch> candidates = findEligibleSourceBatches(
+                    factoryId, plan, materialTypeId, sourceWarehouseId);
 
             BigDecimal remaining = issued;
             List<Map<String, Object>> allocated = new ArrayList<>();
@@ -604,12 +608,54 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     /**
+     * 领料 FEFO 必须沿用生产计划冻结的库存所有权范围。普通计划保持原有公司库存查询；
+     * 客户库存生产只允许同客户、且与计划销售订单归属一致的客户库存，绝不回退到公司库存。
+     */
+    private List<MaterialBatch> findEligibleSourceBatches(String factoryId,
+                                                           ProductionPlan plan,
+                                                           String materialTypeId,
+                                                           String sourceWarehouseId) {
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            List<MaterialBatch> candidates = Collections.emptyList();
+            if (sourceWarehouseId != null && !sourceWarehouseId.isBlank()) {
+                candidates = materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
+                        factoryId, materialTypeId, sourceWarehouseId);
+            }
+            // 仅公司库存的历史领料单允许无 warehouse 批次回退；通用 FEFO 本身排除客户库存。
+            return candidates.isEmpty()
+                    ? materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId)
+                    : candidates;
+        }
+
+        ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(plan, "生产领料");
+        if (sourceWarehouseId == null || sourceWarehouseId.isBlank()) {
+            throw new BusinessException(409, "客户专属库存领料缺少来源仓库")
+                    .withCode("CUSTOMER_STOCK_REQUISITION_SOURCE_WAREHOUSE_REQUIRED")
+                    .withHint("请重新按生产计划生成领料单，让系统带出原料仓")
+                    .withHintTarget("sourceWarehouseId")
+                    .withSeverity("BLOCKING");
+        }
+        if (plan.getSourceOrderId() == null || plan.getSourceOrderId().isBlank()) {
+            return materialBatchRepository
+                    .findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouseForUpdate(
+                            factoryId, materialTypeId, sourceWarehouseId, plan.getCustomerId());
+        }
+        return materialBatchRepository
+                .findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
+                        factoryId, materialTypeId, sourceWarehouseId,
+                        plan.getCustomerId(), plan.getSourceOrderId());
+    }
+
+    /**
      * 物理迁移: 逐已拣批次把 issued 数量从源批次 (原料仓) 划出, 在生产仓建同物料新批次。
      * 保留单价/单位/效期/批号血缘。把新建的生产仓批次 id 回写进 batch_numbers 行 (workshopBatchId),
      * 供关单退料时精确反向划出。幂等: batch_row 已带 workshopBatchId → 跳过 (二次防呆)。
      */
-    private void relocatePickedMaterialToWorkshop(String factoryId, FactoryMaterialRequisition mr,
-                                                  String targetWarehouseId, Long operatorId) {
+    private void relocatePickedMaterialToWorkshop(String factoryId,
+                                                  FactoryMaterialRequisition mr,
+                                                  ProductionPlan plan,
+                                                  String targetWarehouseId,
+                                                  Long operatorId) {
         if (materialBatchRepository == null) {
             throw new BusinessException(500, "领料调拨失败: MaterialBatchRepository 未注入")
                     .withCode("PRODUCTION_REQUISITION_TRANSFER_UNAVAILABLE")
@@ -655,6 +701,24 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     throw new BusinessException(403, "领料调拨失败: 批次不属于当前工厂 " + source.getId())
                             .withHint("请切换到正确工厂或核对批次").withSeverity("BLOCKING");
                 }
+                if (mr.getSourceWarehouseId() != null
+                        && !mr.getSourceWarehouseId().equals(source.getWarehouseId())) {
+                    throw new BusinessException(409, "领料调拨失败: 批次不属于领料单来源仓库")
+                            .withCode("PRODUCTION_REQUISITION_BATCH_WAREHOUSE_MISMATCH")
+                            .withHint("请重新确认领料，由系统按来源仓先进先出选择批次")
+                            .withHintTarget(it.getId())
+                            .withSeverity("BLOCKING");
+                }
+                if (it.getMaterialTypeId() != null
+                        && !it.getMaterialTypeId().equals(source.getMaterialTypeId())) {
+                    throw new BusinessException(409, "领料调拨失败: 批次物料与领料行不一致")
+                            .withCode("PRODUCTION_REQUISITION_BATCH_MATERIAL_MISMATCH")
+                            .withHint("请重新确认领料，由系统按该物料选择批次")
+                            .withHintTarget(it.getId())
+                            .withSeverity("BLOCKING");
+                }
+                ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                        plan, source, it.getId());
                 BigDecimal available = source.getCurrentQuantity();
                 if (available.compareTo(moveQty) < 0) {
                     throw new BusinessException(409, String.format(
@@ -691,6 +755,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 workshop.setReceiptDate(LocalDate.now());
                 workshop.setProductionDate(source.getProductionDate());
                 workshop.setExpireDate(source.getExpireDate());
+                // 搬仓不改变所有权或销售订单血缘。客户库存仍属于原客户，且库存生产场景继续保持未绑定订单。
+                workshop.setOwnership(source.getOwnership());
+                workshop.setOwnerCustomerId(source.getOwnerCustomerId());
+                workshop.setSourceSalesOrderId(source.getSourceSalesOrderId());
+                workshop.setSourceSalesOrderItemId(source.getSourceSalesOrderItemId());
                 workshop.setWarehouseId(targetWarehouseId);
                 workshop.setStatus(MaterialBatchStatus.AVAILABLE);
                 workshop.setCreatedBy(operatorId != null ? operatorId : 0L);
