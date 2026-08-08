@@ -496,6 +496,16 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                         || !"OUTPUT".equalsIgnoreCase(Objects.toString(port.get("direction"), ""))) {
                     continue;
                 }
+                // 🔴 2026-08-09: 副产不参与「标准用量基准」的单位判定。
+                //
+                // 基准回答的是「每产出多少主/联产, 配多少辅料」。副产是这道工序捎带出来的东西
+                // (肥油/边角料), 它的单位与主产出天然可以不同 —— 真机: 成品是 盒、副产肥油是 kg。
+                // 把它算进来会让 outputUnits = {盒, kg} → size != 1 → 整道工序判为「缺少可用的产出基准」,
+                // 后果是**这道工序的辅料从此再也改不了**(弹窗里"当前不能保存", 而按钮不禁用, 点了没反应)。
+                // 即: 加一个副产 = 永久丧失辅料可配置性, 而两件事在业务上毫无关系。
+                if (isByproductPort(port, nodesById)) {
+                    continue;
+                }
                 addCanonicalUnit(portUnits, port.get("unit"));
                 addCanonicalKind(portKinds, port.get("materialKind"));
                 collectMaterialNodeContract(
@@ -507,7 +517,12 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         addCanonicalKind(processKinds, node.getData().get("outputMaterialKind"));
         for (ProductProcessWorkflowDTO.Edge edge : graph.edges()) {
             if (Objects.equals(processNodeId, edge.getSource())) {
-                collectMaterialNodeContract(nodesById.get(edge.getTarget()), fallbackUnits, fallbackKinds);
+                ProductProcessWorkflowDTO.Node target = nodesById.get(edge.getTarget());
+                // 兜底路径同样要排除副产, 否则 port 未声明单位时副产又从这里混进来。
+                if (isByproductNode(target)) {
+                    continue;
+                }
+                collectMaterialNodeContract(target, fallbackUnits, fallbackKinds);
             }
         }
         // Workflow 修订中工序 OUTPUT port 是报工单位权威；相邻物料节点只在 port 未声明时兜底。
@@ -612,6 +627,23 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private String displayRevisionStatus(WorkflowRevisionCandidateDTO candidate) {
         if (candidate.isEnabled()) return "ENABLED";
         return candidate.getStatus();
+    }
+
+    /** 该 OUTPUT 端口指向的物料节点是不是副产 —— 副产不参与基准单位判定。 */
+    private boolean isByproductPort(
+            Map<?, ?> port, Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
+        return isByproductNode(nodesById.get(Objects.toString(port.get("materialNodeId"), null)));
+    }
+
+    /**
+     * 画布把副产建成「普通产出节点 + isByproduct 标记」(刻意不设 kind:'BYPRODUCT',
+     * 见 MaterialNodeData.isByproduct: 「副产只看物料上的 isByproduct 标记, 与材质正交」),
+     * 所以这里只认这个标记, 不按 kind 判。
+     */
+    private boolean isByproductNode(ProductProcessWorkflowDTO.Node node) {
+        if (node == null || node.getData() == null) return false;
+        Object flag = node.getData().get("isByproduct");
+        return Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(Objects.toString(flag, ""));
     }
 
     private record ResolvedProcess(

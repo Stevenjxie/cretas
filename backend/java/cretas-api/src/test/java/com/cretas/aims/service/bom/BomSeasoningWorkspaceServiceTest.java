@@ -584,6 +584,63 @@ class BomSeasoningWorkspaceServiceTest {
                         .build()));
     }
 
+    /**
+     * 🔴 2026-08-09 真机: 一道工序加了副产之后, 它的辅料就再也改不了了。
+     *
+     * <p>副产的单位与主产出天然可以不同(真机: 成品 box、副产肥油 kg)。若副产也算进
+     * outputUnits, size 就 != 1 → 整道工序判「缺少可用的产出基准」→ 辅料弹窗
+     * 「当前不能保存」(而按钮不禁用, 点了没反应)。即: 加一个副产 = 永久丧失辅料可配置性,
+     * 而这两件事在业务上毫无关系。基准回答的是「每产出多少主/联产配多少辅料」, 副产不参与。
+     */
+    @Test
+    void byproductOutputDoesNotDestroyTheSeasoningBasis() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithByproductAlongsideFinished(recipe, "p1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "分切")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        var process = response.getProcesses().get(0);
+        assertTrue(process.isStandardUsageSupported(), "副产不该让整道工序失去辅料基准");
+        assertEquals("box", process.getStandardBasisUnit(), "基准应取主产出单位, 不受副产 kg 影响");
+    }
+
+    /** 一道工序: 主产出 box + 副产 kg —— 与画布「+ 副产」建出来的形状一致。 */
+    private void pinWithByproductAlongsideFinished(BomRecipe recipe, String processId) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("ports", List.of(
+                Map.of("direction", "OUTPUT", "unit", "box",
+                        "materialNodeId", "fg-1", "materialKind", "FINISHED_GOOD"),
+                Map.of("direction", "OUTPUT", "unit", "kg",
+                        "materialNodeId", "byp-1", "materialKind", "SEMI_FINISHED")));
+        Map<String, Object> fgData = new LinkedHashMap<>();
+        fgData.put("baseUnit", "box");
+        Map<String, Object> bypData = new LinkedHashMap<>();
+        bypData.put("baseUnit", "kg");
+        bypData.put("isByproduct", Boolean.TRUE);
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("fg-1", "FINISHED_GOOD",
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), fgData),
+                new ProductProcessWorkflowDTO.Node("byp-1", "SEMI_FINISHED",
+                        new ProductProcessWorkflowDTO.Position(1D, 1D), bypData));
+        List<ProductProcessWorkflowDTO.Edge> edges = List.of(
+                new ProductProcessWorkflowDTO.Edge("e-fg", "node-" + processId, "output", "fg-1", "input"),
+                new ProductProcessWorkflowDTO.Edge("e-byp", "node-" + processId, "output2", "byp-1", "input"));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
+                        nodes, edges));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
+    }
+
     private void pinWithLinkedOutput(BomRecipe recipe, String processId, String baseUnit, String materialKind) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
