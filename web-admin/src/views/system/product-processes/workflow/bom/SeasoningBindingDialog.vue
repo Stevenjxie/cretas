@@ -71,24 +71,11 @@ const businessUnitLabel = (unit: string): string => {
   return ({ kg: '千克', g: '克', L: '升', mL: '毫升' } as Record<string, string>)[code]
     || displayUnit(code);
 };
-const standardBasisQuantity = computed(() => (
-  props.process?.standardBasisQuantity ?? props.process?.basisQuantity ?? null
-));
-const standardBasisUnit = computed(() => (
-  props.process?.standardBasisUnit ?? props.process?.basisUnit ?? null
-));
-const basisLabel = computed(() => {
-  if (standardBasisQuantity.value == null || !standardBasisUnit.value) return '未解析';
-  const quantity = Number(standardBasisQuantity.value).toFixed(4).replace(/\.?0+$/, '');
-  return `${quantity} ${canonicalUnitCode(standardBasisUnit.value)}`;
-});
-const basisObjectLabel = computed(() => (
-  props.process?.standardBasisMaterialKind === 'SEMI_FINISHED'
-    ? '本工序半成品'
-    : props.process?.standardBasisMaterialKind === 'FINISHED_GOOD'
-      ? '本工序成品'
-      : '本工序产出'
-));
+// ⛔ 这里曾经有 standardBasisQuantity / standardBasisUnit / basisLabel / basisObjectLabel 四个
+// computed, 用 process.standardBasis*(后端按**产出单位**解析出来的基准)拼出「每生产 1 box 本工序成品」。
+// 它与真实算式不符(算式分母是投料 kg, 见模板里那段注释与真机实测的 8.3 倍偏差), 已整体删除 ——
+// 只删展示、不删后端字段。留着它们的话, 下一个人很容易再把这个错误的基准接回界面上。
+// 要恢复「按产出计量」的语义, 必须先改 ProcessSheetServiceImpl 的算式并处理存量配置, 那是产品决策。
 const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'materialReferencePrice'> | undefined>();
 const effectivePrice = computed(() => {
   const movingAvgPrice = refreshedPrices.value === undefined
@@ -319,9 +306,25 @@ async function refreshSelectedMaterialPrice() {
       </el-form-item>
       <el-form-item label="投入数量" required>
         <div class="dosage-contract" data-testid="seasoning-dosage-sentence">
+          <!--
+            🔴 2026-08-08 真机实测改正: 这里原本写「每生产 {basisLabel} {basisObjectLabel}」,
+            即把用量说成**按产出**计。而后端 ProcessSheetServiceImpl 算需求量用的是
+
+                quantityKg = effectiveRawKg × dosagePerKgG / 1000
+                effectiveRawKg = req.getInputQuantity()(本工序**投料**量)/ potRawKgs
+
+            —— 分母是**投入原料的公斤数**, 与产出无关。同一方法里包材才是按 reportedOutput 缩放的,
+            两者本就不同源。实测(F006 投 100kg / 出 12 盒, 配 25 g): 系统要 2.5kg,
+            而按「每盒 25 g」的读法只需 0.3kg —— 差 8.3 倍。
+
+            ⛔ 不能反过来改算式: LIUSHANMEN(真客户)有 8 条在用的辅料配置, 改分母会直接改动
+            他们的实际扣料。所以这里只把话说对, 计算一行没动。
+            (遗留问题: 后端 standardBasis 仍按**产出单位**解析并据此 gate standardUsageSupported,
+             那套口径与真实算式不一致, 属产品决策, 未动 —— 见交接。)
+          -->
           <div class="dosage-contract__basis">
-            <span class="dosage-contract__eyebrow">生产基准</span>
-            <strong>每生产 {{ basisLabel }} {{ basisObjectLabel }}</strong>
+            <span class="dosage-contract__eyebrow">用量基准</span>
+            <strong>每投入 1 kg 原料（本工序投料量）</strong>
           </div>
           <span class="dosage-contract__arrow">需要投入</span>
           <div class="dosage-contract__input">

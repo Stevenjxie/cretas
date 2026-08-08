@@ -111,7 +111,7 @@ describe('SeasoningBindingDialog', () => {
       quantity: 1, fromUnit: '斤', toUnit: 'g',
     }));
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(2);
-    expect(wrapper.text()).toContain('每生产 1 kg 本工序半成品');
+    expect(wrapper.text()).toContain('每投入 1 kg 原料');
     expect(wrapper.get('[data-testid="seasoning-dosage-unit"]').text()).toBe('斤');
     wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 1);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
@@ -128,7 +128,7 @@ describe('SeasoningBindingDialog', () => {
     await fillRequiredFields(wrapper, 1.5);
 
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
-      .toContain('每生产 1 kg 本工序半成品需要投入');
+      .toContain('每投入 1 kg 原料（本工序投料量）需要投入');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
 
@@ -147,7 +147,9 @@ describe('SeasoningBindingDialog', () => {
       process: { ...process, standardBasisUnit: basisUnit, standardBasisQuantity: 1, standardUsageSupported: false },
     });
     await fillRequiredFields(wrapper, 5);
-    expect(wrapper.text()).toContain(`1 ${basisUnit}`);
+    // ⛔ 这里原本还断言页面上回显出「1 box」/「1 L」这个**产出基准**。该回显已删除:
+    // 它描述的分母(产出)与后端真实算式(投料 kg)不符, 是 8.3 倍偏差的来源。
+    // 承重的两条断言留着 —— 停用提示仍在, 且 createBinding 一次都不许被调用(fail closed)。
     expect(wrapper.text()).toContain('本工序缺少可用的产出基准');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
@@ -307,6 +309,6 @@ describe('SeasoningBindingDialog', () => {
       },
     });
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
-      .toContain('每生产 1 kg 本工序半成品');
+      .toContain('每投入 1 kg 原料');
   });
 });

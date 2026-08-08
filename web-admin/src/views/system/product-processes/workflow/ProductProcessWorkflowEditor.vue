@@ -2051,6 +2051,16 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
     const recipeIdByOutput: Record<string, string> = {};
     const productIdByRecipe: Record<string, string> = {};
     const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
+    // ⛔ 这两个必须声明在下面那个 forEach **之前**。
+    // 2026-08-08 事故: `packagingBindingsByOutput` 原本声明在 auxiliaryByProcess 旁边
+    // (即这个 forEach 之后), 而 forEach 里第 1 个包材赋值就引用它 —— const 的 TDZ
+    // 让它抛 `ReferenceError: Cannot access ... before initialization`, 被本函数末尾的
+    // catch 吞成一行 console.error。后果是**整个 BOM 浮层加载全灭**: 辅料/包材 cell 全空、
+    // hydrate 从不执行, 于是「改克数产生新工艺版本」在真机上恒定是断的。
+    // TypeScript 抓不到这一类: 引用写在闭包里, 编译器假定它延后执行, 不报 TS2448。
+    // 闸见 __tests__/noUseBeforeDefine.spec.ts —— 它按源码顺序判, 与执行时机无关。
+    const materialBindingsByProcess: Record<string, WorkflowMaterialBinding[]> = {};
+    const packagingBindingsByOutput: Record<string, WorkflowPackagingBinding[]> = {};
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
@@ -2131,8 +2141,8 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
     });
 
     const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
-    const materialBindingsByProcess: Record<string, WorkflowMaterialBinding[]> = {};
-    const packagingBindingsByOutput: Record<string, WorkflowPackagingBinding[]> = {};
+    // materialBindingsByProcess / packagingBindingsByOutput 已提到上面那个 forEach 之前声明 ——
+    // 别搬回来, 搬回来就是 TDZ (见上面的事故注释)。
     const recipeIdByProcess: Record<string, string> = {};
     const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
     // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
