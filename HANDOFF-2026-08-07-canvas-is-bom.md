@@ -4,7 +4,7 @@
 **本地 main**: `401e48c90d merge: 画布即 BOM 阶段 3-3(删 ACTIVE_BOM_REQUIRED 前置 + 从画布投影 BOM)`
 **设计定稿**: `docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md`（分支 `codex/claude-bom-canvas-spec`）
 **GitHub 仍不可用** → 全部走本地 main 汇合（见 `.claude/rules/worktree-and-main-only-deploy.md` 的「🔌 GitHub 不可用时」）
-**未部署 prod**（owner 未下指令）
+**✅ 已部署 prod**（2026-08-08，owner 明确指令）—— 离线部署台账见 §八
 
 ---
 
@@ -199,6 +199,45 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 | `raw_material_types` 勾 `is_byproduct` | 1 个（F006 `验收-副产-肥油` YL113） | 唯一可用的副产验收样本 |
 | `product_process_workflow_revisions` | 28 | — |
 | **副产是物料不是产品 SKU** | `bom_recipe_items.material_type_id → raw_material_types(id)` 硬外键 | 我第一版接错了池子，接产品 SKU 会直接违反外键 |
+
+---
+
+## 八、离线部署台账（GitHub 上查不到，必须逐条核销）
+
+按 `.claude/rules/worktree-and-main-only-deploy.md` 的「离线期间的账要写下来」。
+
+| 项 | 值 |
+|---|---|
+| 部署时间 | 2026-08-08 10:10–10:14 |
+| 部署的本地 commit | `22f1abcf2b`（本地 main HEAD，**不在 origin 上**） |
+| 部署方式 | detached worktree `../cretas-deploy-0808` + `SKIP_GIT_CHECK=1` |
+| web-admin | ✅ 四路哈希一致 `3fd838a6351e93d1…`，756 assets |
+| Java 后端 | ✅ 蓝绿 green→blue，版本 `v20260808_101150`，总耗时 225s |
+| Python | ❌ 未部署（本轮无 Python 改动） |
+| DB 迁移 | ❌ 本轮零新增迁移；部署前 `FlywayVersionUniquenessTest` + `*RepositoryQueryValidationTest` 62 用例全绿 |
+
+**含哪些工作**（本地 main 在 `origin/main` 之上，除本轮画布即 BOM 五个阶段外，
+还夹带其它并发 session 已合入 main 的 commit —— 这是「main 是唯一汇合点」的常态，
+恢复 GitHub 后各自走 PR 核销）。
+
+**运行中的 jar 已核对确含本次修复**（不只看部署成功）：
+
+```
+projectActiveBomFromRevision      1   ← 3-3 投影
+WORKFLOW_ACTIVE_BOM_REQUIRED      0   ← 3-3 前置已删
+projectRawMaterialItems           1   ← 投影入口
+assertSeasoningCategoryAllows     1   ← 阶段 4 类别闸
+POT_RATIO_CATEGORIES/INJECTION_   2   ← 类别常量
+readableReason                    1   ← 可读拒绝原因
+SeasoningProcessCategory.class    1   ← 常量类
+```
+
+⚠️ 核对时踩了一次探针坑：先用 `strings | grep '后续锅调料比例'` 得 0，
+差点判成「没部署上」。**`strings` 默认只认 ASCII，中文常量当然找不到** ——
+换 ASCII 标识符（方法名/常量名）才是有效判据。
+
+**部署前后数据零影响**：6 个被生产计划钉住的 revision + 9 条计划逐字相同。
+prod 后端 `HTTP 200`，web-admin 公网 `HTTP 200`。
 
 ---
 
