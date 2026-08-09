@@ -582,8 +582,15 @@ public class VoucherServiceImpl implements VoucherService {
                         .filter(o -> factoryId.equals(o.getFactoryId()) && o.getVflag() == VoucherFlag.UNCREATED)
                         .map(ReturnOrder::getId).toList();
             case "INTERNAL_TRANSFER":
+                // ⚠️ 除 vflag 外还必须判业务状态。2026-08-09 起 INVENTORY_TRANSFER 凭证只在
+                // 【确认入库】时生成, 于是草稿/待审/已取消/已驳回的调拨会长期停在 UNCREATED ——
+                // 只按 vflag 扫的话, "批量补凭证" 会给这些【库存一分没动】的单子补出凭证,
+                // 正是刚修掉的那种幽灵凭证, 从另一个入口原样长回来。
+                // 只有 CONFIRMED (库存真正搬完) 才允许补。
                 return internalTransferRepo.findAll().stream()
-                        .filter(t -> factoryId.equals(t.getSourceFactoryId()) && t.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(t -> factoryId.equals(t.getSourceFactoryId())
+                                && t.getVflag() == VoucherFlag.UNCREATED
+                                && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED)
                         .map(InternalTransfer::getId).toList();
             case "WASTAGE_RECORD":
                 return wastageRecordRepo.findAll().stream()

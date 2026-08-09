@@ -1052,7 +1052,20 @@ public class TransferServiceImpl implements TransferService {
         transfer.setStatus(TransferStatus.CONFIRMED);
         transfer.setConfirmedAt(now);
         log.info("调拨确认: transferId={}, 库存已更新", transferId);
-        return transferRepository.save(transfer);
+        InternalTransfer saved = transferRepository.save(transfer);
+        // 库存真正搬完了才通知凭证侧入账 —— 凭证原先挂在"创建"上, 草稿阶段就记账 (见
+        // TransferConfirmedEvent 的说明)。⚠️ 传【调出方】工厂: 跨厂调拨由调入方执行确认,
+        // 而凭证一直归属调出方, 传当前 factoryId 会把凭证记到错的厂。
+        if (applicationEventPublisher != null) {
+            try {
+                applicationEventPublisher.publishEvent(new com.cretas.aims.event.TransferConfirmedEvent(
+                        this, saved.getSourceFactoryId(), saved.getId()));
+            } catch (Exception e) {
+                // 发事件失败不该把已经完成的入库翻掉 —— 凭证可由财务补生成 (批量补凭证工具)。
+                log.warn("发布调拨确认事件失败: transferId={}, err={}", saved.getId(), e.getMessage());
+            }
+        }
+        return saved;
     }
 
     @Override
