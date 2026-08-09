@@ -175,19 +175,50 @@ public class VoucherServiceImpl implements VoucherService {
         return voucherRepo.save(voucher);
     }
 
+    /**
+     * 批量补凭证 —— <b>每单独立事务</b>, 一单失败不拖垮整批。
+     *
+     * <p><b>缺陷</b> (2026-08-09 prod 实测, F006): 原实现是<b>整批一个 {@code @Transactional}</b> +
+     * 逐单 try/catch。看着像"一单失败不影响其余", 实际完全不是 —— 逐单 catch 挡得住 Java 异常,
+     * 挡不住<b>PostgreSQL 已经把整个事务标记为 aborted</b>: 第一单插入违反约束后, 同一事务里
+     * 后续每一条语句都直接返回 {@code current transaction is aborted, commands ignored until
+     * end of transaction block}, 连 {@code updateVflag(FAILED)} 都写不进去; 最后 proxy commit
+     * 看到 rollback-only → {@code UnexpectedRollbackException} → 调用方收到一个语焉不详的 409,
+     * 而<b>一张凭证都没生成</b>。实测 F006 一次批量补: 第一单是零金额调拨触发
+     * {@code chk_ve_single_side}, 后面 7 单全部陪葬, 日志里是同一条失败 SQL 重复 8 次。
+     *
+     * <p>修法照 {@link #batchPost} —— 那边 2026-07-04 已经踩过同一个坑并落地了正解:
+     * 每单 {@code PROPAGATION_REQUIRES_NEW} 独立事务, 失败的单独回滚, 成功的照常提交。
+     * 批量补凭证同样不是"全有全无"语义: 财务要的是"补上了几张、哪几张没补上、为什么"。
+     */
     @Override
-    @Transactional
     public int batchCreateForFactory(String factoryId, String businessType) {
         List<String> ids = findUncreatedIds(factoryId, businessType);
+        // 每单独立事务: 一单违反约束只回滚它自己, 不会把整批的 DB 会话弄脏。
+        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
         int count = 0;
         for (String id : ids) {
             try {
-                createFromBusiness(factoryId, businessType, id);
-                updateVflag(businessType, id, VoucherFlag.CREATED);
+                tt.execute(status -> {
+                    createFromBusiness(factoryId, businessType, id);
+                    updateVflag(businessType, id, VoucherFlag.CREATED);
+                    return null;
+                });
                 count++;
             } catch (Exception e) {
                 log.warn("Batch generate failed: {}/{} — {}", businessType, id, e.getMessage());
-                updateVflag(businessType, id, VoucherFlag.FAILED);
+                // 标 FAILED 也必须在【干净的新事务】里做 —— 上面那个事务已经回滚,
+                // 沿用它写不进去 (这正是旧实现连 FAILED 都标不上的原因)。
+                try {
+                    tt.execute(status -> {
+                        updateVflag(businessType, id, VoucherFlag.FAILED);
+                        return null;
+                    });
+                } catch (Exception ignored) {
+                    log.warn("Batch generate: 标记 FAILED 也失败 {}/{}", businessType, id);
+                }
             }
         }
         return count;
@@ -597,10 +628,16 @@ public class VoucherServiceImpl implements VoucherService {
                 //
                 // 已有凭证的一律排除 —— FAILED 不保证"一定没生成", 重复生成会撞唯一约束、
                 // 再把 vflag 打回 FAILED, 制造"越补越失败"的假象。
+                // 🔴 零金额必须跳过 (2026-08-09 prod 实测): TransferVoucherListener 一直有这道
+                // 守卫 (totalAmount<=0 → 无会计影响, 不生成), 而这里【没有】—— 口径不一致。
+                // 后果不是"多生成一张废凭证"那么轻: 0 值调拨会造出 debit=0/credit=0 的分录,
+                // 违反 chk_ve_single_side, 把整个 DB 事务打成 aborted。实测 F006 一次批量补
+                // 就是被一张零金额调拨 (TRF-20260703-5801) 带崩全批。
                 return internalTransferRepo.findAll().stream()
                         .filter(t -> factoryId.equals(t.getSourceFactoryId())
                                 && (t.getVflag() == VoucherFlag.UNCREATED || t.getVflag() == VoucherFlag.FAILED)
                                 && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED
+                                && t.getTotalAmount() != null && t.getTotalAmount().signum() > 0
                                 && findBySourceBusiness("INTERNAL_TRANSFER", t.getId()).isEmpty())
                         .map(InternalTransfer::getId).toList();
             case "WASTAGE_RECORD":
