@@ -4744,16 +4744,22 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 # 的 12 s 管 semantic-first, 都在 Java 的 30 s 之内。)
 _T3_PROVIDER_TIMEOUT_SECONDS = 2.5
 _T3_TOTAL_TIMEOUT_SECONDS = 6.0
+_T3_MAX_TOKENS = 500
 # Authenticated restaurant chat uses the LLM as its natural-language front
 # door.  The shared MAPPER slot deliberately carries an aggressive interactive
 # budget, but a cold quota/circuit state can consume that budget before any
 # healthy fallback receives a meaningful attempt.  REVIEW starts with the
 # verified non-thinking Max pair and remains behind the same free-tier
 # allowlist/expiry guards in ``common.llm_router``.  Give that high-accuracy
-# semantic-first path enough time to reach its Plus tail without changing the
-# shared router or the legacy T3 latency contract.
-_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 5.0
-_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0
+# semantic-first path enough time to reach its verified tail without changing
+# the shared router or the legacy T3 latency contract. 2026-08-09 production
+# evidence: the last reachable REVIEW provider returned a valid restaurant
+# intent in 6.6-9.7 s, while 500 tokens truncated its JSON at ``confidence``.
+# Keep the whole cascade inside Java's independent 30 s deadline, but give the
+# semantic planner enough time and output room to finish one validated plan.
+_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 10.0
+_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 25.0
+_SEMANTIC_MAX_TOKENS = 1000
 _T3_MIN_CONFIDENCE = 0.6
 
 
@@ -5635,7 +5641,9 @@ async def _t3_llm_parse(
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0,
-            "max_tokens": 500,
+            "max_tokens": (
+                _SEMANTIC_MAX_TOKENS if prefer_high_accuracy else _T3_MAX_TOKENS
+            ),
         }
         with llm_caller_context("restaurant_intent"):
             result = await call_chain(
