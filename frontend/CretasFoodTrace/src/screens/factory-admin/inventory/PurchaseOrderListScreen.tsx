@@ -12,6 +12,7 @@ import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
+import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -28,6 +29,7 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 export default function PurchaseOrderListScreen() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuthStore();
+  const isOperationsReadOnly = isMobileBusinessObserver(user);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -108,7 +110,7 @@ export default function PurchaseOrderListScreen() {
     return (
       <Card style={styles.card}
         onPress={() => navigation.navigate('PurchaseOrderDetail', { orderId: item.id })}
-        onLongPress={() => openSheet(item)}>
+        onLongPress={isOperationsReadOnly ? undefined : () => openSheet(item)}>
         <Card.Content>
           <View style={styles.cardHeader}>
             <Text variant="titleMedium" style={styles.orderNumber}>{item.orderNumber}</Text>
@@ -126,13 +128,13 @@ export default function PurchaseOrderListScreen() {
             <Text style={styles.label}>下单日期</Text>
             <Text style={styles.value}>{item.orderDate}</Text>
           </View>
-          {item.status === 'DRAFT' && (
+          {!isOperationsReadOnly && item.status === 'DRAFT' && (
             <View style={styles.actions}>
               <Button mode="contained" compact onPress={() => handleAction(item.id, 'submit')} style={styles.actionBtn}>提交</Button>
               <Button mode="outlined" compact onPress={() => handleAction(item.id, 'cancel')} style={styles.actionBtn}>取消</Button>
             </View>
           )}
-          {item.status === 'SUBMITTED' && (
+          {!isOperationsReadOnly && item.status === 'SUBMITTED' && (
             <View style={styles.actions}>
               <Button mode="contained" compact onPress={() => handleAction(item.id, 'approve')} style={styles.actionBtn}>审批</Button>
               <Button mode="outlined" compact textColor="#f56c6c" onPress={() => handleAction(item.id, 'reject')} style={styles.actionBtn}>驳回</Button>
@@ -148,17 +150,21 @@ export default function PurchaseOrderListScreen() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="采购订单" />
-        <Appbar.Action icon="robot-outline" onPress={() => navigation.dispatch(CommonActions.navigate('FAAITab', { screen: 'AIChat', params: { entityType: 'PURCHASE', initialMessage: '我要创建采购订单' } }))} />
-        <Appbar.Action
-          testID="pm-procurement-confirm-btn"
-          icon="truck-check"
-          onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('ProcurementDeliveryConfirm')}
-        />
+        {!isOperationsReadOnly && (
+          <Appbar.Action icon="robot-outline" onPress={() => navigation.dispatch(CommonActions.navigate('FAAITab', { screen: 'AIChat', params: { entityType: 'PURCHASE', initialMessage: '我要创建采购订单' } }))} />
+        )}
+        {!isOperationsReadOnly && (
+          <Appbar.Action
+            testID="pm-procurement-confirm-btn"
+            icon="truck-check"
+            onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('ProcurementDeliveryConfirm')}
+          />
+        )}
         <Appbar.Action icon="refresh" onPress={onRefresh} />
       </Appbar.Header>
 
       {/* SP6 #36 — 出纳付款 + 采购异常 快捷入口 (防呆 Rule 5: 有入口不死循环) */}
-      <ScrollView
+      {!isOperationsReadOnly && <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         style={styles.quickBar}
@@ -175,7 +181,7 @@ export default function PurchaseOrderListScreen() {
           <Text style={styles.quickCardTitle}>采购异常</Text>
           <Text style={styles.quickCardDesc}>处理超收/少收</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </ScrollView>}
 
       <View style={styles.filterRow}>
         <SegmentedButtons
@@ -206,7 +212,7 @@ export default function PurchaseOrderListScreen() {
         )}
       </View>
 
-      <StickyFooterSummary
+      {!isOperationsReadOnly && <StickyFooterSummary
         stats={summary?.stats ?? []}
         loading={summary == null && !loading}
         onAIAnalyze={() =>
@@ -218,16 +224,16 @@ export default function PurchaseOrderListScreen() {
             },
           }))
         }
-      />
+      />}
 
-      <FAB
+      {!isOperationsReadOnly && <FAB
         icon="plus"
         style={styles.fab}
         onPress={() => navigation.navigate('PurchaseOrderCreate')}
         label="新建采购单"
-      />
+      />}
 
-      <RowActionBottomSheet
+      {!isOperationsReadOnly && <RowActionBottomSheet
         visible={actionSheetVisible}
         onClose={() => setActionSheetVisible(false)}
         actions={rowActions}
@@ -240,7 +246,7 @@ export default function PurchaseOrderListScreen() {
             params: { entityType: 'PURCHASE', initialMessage: `${selectedOrder.orderNumber}: ` },
           }));
         }}
-      />
+      />}
     </View>
   );
 }

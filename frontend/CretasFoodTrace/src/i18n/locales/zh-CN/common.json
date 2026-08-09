@@ -578,7 +578,18 @@
     "download_timeout_message": "下载超时，请保持网络稳定后重试。",
     "check_failed_title": "检查更新失败",
     "failed_message": "更新检查失败：{{error}}",
-    "disabled_message": "当前版本暂不支持手动检查更新。"
+    "disabled_message": "当前版本暂不支持手动检查更新。",
+    "required_checking_title": "正在检查版本",
+    "required_checking_message": "请稍候，确认当前版本可以安全使用。",
+    "required_badge": "必须更新",
+    "required_title": "当前版本已停止使用",
+    "required_message": "为了保证业务数据和操作流程正确，请先安装支持的最新版本。更新完成前不能进入系统。",
+    "current_version": "当前版本",
+    "minimum_version": "最低支持版本",
+    "required_retry": "安装完成后重新检查",
+    "required_help": "如果无法下载或安装，请检查网络和安装权限，仍有问题请联系管理员。",
+    "required_missing_url": "服务器暂未提供安装地址。请联系管理员配置后点击“重新检查”。",
+    "required_open_failed": "无法打开安装地址。请检查网络后重试，仍有问题请联系管理员。"
   }
 }
 

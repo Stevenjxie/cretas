@@ -40,7 +40,7 @@ module.exports = ({ config }) => {
     android: {
       ...config.android,
       package: 'com.cretas.foodtrace',
-      versionCode: 14,
+      versionCode: 15,
     },
     extra: {
       ...config.extra,

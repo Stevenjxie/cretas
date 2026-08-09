@@ -392,6 +392,7 @@ public class MobileDTO {
     public static class VersionCheckResponse {
         private String currentVersion;
         private String latestVersion;
+        private String minimumVersion;
         private Boolean updateRequired;
         private Boolean updateAvailable;
         private String downloadUrl;

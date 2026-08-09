@@ -6,6 +6,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, SalesOrder } from '../../../services/api/salesApiClient';
 import { formatNumberWithCommas } from '../../../utils/formatters';
+import { useAuthStore } from '../../../store/authStore';
+import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -23,6 +25,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 export default function SalesOrderDetailScreen() {
   const navigation = useNavigation<Nav>();
+  const user = useAuthStore((state) => state.user);
+  const isOperationsReadOnly = isMobileBusinessObserver(user);
   const route = useRoute<RouteProp<FAManagementStackParamList, 'SalesOrderDetail'>>();
   const { orderId } = route.params;
 
@@ -147,14 +151,14 @@ export default function SalesOrderDetailScreen() {
           </Card>
         )}
 
-        <View style={styles.actionBar}>
+        {!isOperationsReadOnly && <View style={styles.actionBar}>
           {order.status === 'DRAFT' && (
             <>
               <Button mode="contained" onPress={() => handleAction('confirm')} style={styles.actionBtn}>确认订单</Button>
               <Button mode="outlined" onPress={() => handleAction('cancel')} style={styles.actionBtn}>取消</Button>
             </>
           )}
-        </View>
+        </View>}
 
         <View style={{ height: 30 }} />
       </ScrollView>
