@@ -1,3 +1,5 @@
 # Dispatch 完成记录 — 2026-08-09
 
 - `BUG-F006-CUSTOMER-STOCK-INTERIM-OWNERSHIP-20260809` — `merged` — Owner: `/root` — Base SHA `e34717e3d0864d8a66bbe9d2d943aa13b14fb90b`；F006 写入型 Playwright E2E 在客户归属库存生产执行“生产小结”前发现，小结入口创建成品批次时未继承计划的 `outputOwnership/customerId/sourceOrderId`，会把客户来料成品误作公司库存并阻断后续销售订单绑定。修复后小结成品与普通结单入库保持同一归属口径：客户库存生产继承 `CUSTOMER_OWNED` 与同一客户，且没有销售订单时不虚构订单来源；公司库存生产继续保持 `COMPANY_OWNED` 并清空客户归属。`InterimSettleServiceTest` 29/29 通过，scope 随本归档释放；离线 exact-local-main 发布及 F006 小结、成品库存、销售绑定写入型 E2E 由当前协调任务继续记录。
+
+- `SOP-FACTORY-2379-CATEGORY-FALLBACK-20260807` — `merged` — Owner: `/root` — Base SHA `44fb00087a3eb3dd8c588262922dc0ab9d787b9c`；#2379/#2385 的无分段字典类别与用户手填料号口径、工厂 SOP/F006 canonical source/AI Assist 已经由 PR #2382 发布，PR #2389 再把物料类问题强制限定到 `f006-production-full-chain-sop.md` 并从 clean exact main 发布。生产 3 个物料等价问法和固定“BOM 激活后 Workflow 为什么还不能发布？”共 4/4 内容正确，所有 sources 仅为 canonical F006 source；强制顺序、ACTIVE BOM 前置门禁、发布并启用验收命中，禁止错误说法为 0。目标合同 `76 passed`、餐饮共享回归 `432 passed`、CI/Python 发布 smoke 通过，生产 ERP 业务写入为 0；工厂 scope 随本归档释放。
