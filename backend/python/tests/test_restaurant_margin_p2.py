@@ -211,7 +211,10 @@ def test_margin_forecast_core_subtracts_cogs():
     # cogs flat 800/day → margin flat 1200
     cogs = {d: Decimal("800") for d, _ in rev}
     res = compute_margin_forecast_core(rev, cogs, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    # 毛利序列和营收序列共用 target_forecast.compute_rolling_forecast, 2026-08-10
+    # 起带周内项。30 天连续 → 七个星期几各 4 次以上, 因子生效; 序列全平 → 因子
+    # 都是 1.0, 预测值不变。
+    assert res["model_type"] == "linear_trend_dow"
     assert all(abs(p["forecast_amount"] - 1200.0) < 0.01 for p in res["points"])
 
 
@@ -220,7 +223,8 @@ def test_margin_forecast_core_missing_cogs_day_treated_zero():
     rev = _rev_series([1000] * 20)
     cogs = {}  # no cogs at all → margin == revenue
     res = compute_margin_forecast_core(rev, cogs, anchor=date(2026, 1, 20), horizon_days=5)
-    assert res["model_type"] == "linear_trend"
+    # 20 天连续 → 七个星期几各 ≥3 次(周内项生效); 全平 → 因子 1.0, 预测值不变。
+    assert res["model_type"] == "linear_trend_dow"
     assert all(abs(p["forecast_amount"] - 1000.0) < 0.01 for p in res["points"])
 
 
