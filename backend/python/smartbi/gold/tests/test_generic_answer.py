@@ -732,3 +732,31 @@ def test_generic_path_never_answers_why_or_what_should_i_do():
     assert cells == [("revenue", "all", "summary")], (
         "归因问题**确实**能翻译出格子 —— 正因如此才必须靠 action 守卫拦住, "
         "⛔ 不能指望「翻译不出来」自然挡掉")
+
+
+def test_fallback_answer_goes_through_the_same_contract():
+    """🔴 承重: 兜底的答案**也要过同一道契约**, ⛔ 不许绕过。
+
+    2026-08-10 的事故: 第一版兜底直接 `return`, 于是它成了**一个绕过唯一那道
+    闸的后门**。用户问「本月营收比上月低是什么原因」, 契约正确判定「没覆盖
+    原因分析」准备拒答, 兜底接住后回了「本月全部门店营收合计 ¥6,490,180.61。」
+
+    ⛔ 判据: **绕过闸的路径迟早会走进闸本来要挡的那件事。**
+       正解不是给兜底逐条加守卫(那只堵已知的那种), 是让它走同一道闸。
+    """
+    import io
+    import pathlib
+
+    src = io.open(pathlib.Path(__file__).resolve().parents[1]
+                  / "restaurant" / "restaurant_intent_service.py",
+                  encoding="utf-8").read()
+    i_hook = src.index("try_generic_answer")
+    i_ret = src.index('"served_by": "generic_executor_fallback"')
+    between = src[i_hook:i_ret]
+    assert "_contract.validate(" in between, (
+        "🔴 兜底答案没有重新过契约 —— 它成了绕过闸的后门")
+    assert "has_displayable_business_result(fb_raw)" in between, (
+        "兜底答案没有过「有没有可展示的真实业务结果」这一关")
+    # ⛔ 没过就必须回到原拒绝语，不能带着半成品往下走
+    assert "generic = None" in between, (
+        "兜底没过契约时没有交回原路径")

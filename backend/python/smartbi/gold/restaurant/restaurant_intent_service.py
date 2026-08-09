@@ -1437,6 +1437,27 @@ async def tiered_answer(
             except Exception:  # noqa: BLE001 — 兜底坏了不该连累主链路
                 logger.exception("[contract-fallback] 通用执行器异常, 走原拒绝语")
             if generic and generic.get("served"):
+                # 🔴 承重: 兜底的答案**也要过同一道契约**。
+                #
+                #    2026-08-10 的事故: 第一版直接 return, 于是兜底成了一个
+                #    **绕过唯一那道闸的后门** —— 用户问「本月营收比上月低是什么
+                #    原因」, 契约正确判定「没覆盖原因分析」准备拒答, 兜底接住后
+                #    回了一句「本月全部门店营收合计 ¥6,490,180.61。」,
+                #    用一个数字回答了「为什么」。
+                #
+                #    ⛔ 判据: **绕过闸的路径迟早会走进闸本来要挡的那件事。**
+                #       正解不是给兜底加一条条守卫(那是补丁, 只堵已知的那种),
+                #       是让它**走同一道闸** —— 归因问题的兜底答案在这里会
+                #       原样再失败一次, 而多指标问题的兜底答案会通过。
+                fb_raw = str(generic.get("answer_text") or "")
+                fb_contract = _contract.validate(
+                    _drop_planner_invented_metrics(spec, query), fb_raw)
+                if not fb_contract.passed or not has_displayable_business_result(fb_raw):
+                    logger.info(
+                        "[contract-fallback] 兜底答案自己也没过契约, 走原拒绝语: "
+                        "missing=%s query=%r", fb_contract.missing, query[:60])
+                    generic = None
+            if generic and generic.get("served"):
                 logger.info(
                     "[contract-fallback] 契约未过, 通用执行器接住: cell=%s query=%r",
                     generic.get("cell"), query[:60])
