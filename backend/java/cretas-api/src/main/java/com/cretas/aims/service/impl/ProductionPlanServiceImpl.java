@@ -545,6 +545,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <p>外键只有三条且全在这个三元组内部(ports→tasks / ports→instance / tasks→instance),
      * 但另有几张表用<b>无外键</b>的列指向任务 —— 那种引用删的时候一声不吭, 留下孤儿。
      * 有任何一条就 fail closed 不删。
+     *
+     * <p>🔴 三个引用列<b>类型不一致</b>: production_reports / semi_finished_inventory 那两个是
+     * bigint, 而 process_checkin_records.process_task_id 是 <b>varchar</b>(实测 prod 里它和
+     * work_process_tasks.id 一条都对不上, 是另一个域的任务)。第一版没钉类型, PG 直接报
+     * {@code operator does not exist: character varying = bigint} —— 整条语句 prepare 不了。
+     * 所以每一处比较都显式钉类型, 不靠推断。
      */
     void dropCompiledRuntime(String factoryId, Long batchId) {   // 包内可见: 供闸测直接调
         if (productionWorkflowInstanceRepository == null) {
@@ -575,13 +581,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         Number referencing = (Number) entityManager.createNativeQuery("""
                 SELECT (SELECT COUNT(*) FROM production_reports r
                          WHERE r.work_process_task_id IN (
-                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                               SELECT t.id FROM work_process_tasks t
+                                WHERE t.workflow_instance_id = :iid))
                      + (SELECT COUNT(*) FROM semi_finished_inventory s
                          WHERE s.source_work_process_task_id IN (
-                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                               SELECT t.id FROM work_process_tasks t
+                                WHERE t.workflow_instance_id = :iid))
                      + (SELECT COUNT(*) FROM process_checkin_records c
                          WHERE c.process_task_id IN (
-                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                               SELECT t.id::text FROM work_process_tasks t
+                                WHERE t.workflow_instance_id = :iid))
                 """)
                 .setParameter("iid", instanceId)
                 .getSingleResult();
