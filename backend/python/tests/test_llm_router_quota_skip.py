@@ -224,3 +224,24 @@ def test_unwritable_state_file_never_breaks_the_router(tmp_path, monkeypatch):
     _quota_record_exhausted(key)          # 不能抛
     assert _quota_should_skip(key) is True  # 内存仍然生效
     llm_router._quota_load_state()          # 读不到也不能抛
+
+
+def test_zhipu_balance_exhausted_429_is_quota_not_transient():
+    """智谱余额耗尽用 429 + 中文报文, 不含 SetLimitExceeded。
+
+    2026-08-09 prod 实测 zhipu/glm-4.6v:
+      429 {"error":{"code":"1113","message":"余额不足或无可用资源包，请充值。"}}
+    分类成瞬时故障 → 60s 短熔断 → 每分钟重试一次, 无限空转。
+    余额耗尽在结构上等同额度耗尽($0 且不会自愈), 应归 6h quota-skip。
+    """
+    body = '{"error":{"code":"1113","message":"余额不足或无可用资源包，请充值。"}}'
+    assert llm_router._is_quota_exhausted(429, body) is True
+
+
+def test_plain_429_rate_limit_is_still_transient():
+    """阴性对照: 普通 429 突发限流必须仍然走短熔断, 不能被上一条误伤。
+
+    没有这条, 上面那个断言可以靠「429 一律算额度耗尽」通过 ——
+    那会把 QPS 限流罚 6 小时。
+    """
+    assert llm_router._is_quota_exhausted(429, '{"error":{"message":"Too many requests"}}') is False

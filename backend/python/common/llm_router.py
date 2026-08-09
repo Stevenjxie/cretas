@@ -1358,6 +1358,12 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     lowered_body = body_text.lower()
     if status_code == 429 and "setlimitexceeded" in lowered_body:
         return True
+    # Zhipu: 余额耗尽用 429 + 中文报文 + code 1113, 不含 SetLimitExceeded。
+    # 2026-08-09 实测 glm-4.6v。结构上等同额度耗尽($0 且不会自愈), 分到
+    # 短熔断只会每 60s 空转重试一次。普通 429 突发限流不受影响 ——
+    # 必须同时命中这两个特征之一, 见 test_plain_429_rate_limit_is_still_transient。
+    if status_code == 429 and ("余额不足" in body_text or '"code":"1113"' in body_text):
+        return True
     if status_code == 403:
         return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
     if status_code == 402 and (
