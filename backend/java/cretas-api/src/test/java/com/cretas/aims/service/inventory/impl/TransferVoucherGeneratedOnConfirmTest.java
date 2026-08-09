@@ -88,7 +88,11 @@ class TransferVoucherGeneratedOnConfirmTest {
         assertTrue(method > 0, "找不到 findUncreatedIds, 断言锚点失效");
         int idx = vs.indexOf("case \"INTERNAL_TRANSFER\":", method);
         assertTrue(idx > 0, "findUncreatedIds 应有 INTERNAL_TRANSFER 分支");
-        String branch = vs.substring(idx, Math.min(vs.length(), idx + 900));
+        // 按【下一个 case】截断, 不用固定字符窗口 —— 2026-08-09 实测: 原来写死 900 字符,
+        // 后来给这个分支补了段注释, 判据就被挤出窗口, 断言在代码没坏的情况下变红。
+        int end = vs.indexOf("case \"WASTAGE_RECORD\":", idx);
+        assertTrue(end > idx, "定位不到分支结尾");
+        String branch = vs.substring(idx, end);
         assertTrue(branch.contains("TransferStatus.CONFIRMED"),
                 "批量补凭证必须只覆盖 CONFIRMED 的调拨单, 实际分支: " + branch);
     }
