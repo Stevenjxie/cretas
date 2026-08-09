@@ -40,7 +40,7 @@ class ProductMasterDataRepositoryQueryValidationTest {
     @Autowired ProductProcessWorkflowRepository workflowRepository;
 
     @Test
-    void repositoriesBootAndProductQueriesHideRawMaterialOwner() {
+    void repositoriesBootAndProductQueriesHideRawMaterialOwner() throws Exception {
         Factory factory = new Factory();
         factory.setId("F-JPA-MASTER");
         factory.setName("JPA master data query gate factory");
@@ -162,6 +162,13 @@ class ProductMasterDataRepositoryQueryValidationTest {
                 factory.getId(), " RAW MATERIAL ", raw.getId())).isFalse();
         assertThat(materialRepository.findCodesByFactoryIdAndCodePrefix(factory.getId(), "yl"))
                 .containsExactly("YL065", "YL066");
+        String prefixQuery = RawMaterialTypeRepository.class
+                .getMethod("findCodesByFactoryIdAndCodePrefix", String.class, String.class)
+                .getAnnotation(org.springframework.data.jpa.repository.Query.class)
+                .value();
+        assertThat(prefixQuery)
+                .as("PostgreSQL stringtype=unspecified requires an explicit prefix parameter type")
+                .contains("CAST(:prefix AS VARCHAR)");
         assertThat(materialRepository.findCodeConflictIncludingDeleted(factory.getId(), "yl066"))
                 .get()
                 .satisfies(conflict -> {
