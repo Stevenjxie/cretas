@@ -3133,14 +3133,150 @@ async def resolve_stock_shortage(
     )
 
 
+async def _resolve_food_cost_ratio(
+    smartbi_pool,
+    factory_id: str,
+    *,
+    days: int,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]],
+    window_label: Optional[str],
+) -> OpsAnswer:
+    """Read a period food-cost ratio without substituting recipe snapshots."""
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        row = await conn.fetchrow(
+            """
+            WITH revenue AS (
+                SELECT COALESCE(SUM(net_amount), 0)::float AS amount,
+                       COUNT(*)::bigint AS transaction_count
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int - 1))
+                   AND ($4::date IS NULL OR date <= $4::date)
+            ),
+            food_cost AS (
+                SELECT SUM(f.amount)::float AS amount,
+                       COUNT(*)::bigint AS line_count,
+                       ARRAY_AGG(DISTINCT f.source_type ORDER BY f.source_type) AS source_types,
+                       ARRAY_AGG(DISTINCT c.name ORDER BY c.name) AS categories
+                  FROM fact_cost_line f
+                  JOIN dim_cost_category c
+                    ON c.category_id = f.category_id
+                   AND c.factory_id = f.factory_id
+                 WHERE f.factory_id = $1
+                   AND f.date >= COALESCE($3::date, CURRENT_DATE - ($2::int - 1))
+                   AND ($4::date IS NULL OR f.date <= $4::date)
+                   AND c.cost_type = 'material'
+                   AND (c.name LIKE '%食材%' OR c.name LIKE '%原料%')
+            )
+            SELECT revenue.amount AS revenue,
+                   revenue.transaction_count,
+                   food_cost.amount AS food_cost,
+                   food_cost.line_count,
+                   food_cost.source_types,
+                   food_cost.categories
+              FROM revenue CROSS JOIN food_cost
+            """,
+            factory_id, days, window_start, window_end,
+        )
+
+    payload = dict(row or {})
+    revenue = float(payload.get("revenue") or 0)
+    food_cost = (
+        float(payload["food_cost"])
+        if payload.get("food_cost") is not None
+        else None
+    )
+    transaction_count = int(payload.get("transaction_count") or 0)
+    line_count = int(payload.get("line_count") or 0)
+    source_types = list(payload.get("source_types") or [])
+    categories = list(payload.get("categories") or [])
+    window_meta = {
+        "window_start": _date_text(window_start) if window_start else None,
+        "window_end": _date_text(window_end) if window_end else None,
+        "window_label": window_label,
+        "scope_matches_request": True,
+    }
+
+    if revenue <= 0:
+        answer = (
+            f"{window_text}全店食材成本率暂时无法计算：没有可用的 POS 净营收事实。"
+            "本次不会用其他期间或单菜配方成本替代。"
+        )
+        meta = {**window_meta, "no_pos_data": True}
+        kpis: List[Dict[str, Any]] = []
+    elif food_cost is None or line_count == 0:
+        answer = (
+            f"{window_text}全店食材成本率暂时无法计算：已有 POS 净营收事实"
+            f"（¥{revenue:,.2f}，{transaction_count:,} 笔），但没有同一期间的食材成本事实。"
+            "本次不会用单菜配方成本榜、理论成本快照或 0 替代。可信的期间口径应先补齐"
+            "“期初库存 + 本期采购 − 期末库存”或经核验的期间食材成本事实，再除以同口径净营收。"
+        )
+        meta = {
+            **window_meta,
+            "no_data": True,
+            "food_cost_fact_missing": True,
+            "transaction_count": transaction_count,
+        }
+        kpis = [
+            {"title": "POS 净营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
+            {"title": "期间食材成本", "value": "暂无事实", "rawValue": None},
+        ]
+    else:
+        ratio = food_cost / revenue * 100
+        answer = (
+            f"{window_text}已登记期间食材成本为 ¥{food_cost:,.2f}，POS 净营收为 "
+            f"¥{revenue:,.2f}，食材成本占净营收 **{ratio:.2f}%**。\n\n"
+            "这是“已登记期间食材成本 ÷ 同期 POS 净营收”的参考比率；只有成本事实已按"
+            "“期初库存 + 本期采购 − 期末库存”核验时，才能作为可信的期间实际口径。"
+            "它不是单菜真实毛利率，也不由当前单菜配方成本快照推算。"
+        )
+        meta = {
+            **window_meta,
+            "food_cost_fact_line_count": line_count,
+            "food_cost_source_types": source_types,
+            "food_cost_categories": categories,
+            "transaction_count": transaction_count,
+        }
+        kpis = [
+            {"title": "食材成本率", "value": f"{ratio:.2f}%", "rawValue": ratio},
+            {"title": "期间食材成本", "value": f"¥{food_cost:,.2f}", "rawValue": food_cost},
+            {"title": "POS 净营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
+        ]
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_RECIPE_COST",
+        title=f"{window_text}全店食材成本率",
+        answer_text=answer,
+        charts=[],
+        kpis=kpis,
+        meta=meta,
+    )
+
+
 async def resolve_recipe_cost(
     smartbi_pool, factory_id: str, top_n: int = 10,
+    days: int = 30,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
+    food_cost_ratio: bool = False,
 ) -> OpsAnswer:
     """Top N dishes by food cost (standard_qty × unit_price rollup).
 
     Joins cretas_db.product_types for dish names at query time (no dim_product
     ETL needed yet — see 2026_04_24_recipe_product_source_pk.sql rationale).
     """
+    if food_cost_ratio:
+        return await _resolve_food_cost_ratio(
+            smartbi_pool,
+            factory_id,
+            days=days,
+            date_range=date_range,
+            window_label=window_label,
+        )
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(

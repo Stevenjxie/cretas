@@ -23,6 +23,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     TRUSTED_PLANNER_AUTHORITIES,
+    _is_food_cost_ratio_query,
     build_resolver_query,
     log_intent_capture,
     parse_restaurant_query,
@@ -962,6 +963,8 @@ async def tiered_answer(
 
         resolver_query = build_resolver_query(query, spec)
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
+        if _is_food_cost_ratio_query(query):
+            execution_kwargs["food_cost_ratio"] = True
         plan = spec.planned_intents or (spec.intent,)
         store_mentions = tuple(
             getattr(spec, "store_slots", ())
