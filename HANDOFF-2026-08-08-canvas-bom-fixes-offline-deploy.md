@@ -196,3 +196,9 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 3. 🔴 **只删不建 = 把批次弄坏**: 读路径不会自动物化, 直接 409 `WORKFLOW_RUNTIME_NOT_MATERIALIZED`。
 
 闸 10 项; 变异: 去掉孤儿守卫 → `refusesToDropWhenTasksAreSoftReferenced` 红; 去掉端口删除 → `dropsPortsThenTasksThenInstance` 红。
+
+### 2026-08-09 09:35 GitHub 恢复 —— 离线 backlog 已回归 origin/main
+
+- 停用期间攒的 **155 个 commit** 已推上 `origin/main`(`1df388cac2..549fd37f22`)。推之前 origin/main 已被别的 session 推进 3 个(PR#2389 SOP canary), 先 merge 再推, **没有 force、没有改历史**。
+- ⚠️ **prod 的 Java 跑的是 `003e3432d9`**(我这一轮验过的构建), 不等于当前 `origin/main` —— 差的是 PR#2389 带的 sales/web-admin 改动, 属另一 session, 由他们自己发。我没顺手替他们部。
+- 从现在起恢复正规通道: 碰 backend/web-admin 代码走 PR, docs/`.claude/` 走 fastlane, **仍然是推上 origin/main 之后才部署**。
