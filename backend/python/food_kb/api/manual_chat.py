@@ -369,6 +369,15 @@ _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 5. “最近30天哪个时段生意最好”现在由历史时段表现 resolver 承接，按 POS 时间戳使用统一的午市/下午茶/晚市/夜宵边界；无时间戳记录不会硬塞进夜宵，而会如实披露。有金额权限时按营收排序，无金额权限时按单量排序。“最近30天食材成本占营收多少”按全店比率处理，泛指“食材”不再被误标成某个具体食材维度；同期间食材成本事实缺失时必须说明暂不可计算，不得拿配方理论成本或 0 代替。“最近30天折扣力度多大”按折扣金额、折扣率和优惠构成作描述性汇总，不把同期变化写成折扣导致营收变化。
 
 例如首问“最近30天总营收是多少”或“最近30天加权毛利率是多少”而未写门店时，当前可回答全部门店合计并披露范围；历史时段表现、全店食材成本占比与折扣力度已有可执行口径，缺少对应事实时如实说明不可计算。首问“比较 A 店宫保鸡丁 4–6 月销量”，追问“那成本和毛利呢”可沿用三项范围；若改问“换 B 店看 7 月”，则按新范围重新规划。"""
+_RESTAURANT_DISCOUNT_GUIDE_ANSWER = """\
+餐饮导览助手不能读取、计算或分析当前门店的折扣数据，也不会编造折扣金额、占比或健康判断；真实结果请进入 SmartBI 餐饮 AI 查询。
+
+建议明确提问：“最近30天全部门店的折扣金额、折扣率和优惠构成分别是多少？”实际分析应同时给出：
+1. 折扣金额：同期间订单优惠金额合计；
+2. 折扣率：折扣金额 ÷ 同期间营收；
+3. 优惠构成：按当前系统已记录的优惠类型汇总金额与占比。
+
+没有当前租户的同期间事实时必须明确暂不可计算，不能用行业示例、模拟占比或 0 冒充真实结果。输出只作描述性汇总；除非另有经验证的因果证据，不得声称折扣导致营收变化。"""
 _RESTAURANT_QUERY_CONTRACT_ANSWER = """\
 餐饮导览助手只解释提问合同，不替用户查询、计算或分析真实经营数据；实际提问请进入 SmartBI 餐饮 AI。
 
@@ -761,6 +770,20 @@ def _needs_restaurant_context_scope_guard(query: str) -> bool:
         )
     )
     return follow_up_scope or default_scope
+
+
+def _needs_restaurant_discount_guide_guard(query: str) -> bool:
+    """Keep discount-data questions inside the guide-only product boundary."""
+    normalized = (query or "").lower()
+    mentions_discount = any(term in normalized for term in ("折扣", "优惠"))
+    asks_for_analysis = any(
+        term in normalized
+        for term in (
+            "力度", "情况", "怎么样", "多少", "金额", "折扣率", "占比",
+            "构成", "分布", "分析", "健康", "趋势",
+        )
+    )
+    return mentions_discount and asks_for_analysis
 
 
 def _needs_restaurant_query_contract_guard(query: str) -> bool:
@@ -1931,6 +1954,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_guide_boundary_guard(request.question)
     ):
         guard_answer = _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_discount_guide_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DISCOUNT_GUIDE_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_proactive_findings_guard(request.question)
