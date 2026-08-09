@@ -48,6 +48,7 @@ import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguatio
 import { getFinanceSummary, type FinanceSummary } from '@/api/smartbi/gold';
 import { copySalesOrder } from '@/api/orderCopy';
 import type { TableRow } from '@/types/api';
+import type { RowAction } from '@/types/rowActions';
 import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
@@ -73,6 +74,17 @@ import {
   type MaterialSupplyMode,
   type SalesProcessingMode,
 } from './salesOrderSupplyContract';
+import {
+  SALES_ORDER_LIFECYCLE_TABS,
+  matchesSalesOrderListFilters,
+  salesOrderLifecycleCounts,
+  salesOrderPaymentStateOf,
+  salesOrderPrimaryActionOf,
+  salesOrderShipmentStateOf,
+  type SalesOrderLifecycle,
+  type SalesOrderPaymentState,
+  type SalesOrderShipmentState,
+} from './salesOrderListUx';
 
 // G1: 税率分组开票对话框 (客户原话 2645-2660s)
 // Sprint 4 W2 S-INVOICE-CLIENT-1: defaultInvoiceType 字段从 SO 行带过来 (后端在 SO 创建时已 prefill 自 customer)
@@ -181,11 +193,43 @@ const kanbanColumns = computed(() =>
 
 /** UX-A2: secondary-action dropdown ("操作 ▾") shown last in row toolbar. */
 function rowActionsFor(row: TableRow) {
-  return computeRowActions(
+  const baseActions = computeRowActions(
     'salesOrder',
     { status: String(row.status || ''), id: String(row.id || '') },
     { canViewPrice: canViewPrice.value }
   );
+  const status = String(row.status || '').toUpperCase();
+  const secondaryActions: RowAction[] = [];
+
+  if (status === 'DRAFT') {
+    secondaryActions.push({ id: 'edit', icon: '✎', label: '编辑订单', aiHint: '修改这张销售订单' });
+  }
+  if (['DRAFT', 'CONFIRMED'].includes(status)) {
+    secondaryActions.push({
+      id: 'cancel', icon: '×', label: '取消订单', danger: true,
+      requiresConfirm: true, aiHint: '取消这张销售订单',
+    });
+  }
+  if (['CONFIRMED', 'PROCESSING', 'SHIPPED'].includes(status)) {
+    secondaryActions.push({ id: 'quick-invoice', icon: '▤', label: '开票', priceRelated: true });
+  }
+  if (['CONFIRMED', 'PROCESSING', 'SHIPPED', 'COMPLETED'].includes(status)) {
+    secondaryActions.push({ id: 'tax-invoice', icon: '％', label: '税率分组开票', priceRelated: true });
+  }
+  if (['CONFIRMED', 'PROCESSING', 'SHIPPED'].includes(status)) {
+    secondaryActions.push({ id: 'quick-payment', icon: '¥', label: '登记收款', priceRelated: true });
+  }
+
+  const primaryId = salesOrderPrimaryActionOf(row);
+  const primaryDuplicates = new Set(
+    primaryId === 'submit-review' ? ['submit', 'submit-for-review'] : []
+  );
+  const deduped = new Map<string, RowAction>();
+  [...secondaryActions, ...baseActions]
+    .filter((action) => action.id !== 'view-detail' && !primaryDuplicates.has(action.id))
+    .filter((action) => !action.priceRelated || canViewPrice.value)
+    .forEach((action) => deduped.set(action.id, action));
+  return [...deduped.values()];
 }
 
 // #1290 follow-up — 退货 dialog state. Mirrors procurement/orders/list.vue +
@@ -238,6 +282,9 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit': handleEdit(row); break;
+    case 'quick-invoice': handleQuickInvoice(row); break;
+    case 'tax-invoice': openTaxGroupInvoice(row); break;
+    case 'quick-payment': handleQuickPayment(row); break;
     // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm；提交 OA 审批走独立的链式/单次路径。
     case 'approve': handleAction(String(row.id), 'confirm'); break;
     case 'submit': case 'submit-for-review':
@@ -337,9 +384,12 @@ function handleWorkflowNodeClick(nodeId: string) {
   const primary = getBucketPrimaryStatus('sales', nodeId);
   if (!primary) return;
   statusFilter.value = primary;
+  activeLifecycle.value = 'all';
+  shipmentFilter.value = 'all';
+  paymentFilter.value = 'all';
   pagination.value.page = 1;
   loadData();
-  ElMessage.success(`已切到 "${getBucketLabel('sales', nodeId)}" (显示状态: ${primary}). bucket 含多个状态, 想看其他请打开状态下拉切换.`);
+  ElMessage.success(`已按“${getBucketLabel('sales', nodeId)}”的主要状态筛选；点击“重置”可返回全部订单。`);
 }
 
 const loading = ref(false);
@@ -396,60 +446,102 @@ const { summary: footerSummary, loading: footerLoading } = useListSummary('sales
 const searchKeyword = ref('');
 const dialogVisible = ref(false);
 
-// P1-6 智能筛选 tab (v1 金矿截图 49m38s 6 tab)
-const activeViewTab = ref<'all' | 'unshipped' | 'partialShipped' | 'unpaid' | 'partialPaid' | 'completed'>('all');
-const viewTabs = [
-  { key: 'all', label: '全部订单' },
-  { key: 'unshipped', label: '未出库订单' },
-  { key: 'partialShipped', label: '部分出库订单' },
-  { key: 'unpaid', label: '未收款订单' },
-  { key: 'partialPaid', label: '部分收款订单' },
-  { key: 'completed', label: '已完成订单' },
-] as const;
+// 一级分页只表达互斥订单生命周期；出库和收款是可组合的正交筛选维度。
+const activeLifecycle = ref<SalesOrderLifecycle>('all');
+const shipmentFilter = ref<SalesOrderShipmentState>('all');
+const paymentFilter = ref<SalesOrderPaymentState>('all');
+const lifecycleTabs = SALES_ORDER_LIFECYCLE_TABS;
+const lifecycleCounts = computed(() => salesOrderLifecycleCounts(
+  tableData.value.filter((row) => matchesSalesOrderListFilters(row, {
+    lifecycle: 'all',
+    shipment: shipmentFilter.value,
+    payment: paymentFilter.value,
+  }))
+));
+const hasClientSideFilters = computed(() =>
+  activeLifecycle.value !== 'all'
+  || shipmentFilter.value !== 'all'
+  || paymentFilter.value !== 'all'
+);
 
-// Client-side filter based on activeViewTab
 const filteredTableData = computed(() => {
-  const rows = tableData.value;
-  if (activeViewTab.value === 'all') return rows;
-  return rows.filter((row) => {
-    const total = Number(row.totalAmount || 0);
-    const shipped = Number(row.actualShippedAmount || 0);
-    const paid = Number(row.paidAmount || 0);
-    const status = String(row.status || '');
-    switch (activeViewTab.value) {
-      case 'unshipped':
-        return shipped <= 0 && status !== 'CANCELLED' && status !== 'COMPLETED';
-      case 'partialShipped':
-        return shipped > 0 && shipped < total && status !== 'CANCELLED';
-      case 'unpaid':
-        return paid <= 0 && status !== 'CANCELLED';
-      case 'partialPaid':
-        return paid > 0 && paid < total && status !== 'CANCELLED';
-      case 'completed':
-        return status === 'COMPLETED';
-      default:
-        return true;
-    }
-  });
+  return tableData.value.filter((row) => matchesSalesOrderListFilters(row, {
+    lifecycle: activeLifecycle.value,
+    shipment: shipmentFilter.value,
+    payment: paymentFilter.value,
+  }));
+});
+const visibleOrderTotal = computed(() => hasClientSideFilters.value
+  ? filteredTableData.value.length
+  : pagination.value.total
+);
+const displayedTableData = computed(() => {
+  if (!hasClientSideFilters.value) return filteredTableData.value;
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredTableData.value.slice(start, start + pagination.value.size);
 });
 
-function tabCount(key: string): number {
-  if (key === 'all') return tableData.value.length;
-  const rows = tableData.value;
-  return rows.filter((row) => {
-    const total = Number(row.totalAmount || 0);
-    const shipped = Number(row.actualShippedAmount || 0);
-    const paid = Number(row.paidAmount || 0);
-    const status = String(row.status || '');
-    switch (key) {
-      case 'unshipped': return shipped <= 0 && status !== 'CANCELLED' && status !== 'COMPLETED';
-      case 'partialShipped': return shipped > 0 && shipped < total && status !== 'CANCELLED';
-      case 'unpaid': return paid <= 0 && status !== 'CANCELLED';
-      case 'partialPaid': return paid > 0 && paid < total && status !== 'CANCELLED';
-      case 'completed': return status === 'COMPLETED';
-      default: return false;
-    }
-  }).length;
+function lifecycleTabCount(key: SalesOrderLifecycle): number {
+  return lifecycleCounts.value[key];
+}
+
+function shipmentStateLabel(row: TableRow): string {
+  const state = salesOrderShipmentStateOf(row);
+  return state === 'SHIPPED' ? '已出库' : state === 'PARTIAL' ? '部分出库' : '未出库';
+}
+
+function shipmentStateTagType(row: TableRow): 'success' | 'warning' | 'info' {
+  const state = salesOrderShipmentStateOf(row);
+  return state === 'SHIPPED' ? 'success' : state === 'PARTIAL' ? 'warning' : 'info';
+}
+
+function paymentStateLabel(row: TableRow): string {
+  const state = salesOrderPaymentStateOf(row);
+  return state === 'PAID' ? '已收款' : state === 'PARTIAL' ? '部分收款' : '未收款';
+}
+
+function paymentStateTagType(row: TableRow): 'success' | 'warning' | 'info' {
+  const state = salesOrderPaymentStateOf(row);
+  return state === 'PAID' ? 'success' : state === 'PARTIAL' ? 'warning' : 'info';
+}
+
+function orderItemsFor(row: TableRow): TableRow[] {
+  return Array.isArray(row.items) ? row.items as TableRow[] : [];
+}
+
+function primaryActionLabel(row: TableRow): string {
+  if (!canWrite.value) return '查看详情';
+  switch (salesOrderPrimaryActionOf(row)) {
+    case 'submit-review': return String(row.status || '').toUpperCase() === 'FINANCE_REJECTED' ? '重新提交' : '提交审核';
+    case 'view-review': return '查看审批';
+    case 'create-delivery': return '创建发货单';
+    case 'continue-delivery': return '继续履约';
+    default: return '查看详情';
+  }
+}
+
+async function handlePrimaryAction(row: TableRow): Promise<void> {
+  if (!canWrite.value) {
+    goDetail(String(row.id));
+    return;
+  }
+  switch (salesOrderPrimaryActionOf(row)) {
+    case 'submit-review':
+      if (String(row.status || '').toUpperCase() === 'FINANCE_REJECTED') {
+        await handleAction(String(row.id), 'resubmit');
+      } else {
+        await handleSubmitForReviewRow(row);
+      }
+      break;
+    case 'view-review':
+    case 'view-detail':
+      goDetail(String(row.id));
+      break;
+    case 'create-delivery':
+    case 'continue-delivery':
+      await handleQuickDelivery(row);
+      break;
+  }
 }
 
 interface OrderItem {
@@ -833,8 +925,8 @@ async function loadData() {
     const url = statusFilter.value
       ? `/${factoryId.value}/sales/orders/by-status`
       : `/${factoryId.value}/sales/orders`;
-    // P1-6 smart tabs do client-side filter → load larger batch
-    const effectiveSize = activeViewTab.value === 'all' ? pagination.value.size : 200;
+    // 生命周期/出库/收款组合筛选目前由前端在已加载结果上组合；激活时扩大工作集。
+    const effectiveSize = hasClientSideFilters.value ? 200 : pagination.value.size;
     const params: TableRow = { page: pagination.value.page, size: effectiveSize };
     if (statusFilter.value) params.status = statusFilter.value;
     const res = await get(url, { params });
@@ -862,8 +954,9 @@ async function loadData() {
   finally { loading.value = false; }
 }
 
-function handleTabChange() {
-  // Tab 切换时 reload (后端返回 top 200 以便 client-side filter)
+function handleLifecycleTabChange() {
+  // 生命周期切换时扩大工作集，再从同一批 rows 派生分页计数与列表。
+  statusFilter.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -1844,10 +1937,24 @@ function removeExtraFee(idx: number) {
 }
 
 function goDetail(id: string) { router.push(`/sales/orders/${id}`); }
-function handlePageChange(page: number) { pagination.value.page = page; loadData(); }
-function handleSizeChange(size: number) { pagination.value.size = size; pagination.value.page = 1; loadData(); }
-function handleStatusChange() { pagination.value.page = 1; loadData(); }
-function handleRefresh() { statusFilter.value = ''; searchKeyword.value = ''; pagination.value.page = 1; loadData(); }
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+  if (!hasClientSideFilters.value) loadData();
+}
+function handleSizeChange(size: number) {
+  pagination.value.size = size;
+  pagination.value.page = 1;
+  if (!hasClientSideFilters.value) loadData();
+}
+function handleRefresh() {
+  statusFilter.value = '';
+  searchKeyword.value = '';
+  activeLifecycle.value = 'all';
+  shipmentFilter.value = 'all';
+  paymentFilter.value = 'all';
+  pagination.value.page = 1;
+  loadData();
+}
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
@@ -2090,7 +2197,7 @@ function handleMergePurchase() {
         <div class="card-header">
           <div class="header-left">
             <span class="page-title">{{ label('salesOrder') }}管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="data-count">共 {{ visibleOrderTotal }} 条记录</span>
           </div>
           <div class="header-right">
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
@@ -2101,21 +2208,40 @@ function handleMergePurchase() {
         </div>
       </template>
 
-      <!-- P1-6 智能筛选 tab (v1 金矿截图 49m38s) -->
-      <el-radio-group v-model="activeViewTab" size="default" @change="handleTabChange" style="margin-bottom: 12px">
-        <el-radio-button v-for="tab in viewTabs" :key="tab.key" :value="tab.key">
-          {{ tab.label }} <span v-if="tabCount(tab.key) > 0" class="tab-count">{{ tabCount(tab.key) }}</span>
-        </el-radio-button>
-      </el-radio-group>
+      <div class="lifecycle-filter-header">
+        <el-tabs v-model="activeLifecycle" class="sales-lifecycle-tabs" @tab-change="handleLifecycleTabChange">
+          <el-tab-pane v-for="tab in lifecycleTabs" :key="tab.key" :name="tab.key">
+            <template #label>
+              <span>{{ tab.label }}</span>
+              <span class="tab-count">{{ lifecycleTabCount(tab.key) }}</span>
+            </template>
+          </el-tab-pane>
+        </el-tabs>
+        <el-tooltip content="分页数字来自当前已加载的同一批订单，不会把出库和收款重复计入生命周期。" placement="top">
+          <span class="count-scope-note"><el-icon><QuestionFilled /></el-icon> 计数口径</span>
+        </el-tooltip>
+      </div>
 
       <div class="search-bar">
         <!-- Apr 20 Bug BR-07 fix: 加 keyword 搜索 (订单号/客户名) -->
         <el-input v-model="searchKeyword" placeholder="搜索 订单号/客户" clearable style="width: 240px" @keyup.enter="loadData" />
-        <el-select v-model="statusFilter" placeholder="按状态筛选" clearable style="width: 160px" @change="handleStatusChange">
-          <el-option v-for="(v, k) in statusMap" :key="k" :label="v.text" :value="k" />
+        <el-select v-model="shipmentFilter" aria-label="出库状态" style="width: 140px" @change="handleLifecycleTabChange">
+          <el-option label="全部出库状态" value="all" />
+          <el-option label="未出库" value="UNSHIPPED" />
+          <el-option label="部分出库" value="PARTIAL" />
+          <el-option label="已出库" value="SHIPPED" />
+        </el-select>
+        <el-select v-model="paymentFilter" aria-label="收款状态" style="width: 140px" @change="handleLifecycleTabChange">
+          <el-option label="全部收款状态" value="all" />
+          <el-option label="未收款" value="UNPAID" />
+          <el-option label="部分收款" value="PARTIAL" />
+          <el-option label="已收款" value="PAID" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="loadData">搜索</el-button>
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <el-tag v-if="statusFilter" closable type="info" @close="statusFilter = ''; loadData()">
+          流程概览筛选：{{ statusMap[statusFilter]?.text || statusFilter }}
+        </el-tag>
         <el-button
           v-if="viewMode === 'table' && canWrite"
           :type="salesBatchMode ? 'primary' : 'default'"
@@ -2184,7 +2310,7 @@ function handleMergePurchase() {
 
       <GridView
         v-if="viewMode === 'grid'"
-        :rows="filteredTableData"
+        :rows="displayedTableData"
         title-field="orderNumber"
         subtitle-field="customerName"
         status-field="status"
@@ -2192,7 +2318,7 @@ function handleMergePurchase() {
       />
       <KanbanView
         v-else-if="viewMode === 'kanban'"
-        :rows="filteredTableData"
+        :rows="displayedTableData"
         status-field="status"
         title-field="orderNumber"
         subtitle-field="customerName"
@@ -2204,7 +2330,7 @@ function handleMergePurchase() {
       <el-table
         :key="salesBatchMode ? 'sales-batch-table' : 'sales-default-table'"
         v-else
-        :data="filteredTableData"
+        :data="displayedTableData"
         v-loading="loading"
         empty-text="暂无数据"
         stripe
@@ -2217,6 +2343,39 @@ function handleMergePurchase() {
       >
         <!-- T131 Part 3 — 多选列 (Element Plus 在 COLUMN 上用 :selectable, 非 table 的 rowSelectable). -->
         <el-table-column v-if="salesBatchMode" type="selection" width="48" :selectable="canSelectRow" />
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div class="order-trace-panel">
+              <section class="trace-section trace-items">
+                <div class="trace-section-title">订单明细</div>
+                <template v-if="orderItemsFor(row).length">
+                  <div v-for="item in orderItemsFor(row).slice(0, 4)" :key="String(item.id || item.productTypeId)" class="trace-item-line">
+                    <span>{{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }}</span>
+                    <strong>{{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}</strong>
+                  </div>
+                  <div v-if="orderItemsFor(row).length > 4" class="trace-more">另有 {{ orderItemsFor(row).length - 4 }} 项，进入详情查看</div>
+                </template>
+                <el-empty v-else description="列表未返回明细，可进入订单详情查看" :image-size="44" />
+              </section>
+              <section class="trace-section">
+                <div class="trace-section-title">出库履约</div>
+                <el-tag :type="shipmentStateTagType(row)" effect="light">{{ shipmentStateLabel(row) }}</el-tag>
+                <div v-if="canViewPrice" class="trace-metric">
+                  已出库 {{ formatAmount(row.actualShippedAmount || 0) }} / 订单 {{ formatAmount(row.totalAmount || 0) }}
+                </div>
+                <div class="trace-hint">销售创建发货单，仓储确认实发并扣减库存。</div>
+              </section>
+              <section class="trace-section">
+                <div class="trace-section-title">收款进度</div>
+                <el-tag :type="paymentStateTagType(row)" effect="light">{{ paymentStateLabel(row) }}</el-tag>
+                <div v-if="canViewPrice" class="trace-metric">
+                  已收 {{ formatAmount(row.paidAmount || 0) }} / 应收 {{ formatAmount(row.totalAmount || 0) }}
+                </div>
+                <div class="trace-hint">收款状态独立追踪，不改变订单生命周期分类。</div>
+              </section>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="orderNumber" label="订单编号" width="170" sortable />
         <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
@@ -2387,7 +2546,7 @@ function handleMergePurchase() {
         </el-table-column>
         <el-table-column
           prop="status"
-          label="状态"
+          label="订单状态"
           width="120"
           align="center"
           sortable
@@ -2397,6 +2556,20 @@ function handleMergePurchase() {
           <template #default="{ row }">
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="出库状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="shipmentStateTagType(row)" size="small" effect="light">
+              {{ shipmentStateLabel(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="收款状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="paymentStateTagType(row)" size="small" effect="light">
+              {{ paymentStateLabel(row) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -2427,58 +2600,17 @@ function handleMergePurchase() {
             <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right" align="center" class-name="business-list-table__actions">
+        <el-table-column label="下一步" width="250" fixed="right" align="center" class-name="business-list-table__actions">
           <template #default="{ row }">
             <div class="business-action-row">
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
-            <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <!-- T131/N9 — 提交后按已发布 OA 规则自动路由。DRAFT 链式（先确认再路由）；CONFIRMED 单次。 -->
             <el-button
-              v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite"
               type="primary"
-              link
               size="small"
               :loading="submittingIds.has(row.id)"
               :disabled="submittingIds.has(row.id)"
-              @click="handleSubmitForReviewRow(row)"
-            >提交 OA 审批</el-button>
-            <!-- T131 — 「确认」保留为 DRAFT 的次要操作 (仅 DRAFT→CONFIRMED, 不送财务). -->
-            <el-button v-if="row.status === 'DRAFT' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'confirm')">确认</el-button>
-            <el-button v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>
-            <el-button v-if="row.status === 'FINANCE_REJECTED' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'resubmit')">重新提交</el-button>
-            <!--
-              Issue #740 (六扇门 May10 会议): 销售只创建发货单 (DRAFT/PENDING_WAREHOUSE_CONFIRM,
-              不扣库存); 仓库角色去 仓储管理 → 出货管理 确认实发数量并扣库存.
-              按钮文案从 "出库" 改为 "创建发货单" 准确反映行为.
-            -->
-            <el-button
-              v-if="(row.status === 'CONFIRMED' || row.status === 'PROCESSING') && canWrite"
-              type="warning"
-              link
-              size="small"
-              @click="handleQuickDelivery(row)"
-            >创建发货单</el-button>
-            <el-button
-              v-if="(row.status === 'CONFIRMED' || row.status === 'PROCESSING' || row.status === 'SHIPPED') && canWrite"
-              type="success"
-              link
-              size="small"
-              @click="handleQuickInvoice(row)"
-            >开票</el-button>
-            <el-button
-              v-if="(row.status === 'CONFIRMED' || row.status === 'PROCESSING' || row.status === 'SHIPPED' || row.status === 'COMPLETED') && canWrite"
-              type="success"
-              link
-              size="small"
-              @click="openTaxGroupInvoice(row)"
-            >税率分组开票</el-button>
-            <el-button
-              v-if="(row.status === 'CONFIRMED' || row.status === 'PROCESSING' || row.status === 'SHIPPED') && canWrite"
-              type="primary"
-              link
-              size="small"
-              @click="handleQuickPayment(row)"
-            >收款</el-button>
+              @click="handlePrimaryAction(row)"
+            >{{ primaryActionLabel(row) }}</el-button>
+            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
@@ -2499,7 +2631,7 @@ function handleMergePurchase() {
 
       <div class="pagination-wrapper">
         <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50]" :total="pagination.total"
+          :page-sizes="[10, 20, 50]" :total="visibleOrderTotal"
           layout="total, sizes, prev, pager, next, jumper"
           @current-change="handlePageChange" @size-change="handleSizeChange" />
       </div>
@@ -3043,7 +3175,73 @@ function handleMergePurchase() {
     .data-count { font-size: 13px; color: #909399; }
   }
 }
-.search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.lifecycle-filter-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin: -4px 0 12px;
+}
+.sales-lifecycle-tabs {
+  flex: 1;
+  min-width: 0;
+  :deep(.el-tabs__header) { margin: 0; }
+  :deep(.el-tabs__nav-wrap::after) { display: none; }
+  :deep(.el-tabs__item) { min-height: 48px; padding: 0 18px; }
+}
+.tab-count {
+  display: inline-flex;
+  min-width: 18px;
+  justify-content: center;
+  margin-left: 5px;
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+:deep(.el-tabs__item.is-active) .tab-count { color: var(--el-color-primary); }
+.count-scope-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 17px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: help;
+}
+.search-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.order-trace-panel {
+  position: sticky;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.35fr) minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(1180px, calc(100vw - 280px));
+  padding: 14px 18px 16px 62px;
+  background: var(--el-fill-color-extra-light);
+  border-top: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.trace-section {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+.trace-section-title { margin-bottom: 10px; color: var(--el-text-color-primary); font-weight: 600; }
+.trace-item-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; color: var(--el-text-color-regular); }
+.trace-item-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-item-line strong { flex-shrink: 0; font-weight: 500; }
+.trace-more, .trace-hint { margin-top: 8px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.trace-metric { margin-top: 10px; color: var(--el-text-color-regular); line-height: 1.5; }
+.trace-items :deep(.el-empty) { padding: 2px 0 0; }
+.business-action-row { justify-content: center; flex-wrap: nowrap; }
+@media (max-width: 1366px) {
+  .sales-lifecycle-tabs :deep(.el-tabs__item) { padding: 0 11px; }
+  .order-trace-panel { grid-template-columns: 1fr 1fr; padding-left: 54px; }
+  .trace-items { grid-column: 1 / -1; }
+}
 .form-help-text { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
 .order-items-scope-hint { margin: 0 0 10px; padding: 8px 12px; background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px; }
 .supplied-material-editor { width: 100%; }
