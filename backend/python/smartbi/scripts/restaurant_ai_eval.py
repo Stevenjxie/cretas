@@ -68,7 +68,9 @@ _STORE_C = "模拟·长宁龙之梦店"
 #:    本租户只有一家，照搬过来这条用例会变成「非歧义」而依然显示通过。
 _STORE_AMBIG = "社区店"
 _STORE_AMBIG_1 = "模拟·宝山大场社区店"
-_STORE_AMBIG_2 = "模拟·闵行莘庄社区店"
+#: ⚠️ 反问只列前 3 家候选，这两个必须都在被列出的那几家里，
+#:    否则断言会因为「候选被截断」而红，那不是行为错。
+_STORE_AMBIG_2 = "模拟·普陀真如社区店"
 #: 本租户门店名的共同前缀，用于「答案里点到了某家店」这类不指定是哪家的断言。
 _STORE_NAME_PREFIX = "模拟·"
 #: 别的租户的门店名——跨租户泄漏的阴性对照，不随本租户变。
@@ -171,7 +173,7 @@ CASES: List[Dict[str, Any]] = [
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "本月", "chain": "dish",
      "contains": ["哪一组门店"],
-     "followup_contains": ["全部门店", f"{_STORE_A}"],
+     "followup_contains": ["全部门店", _STORE_NAME_PREFIX],
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "全部门店", "chain": "dish",
      "contains": [f"「{_DISH_MAIN}」", "销量"]},
@@ -190,7 +192,9 @@ CASES: List[Dict[str, Any]] = [
      "followup_contains": ["本月", "上个月", "最近7天", "最近30天"]},
     {"q": "本月", "chain": "dish_named_store",
      "contains": ["哪一组门店"],
-     "followup_contains": [f"{_STORE_A}"],
+     # ⛔ 只断言「按钮里出现了本租户的门店」, 不断言是哪一家:
+     #    本租户 10 家门店营收差距 2% 以内, 按钮取其中 3 家, 取到谁会随数据滚动。
+     "followup_contains": [_STORE_NAME_PREFIX],
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": f"{_STORE_A}", "chain": "dish_named_store",
      "contains": [f"{_STORE_A}", f"「{_DISH_MAIN}」", "销量"],
@@ -257,9 +261,13 @@ CASES: List[Dict[str, Any]] = [
     #    而这条用例仍可能因为「指的是哪家」恰好没出现而被判失败，
     #    看起来像 AI 退化，实际是夹具过期。`_assert_fixture_self_consistent`
     #    与 `_preflight_fixture` 一起把这种情况提前报成人话。
-    {"q": f"{_STORE_AMBIG}的营收",
-     "contains": ["指的是哪家", f"{_STORE_AMBIG}"],
-     "followup_contains": [f"{_STORE_AMBIG_1}", f"{_STORE_AMBIG_2}"],
+    # ⚠️ 必须把时间槽先填上: 时间和门店同时缺失时，系统会先反问时间，
+    #    这条用例就测不到门店歧义了（2026-08-09 实测：「社区店的营收」被
+    #    时间反问抢先，补上「本月」后才出现「匹配到多家门店」）。
+    {"q": f"本月{_STORE_AMBIG}的营收",
+     # ⚠️ 候选门店列在**正文**里, 不在按钮里 —— 断言必须落在正文。
+     #    写成 followup_contains 会红, 但红的原因是「我查错了地方」, 不是行为错。
+     "contains": ["匹配到多家门店", f"{_STORE_AMBIG_1}", f"{_STORE_AMBIG_2}"],
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": f"本月全部门店{_DISH_MAIN}和{_DISH_ALT}和{_DISH_SIG}的销量",
      "contains": [f"{_DISH_MAIN}", f"{_DISH_ALT}", f"{_DISH_SIG}"],
