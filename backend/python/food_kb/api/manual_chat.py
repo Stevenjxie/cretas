@@ -142,7 +142,7 @@ _COMPLEX_KEYWORDS = {"怎么", "如何", "步骤", "流程", "对比", "分析",
 
 _CURRENT_FACTORY_SOP_SOURCE = "f006-production-full-chain-sop.md"
 _PRODUCTION_SOP_KEYWORDS = frozenset({
-    "sku", "bom", "配方", "workflow", "cell", "工序", "原料", "辅料", "包材",
+    "sku", "bom", "配方", "workflow", "cell", "工序", "物料", "原料", "辅料", "包材",
     "半成品", "成品", "单位", "克重", "锅序", "替代", "联产", "副产", "拓扑",
     "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
