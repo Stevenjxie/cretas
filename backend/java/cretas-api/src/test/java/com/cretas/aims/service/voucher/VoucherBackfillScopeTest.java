@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -61,6 +62,30 @@ class VoucherBackfillScopeTest {
                 "FAILED 必须纳入可补范围: 没有任何其它路径会重试它");
         assertTrue(branch.contains("VoucherFlag.UNCREATED"),
                 "UNCREATED 仍要补");
+    }
+
+    @Test
+    @DisplayName("零金额的调拨不补 — 否则 debit=0/credit=0 违反约束, 把整批事务打成 aborted")
+    void skipsZeroAmount() throws IOException {
+        assertTrue(transferBranch().contains("getTotalAmount().signum() > 0"),
+                "必须跳过零金额调拨: listener 一直有这道守卫, 这里缺了就会造出 0/0 分录");
+    }
+
+    @Test
+    @DisplayName("每单独立事务 — 一单失败不拖垮整批")
+    void perItemIndependentTransaction() throws IOException {
+        Path p = Path.of("src/main/java/com/cretas/aims/service/voucher/impl/VoucherServiceImpl.java");
+        String src = Files.readString(p, StandardCharsets.UTF_8);
+        int m = src.indexOf("public int batchCreateForFactory(");
+        assertTrue(m > 0, "找不到 batchCreateForFactory");
+        int end = src.indexOf("public Voucher post(", m);
+        assertTrue(end > m, "定位不到方法结尾");
+        String body = src.substring(m, end);
+        // 缺陷版本靠整批一个 @Transactional + 逐单 catch —— catch 挡不住 PG 的 aborted transaction
+        assertTrue(body.contains("PROPAGATION_REQUIRES_NEW"),
+                "每单必须独立事务, 否则一单违约会把整批 DB 会话打成 aborted");
+        assertFalse(src.substring(Math.max(0, m - 200), m).contains("@Transactional"),
+                "batchCreateForFactory 不该再挂整批 @Transactional");
     }
 
     @Test
