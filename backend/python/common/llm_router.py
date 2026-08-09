@@ -905,6 +905,12 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 即切换。链尾只保留 GLM/Plus/Zhipu，不追加通用 _TEXT_TAIL：
     # Max/DeepSeek/Kimi 对短 JSON 分类既慢又浪费，生产已证明会放大超时。
     # 深度经营分析继续由 INSIGHTS/REASONING 槽负责。
+    # ⛔ 2026-08-09 曾把 qwen3.7-max / qwen3-max-2025-09-23 加进本链(它们在 REVIEW
+    #    打分 3/3), 但 MAPPER 的契约是「快而有界」——
+    #    test_mapper_uses_bounded_fast_models_without_max_or_reasoners 明确禁止 model
+    #    名里出现 max / deepseek / kimi。2026-08-10 移除。
+    #    判据: **一个模型在 A 槽表现好, 不构成把它放进 B 槽的理由** —— 槽的契约
+    #    (延迟上界 / 成本 / 是否强制 thinking)先于打分。
     SLOT.MAPPER: _dedup_chain([
         ("aliyun_c", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "qwen3.7-flash-2026-07-15"),
@@ -921,8 +927,6 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         #      glm-4.7 3/3 3.0s   qwen3.7-max 3/3 3.0s
         #      qwen3-max-2025-09-23 3/3 3.8s   glm-5 3/3 4.4s
         ("aliyun_c", "glm-4.7"),
-        ("aliyun_c", "qwen3.7-max"),
-        ("aliyun_c", "qwen3-max-2025-09-23"),
         ("aliyun_c", "glm-5"),
         # ⚠️ zhipu 排到**最后**: 实测它在这个槽上稳定超时, 而链是串行且共享一个
         #    总预算 —— 它排在前面会把预算吃掉, 后面本来 1 秒就能答的候选
@@ -1047,8 +1051,6 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "glm-4.7"),                # 3/3  conf 0.90-0.98  3.0s
         ("aliyun_c", "qwen3-max-2025-09-23"),   # 3/3  conf 0.95       3.8s
         ("aliyun_c", "glm-5"),                  # 3/3  conf 0.98-0.99  4.4s
-        ("aliyun_b", "qwen3.7-max-preview"),    # 3/3  conf 0.95       4.4s
-        ("aliyun_a", "qwen3.7-max-preview"),    # 3/3  conf 0.95       6.4s
         ("aliyun_c", "kimi-k2.6"),              # 3/3  conf 0.90-0.95  2s (复测)
         ("aliyun_c", "deepseek-v3"),            # 3/3  conf 0.90-0.95  3-4s  纯文本
         ("aliyun_c", "qwen3-vl-plus"),          # 3/3  conf 0.90-0.98  3-4s
