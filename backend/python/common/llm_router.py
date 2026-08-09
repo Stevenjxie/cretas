@@ -744,221 +744,191 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
-# Universal free-text fallback tail (appended to every text slot).
-# Rebuilt 2026-06-11 (key rotation incident): keys were rotated to new accounts
-# so the per-account free allowlists are stale. The OLD tail hit bare
-# `qwen3-max` / `qwen-max` / `qwen-plus` (NOT on the free allowlists = PAID) and
-# blew up the bill. EVERY entry below is now on the new free allowlist for its
-# account (see reference_dashscope_free_model_allowlist 2026-06-11 section).
-# Order: the still-live aliyun_c pool → interleaved TokenHub/Ark independent
-# providers → zhipu.  The 2026-08-03 audit physically removed every Aliyun
-# pair whose recorded grant had already expired; runtime expiry refusal remains
-# the final guard for the grants that lapse later.
-# Shared deep text fallback tail — broadly-capable NON-thinking-only models, EVERY
-# entry ∈ _SAFE_MODELS, authored soonest-expiry-first (use-it-or-lose-it) with a
-# non-DashScope floor (tencent/zhipu) that survives all aliyun bulk expiries.
-# (Fast slots append this; the param layer sets enable_thinking=false so default-ON
-# hybrids here don't waste 10-20x latency/tokens.)
 _TEXT_TAIL: List[Tuple[str, str]] = [
-    # aliyun_c grants still live on the 2026-08-03 audit date.
-    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3-max-preview"),
-    ("aliyun_c", "glm-5.1"), ("aliyun_c", "qwen3.5-flash"),
-    ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
-    ("aliyun_c", "glm-5.2"),
-    # ── non-DashScope floor (independent of aliyun expiries) ──────────────
-    # 2026-08-02 重测(官方模型参数 + 生产 API Key + 餐饮 T3 五种真实契约)。
-    # 旧链把逐模型已停的 TokenHub/Ark endpoint 排在前面，而且漏发 TokenHub 的
-    # thinking 开关；结果是 401008/SetLimitExceeded、20s timeout 或空 content。
-    # 新链只保留当前 5/5 的通用模型，并继续按 5s/provider、12s total 的调用预算
-    # 排列。Hy-MT2 官方定位为翻译模型，即使恢复额度也不再进入通用文本链。
+    # 非 DashScope 地板 —— 到期日为 None → _expiry_of 返回 _FAR_FUTURE →
+    # _build_chain 的排序必然把它们放在所有 aliyun 条目之后。这正是
+    # 「先榨干会过期的, 不过期的留到最后」。
     #
-    # 两个 provider **交错**排列, 不是 tencent 整段再 ark 整段: 地板的意义是
-    # "阿里云全挂了还能答", 如果前几位全是同一个 provider, 那个 provider 一出问题
-    # (key 失效 / 账号被停 / 平台故障)地板就又空了。交错之后要连续两家都挂才穿透。
-    # 括号里是 2026-08-02 关闭思考后的真实 T3 延迟范围。
-    ("tencent", "deepseek-v4-pro-202606"),        # 2.05-2.63s
-    ("ark", "doubao-seed-2-1-turbo-260628"),      # 3.27-4.87s
-    ("tencent", "glm-5.2"),                       # 2.54-3.53s
-    ("ark", "doubao-seed-2-0-lite-260428"),       # 2.66-5.20s, deeper fallback
-    ("tencent", "qwen3.5-plus"),                  # 3.08-4.09s
-    ("tencent", "minimax-m3"),                    # 1.30-5.58s, variable tail
+    # 2026-08-09 实测收缩: tencent 9 个只剩 minimax-m2.7(6.7s, 偏慢但是
+    # 唯一非阿里/非智谱的活口); 其余 7 个 401008 FREE_QUOTA_EXHAUSTED,
+    # kimi-k2.6 走参数层仍返回空内容。ark 两个全部 SetLimitExceeded → 清空。
+    # 两家 provider 的配置与代码路径均保留, 待补齐清单后加回。
+    ("tencent", "minimax-m2.7"),
     ("zhipu", "glm-4.5-air"),
 ]
 
-# VL-only chain — vision models only (no _TEXT_TAIL). aliyun_a has NO confirmed-ON VL
-# (screenshot didn't cover VL → toggle unknown → excluded to avoid billing).
-_VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
-    ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),  # 08/13
-    ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("zhipu", "glm-4.6v"),
-])
+# ══ 资格层 ══════════════════════════════════════════════════════════════
+# 下面三个名单是**人写的实测结论**, 独立于 _SLOT_POOLS 的定义 —— 闸拿它们
+# 比对池内容时两边来源不同, 不是恒真式。
 
-# SLOT_MODELS — capability-tier head (quality-appropriate) + expiry order within tier
-# (soonest-expiry account first) + shared tail. Every (account, model) ∈ _SAFE_MODELS
-# (CI-enforced). thinking-only models (deepseek-r1/qwen3-*-thinking/kimi-k2.7-code)
-# appear ONLY in REASONING. Runtime order is authoritative (no re-sort); _refuse_reason
-# drops expired/unsafe entries so heads auto-switch as free grants lapse.
-SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — 高频低延迟, thinking off → flash/turbo.
-    SLOT.CHAT: _dedup_chain([
-        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_c", "qwen-plus-latest"),
-    ] + _TEXT_TAIL),
-    # INSIGHTS — 长经营分析优先 Plus（质量/时延平衡），Max 仅作深尾。
-    # 2026-07-26 用户逐账户截图确认 A/B/C 的 Plus 与指定版本均有大额免费额度，
-    # 且全部开启“免费额度用完即停”。生产 14:55 已证明把三个耗尽 Max 放在
-    # 链头会连续 403，既浪费延迟也没有提升质量。当天真实最小探针确认
-    # C/B/A Plus 均 200，A qwen3.7-max-2026-06-08 也 200；旧 A
-    # qwen3.7-max-2026-05-20 已 403。2026-08-03 生产最小探针进一步确认
-    # A/B/C bare Plus 与 C dated Plus 均已 FreeTierOnly；从 allowlist 和所有
-    # slot 物理剔除，只保留仍返回 200 的 B/A dated Plus。
-    SLOT.INSIGHTS: _dedup_chain([
-        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen-plus-latest"),
-        ("aliyun_a", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3-max-preview"),
-    ] + _TEXT_TAIL),
-    # CHART — compact JSON (thinking off + json_object) → flash/coder; NO glm-5 head (60s).
-    SLOT.CHART: _dedup_chain([
-        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
-    ] + _TEXT_TAIL),
-    # MAPPER — 字段映射 JSON (thinking off + json_object) → fast text models.
-    # 2026-07-26 用户控制台截图确认 B/C 的 versioned Flash 与 alias 均有
-    # 100 万免费额度且用完即停；用独立账户交错排列，单账户限流/故障时一次
-    # 即切换。链尾只保留 GLM/Plus/Zhipu，不追加通用 _TEXT_TAIL：
-    # Max/DeepSeek/Kimi 对短 JSON 分类既慢又浪费，生产已证明会放大超时。
-    # 深度经营分析继续由 INSIGHTS/REASONING 槽负责。
-    SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_c", "qwen3.7-flash"),
-        ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_c", "glm-5.2"),
-        ("zhipu", "glm-4.5-air"),
-    ]),
-    # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
-    SLOT.REASONING: _dedup_chain([
-        ("aliyun_c", "deepseek-v3.1"),
-        # 控制台服务 ID 是 deepseek-v4-pro-202606; 旧代码写的 `deepseek-v4-pro`
-        # 在 TokenHub 上不存在, 所以它恒 402 —— 那个 402 一直被误读成"额度没领",
-        # 实际是模型名错。真实余量 999978/1M, 几乎没动过。
-        ("aliyun_c", "deepseek-v3.2"), ("tencent", "deepseek-v4-pro-202606"),
-        ("aliyun_c", "qwen3-235b-a22b-thinking-2507"),
-        ("aliyun_c", "deepseek-r1"),
-    ] + _TEXT_TAIL),
-    # VL — 仅视觉链.
-    SLOT.VL: _VL_CHAIN,
-    # REVIEW — 中文 critique 质量 → verified non-thinking models.
-    # 05-17/preview Max 强制 enable_thinking=true，与 REVIEW 的低延迟
-    # enable_thinking=false 契约冲突；改用 A/C 06-08（实测均兼容）并以
-    # 三账户 Plus 收尾，避免每次稳定 400 后才 fallback。
-    # 2026-07-30: Max/Plus 六个组合**每天下午必然全部 403 耗尽**(07-27 起稳定
-    # 40-57 次/天), 之后 REVIEW 落到 deepseek-v3.2 —— 它给出的餐饮 T3 计划
-    # **内容完全正确**(intent/metrics/dimensions/store_scope 全对), 但
-    # `confidence` 返回 **-1.0**(不认这个字段)。餐饮 T3 的闸是
-    # `confidence < _T3_MIN_CONFIDENCE(0.6) → clarification`, 于是一个 100%
-    # 正确的计划被判成「我还缺一个关键信息」, 整条餐饮问答天天下午退化。
-    # 实测同一问句: deepseek-v3.2 → confidence=-1.0; qwen3.7-flash → 0.95,
-    # 计划内容两者一致。故把仍有额度的 flash 插在 deepseek **之前** ——
-    # 2026-08-02 fresh production probes found both Max heads returning 403 after
-    # restart, while dated Plus still passed the restaurant contract. Lead with
-    # the healthy dated grants so a cold process does not burn two failed calls;
-    # keep Max immediately behind them in case its daily grant recovers.
-    SLOT.REVIEW: _dedup_chain([
-        # Keep the restaurant semantic planner's independent-provider floor
-        # inside its 12s wall-clock budget.  All four pairs passed 5/5 real T3
-        # contract shapes on 2026-08-02; interleaving prevents one provider
-        # outage from consuming the entire interactive budget.
-        ("tencent", "deepseek-v4-pro-202606"),
-        ("ark", "doubao-seed-2-1-turbo-260628"),
-        ("tencent", "glm-5.2"),
-        ("ark", "doubao-seed-2-0-lite-260428"),
-        # 2026-08-03 production probe: B/A dated Plus still return 200; C dated
-        # and all three bare Plus grants now return FreeTierOnly and are removed.
-        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
-        # 判据是「答对 intent 且 confidence >= 0.6」而不是「能否调通」。
-        # 下面六个全部实测 ✅(conf 0.95-0.98)。
-        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen3-max-preview"),
-        ("aliyun_c", "glm-5.1"), ("aliyun_c", "deepseek-v3.1"),
-        # ── 2026-08-09: 上面**全部**免费额度耗尽那天补进来的一层 ──────────
-        #
-        # 🔴 当天实测: REVIEW 链 20 个组合里只有 2 个还活着 ——
-        #    `zhipu/glm-4.5-air`(熔断中, 且实测不吐 JSON, 合约 0/3) 与
-        #    `aliyun_c/deepseek-v3.2`(那颗毒丸, confidence 恒负, 合约 0/3)。
-        #    阿里云 a/b/c 全是 403 `Free quota exhausted`, 腾讯全是 402
-        #    `401008 free trial quota exhausted`, 火山是 429 `SetLimitExceeded`。
-        #    于是 T3 规划器整层 fail-closed, 而 66.5% 的餐饮提问走这一层。
-        #
-        # ⛔ 判据不是「能否调通」而是「答对 intent 且 confidence>=0.6」——
-        #    07-30 那轮已经证明「调通但 confidence=-1.0」等于毒丸。
-        #    拿**真实 T3 prompt** 逐个打分(3 个问句 / SALES_SUMMARY, GROSS_MARGIN,
-        #    WASTAGE), 当天仍有额度的候选实测:
-        #      qwen3-vl-plus                  3/3  conf 0.90-0.98   3-4s   ← 选它
-        #      deepseek-r1                    3/3  conf 0.95       13-70s  ✗ 超预算
-        #      qwen3-235b-a22b-thinking-2507  3/3  conf 0.85-0.95  28-46s  ✗ 超预算
-        #      qwen3-vl-32b-instruct          2/3  (把菜品毛利问句判成营收汇总) 3-4s
-        #      qwen3-vl-flash-2026-01-22      2/3  (同上)                    2s
-        #    两个 reasoner 虽然满分, 但 13-70s 直接击穿 REVIEW 的 12s 交互预算,
-        #    故意**不**放进来 —— 放进来只会把「答不出来」换成「等到超时」。
-        #
-        # ⚠️ 它们是 VL(视觉)模型, 这里当纯文本用: 已在 _SAFE_MODELS 白名单内
-        #    (VL 槽在用), 纯文本入参实测正常。放在这一段而不是链头 ——
-        #    上面那些额度恢复后行为逐字不变, 只有全耗尽时才会走到这里。
-        #    满分档(3/3)在前, 2/3 档随后, 都在 12s 预算内:
-        # ⚠️ 2026-08-09 判别实验: 先把 qwen3-vl-plus 放链头, 电池连续两轮
-        #    在**多轮上下文继承**用例上退化([07][08] 菜品链延续 /
-        #    [74][75][76] 澄清乱序链), 而换型前两轮这些全过。我的合约测试
-        #    只测了**单轮**, 这是验证里的缺口。故改成纯文本的 deepseek-v3 打头,
-        #    VL 模型退到其后 —— 若多轮恢复, 说明 VL 模型不适合承担会话继承。
-        ("aliyun_c", "deepseek-v3"),            # 3/3  conf 0.90-0.95  3-4s  纯文本
-        ("aliyun_c", "qwen3-vl-plus"),          # 3/3  conf 0.90-0.98  3-4s
-        # ⚠️ deepseek-v3 与链尾那颗毒丸 deepseek-v3.2 同族, 但 confidence 正常 ——
-        #    同族不同版本行为可以完全相反, 只能实测, 不能按家族推断。
-        ("aliyun_c", "kimi-k2.6"),              # 2/3  2-3s (菜品毛利判成营收汇总)
-        ("aliyun_c", "qwen3-vl-32b-instruct"),  # 2/3  3-4s (同上)
-        ("aliyun_c", "qwen3-vl-flash-2026-01-22"),  # 2/3  2s (同上)
-        # ⛔ 实测仍有额度但**故意不放**的: glm-4.7(23-37s) / glm-5(64-89s) /
-        #    deepseek-r1(13-70s) / qwen3-235b-a22b-thinking(28-46s) ——
-        #    全部击穿 REVIEW 的 12s 交互预算, 放进来只是把「答不出来」换成「等到超时」。
-        #
-        # ⚠️ 上面五个**全在 aliyun_c 一个账号上**, 且该账号免费额度 2026-08-13 到期。
-        #    跨账号冗余做不到, 不是因为没有可用模型 —— 2026-08-09 宽扫实测
-        #    aliyun_a/b、腾讯、火山各自都还有能调通的模型(共 24 个组合) ——
-        #    而是因为它们**不在 `_SAFE_MODELS` 白名单**里: 白名单的语义是
-        #    「该账号上这个模型的『免费额度用完即停』已确认开启」, 而
-        #    「HTTP 200」**分辨不出免费还是计费**。要接它们必须先在控制台逐个确认开关。
-        #    ⛔ 不要因为「探针能通」就往白名单里加 —— 那正是这条计费红线要挡的事。
-    ] + _TEXT_TAIL + [
-        # ⛔ aliyun_c/deepseek-v3.2 必须排在**整条链最后**, _TEXT_TAIL 之后。
-        #
-        # 它答对 intent 但 confidence 恒负(-1.0 / -0.95 实测), 而 confidence<0.6
-        # 是餐饮 T3 的澄清闸 —— 也就是"内容对、契约不合规"。路由器看到 HTTP 200
-        # 就算成功、**不再 fallback**, 于是它成了一颗毒丸。
-        #
-        # 2026-07-30 早先只把它压到"已验证的 aliyun 模型之后", 但那时它仍在
-        # _TEXT_TAIL **之前** —— 阿里云每天下午一耗尽, 链路就停在它身上,
-        # 腾讯那层非阿里云地板**结构上永远够不到**, 等于不存在。放到最后之后,
-        # 阿里云耗尽 → 走腾讯地板 → 全挂了才落到它(那时它至少还能给个澄清)。
-        #
-        # 顺带: `_t3_llm_parse` 现在给 call_chain 传 content_validator, 负 confidence
-        # 会被判为无效并继续 fallback。两道措施是冗余的, 故意的 —— 排序保证"够得到",
-        # validator 保证"就算排序又漂了也不会被它吞掉"。
+# 实测慢(关思考档 > 4s 或真实负载击穿 12s 交互预算)。禁止进交互槽的池。
+# ⚠️ tencent/minimax-m2.7 也在此列, 但它属于 _TEXT_TAIL 地板, 由 _build_chain
+#    单独追加, 不受本名单约束 —— 地板的职责是"前面全挂了还能答", 慢于不答。
+_SLOW_MODELS: frozenset = frozenset({
+    "deepseek-r1",                     # 8.6s 空载 / 13-25s 真实 REVIEW 负载
+    "deepseek-r1-0528",                # 12.1s
+    "qwen3-235b-a22b-thinking-2507",   # 9.5s
+    "kimi-k2-thinking",                # 5.2s
+    "qwen3.7-max-preview",             # 6.0-8.5s
+    "minimax-m2.7",                    # 6.7s (地板, 见上)
+})
+
+# 开思考会返回空 content 或极慢 → 只进 profile 里 enable_thinking=false 的槽。
+# 2026-08-09 实测: glm-4.6 推理档 44s / qwen3.6-plus-2026-04-02 17.8s /
+# qwen3.5-plus-2026-02-15 21.1s (关思考档全部 ~1s)。
+_THINKING_OFF_ONLY: frozenset = frozenset({
+    "glm-4.6", "qwen3.6-plus-2026-04-02", "qwen3.5-plus-2026-02-15",
+})
+
+# 关思考会 400 → 只能进 REASONING(其 profile 为 {}, 不设 enable_thinking)。
+# 2026-08-09 实测 aliyun_c/MiniMax-M2.5: 关思考 400, 开思考 3.6s OK。
+_REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
+
+
+# ══ 候选池 ══════════════════════════════════════════════════════════════
+# INSIGHTS 与 REVIEW 共用同一个质量档池: 两者判据逐字相同(质量优先 + 关思考档
+# ≤4s), 各写一份 21 行迟早漂移成两张不一致的表。将来若真分化(例如 REVIEW 需要
+# 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
+_QUALITY_TIER_POOL: List[Tuple[str, str]] = [
+    ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
+    ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
+    ("aliyun_c", "qwen3-max-2025-09-23"),          # 08-13  1.6s
+    ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
+    ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
+    ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
+    ("aliyun_c", "qwen3.7-max"),                   # 08-20  1.2s
+    ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
+    ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 08-24  3.2s
+    ("aliyun_b", "qwen3.7-max-2026-05-17"),        # 08-24  3.9s
+    ("aliyun_c", "kimi-k2.7-code"),                # 09-14  1.8s
+    ("aliyun_b", "kimi-k2.7-code"),                # 09-14  1.8s
+    ("aliyun_a", "kimi-k2.7-code"),                # 09-14  2.1s
+    ("aliyun_a", "qwen3.7-flash"),                 # 10-23  0.5s
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"),      # 10-23  0.6s
+    ("aliyun_b", "deepseek-v4-flash-0731"),        # 10-31  1.3s
+    ("aliyun_a", "deepseek-v4-flash-0731"),        # 10-31  1.5s
+    ("aliyun_c", "qwen3.8-max"),                   # 11-01  1.0s
+    ("aliyun_a", "qwen3.8-max"),                   # 11-01  1.1s
+    ("aliyun_b", "qwen3.8-max"),                   # 11-01  1.1s
+]
+
+# 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
+# 它只在「同一到期日」时生效(_build_chain 用稳定排序), 表达的是质量优先级。
+# 跨到期日的先后由 _build_chain 按到期日升序算, 人不要在这里排。
+_SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
+    # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
+    SLOT.CHAT: [
+        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
+        ("aliyun_c", "deepseek-v3.2-exp"),             # 08-13  0.9s
+        ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
+        ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
+        ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
+        ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
+        ("aliyun_c", "qwen3-max-2025-09-23"),          # 08-13  1.6s
+        ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
+        ("aliyun_c", "qwen3.7-max"),                   # 08-20  1.2s
+        ("aliyun_a", "qwen3.7-flash"),                 # 10-23  0.5s
+        ("aliyun_a", "qwen3.7-flash-2026-07-15"),      # 10-23  0.6s
+        ("aliyun_b", "deepseek-v4-flash-0731"),        # 10-31  1.3s
+        ("aliyun_a", "deepseek-v4-flash-0731"),        # 10-31  1.5s
+        ("aliyun_c", "qwen3.8-max"),                   # 11-01  1.0s
+        ("aliyun_a", "qwen3.8-max"),                   # 11-01  1.1s
+        ("aliyun_b", "qwen3.8-max"),                   # 11-01  1.1s
+    ],
+    # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
+    SLOT.CHART: [
+        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
+        ("aliyun_c", "deepseek-v3.2-exp"),
+        ("aliyun_c", "glm-4.6"),
         ("aliyun_c", "deepseek-v3.2"),
-    ]),
+        ("aliyun_c", "qwen3-max-2025-09-23"),
+        ("aliyun_c", "qwen3.7-max-2026-05-20"),
+        ("aliyun_c", "qwen3.7-max"),
+        ("aliyun_a", "qwen3.7-flash"),
+        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "deepseek-v4-flash-0731"),
+        ("aliyun_a", "deepseek-v4-flash-0731"),
+        ("aliyun_c", "qwen3.8-max"),
+        ("aliyun_a", "qwen3.8-max"),
+        ("aliyun_b", "qwen3.8-max"),
+    ],
+    # MAPPER — 短 JSON 字段映射。池比 CHAT 更窄: Max 级对短分类既慢又浪费。
+    SLOT.MAPPER: [
+        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
+        ("aliyun_c", "deepseek-v3.2-exp"),
+        ("aliyun_c", "glm-4.6"),
+        ("aliyun_c", "deepseek-v3.2"),
+        ("aliyun_a", "qwen3.7-flash"),
+        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "deepseek-v4-flash-0731"),
+        ("aliyun_a", "deepseek-v4-flash-0731"),
+    ],
+    # INSIGHTS / REVIEW — 共用质量档池, 见下方 _QUALITY_TIER_POOL 定义。
+    SLOT.INSIGHTS: list(_QUALITY_TIER_POOL),
+    SLOT.REVIEW: list(_QUALITY_TIER_POOL),
+    # REASONING — 允许慢, profile 为 {} (不设 enable_thinking)。
+    SLOT.REASONING: [
+        ("aliyun_c", "deepseek-v3.2"),
+        ("aliyun_c", "deepseek-v3.2-exp"),
+        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
+        ("aliyun_c", "MiniMax-M2.5"),                  # 仅此槽可用(关思考会 400)
+        ("aliyun_c", "kimi-k2-thinking"),
+        ("aliyun_c", "deepseek-r1"),
+        ("aliyun_c", "qwen3-235b-a22b-thinking-2507"),
+        ("aliyun_c", "deepseek-r1-0528"),
+        ("aliyun_c", "qwen3.7-max-2026-05-17"),
+        ("aliyun_a", "qwen3.7-max-2026-05-17"),
+        ("aliyun_b", "qwen3.7-max-2026-05-17"),
+        ("aliyun_c", "qwen3.7-max-preview"),
+        ("aliyun_a", "qwen3.7-max-preview"),
+        ("aliyun_b", "qwen3.7-max-preview"),
+        ("aliyun_c", "kimi-k2.7-code"),
+        ("aliyun_b", "kimi-k2.7-code"),
+        ("aliyun_a", "kimi-k2.7-code"),
+        ("aliyun_b", "deepseek-v4-flash-0731"),
+        ("aliyun_a", "deepseek-v4-flash-0731"),
+        ("aliyun_c", "qwen3.8-max"),
+        ("aliyun_a", "qwen3.8-max"),
+        ("aliyun_b", "qwen3.8-max"),
+    ],
+    # VL — 仅视觉。⚠️ 2026-08-13 后这两个双双过期, 链会变空, call_chain 抛
+    #      All providers exhausted for vl。这是**期望行为**(spec §9.1,
+    #      owner 2026-08-09 拍板): 业务用不到 VL(prod 7 天仅 1 次真实调用),
+    #      且原 VL 地板 zhipu/glm-4.6v 已因余额不足死亡。明确报错优于把图片
+    #      请求静默降级给文本模型瞎猜 —— CLAUDE.md 核心原则 1。
+    SLOT.VL: [
+        ("aliyun_c", "qwen3-vl-flash-2026-01-22"),     # 08-13  0.7s
+        ("aliyun_c", "qwen3-vl-32b-instruct"),         # 08-13  1.0s
+    ],
 }
+
+# VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
+# 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
+# 也是 test_every_text_slot_has_a_floor 的唯一豁免项。
+_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL})
+
+
+def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
+    """按免费额度到期日升序拼链 —— use-it-or-lose-it。
+
+    ⚠️ 这里**推翻**了旧注释 "Runtime order is authoritative (no re-sort)"。
+    旧契约要求人手写最终顺序, 而 _SAFE_MODELS 的 docstring 与 _expiry_of()
+    从一开始就写着 "soonest-expiry-first" —— 意图在注释里, 约束不存在, 于是
+    每个到期日都要人改一次, 漏一次链就腐烂一次。2026-08-09 实测后果: 三个
+    aliyun 账号约 1800 万 token 可用额度 router 一个都够不着, 而链里 5 个
+    aliyun_a/b 条目实测 5/5 全 403 在空转。改成代码算, 到期日一到自动重排。
+
+    稳定排序: 同一到期日保持 _SLOT_POOLS 里人写的顺序(= 质量优先级),
+    只有跨到期日才重排。到期日为 None 的地板 → _FAR_FUTURE → 必然沉底。
+    """
+    entries = list(_SLOT_POOLS[slot])
+    if slot not in _NO_TEXT_TAIL_SLOTS:
+        entries += _TEXT_TAIL
+    return _dedup_chain(sorted(entries, key=lambda p: _expiry_of(*p)))
+
+
+SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

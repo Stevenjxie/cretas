@@ -61,23 +61,12 @@ def _reset_caches():
 def test_every_chain_entry_is_a_registered_safe_model():
     """Nothing a SLOT chain can call is outside _SAFE_MODELS (ON-toggle allowlist).
 
-    ⛔ KNOWN RED as of the 2026-08-09 _SAFE_MODELS rewrite (task 3 of the
-    "llm-router expiry-first chain" plan) — by design, not an oversight.
-
-    This task's own brief (Steps 5-6) demands the full router suite go green,
-    and separately forbids editing SLOT_MODELS/_TEXT_TAIL/_VL_CHAIN (that
-    rewrite is Task 4's job, off pools computed from this registry). Those two
-    requirements cannot both hold simultaneously: the 08-09 audit retired far
-    more of SLOT_MODELS' literal content than a partial, in-task fix could
-    plausibly repatch without touching the forbidden files (e.g. the entire
-    aliyun_b/aliyun_c qwen3.7-flash* head of CHAT/CHART/MAPPER, all of
-    tencent's REVIEW models bar minimax-m2.7, and every ark entry). Weakening
-    this assertion is separately forbidden too — it IS the billing-safety net
-    the whole registry exists to protect, so it must not be watered down or
-    skipped. It will go back to green only once Task 4 rebuilds SLOT_MODELS
-    from _SAFE_MODELS pools. Runtime is still safe in the meantime:
-    _refuse_reason refuses every unregistered entry at call time regardless of
-    what this test currently reports.
+    THE central billing-safety invariant. 2026-08-09: SLOT_MODELS is now
+    _build_chain(slot) for every slot — computed from _SLOT_POOLS, which is
+    itself authored only from pairs already present in _SAFE_MODELS (Task 4
+    of the "llm-router expiry-first chain" plan). So this test is structurally
+    satisfied by construction; it stays as a standing regression guard against
+    a future hand-edit to _SLOT_POOLS that adds an unregistered pair.
     """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
@@ -105,19 +94,29 @@ def test_no_thinking_only_model_in_fast_slots():
 def test_non_thinking_profile_slots_exclude_force_thinking_models():
     """Console quota does not make a model protocol-compatible.
 
-    Live A/B/C probes showed the 05-17 and preview Max SKUs reject
-    enable_thinking=false. Any slot that injects false must exclude them.
+    Live A/B/C probes showed the 05-17 and preview Max SKUs (and the rest of
+    _THINKING_ONLY) reject enable_thinking=false. 2026-08-09 rewrite: the
+    shared _QUALITY_TIER_POOL (INSIGHTS/REVIEW) now legitimately contains
+    qwen3.7-max-2026-05-17 and kimi-k2.7-code — expiry-first sorting
+    (_build_chain) puts a pool's whole authored content in the chain, not a
+    hand-curated subset that dodges _THINKING_ONLY. The old policy ("keep
+    these OUT of the chain entirely") is superseded by the structural guard
+    already in _apply_slot_params: `model not in _THINKING_ONLY` skips
+    injecting `enable_thinking` for exactly these models, regardless of which
+    slot's chain they sit in. So the invariant this test must protect is not
+    "never in a False-profile chain" but "never actually sent False" — assert
+    that directly, against the real function, not a static exclusion list.
     """
-    force_thinking = {
-        "qwen3.7-max-2026-05-17",
-        "qwen3.7-max-preview",
-    }
     for slot, profile in llm_router._SLOT_PARAMS.items():
-        if profile.get("enable_thinking") is False:
-            models = {model for _account, model in llm_router.SLOT_MODELS[slot]}
-            assert models.isdisjoint(force_thinking), (
-                f"{slot.value} would send enable_thinking=false to "
-                f"{sorted(models & force_thinking)}"
+        if profile.get("enable_thinking") is not False:
+            continue
+        for account, model in llm_router.SLOT_MODELS[slot]:
+            if model not in llm_router._THINKING_ONLY:
+                continue
+            p = llm_router._apply_slot_params(slot, account, model, {"messages": []})
+            assert "enable_thinking" not in p, (
+                f"{slot.value}: {account}/{model} is _THINKING_ONLY but would "
+                f"still get enable_thinking=false → protocol 400"
             )
 
 
@@ -134,50 +133,77 @@ def test_chains_deduped():
 
 
 def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
+    """MAPPER pool: short JSON field mapping, bounded to models measured fast
+    with thinking off. 2026-08-09 rewrite: the pool now legitimately includes
+    deepseek-v3.2 / deepseek-v3.2-exp (0.9-1.1s per the pool's own latency
+    notes) — a bare "deepseek" substring ban is no longer the right test (it
+    would also false-positive on the floor's own "minimax-m2.7", which
+    contains "max" as a substring of "mini-max"). The real, still-true policy
+    is: no _THINKING_ONLY / _SLOW_MODELS reasoner and no Max-tier model in the
+    authored pool (checked separately from the appended floor, which is
+    allowed to be slow — see _SLOW_MODELS' comment on why minimax-m2.7 is
+    exempt).
+    """
     chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
     assert chain[:4] == [
-        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_c", "qwen3.7-flash"),
-        ("aliyun_b", "qwen3.7-flash"),
+        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
+        ("aliyun_c", "deepseek-v3.2-exp"),
+        ("aliyun_c", "glm-4.6"),
+        ("aliyun_c", "deepseek-v3.2"),
     ]
-    assert ("aliyun_c", "glm-5.2") in chain
+    assert ("tencent", "minimax-m2.7") in chain     # non-DashScope floor
     assert ("zhipu", "glm-4.5-air") in chain
+    pool = llm_router._SLOT_POOLS[SLOT.MAPPER]      # pool only — floor excluded
+    assert all(model not in llm_router._THINKING_ONLY for _a, model in pool)
+    assert all(model not in llm_router._SLOW_MODELS for _a, model in pool)
     assert all(
-        token not in model
-        for _account, model in chain
-        for token in ("max", "deepseek", "kimi")
+        "qwen3.7-max" not in model and "qwen3.8-max" not in model
+        for _a, model in pool
     )
 
 
-def test_insights_prefers_verified_live_plus_before_max_deep_tail():
-    chain = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
-    assert chain[:2] == [
-        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
+def test_insights_and_review_share_the_quality_tier_pool():
+    """2026-08-09 rewrite: INSIGHTS and REVIEW draw from the identical
+    _QUALITY_TIER_POOL (same judging criteria — quality-first, relies on
+    _build_chain's expiry-first sort rather than hand-curated "Plus before
+    Max" ordering) plus the shared _TEXT_TAIL floor, so their built chains
+    must be equal. This replaces the old per-slot hand-pinned head assertions
+    (which named aliyun_b/aliyun_a qwen3.7-plus-2026-05-26 and
+    qwen3.7-max-2026-06-08 — both retired from _SAFE_MODELS entirely by the
+    Task 3 audit, see test_production_exhausted_aliyun_pairs_are_fully_retired)
+    and guards against the two pools silently forking in a future edit.
+    """
+    insights = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
+    review = llm_router.SLOT_MODELS[SLOT.REVIEW]
+    assert insights == review
+    assert insights == list(llm_router._QUALITY_TIER_POOL) + list(llm_router._TEXT_TAIL)
+    assert insights[:2] == [
+        ("aliyun_c", "deepseek-v3.2"),
+        ("aliyun_c", "glm-4.6"),
     ]
-    first_max = next(i for i, (_account, model) in enumerate(chain) if "max" in model)
-    assert first_max >= 4
-    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:6])
-    assert ("aliyun_a", "qwen3.7-max-2026-05-20") not in chain
-    assert ("aliyun_a", "qwen3.7-max-2026-06-08") in chain
 
 
-def test_review_reaches_verified_independent_providers_before_aliyun():
+def test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts():
+    """2026-08-09 rewrite inverts the old head-of-chain guarantee: expiry-first
+    ordering means REVIEW now LEADS with the earliest-expiring aliyun pairs
+    (from _QUALITY_TIER_POOL, real dates) and the non-aliyun floor sits at the
+    structural tail (_TEXT_TAIL entries have expiry=None -> _FAR_FUTURE, which
+    always sorts last). That reversal is the whole point of the rewrite (use
+    the expiring grants before they're wasted) — what must still hold is that
+    the non-aliyun floor is reachable at all, and strictly after every aliyun
+    entry, once aliyun is exhausted.
+    """
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
-    assert chain[:4] == [
-        ("tencent", "deepseek-v4-pro-202606"),
-        ("ark", "doubao-seed-2-1-turbo-260628"),
-        ("tencent", "glm-5.2"),
-        ("ark", "doubao-seed-2-0-lite-260428"),
-    ]
-    assert chain[4:8] == [
-        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
-        ("aliyun_a", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
-    ]
-    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain)
+    non_aliyun = [(a, m) for a, m in chain if a not in llm_router._ALIYUN_ACCOUNTS]
+    assert non_aliyun, "REVIEW has no non-aliyun floor at all"
+    last_aliyun_idx = max(
+        i for i, (a, _m) in enumerate(chain) if a in llm_router._ALIYUN_ACCOUNTS
+    )
+    first_floor_idx = min(chain.index(p) for p in non_aliyun)
+    assert first_floor_idx > last_aliyun_idx, (
+        "non-aliyun floor precedes an aliyun pair -- floor should be the "
+        "structural tail (None expiry -> _FAR_FUTURE)"
+    )
 
 
 def test_no_slot_keeps_an_aliyun_grant_expired_by_august_3():
@@ -718,30 +744,45 @@ def test_no_chain_calls_a_stale_or_translation_only_tokenhub_model():
 def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
     """2026-08-09: only minimax-m2.7 survived the re-audit; the other three
     _TOKENHUB_VERIFIED pairs from 08-02 now 401008 quota-exhausted and were
-    removed from _SAFE_MODELS. Whether the survivor is wired into _TEXT_TAIL is
-    Task 4's job (chain rewrite off the new registry) — this test only pins the
-    registry fact, not a chain literal it cannot touch.
+    removed from _SAFE_MODELS. Task 4 rebuilt _TEXT_TAIL off the new registry,
+    so this now also checks the survivor is actually wired into the floor
+    (the test's name always promised this; it couldn't be checked until
+    Task 4 replaced the chain literal).
     """
     for pair in _TOKENHUB_REGISTERED_2026_08_09:
         assert pair in llm_router._SAFE_MODELS, (
             f"{pair} not registered -> _refuse_reason blocks it"
         )
+        assert pair in llm_router._TEXT_TAIL, f"{pair} registered but not wired into the floor"
 
 
-def test_negative_confidence_pill_sits_after_the_non_aliyun_floor_in_review():
-    """REVIEW must reach the TokenHub floor before the negative-confidence model.
+def test_negative_confidence_pill_now_precedes_the_non_aliyun_floor_in_review():
+    """Pre-2026-08-09 policy: REVIEW was hand-ordered so this pill
+    (aliyun_c/deepseek-v3.2 -- correct plan, confidence pinned at -0.95/-1.0)
+    sat AFTER the non-aliyun floor, because the router treated any HTTP 200 as
+    success and stopped, so anything ordered after a poison pill was dead
+    code. `_TOKENHUB_VERIFIED`'s four pairs from that era are gone from
+    _SAFE_MODELS entirely (see test_verified_tokenhub_models_are_registered_
+    and_in_the_text_tail); only minimax-m2.7 survives.
 
-    aliyun_c/deepseek-v3.2 returns a correct plan with confidence -0.95. The
-    router sees HTTP 200 and stops, so anything ordered after it is dead code
-    once the Aliyun quota is gone -- which is every afternoon.
+    2026-08-09 rewrite inverts the ordering on purpose: _build_chain sorts by
+    expiry, and deepseek-v3.2 (a real, 08-13-dated grant) can never sort after
+    the never-expiring floor (_TEXT_TAIL entries have expiry=None ->
+    _FAR_FUTURE). The hand-curated safety-net ordering is structurally
+    unachievable under expiry-first sorting now, so the safety net moved down
+    a layer instead: `_t3_llm_parse` passes call_chain a content_validator
+    that treats negative confidence as invalid output and keeps falling
+    through, regardless of chain position -- ordering is no longer the
+    enforcement point. This test pins the new, intentional fact.
     """
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
     pill = chain.index(("aliyun_c", "deepseek-v3.2"))
-    floor_positions = [chain.index(p) for p in _TOKENHUB_VERIFIED if p in chain]
-    assert floor_positions, "REVIEW cannot reach any verified TokenHub model"
-    assert pill > max(floor_positions), (
-        f"negative-confidence model at {pill} precedes the TokenHub floor at "
-        f"{sorted(floor_positions)} -> floor unreachable"
+    floor_positions = [chain.index(p) for p in llm_router._TEXT_TAIL if p in chain]
+    assert floor_positions, "REVIEW cannot reach the non-aliyun floor at all"
+    assert pill < min(floor_positions), (
+        f"the pill at {pill} no longer sorts before the floor at "
+        f"{sorted(floor_positions)} -- if this flips back, re-check that the "
+        f"content_validator note above still matches call_chain's behavior"
     )
 
 
@@ -909,12 +950,12 @@ def test_every_ark_chain_entry_is_registered():
     """Duplicates the global invariant on purpose, scoped to ark, so a failure
     names the provider whose billing premise is conditional.
 
-    ⛔ KNOWN RED alongside test_every_chain_entry_is_a_registered_safe_model
-    above, same reason: the 08-09 audit emptied ark's _SAFE_MODELS section
-    entirely (see _ARK_VIABLE), but SLOT_MODELS still literally contains
-    ("ark", "doubao-seed-2-1-turbo-260628") / ("ark", "doubao-seed-2-0-lite-...")
-    in REVIEW / _TEXT_TAIL, and this task may not touch those (Task 4's job).
-    _refuse_reason still refuses every ark call at runtime.
+    2026-08-09: ark's _SAFE_MODELS section is empty (_ARK_VIABLE is empty —
+    both prior candidates SetLimitExceeded-paused), and the rebuilt
+    _SLOT_POOLS/_TEXT_TAIL (Task 4) contain no ark entries at all, so this is
+    vacuously true today. Stays as a standing regression guard: if ark regains
+    a measured-viable model and someone wires it into a pool before it's
+    registered, this catches it.
     """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
@@ -1005,14 +1046,11 @@ def test_ark_registry_is_exactly_the_measured_viable_set():
 
 
 def test_ark_paused_or_contract_rejected_models_are_not_reachable():
-    """⛔ KNOWN RED as of 2026-08-09, third of the set alongside
-    test_every_chain_entry_is_a_registered_safe_model /
-    test_every_ark_chain_entry_is_registered, same reason: the 08-09 audit found
-    doubao-seed-2-1-turbo-260628 and doubao-seed-2-0-lite-260428 both now
-    SetLimitExceeded-paused (moved into _ARK_PAUSED, see its comment), and both
-    are still literal, unmigrated entries in SLOT_MODELS[SLOT.REVIEW] /
-    _TEXT_TAIL. This task may not touch those (Task 4's job). _refuse_reason
-    still refuses both at call time regardless of what this test reports.
+    """2026-08-09: doubao-seed-2-1-turbo-260628 and doubao-seed-2-0-lite-260428
+    (both SetLimitExceeded-paused, see _ARK_PAUSED) are no longer anywhere in
+    SLOT_MODELS — Task 4's rebuilt _SLOT_POOLS/_TEXT_TAIL contain zero ark
+    entries. Vacuously true today; stays as a standing regression guard for
+    when ark is reintroduced.
     """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
@@ -1059,29 +1097,33 @@ def test_tokenhub_thinking_switch_is_model_family_specific():
 
 
 def test_non_aliyun_floor_interleaves_two_independent_providers():
-    """The floor exists for "Aliyun is entirely gone". If its first entries were all
-    one provider, that provider's own outage empties it again — so the head must
-    alternate, and two different providers must appear in the first three slots."""
+    """The floor exists for "Aliyun is entirely gone". 2026-08-09 audit
+    collapsed it from 7 candidates (tencent x6 interleaved with ark x2, per
+    the pre-rewrite _TEXT_TAIL) down to 2 survivors that same day: 7 tencent
+    SKUs hit 401008 FREE_QUOTA_EXHAUSTED and both ark SKUs hit
+    SetLimitExceeded (see the new _TEXT_TAIL's comment). At this reduced size
+    the invariant that must still hold is the same one that mattered before:
+    it is not a single point of failure — the survivors must span 2 different
+    providers, not one provider's two models.
+    """
     floor = [
         (a, m) for (a, m) in llm_router._TEXT_TAIL
         if a not in llm_router._ALIYUN_ACCOUNTS
     ]
-    assert len(floor) >= 4, floor
-    head_accounts = [a for a, _m in floor[:3]]
-    assert len(set(head_accounts)) >= 2, (
-        f"floor head is single-provider ({head_accounts}) — one outage empties it"
+    assert len(floor) >= 2, floor
+    assert len(set(a for a, _m in floor)) >= 2, (
+        f"floor is single-provider ({floor}) — one outage empties it"
     )
 
 
-def test_floor_starts_with_current_contract_valid_independent_models():
-    """Pins the measured production floor and provider interleave."""
+def test_floor_is_exactly_the_2026_08_09_survivor_set():
+    """Pins the measured production floor after the 08-09 TokenHub/Ark
+    collapse (test above documents why it shrank from 7 to 2)."""
     floor = [
         (a, m) for (a, m) in llm_router._TEXT_TAIL
         if a not in llm_router._ALIYUN_ACCOUNTS
     ]
-    assert floor[:4] == [
-        ("tencent", "deepseek-v4-pro-202606"),
-        ("ark", "doubao-seed-2-1-turbo-260628"),
-        ("tencent", "glm-5.2"),
-        ("ark", "doubao-seed-2-0-lite-260428"),
+    assert floor == [
+        ("tencent", "minimax-m2.7"),
+        ("zhipu", "glm-4.5-air"),
     ]
