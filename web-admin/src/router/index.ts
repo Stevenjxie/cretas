@@ -500,6 +500,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '调拨单列表', module: 'warehouse' }
           },
           {
+            path: 'new',
+            name: 'TransferCreate',
+            component: () => import('@/views/transfer/list.vue'),
+            meta: { requiresAuth: true, title: '新建调拨单', module: 'warehouse', hidden: true }
+          },
+          {
             path: ':id',
             name: 'TransferDetail',
             component: () => import('@/views/transfer/detail.vue'),
