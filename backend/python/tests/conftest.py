@@ -420,3 +420,88 @@ def pytest_collection_modifyitems(config, items):
             "Phase 2B endpoint coverage gate FAILED — " + "; ".join(parts),
             returncode=1,
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PostgreSQL 可达性闸 (2026-08-10)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 21 个用例里写着:
+#     if not settings.postgres_url:
+#         pytest.skip("No Postgres configured")
+#
+# 而 `Settings.postgres_url` 是**拼出来的字符串**(f"postgresql://{user}:{pw}@
+# {host}:{port}/{db}"), 各字段都有默认值 → 它**永远非空**。那个守卫是结构性的
+# 死代码, 从来没有生效过一次。于是没有 PG 的环境里, 这些用例不是「优雅跳过」而是
+# 报 `OSError: Connect call failed 127.0.0.1:5432` —— 149 个 error, 并因此被整体
+# 挂进 ci-gate-excludes.txt, 一挂几个月。
+#
+# 判据: **写「没配就跳过」的守卫时, 要确认「没配」这个状态真的表达得出来。**
+#       一个恒为真的表达式后面跟着 skip, 和没写守卫是一回事。
+#
+# 这里不改 `postgres_url` 的生产语义(它对线上是对的), 只在**测试会话开始时探一次
+# 可达性**: 连不上就把它置空, 让那 21 个守卫按作者本来的意图生效。
+# ⛔ 这不增加任何覆盖 —— 它只是把「伪装成错误的缺席」变成「如实报告的跳过」。
+#    要真正跑这些用例, 得给 CI 加 postgres service container + 应用迁移, 那是
+#    另一件事(见 ci-gate-excludes.txt ① 组)。
+def _pg_reachable(dsn: str, timeout: float = 2.0) -> bool:
+    """能不能真的**连上并查一句**, 而不是「端口上有东西在监听」。
+
+    ⚠️ 第一版这里是 socket.create_connection((host, port)) —— TCP 握手成功就算
+       可达。本机实测: 那个端口上确实有东西 accept, 但它不是一个能用的 PostgreSQL,
+       握手后立刻断 → 用例拿到的是 `ConnectionResetError: [WinError 64]` 而不是
+       「连接被拒绝」, 而我的探针早就判定「可达」并放行了。
+       判据: **判别式要验「只有真东西才有的特征」, 不能验代理指标。**
+       端口开着 ≠ 服务是它; 能跑 `SELECT 1` 才算数。
+    """
+    import asyncio
+
+    async def _probe() -> bool:
+        try:
+            import asyncpg
+        except Exception:
+            return False
+        conn = None
+        try:
+            conn = await asyncio.wait_for(asyncpg.connect(dsn), timeout=timeout)
+            await conn.fetchval("SELECT 1")
+            return True
+        except Exception:
+            return False
+        finally:
+            if conn is not None:
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
+
+    try:
+        return asyncio.run(_probe())
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _postgres_reachability_gate():
+    import pytest as _pytest
+
+    try:
+        from smartbi.config import Settings, get_settings
+    except Exception:                      # 纯离线子集, 没有 config 也不该炸
+        yield
+        return
+
+    s = get_settings()
+    if _pg_reachable(s.postgres_url):
+        yield                              # 有库 → 什么都不做, 用例照常真跑
+        return
+
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(Settings, "postgres_url", property(lambda self: ""), raising=False)
+    mp.setattr(Settings, "postgres_async_url", property(lambda self: ""), raising=False)
+    print(f"\n[conftest] PostgreSQL {s.postgres_host}:{s.postgres_port} 连不上 "
+          f"(SELECT 1 失败) —— 依赖真库的用例将按其自带守卫跳过(不是失败)")
+    try:
+        yield
+    finally:
+        mp.undo()
