@@ -760,3 +760,55 @@ def test_fallback_answer_goes_through_the_same_contract():
     # ⛔ 没过就必须回到原拒绝语，不能带着半成品往下走
     assert "generic = None" in between, (
         "兜底没过契约时没有交回原路径")
+
+
+def test_every_contract_failure_records_why():
+    """🔴 承重: 契约判失败的**每一个**出口都要记下「缺了什么」。
+
+    2026-08-10 实测: `optimize` 有 141 条契约未过，其中 **140 条没有任何理由
+    记录** —— `answered_missing` 写的是**判定模型**的结论，而契约自己算出的
+    `missing`（拒绝语里已经在用！）从来没被写进日志。
+    于是要弄清「这 141 条到底缺什么」只能翻问句原文反推。
+
+    ⛔ 判据：**闸否决了什么，就要记下它为什么否。**
+       与「6 处否决全部静默」是同一个病 —— 而且修法一样便宜。
+    ⚠️ 这条按 `contract_pass=False` 的出口**逐个**数，新增一个出口忘了传就红。
+    """
+    import io
+    import pathlib
+    import re
+
+    src = io.open(pathlib.Path(__file__).resolve().parents[1]
+                  / "restaurant" / "restaurant_intent_service.py",
+                  encoding="utf-8").read()
+    # 每个 contract_pass=False 的 capture 调用，后面 4 行内必须有 contract_missing
+    sites = [m.start() for m in re.finditer(r"contract_pass=False", src)]
+    assert sites, "找不到任何契约失败的记录点 —— 断言失去意义，请更新这条测试"
+    for pos in sites:
+        window = src[pos:pos + 260]
+        assert "contract_missing=" in window, (
+            f"有一个 contract_pass=False 的出口没记录缺什么（偏移 {pos}）—— "
+            f"⛔ 那条拒答的理由会永久丢失，只能靠翻问句原文反推")
+
+
+def test_contract_missing_is_not_the_same_as_the_judge_verdict():
+    """⚠️ `contract_missing` 与 `answered_judgment` 是两回事，别混。
+
+    · `answered_judgment` = 判定**模型**看着问句和答案说「答上了没」——
+      概率的，而且额度不够时**根本不跑**
+    · `contract_missing`  = **契约**（确定性规则）算出的「缺哪些要素」——
+      确定的，每个答案都有
+
+    ⛔ 之前只记了前者，于是契约否决的理由全丢了。
+    """
+    import io
+    import pathlib
+
+    src = io.open(pathlib.Path(__file__).resolve().parents[2]
+                  / "gold" / "restaurant" / "restaurant_intent.py",
+                  encoding="utf-8").read()
+    assert 'agg_meta["contract_missing"]' in src, "契约的 missing 没有写进 agg_meta"
+    assert 'agg_meta["answered_judgment"]' in src
+    i_judge = src.index('agg_meta["answered_judgment"]')
+    i_contract = src.index('agg_meta["contract_missing"]')
+    assert i_judge != i_contract, "两者被写成了同一个字段"

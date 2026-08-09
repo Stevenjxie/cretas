@@ -6936,6 +6936,16 @@ async def log_intent_capture(
     served: bool,
     total_wall_ms: int = 0,
     source: Optional[str] = None,
+    #: 🔴 契约判失败时**缺的是哪些要素**（`ContractResult.missing`）。
+    #:
+    #: 2026-08-10 实测: `optimize` 有 141 条契约未过, 而其中 **140 条的
+    #: `answered_missing` 是空的** —— 那个字段写的是**判定模型**的结论,
+    #: 契约自己算出来的 `missing`(拒绝语里已经在用!)**从来没被记下来**。
+    #: 于是要弄清「这 141 条到底缺什么」只能去翻问句原文反推。
+    #:
+    #: ⛔ 判据: **闸否决了什么, 就要记下来它为什么否** —— 与今天早上诊断的
+    #:    「6 处否决全部静默」是同一个病, 修法也一样便宜。
+    contract_missing: Optional[Sequence[str]] = None,
 ) -> Optional[int]:
     """Fire-and-forget capture of a parse+serve outcome, reusing the existing
     llm_fallback_logger table (no new schema). tier/confidence/contract_pass
@@ -7022,6 +7032,13 @@ async def log_intent_capture(
         # None = 判不了(模型不可用/输出不可解析)。⛔ 不能写成 false ——
         # 「判不了」不该进待办清单, 否则供应商池一干, 清单就被噪音淹掉。
         agg_meta["answered_judgment"] = judged
+        # ⚠️ 与 `answered_judgment` 是**两回事**, 别混:
+        #    answered_judgment = 判定**模型**看着问句和答案说「答上了没」
+        #    contract_missing  = **契约**(确定性规则)算出的「缺哪些要素」
+        #    前者是概率的、可能没跑(额度), 后者是确定的、每个答案都有。
+        #    ⛔ 之前只记了前者, 于是契约否决的理由全丢了。
+        if contract_missing:
+            agg_meta["contract_missing"] = sorted(set(contract_missing))
         if judged is False and judge_missing:
             agg_meta["answered_missing"] = judge_missing
 

@@ -1467,6 +1467,7 @@ async def tiered_answer(
                     pool, spec, factory_id=factory_id, query=query,
                     answer=fallback_text, contract_pass=False, served=True,
                     source=capture_source,
+                    contract_missing=contract.missing,
                 ))
                 out = {
                     "kind": "answer",
@@ -1494,6 +1495,7 @@ async def tiered_answer(
                 pool, spec, factory_id=factory_id, query=query,
                 answer=safe_text, contract_pass=False, served=False,
                 source=capture_source,
+                contract_missing=contract.missing,
             ))
             failed_result = {
                 "kind": "clarification",
