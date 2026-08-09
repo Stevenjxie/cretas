@@ -1,5 +1,7 @@
 # Dispatch 完成记录 — 2026-08-10
 
+- `UX-WEB-SMALL-SCREEN-WORKSPACES-20260810` — `review` — Owner: `/root` — Base SHA `ee0c8c9e58e9ef37d120f7910a2392596aa236c7`；Web Admin 已为 371 个标准 Dialog/Drawer 使用面建立 viewport 内壳体、正文独立滚动与页脚可达的全局小屏安全基线，并把“手动新建调拨单”从 960px 长弹窗迁移为独立 `/transfer/new` 工作区。库存上限、包装换算、重复物料拦截与原 payload 契约保持不变。目标 Vitest 28/28、`vue-tsc -b`、Vite production build、`git diff --check` 通过；Playwright 完成 1366×768、1024×768、768×768、1366×768@125% 四视口，列表往返、仓库选择/空库存提示、无文档横向溢出、主操作不被客服浮球遮挡及长 Dialog 独立滚动均通过。未改后端、数据库、权限或生产业务数据；scope 随本归档释放，PR/CI、合并、exact-main Web 部署和服务级验收由同一用户授权任务继续并分别报告。
+
 - `UX-WEB-WAREHOUSE-WORKSPACE-20260809-001` — `review` — Owner: `/root` — Base SHA `ae92496307df263ac9f26b7bb933dd317bad945a`；Web Admin 新增工厂内会话级多任务标签，支持保留页面状态、显式复制任务页签，并把任一已打开页签拖到右侧作为同源只读参考；右侧以交互遮罩阻止业务操作，不引入第二套业务数据。仓储“无订单入库申请”继续只负责申请、审批、驳回和撤回，审批通过后才进入统一“入库任务与批次”；统一页按全部任务、待收货、收货中、部分入库和已入库批次分页，前三个状态以圆形任务概览呈现，任务分类互斥且部分入库优先。销售订单、无订单入库申请、入库任务与批次三个菜单显示真实可处理数量，接口失败或结果集不完整时隐藏红点，不伪装为 0 或少算值。目标 Vitest 83/83（含既有仓储来源边界与路由契约）、`vue-tsc -b`、`git diff --check` 和本地模拟只读 Playwright 通过；浏览器证据为生命周期 `3/1/1/1/2`、菜单红点 `2/2/3`、两个工作页签及拖拽右侧参考，控制台错误与失败请求均为 0。未改 Java、Entity/Repository/Flyway/Security/Auth 或业务写服务，生产业务写入为 0；scope 随本归档释放，唯一 Web 发布构建、PR/CI、合并和 exact-main 部署由同一用户授权任务继续并分别报告。
 
 ## BUG-F006-RN-PURCHASE-SUPPLIER-SELECT-20260810
