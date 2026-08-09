@@ -456,11 +456,18 @@ class TestQuestionFamily:
 # ─── Miss capture (flywheel 盲区修补 2026-07-23) ───────────────────────────
 
 class TestAggregateMisses:
-    def _miss_row(self, query, n, reasons, spec_intents, last_seen="2026-07-23"):
+    def _miss_row(self, query, n, reasons, spec_intents, last_seen="2026-07-23",
+                  answered_missing=None, codes=None):
+        # 🔴 2026-08-09 (commit ab7e717365) aggregate_misses 的 SQL 增了两列:
+        #    判定模型说的「缺什么」+ 命中的 template_code, 映射时直接下标取值。
+        #    真 asyncpg Record 必然带这两列(SELECT 里就有), 夹具漏了会以
+        #    KeyError 的形式冒充「代码坏了」—— 加新列时这里必须跟着加。
         return {
             "norm_query": query, "occurrence_count": n,
             "reasons": reasons, "spec_intents": spec_intents,
             "last_seen": last_seen,
+            "answered_missing": answered_missing,
+            "codes": codes,
         }
 
     @pytest.mark.asyncio
@@ -482,6 +489,28 @@ class TestAggregateMisses:
         assert len(out) == 2
         assert out[0]["family"] == "write"
         assert out[1]["spec_intents"] == ["RESTAURANT_OPS_SALES_SUMMARY"]
+        # 没有判定结论时给空列表, 不是 None —— 下游按它分组。
+        assert out[0]["answered_missing"] == []
+        assert out[0]["codes"] == []
+
+    @pytest.mark.asyncio
+    async def test_maps_answered_missing_and_codes(self):
+        """「算出来了但答非所问」这一类的两列必须映射出来。
+
+        answered_missing 是判定模型说的「缺什么」, 待办清单按它分组才知道
+        要补哪个能力; codes 是命中的 template_code。两列都要滤掉 NULL ——
+        array_agg 的 FILTER 只挡住了 answered_missing 那一列, codes 没挡。
+        """
+        conn = _FakeConn(rows=[
+            self._miss_row(
+                "客单价最高的店是哪家", 2, ["answered_judgment"], None,
+                answered_missing=["按客单价排序", None],
+                codes=["RESTAURANT_OPS_SALES_SUMMARY", None],
+            ),
+        ])
+        out = await promo.aggregate_misses(_FakePool(conn))
+        assert out[0]["answered_missing"] == ["按客单价排序"]
+        assert out[0]["codes"] == ["RESTAURANT_OPS_SALES_SUMMARY"]
 
     @pytest.mark.asyncio
     async def test_fail_open_on_db_error(self):

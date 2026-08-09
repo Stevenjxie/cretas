@@ -31,6 +31,7 @@ import {
   type FgAdjustRequest,
   type FgAdjustmentReferenceType,
 } from '@/api/finishedGoods';
+import { useFinishedGoodsOwnership } from './useFinishedGoodsOwnership';
 
 const route = useRoute();
 const router = useRouter();
@@ -38,6 +39,10 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 
 const factoryId = computed(() => authStore.factoryId);
+const {
+  loadOwnerCustomers,
+  presentation: ownershipPresentation,
+} = useFinishedGoodsOwnership(factoryId);
 const batchId = computed(() => String(route.params.id || ''));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 // T126: writes need production:read_write OR sales:read_write
@@ -63,6 +68,7 @@ async function loadBatch() {
     const res = await get<TableRow>(`/${factoryId.value}/sales/finished-goods/${batchId.value}`);
     if (res.success && res.data) {
       batch.value = res.data;
+      await loadOwnerCustomers([res.data]);
       seedPriceHistory();
     } else {
       batch.value = null;
@@ -265,6 +271,11 @@ async function handleVoidBatch() {
           <el-button :icon="ArrowLeft" @click="goBack">返回</el-button>
           <h2 class="page-title">{{ batch.batchNumber || batch.id }}</h2>
           <el-tag :type="statusType(batch)" size="large">{{ statusText(batch) }}</el-tag>
+          <el-tag
+            :type="ownershipPresentation(batch).tagType"
+            size="large"
+            effect="plain"
+          >{{ ownershipPresentation(batch).ownershipLabel }}</el-tag>
         </div>
         <div class="header-actions">
           <el-button :icon="Refresh" @click="loadBatch">刷新</el-button>
@@ -290,6 +301,18 @@ async function handleVoidBatch() {
           <el-descriptions-item label="批次号">{{ batch.batchNumber || '-' }}</el-descriptions-item>
           <el-descriptions-item label="产品">
             {{ batch.productName || batch.productType?.name || batch.productTypeId || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="库存归属">
+            <el-tag
+              :type="ownershipPresentation(batch).tagType"
+              size="small"
+              effect="plain"
+            >{{ ownershipPresentation(batch).ownershipLabel }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="归属客户">
+            <span :class="{ 'owner-customer-error': ownershipPresentation(batch).tagType === 'danger' }">
+              {{ ownershipPresentation(batch).customerLabel }}
+            </span>
           </el-descriptions-item>
           <el-descriptions-item label="生产数量">
             {{ batch.producedQuantity ?? '-' }} {{ batch.unit || '' }}
@@ -479,5 +502,9 @@ async function handleVoidBatch() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.owner-customer-error {
+  color: #f56c6c;
+  font-weight: 600;
 }
 </style>

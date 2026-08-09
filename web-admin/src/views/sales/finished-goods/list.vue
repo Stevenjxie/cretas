@@ -8,7 +8,7 @@ import { get } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search, Plus } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
-import type { TableRow } from '@/types/api';
+import type { PageResponse, TableRow } from '@/types/api';
 import { RowActionMenu } from '@/components/list';
 import { computeRowActions } from '@/composables/useRowActions';
 import PriceHistoryDialog from '@/components/dialog/PriceHistoryDialog.vue';
@@ -20,12 +20,17 @@ import {
   type FgAdjustRequest,
   type FgAdjustmentReferenceType,
 } from '@/api/finishedGoods';
+import { useFinishedGoodsOwnership } from './useFinishedGoodsOwnership';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
+const {
+  loadOwnerCustomers,
+  presentation: ownershipPresentation,
+} = useFinishedGoodsOwnership(factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 // T126: writes need production:read_write OR sales:read_write
 const canEdit = computed(
@@ -462,9 +467,14 @@ async function loadData() {
     };
     const kw = searchKeyword.value.trim();
     if (kw) params.keyword = kw;
-    const res = await get(`/${factoryId.value}/sales/finished-goods`, { params });
+    const res = await get<PageResponse<TableRow>>(
+      `/${factoryId.value}/sales/finished-goods`,
+      { params },
+    );
     if (res.success && res.data) {
-      tableData.value = res.data.content || [];
+      const rows = res.data.content || [];
+      await loadOwnerCustomers(rows);
+      tableData.value = rows;
       pagination.value.total = res.data.totalElements || 0;
     } else if (res.success === false) {
       ElMessage.error(res.message || '加载成品数据失败');
@@ -550,6 +560,21 @@ function statusLabel(row: TableRow) {
         <el-table-column prop="batchNumber" label="批次号" width="170" />
         <el-table-column label="产品" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.productName || row.productType?.name || row.productTypeId || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="库存归属" min-width="230">
+          <template #default="{ row }">
+            <div class="ownership-cell">
+              <el-tag
+                :type="ownershipPresentation(row).tagType"
+                size="small"
+                effect="plain"
+              >{{ ownershipPresentation(row).ownershipLabel }}</el-tag>
+              <span
+                class="ownership-customer"
+                :class="{ 'is-error': ownershipPresentation(row).tagType === 'danger' }"
+              >{{ ownershipPresentation(row).customerLabel }}</span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="producedQuantity" label="生产数量" width="110" align="right" />
         <el-table-column prop="shippedQuantity" label="已发货" width="100" align="right" />
@@ -797,4 +822,7 @@ function statusLabel(row: TableRow) {
   }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+.ownership-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; line-height: 1.3; }
+.ownership-customer { color: #606266; white-space: normal; word-break: break-word; }
+.ownership-customer.is-error { color: #f56c6c; font-weight: 600; }
 </style>
