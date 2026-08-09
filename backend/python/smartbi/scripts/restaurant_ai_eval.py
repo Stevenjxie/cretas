@@ -501,7 +501,15 @@ def _preflight_fixture(base: str, auth: Dict[str, str]) -> List[str]:
             ("_DISH_MISSING", _DISH_MISSING, False)):
         flat = _run_case(base, auth, _rand_sid("preflight"),
                          {"q": f"本月全部门店{dish}的销量"})["flat"]
-        found = "没有找到" not in flat
+        # ⛔ 判「这道菜在不在」要看**答出来了没有**，不能看有没有出现「没有找到」。
+        #    2026-08-09 实测: 不存在的菜有两种拒答措辞 ——「没有找到名为…的菜品」
+        #    和「查询维度超出计划 resolver 的能力范围」。第一版只认前者，
+        #    于是把后者读成「这道菜存在」，飞行前核对自己报了个假红。
+        #    正确判据是正向的: 答案里以「」引出这道菜**并且**给了销量。
+        answered = (f"「{dish}」" in flat
+                    and ("销量" in flat or "营收" in flat)
+                    and "没有找到" not in flat)
+        found = answered
         if found != want_found:
             problems.append(
                 f"{label}=「{dish}」应当{'存在' if want_found else '**不存在**'}"
