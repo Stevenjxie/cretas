@@ -3,7 +3,6 @@ import { computed } from 'vue';
 import { Loading } from '@element-plus/icons-vue';
 import type { WorkflowNode as WorkflowNodeData } from '@/types/workflow';
 import WorkflowNode from './WorkflowNode.vue';
-import { workflowColors } from './tokens';
 
 const props = withDefaults(
   defineProps<{
@@ -21,7 +20,7 @@ const props = withDefaults(
     loading: false,
     emptyHint: '暂无工作流数据',
     aiTriggerEnabled: false,
- aiTriggerLabel: ' 跟 AI 说',
+    aiTriggerLabel: '跟 AI 说',
   },
 );
 
@@ -35,7 +34,6 @@ const isVertical = computed(() => props.orientation === 'vertical');
 const showHeader = computed(
   () => Boolean(props.title) || props.aiTriggerEnabled,
 );
-const connectorColor = computed(() => workflowColors.connector);
 </script>
 
 <template>
@@ -67,21 +65,12 @@ const connectorColor = computed(() => workflowColors.connector);
       class="workflow-bar-nodes"
       :class="{ vertical: isVertical }"
     >
-      <template v-for="(node, idx) in nodes" :key="node.id">
+      <template v-for="node in nodes" :key="node.id">
         <WorkflowNode
           :node="node"
           @click="emit('node-click', $event)"
           @long-press="emit('node-long-press', $event)"
         />
-        <span
-          v-if="idx < nodes.length - 1"
-          class="connector"
-          :class="{ vertical: isVertical }"
-          :style="{ color: connectorColor }"
-          aria-hidden="true"
-        >
-          {{ isVertical ? '↓' : '→' }}
-        </span>
       </template>
     </div>
   </section>
@@ -91,9 +80,8 @@ const connectorColor = computed(() => workflowColors.connector);
 .workflow-bar {
   background: var(--el-bg-color, #ffffff);
   border: 1px solid var(--el-border-color-lighter, #e5e7eb);
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  border-radius: 10px;
+  padding: 12px;
   margin-bottom: 12px;
 }
 
@@ -101,12 +89,12 @@ const connectorColor = computed(() => workflowColors.connector);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .workflow-bar-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary, #1f2937);
   line-height: 1.4;
@@ -116,8 +104,8 @@ const connectorColor = computed(() => workflowColors.connector);
   background: var(--el-color-primary-light-9, #e6f7ff);
   color: var(--el-color-primary-dark-2, #0050b3);
   border: 1px solid var(--el-color-primary, #1890ff);
-  border-radius: 999px;
-  padding: 4px 12px;
+  border-radius: 6px;
+  padding: 5px 10px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -137,35 +125,18 @@ const connectorColor = computed(() => workflowColors.connector);
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 24px 0;
+  padding: 14px 0;
   color: var(--el-text-color-secondary, #6b7280);
   font-size: 13px;
 }
 
 .workflow-bar-nodes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  gap: 8px;
 }
 
 .workflow-bar-nodes.vertical {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-.connector {
-  display: inline-flex;
-  align-items: center;
-  font-size: 18px;
-  line-height: 1;
-  user-select: none;
-  min-width: 24px;
-  justify-content: center;
-}
-
-.connector.vertical {
-  width: 100%;
-  justify-content: center;
+  grid-template-columns: 1fr;
 }
 </style>
