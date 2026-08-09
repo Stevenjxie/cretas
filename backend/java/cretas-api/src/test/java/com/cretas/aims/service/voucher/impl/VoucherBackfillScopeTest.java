@@ -1,4 +1,4 @@
-package com.cretas.aims.service.voucher;
+package com.cretas.aims.service.voucher.impl;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -86,6 +87,79 @@ class VoucherBackfillScopeTest {
                 "每单必须独立事务, 否则一单违约会把整批 DB 会话打成 aborted");
         assertFalse(src.substring(Math.max(0, m - 200), m).contains("@Transactional"),
                 "batchCreateForFactory 不该再挂整批 @Transactional");
+    }
+
+    // ==================== 其余 4 支: 范围必须与各自 listener 的生成条件一致 ====================
+
+    private String branchOf(String caseName, String nextCase) throws IOException {
+        Path p = Path.of("src/main/java/com/cretas/aims/service/voucher/impl/VoucherServiceImpl.java");
+        String src = Files.readString(p, StandardCharsets.UTF_8);
+        int m = src.indexOf("private List<String> findUncreatedIds(");
+        assertTrue(m > 0, "找不到 findUncreatedIds");
+        int i = src.indexOf("case \"" + caseName + "\":", m);
+        assertTrue(i > 0, "找不到分支 " + caseName);
+        int e = src.indexOf("case \"" + nextCase + "\":", i);
+        assertTrue(e > i, "定位不到 " + caseName + " 分支结尾");
+        return src.substring(i, e);
+    }
+
+    @Test
+    @DisplayName("销售 — 只补已过财审的 (listener 挂在 SalesOrderFinanceApprovedEvent)")
+    void salesOnlyFinanceApproved() throws IOException {
+        assertTrue(branchOf("SALES_ORDER", "PURCHASE_ORDER").contains("isBookableSalesStatus"),
+                "销售单必须按「已过财审」过滤, 否则给草稿/已取消的单子补出幽灵应收");
+    }
+
+    @Test
+    @DisplayName("采购 — 只补收过货的 (listener 挂在 PurchaseReceiveConfirmedEvent)")
+    void purchaseOnlyReceived() throws IOException {
+        assertTrue(branchOf("PURCHASE_ORDER", "RETURN_ORDER").contains("isBookablePurchaseStatus"),
+                "采购单必须按「已收货」过滤: 货没到就补 = 幽灵应付");
+    }
+
+    @Test
+    @DisplayName("退货 — 排除已驳回 (驳回时另有 listener 作废凭证, 补回来等于对着干)")
+    void returnExcludesRejected() throws IOException {
+        assertTrue(branchOf("RETURN_ORDER", "INTERNAL_TRANSFER").contains("ReturnOrderStatus.REJECTED"),
+                "退货单必须排除 REJECTED");
+    }
+
+    @Test
+    @DisplayName("报损 — 只补已审批的 (无 listener, 补是唯一路径)")
+    void wastageOnlyApproved() throws IOException {
+        assertTrue(branchOf("WASTAGE_RECORD", "PAYROLL_RECORD").contains("Status.APPROVED"),
+                "报损必须只补 APPROVED: 草稿/被驳回的损耗不是损失");
+    }
+
+    @Test
+    @DisplayName("可入账状态的判定表 — 逐个状态钉死, 不靠「除了几个都算」")
+    void bookableStatusTables() {
+        // 销售: 财审通过之后才算
+        for (com.cretas.aims.entity.enums.SalesOrderStatus s
+                : com.cretas.aims.entity.enums.SalesOrderStatus.values()) {
+            boolean expected = s.name().equals("FINANCE_APPROVED") || s.name().equals("PROCESSING")
+                    || s.name().equals("PARTIAL_DELIVERED") || s.name().equals("COMPLETED");
+            assertEquals(expected, svc().isBookableSalesStatus(s),
+                    "销售状态 " + s + " 的可入账判定与预期不符");
+        }
+        // 采购: 收过货才算
+        for (com.cretas.aims.entity.enums.PurchaseOrderStatus s
+                : com.cretas.aims.entity.enums.PurchaseOrderStatus.values()) {
+            boolean expected = s.name().equals("PARTIAL_RECEIVED") || s.name().equals("COMPLETED")
+                    || s.name().equals("CLOSED");
+            assertEquals(expected, svc().isBookablePurchaseStatus(s),
+                    "采购状态 " + s + " 的可入账判定与预期不符");
+        }
+    }
+
+    /**
+     * 直接构造被测实例调【生产方法】—— 2026-08-10 实测: 最初这条断言拿测试里自己抄的一份
+     * Set 跟测试里自己的 expected 比, 是个恒真式; 把 CANCELLED 加进生产方法的可入账集合,
+     * 这条依然通过。变异救了它。判定表必须问生产代码, 不能问自己。
+     */
+    private VoucherServiceImpl svc() {
+        return new VoucherServiceImpl(null, null, null, null,
+                null, null, null, null, null, null, null);
     }
 
     @Test
