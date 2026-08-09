@@ -292,75 +292,89 @@ class Dimension:
     #:       (按门店分组、求明细数量之和), 分组列在 t 上、粒度却可以是 item。
     #:    ⇒ 维度该声明的是**最低要求**, 不是「粒度」。粒度是两边取更细的那个。
     min_grain: Optional[str] = None
+    #: 🔴 **给规划器看的一句话**: 什么样的问题该按这个维度分组。
+    #: ⛔ 与 `Aggregation.asks` 同一条纪律: prompt 由它渲染, 空着 = 登记了一个
+    #:    规划器永远指不到的维度。`assert_registry_self_consistent` 会红。
+    asks: str = ""
 
 
 DIMENSIONS: Dict[str, Dimension] = {
-    "all": Dimension("all", "全店", None, None),
+    "all": Dimension("all", "全店", None, None, asks="不分组, 要整体合计"),
     "store": Dimension(
-        "store", "门店", "t.store_id", "s.name",
+        "store", "门店", "t.store_id", "s.name", asks="按门店/分店/哪家店分",
         join="LEFT JOIN dim_store s ON s.store_id = t.store_id "
              "AND s.factory_id = t.factory_id",
     ),
     "product": Dimension(
         # 分组列在明细表上 → 必须拉到明细粒度
         "product", "菜品", "i.product_id", "p.name", min_grain="item",
+        asks="按菜品/菜/单品分",
         join="LEFT JOIN dim_product p ON p.product_id = i.product_id "
              "AND p.factory_id = i.factory_id",
     ),
-    "channel": Dimension("channel", "渠道", "t.order_type", "t.order_type"),
+    "channel": Dimension("channel", "渠道", "t.order_type", "t.order_type",
+                         asks="按渠道分: 堂食/外卖/团购"),
     # ── 订单表上直接带的分组列 ────────────────────────────────────────────
     "staff": Dimension(
-        "staff", "员工", "t.staff_id", "st.name",
+        "staff", "员工", "t.staff_id", "st.name", asks="按**某个具体员工个人**分; ⛔ 问「各岗位/工种/职位」时不要用它 —— 系统没有岗位维度, 这时 dimensions 留空",
         join="LEFT JOIN dim_staff st ON st.staff_id = t.staff_id "
              "AND st.factory_id = t.factory_id",
     ),
-    "meal_period": Dimension("meal_period", "餐段", "t.meal_period", "t.meal_period"),
+    "meal_period": Dimension("meal_period", "餐段", "t.meal_period", "t.meal_period",
+                             asks="按餐段分: 午市/晚市/夜宵"),
     # ⚠️ MOCK_REST 上 `table_no` 实测**全为 NULL**。照样登记 ——
     #    客户接上台位数据这个格子就点亮；在此之前叙述层显示「未填写」，
     #    ⛔ 不编一个 0 也不假装这个维度不存在。
-    "table": Dimension("table", "台位", "t.table_no", "t.table_no"),
+    "table": Dimension("table", "台位", "t.table_no", "t.table_no",
+                       asks="按台位/桌号分"),
     # ── 时间维度：同一列的三种切法，各答一类问题 ──────────────────────────
     #    日期→「这个月每天怎么走」 星期→「周末比平日好多少」 时段→「哪个钟点最忙」
-    "date": Dimension("date", "日期", "t.date", "t.date"),
+    "date": Dimension("date", "日期", "t.date", "t.date",
+                      asks="按天分, 看每天的情况"),
     "weekday": Dimension(
         "weekday", "星期", "EXTRACT(ISODOW FROM t.date)",
         "CASE EXTRACT(ISODOW FROM t.date) WHEN 1 THEN '周一' WHEN 2 THEN '周二' "
         "WHEN 3 THEN '周三' WHEN 4 THEN '周四' WHEN 5 THEN '周五' "
         "WHEN 6 THEN '周六' ELSE '周日' END",
+        asks="按星期几分, 比周末和平日",
     ),
     "hour": Dimension(
         "hour", "时段", "EXTRACT(HOUR FROM t.time)",
         "EXTRACT(HOUR FROM t.time) || ':00'",
+        asks="按**小时**分(几点钟, 如 12:00/18:00); ⛔ 问餐段(午市/晚市)用 meal_period",
     ),
     # ── 门店属性：与「门店」同一张 dim 表，但答的是不同问题 ────────────────
     "city": Dimension(
-        "city", "城市", "s.city", "s.city",
+        "city", "城市", "s.city", "s.city", asks="按城市分",
         join="LEFT JOIN dim_store s ON s.store_id = t.store_id "
              "AND s.factory_id = t.factory_id",
     ),
     "brand": Dimension(
-        "brand", "品牌", "s.brand", "s.brand",
+        "brand", "品牌", "s.brand", "s.brand", asks="按品牌分",
         join="LEFT JOIN dim_store s ON s.store_id = t.store_id "
              "AND s.factory_id = t.factory_id",
     ),
     # ── 菜品属性 ──────────────────────────────────────────────────────────
     "category": Dimension(
         "category", "菜品类别", "p.category", "p.category", min_grain="item",
+        asks="按菜品类别分: 热菜/凉菜/主食/饮品",
         join="LEFT JOIN dim_product p ON p.product_id = i.product_id "
              "AND p.factory_id = i.factory_id",
     ),
     # ── 损耗链的三个维度 —— 它们只在 wastage 粒度上成立 ────────────────────
     "ingredient": Dimension(
         "ingredient", "食材", "w.ingredient_id", "ing.name", min_grain="wastage",
+        asks="按食材/原料分",
         join="LEFT JOIN dim_ingredient ing ON ing.ingredient_id = w.ingredient_id "
              "AND ing.factory_id = w.factory_id",
     ),
     "wastage_type": Dimension(
         "wastage_type", "损耗类型", "w.wastage_type", "w.wastage_type",
-        min_grain="wastage",
+        min_grain="wastage", asks="按损耗类型分",
     ),
     "wastage_reason": Dimension(
         "wastage_reason", "损耗原因", "w.reason", "w.reason", min_grain="wastage",
+        asks="按损耗原因分",
     ),
 }
 
@@ -480,6 +494,9 @@ def assert_registry_self_consistent() -> None:
         #    `GROUP BY` 少一列的 SQL —— PG 会直接报错, 但那是运行时才发现。
         assert (d.group_expr is None) == (d.label_expr is None), (
             f"维度 {d.key} 的分组列与展示名只声明了一个")
+        assert d.asks, (
+            f"维度 {d.key} 没写 `asks`(什么样的问题该按它分组) —— "
+            f"规划器 prompt 由它渲染, 空着等于登记了一个永远指不到的维度")
         if d.min_grain is not None:
             assert d.min_grain in GRAINS, (
                 f"维度 {d.key} 要求了未登记的粒度 {d.min_grain}")
@@ -521,6 +538,47 @@ def render_aggregation_vocabulary() -> str:
     """
     parts = [f"{a.key}({a.label}, {a.asks})" for a in AGGREGATIONS.values()]
     return "、".join(parts)
+
+
+#: 登记表的键 → **管线内部**使用的维度名。
+#:
+#: 🔴 方向是这样定的, 不是反过来: 管线里有 **8 处以上**消费者直接写着
+#:    `"dish" in dimensions` / `"time" in dimensions`(契约要素、门店×菜品组合、
+#:    时间对比剥离、resolver 能力表、已晋升的整句路由、计划缓存……)。
+#:    登记表是后来的, 让**新写法归一到旧写法**只动一处; 反过来要改 8 处,
+#:    而漏掉任何一处的症状是「那条路径悄悄按旧写法比对, 比不上就拒答」——
+#:    2026-08-09 实测正是如此:「本月米饭的销量」被判成「查询维度超出能力范围」。
+#: ⚠️ 新增的维度(staff/weekday/hour/…)没有旧写法, **原样通过**。
+#: ⛔ prompt 里只给一套写法(登记表的键)。告诉模型「两种都接受」的后果是
+#:    它**两个都写** —— 实测 `dimensions=('product','dish')`, 直接击穿
+#:    resolver 能力的子集判断。给两套写法 = 邀请模型输出两套。
+_REGISTRY_TO_PIPELINE_DIMENSION: Dict[str, str] = {
+    "product": "dish",
+    "date": "time",
+}
+
+
+def canonical_dimensions(names) -> Tuple[str, ...]:
+    """把维度名归一到**管线内部**的写法, 去重且保序。
+
+    ⛔ 认不出的原样保留, 不丢弃 —— 丢弃会让「customer」这种没登记的维度悄悄
+       消失, 而它本该让下游如实说「这项分析做不了」。
+    """
+    out: list = []
+    for n in names or ():
+        k = _REGISTRY_TO_PIPELINE_DIMENSION.get(n, n)
+        if k not in out:
+            out.append(k)
+    return tuple(out)
+
+
+def render_dimension_vocabulary() -> str:
+    """给规划器 prompt 用的维度可选值 —— **唯一来源是本登记表**。
+
+    与 `render_aggregation_vocabulary` 同一条纪律。2026-08-09 实测: 手写的
+    6 个维度对 16 个已登记维度, 10 个规划器永远指不到。
+    """
+    return "、".join(f"{d.key}({d.label}, {d.asks})" for d in DIMENSIONS.values())
 
 
 def registry_size() -> Dict[str, int]:

@@ -51,14 +51,22 @@ _SPEC_METRIC_TO_KEY: Dict[str, str] = {
 #: 规划器的维度枚举只有 `_SEMANTIC_DIMENSIONS` 六个。
 #: ⚠️ `customer` 没有对应的登记维度 —— 不映射，让它走原路径，
 #:    ⛔ 别用「门店」之类近似的顶上去。
-_SPEC_DIMENSION_TO_KEY: Dict[str, str] = {
-    "store": "store",
+#: ⛔ 只登记**别名**。登记表里已有的键(store/product/channel/staff/weekday/…)
+#:    走同名直通, 不在这里重复列一遍 —— 列了就是第二份清单, 登记表加一行时
+#:    两处必然漂移(而漂移的方向是「新维度悄悄指不到」, 完全不报错)。
+#: ⚠️ 别名存在的理由是**历史**: 计划缓存和已晋升的整句路由里存着 dish/time。
+_SPEC_DIMENSION_ALIASES: Dict[str, str] = {
     "dish": "product",
-    "product": "product",
-    "channel": "channel",
-    "ingredient": "ingredient",
     "time": "date",
+    # `customer` 没有对应的登记维度 —— 故意不映射, 让它走原路径如实说没有,
+    # ⛔ 别用「门店」之类近似的顶上去。
 }
+
+
+def _dimension_key(name: str) -> Optional[str]:
+    """规格里的维度名 → 登记表的维度 key。认不出返回 None(⛔ 不猜)。"""
+    mapped = _SPEC_DIMENSION_ALIASES.get(name, name)
+    return mapped if mapped in DIMENSIONS else None
 
 
 def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
@@ -85,8 +93,8 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
     dims = list(getattr(spec, "dimensions", ()) or ())
     dim_key: str = "all"
     for d in dims:
-        mapped = _SPEC_DIMENSION_TO_KEY.get(d)
-        if mapped is not None and mapped in DIMENSIONS:
+        mapped = _dimension_key(d)
+        if mapped is not None:
             dim_key = mapped
             break
 

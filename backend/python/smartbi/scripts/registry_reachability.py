@@ -26,6 +26,7 @@ from typing import Any, Optional, Sequence, Set, Tuple
 from smartbi.gold.restaurant.generic_answer import spec_to_cell
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
+    canonical_dimensions,
     DERIVED,
     DIMENSIONS,
     METRICS,
@@ -80,9 +81,11 @@ def reachable_cells() -> Set[Tuple[str, str, str]]:
         v["metrics"], list(v["dimensions"]) + [None],
         v["actions"], v["directions"], v["aggregations"],
     ):
+        # ⛔ 必须**跟真实管线一样先归一**: 规格入口会把 product→dish、date→time。
+        #    不归一就是在量一个系统实际不做的动作 —— 这个闸就成了自说自话。
         cell = spec_to_cell(_ProbeSpec(
             requested_metrics=(metric,),
-            dimensions=(dim,) if dim else (),
+            dimensions=canonical_dimensions((dim,)) if dim else (),
             analysis_action=action,
             ranking_direction=direction,
             aggregation=agg,

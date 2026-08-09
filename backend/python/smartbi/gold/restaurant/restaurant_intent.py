@@ -35,6 +35,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS as _AGGREGATIONS,
     render_aggregation_vocabulary as _render_aggregation_vocabulary,
+    DIMENSIONS as _REG_DIMENSIONS,
+    render_dimension_vocabulary as _render_dimension_vocabulary,
+    canonical_dimensions as _canonical_dimensions,
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _KITCHEN_OPS_NOUNS,
@@ -918,7 +921,12 @@ def _is_food_cost_ratio_query(text: str) -> bool:
 
 
 _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
-_SEMANTIC_DIMENSIONS = frozenset({"store", "dish", "ingredient", "channel", "customer", "time"})
+#: 规划器**允许产出**的维度取值域 = 登记表的键 ∪ 旧别名。
+#: ⛔ 旧别名(dish/time/customer)必须保留: 计划缓存和已晋升的整句路由里存着
+#:    它们, 去掉会让那些旧计划回放时校验失败 —— 而失败是静默的(整条规格作废)。
+#: ⛔ 不手写新维度: 它们从 `_REG_DIMENSIONS` 来, 登记表加一行这里自动跟上。
+_SEMANTIC_DIMENSIONS = frozenset(_REG_DIMENSIONS) | frozenset(
+    {"dish", "time", "customer"})
 _SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
 _SEMANTIC_METRICS = frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
 
@@ -2212,7 +2220,13 @@ def _build_spec(
         and not _asks_store_breakdown(effective_query)
     ):
         dimension_list.remove("store")
-    dimensions = tuple(dimension_list)
+    # 🔴 归一必须在**这里**, 不能等到构造 spec 的那一行 —— 下面的契约修复、
+    #    门店×菜品组合判断、时间对比剥离全都直接读这个局部变量。
+    #    2026-08-09 实测: 归一放在末尾时, 契约修复看到的仍是 ('product','dish'),
+    #    与 resolver 声明的 ['dish','time'] 比不上 → 修复被跳过 → 停在错的
+    #    resolver 上 → 「本月米饭的销量」答成「问题对象与分析范围不一致」。
+    #    ⛔ 判据: 归一要放在**第一个消费者之前**, 不是放在出口。
+    dimensions = _canonical_dimensions(tuple(dimension_list))
     comparison = sales_spec.comparison_kind or _detect_comparison(effective_query)
     if comparison and "time" in dimensions:
         # Two explicit windows are immutable filters/baselines, not a request
@@ -5037,7 +5051,9 @@ def _build_t3_prompt(
         "4. requested_metrics 只能使用 net_profit、table_turnover、recipe_cost、wastage、"
         "sales_volume、gross_margin、revenue、orders、staffing、return_rate、"
         "customer_review、production_time、service_speed、process_bottleneck；"
-        "dimensions 只能使用 store、dish、ingredient、channel、customer、time。"
+        # ⛔ 维度可选值由 `render_dimension_vocabulary()` 渲染, 不在这里手写。
+        "dimensions 只能使用: " + _render_dimension_vocabulary() + "。"
+        "每个维度只写一次, ⛔ 不要同时写同义的两个(例如 product 和 dish 只写 product)。"
         "requested_metrics 只列用户原话明确要求的指标；“生意怎么样/经营情况如何”这种"
         "概览问题不要自行填入 revenue、orders 或 sales_volume，resolver 会返回概览默认项。\n"
         # ⛔ 这一行的可选值由 `metric_registry.render_aggregation_vocabulary()` 渲染,

@@ -314,3 +314,166 @@ def test_aggregation_slot_is_purely_additive():
     for spec, expected in cases:
         assert getattr(spec, "aggregation", None) is None
         assert spec_to_cell(spec) == expected, f"未填槽时行为变了: {spec}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 批 2 · 维度 —— 同一条纪律: prompt 的可选值只能从登记表渲染
+# ═══════════════════════════════════════════════════════════════════════════
+def test_prompt_renders_every_registered_dimension():
+    """🔴 承重: 登记表里的每个维度都必须进 prompt, ⛔ 不许手写第二份清单。
+
+    2026-08-09 实测: 手写的 6 个维度对 16 个已登记维度 —— 员工/餐段/星期/
+    时段/台位/城市/品牌/菜品类别/损耗类型/损耗原因 这 10 个**规划器永远指不到**。
+    """
+    from smartbi.gold.restaurant.metric_registry import DIMENSIONS
+    from smartbi.gold.restaurant.restaurant_intent import _build_t3_prompt
+
+    prompt = _build_t3_prompt("本月营收多少", None, None, ("模拟·静安嘉里中心店",), None)
+    for key, dim in DIMENSIONS.items():
+        assert key in prompt, f"维度「{key}」登记了但没进 prompt —— 规划器指不到它"
+        assert dim.asks in prompt, f"维度「{key}」的用法说明没进 prompt"
+
+
+def test_planner_dimension_domain_follows_the_registry():
+    """规划器允许产出的维度 = 登记表的键 ∪ 旧别名。
+
+    ⛔ 登记表加一行, 这里要自动跟上 —— 手写就会漂移, 而漂移的方向是
+       「新维度悄悄指不到」, 完全不报错。
+    """
+    from smartbi.gold.restaurant.metric_registry import DIMENSIONS
+    from smartbi.gold.restaurant.restaurant_intent import _SEMANTIC_DIMENSIONS
+
+    missing = set(DIMENSIONS) - set(_SEMANTIC_DIMENSIONS)
+    assert not missing, f"这些已登记维度不在规划器取值域里: {sorted(missing)}"
+    for legacy in ("dish", "time"):
+        assert legacy in _SEMANTIC_DIMENSIONS, (
+            f"旧别名 {legacy} 被去掉了 —— 计划缓存和已晋升路由里存着它, "
+            f"去掉会让旧计划回放时**静默**校验失败")
+
+
+def test_new_dimensions_reach_their_cells_without_a_second_list():
+    """新维度靠**同名直通**接上, ⛔ 不在对照表里重复列一遍。"""
+    for dim in ("staff", "weekday", "hour", "meal_period", "category", "city"):
+        spec = _Spec(requested_metrics=("revenue",), dimensions=(dim,),
+                     ranking_direction="best")
+        assert spec_to_cell(spec) == ("revenue", dim, "rank"), (
+            f"维度 {dim} 没接上 —— 登记了但翻译不出来")
+
+
+def test_legacy_dimension_aliases_still_resolve():
+    """dish→菜品 / time→日期: 旧计划回放时必须照旧成立。"""
+    assert spec_to_cell(_Spec(requested_metrics=("revenue",), dimensions=("dish",),
+                              ranking_direction="best")) == ("revenue", "product", "rank")
+    assert spec_to_cell(_Spec(requested_metrics=("revenue",),
+                              dimensions=("time",))) == ("revenue", "date", "trend")
+
+
+def test_customer_dimension_is_deliberately_unmapped():
+    """⛔ `customer` 没有对应的登记维度 —— 走原路径如实说没有,
+    绝不用「门店」之类近似的顶上去。"""
+    spec = _Spec(requested_metrics=("revenue",), dimensions=("customer",),
+                 ranking_direction="best")
+    assert spec_to_cell(spec) == ("revenue", "all", "summary")
+
+
+def test_generic_fallback_only_runs_when_the_contract_failed():
+    """🔴 承重: 兜底只在**契约判失败**的分支里跑。
+
+    契约通过时它一行都不能执行 —— 否则通用执行器会接管现有能答对的问句,
+    而那些问句的数字会悄悄换成另一套口径(同一个问题两个数)。
+
+    ⚠️ 这条是**源码扫描**而不是行为断言: 跑一次 `tiered_answer` 要真库 + 真模型,
+       而这条约束是**结构性**的, 结构错了行为测试也未必每次都露出来。
+    """
+    import io
+    import pathlib
+
+    src = io.open(pathlib.Path(__file__).resolve().parents[1]
+                  / "restaurant" / "restaurant_intent_service.py",
+                  encoding="utf-8").read()
+    guard = "if not contract.passed or not displayable:"
+    hook = "try_generic_answer"
+    assert guard in src, "契约失败分支的判断条件被改了"
+    assert hook in src, "兜底没接上"
+    i_guard, i_hook = src.index(guard), src.index(hook)
+    assert i_guard < i_hook, "🔴 兜底跑到了契约判断之前 —— 会接管现有正确答案"
+    between = src[i_guard:i_hook]
+    assert "\n        if " not in between and "\n    if " not in between, (
+        "🔴 契约判断与兜底之间插进了别的分支 —— 兜底可能在契约通过时也执行")
+    # ⛔ 兜底只在**它真答出来了**的时候接管; 答不出来必须继续走原样的拒绝语。
+    assert 'generic.get("served")' in src, (
+        "兜底没有检查是否真的答出来 —— 会把空结果当成答案返回")
+
+
+#: 规划器能产出、但**没有任何手写 resolver 声明**的维度。
+#: 落在这里的问句会被判成「查询维度超出计划 resolver 的能力范围」而拒答 ——
+#: 在批 4 把路由倒过来之前, 这是**已知且可接受**的行为(拒答比编一个数好)。
+#: ⛔ 但必须显式登记在这里: 新放开一个维度而不做决定, 症状是「本来能答的问句
+#:    悄悄变成拒答」, 从通过率上看像模型退化。2026-08-09 实测: 放开 meal_period
+#:    当天,「下个月各店人效安排」就这么挂了 —— 而那个 resolver **本来就按餐段出数**,
+#:    只是能力表里没这个名字。
+_DIMENSIONS_NO_RESOLVER_SERVES = {
+    "brand", "category", "city", "hour", "table", "weekday",
+    "wastage_reason", "wastage_type", "staff", "all",
+}
+
+
+def test_every_new_dimension_has_an_explicit_decision():
+    """🔴 承重: 放开一个维度必须做一次决定 —— 要么某个 resolver 真能出它
+    (补进能力表), 要么明确接受它会拒答(登记进上面这张表)。
+
+    ⛔ 不做决定的后果是**静默**的: 规划器开始给问句打这个标签, 而没有 resolver
+       声明它, 于是本来能答的问句变成「查询维度超出能力范围」。
+    """
+    from smartbi.gold.restaurant.metric_registry import DIMENSIONS, canonical_dimensions
+    from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
+
+    declared = set()
+    for dims in _RESOLVER_DIMENSIONS.values():
+        declared |= set(canonical_dimensions(sorted(dims)))
+    unserved = {d for d in DIMENSIONS
+                if not set(canonical_dimensions((d,))) & declared}
+    undecided = unserved - _DIMENSIONS_NO_RESOLVER_SERVES
+    assert not undecided, (
+        f"这些维度放开了但没有任何 resolver 声明, 也没登记进「已知会拒答」名单: "
+        f"{sorted(undecided)} —— 请二选一: 补进 _RESOLVER_DIMENSIONS(它真能出), "
+        f"或加进 _DIMENSIONS_NO_RESOLVER_SERVES(接受它拒答)")
+    stale = _DIMENSIONS_NO_RESOLVER_SERVES - unserved - set()
+    assert not stale, (
+        f"这些维度已经有 resolver 服务了, 该从「已知会拒答」名单里去掉: {sorted(stale)}")
+
+
+def test_dimension_normalization_happens_before_its_first_consumer():
+    """🔴 承重: 维度归一必须在 `_build_spec` 里**第一个消费者之前**。
+
+    2026-08-09 实测的代价: 第一版把归一放在构造 spec 的那一行(出口), 而契约修复、
+    意图规划、时间对比剥离都在它**之前**读那个局部变量 —— 它们看到的仍是
+    `('product','dish')`, 与 resolver 声明的 `['dish','time']` 比不上 →
+    修复被跳过 → 停在错的 resolver 上 →「本月米饭的销量」答成
+    「问题对象与分析范围不一致」。整个回归电池连飞行前检查都过不去。
+
+    ⚠️ 这条是**源码顺序**断言, 且只在 `_build_spec` 的函数体内比 ——
+       第一版拿整份源码比偏移, 把另一个函数的**定义**位置当成了消费点, 自己红了。
+       行为测试测不到「哪一行在哪一行前面」, 但比错范围一样得不到有效信号。
+    """
+    import io as _io
+    import pathlib as _pathlib
+
+    src = _io.open(_pathlib.Path(__file__).resolve().parents[1]
+                   / "restaurant" / "restaurant_intent.py", encoding="utf-8").read()
+    start = src.index("def _build_spec(")
+    end = src.index(chr(10) + "def ", start + 10)
+    body = src[start:end]
+
+    norm = "dimensions = _canonical_dimensions(tuple(dimension_list))"
+    assert norm in body, "维度归一不在 `_build_spec` 里 —— 新写法会直接漏进管线"
+    i_norm = body.index(norm)
+    for consumer, why in (
+        ("_plan_requested_intents(", "意图规划(内部按 dish/time 比对)"),
+        ('if comparison and "time" in dimensions:', "时间对比剥离"),
+        ("_RESOLVER_DIMENSIONS", "契约修复的 resolver 能力比对"),
+    ):
+        assert consumer in body, f"消费者不见了({why}) —— 请更新这条测试, 别直接删断言"
+        assert i_norm < body.index(consumer), (
+            f"🔴 归一排在「{why}」之后 —— 那个消费者会读到未归一的写法, "
+            f"比对失败后**静默**走进拒答")
