@@ -267,6 +267,93 @@ class ProductProcessWorkflowConfigToolWriteTest {
     }
 
     @Test
+    @DisplayName("🔴 承重: 提交别的产品的图 -> 拒, ⛔ 不许给那个产品新建一张别人的草稿")
+    void graphFromAnotherProductIsRejected() throws Exception {
+        // 决定「覆写哪张画布」的 productTypeId 来自 AI 可控的 definition, 而 context 里
+        // 没有 productTypeId 可比对。模型把它填成同厂另一个产品时, requireWorkflowOwner
+        // 会放行(那确实是本厂产品) -> 给【那个】产品新建一张内容是【别人】的草稿。
+        //
+        // ⚠️ 这个洞只在【新建草稿】那一支: 目标产品已有草稿时 assertCurrentVersion 会 409。
+        // 判据: 图的身份来自【节点 id】—— 节点 id 跟着图走, 别的产品的图一个都对不上。
+        ProductProcessWorkflowDTO otherProduct = objectMapper.convertValue(
+                definitionWithOtherNodeIds(), ProductProcessWorkflowDTO.class);
+        when(workflowService.getEditorDefinition("F006", "PT-001"))
+                .thenReturn(java.util.Optional.of(otherProduct));
+
+        Map<String, Object> envelope = execute(
+                Map.of("factoryId", "F006"), definitionWithOwner("PT-001", 3L));
+
+        assertEquals(Boolean.FALSE, envelope.get("success"));
+        assertEquals("WORKFLOW_OWNER_MISMATCH", envelope.get("errorCode"));
+        verify(workflowService, never()).saveDraft(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("库里还没有图(新产品第一张草稿) -> 放行, ⛔ 别把闸做成「新产品永远建不了」")
+    void firstDraftOfBrandNewProductIsAllowed() throws Exception {
+        ProductProcessWorkflowDTO saved = new ProductProcessWorkflowDTO();
+        saved.setStatus("DRAFT");
+        saved.setLockVersion(1L);
+        when(workflowService.getEditorDefinition(any(), any())).thenReturn(java.util.Optional.empty());
+        when(workflowService.saveDraft(any(), any(), any())).thenReturn(saved);
+
+        Map<String, Object> envelope = execute(
+                Map.of("factoryId", "F006"), definitionWithOwner("PT-NEW", 3L));
+
+        assertTrue((Boolean) envelope.get("success"));
+        verify(workflowService).saveDraft(eq("F006"), eq("PT-NEW"), any());
+    }
+
+    @Test
+    @DisplayName("🔴 承重: 每一条【明确拒绝】都要带 status=DECLINED —— 否则网关记成疑似写入")
+    void everyDeclineCarriesTheDeclinedStatusForTheGateway() throws Exception {
+        // 网关(DefaultToolExecutionGateway)对 success:false 只认两种干净失败:
+        // NEED_MORE_INFO 与 DECLINED。不带 status 的一律 -> OUTCOME_UNKNOWN,
+        // 台账记 IN_DOUBT 且【payload 被清空】—— 于是「涉及克数只能预览」这句话
+        // 传不到用户那里, 用户看到的是「执行结果需要人工对账」。
+        // 一个结构上【确定没有写入】的拒绝, 被记成需要人工对账的脏账。
+
+        // (a) 开关关着
+        ToolExecutor disabled = new ProductProcessWorkflowConfigTool(
+                objectMapper, new ProductProcessWorkflowValidator(), workflowService, false);
+        assertEquals("DECLINED", declineStatus(disabled, definitionWithOwner("PT-001", 3L)));
+
+        // (b) 克数补丁
+        String bomArgs = objectMapper.writeValueAsString(Map.of(
+                "definition", definitionWithOwner("PT-001", 3L),
+                "patches", List.of(Map.of("op", "SET_NODE_FIELD",
+                        "nodeId", "process:1", "path", "materialBindings",
+                        "value", List.of(Map.of("materialTypeId", "RMT-1", "dosagePerKgG", 12.5d))))));
+        Map<String, Object> bomEnvelope = objectMapper.readValue(
+                tool.execute(ToolCall.of("bom", tool.getToolName(), bomArgs),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+        assertEquals("DECLINED", bomEnvelope.get("status"));
+
+        // (c) 图不属于这个产品
+        ProductProcessWorkflowDTO otherProduct = objectMapper.convertValue(
+                definitionWithOtherNodeIds(), ProductProcessWorkflowDTO.class);
+        when(workflowService.getEditorDefinition("F006", "PT-001"))
+                .thenReturn(java.util.Optional.of(otherProduct));
+        Map<String, Object> mismatch = execute(
+                Map.of("factoryId", "F006"), definitionWithOwner("PT-001", 3L));
+        assertEquals("DECLINED", mismatch.get("status"));
+    }
+
+    private String declineStatus(ToolExecutor executor, Map<String, Object> definition)
+            throws Exception {
+        String arguments = objectMapper.writeValueAsString(Map.of(
+                "definition", definition,
+                "patches", List.of(Map.of("op", "SET_NODE_FIELD",
+                        "nodeId", "raw", "path", "name", "value", "改名"))));
+        Map<String, Object> envelope = objectMapper.readValue(
+                executor.execute(ToolCall.of("d", executor.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+        return String.valueOf(envelope.get("status"));
+    }
+
+    @Test
     @DisplayName("context 里没有 factoryId -> 拒, 且【不许】回退到入参里的任何值")
     void missingFactoryIdInContextIsRejected() throws Exception {
         // M1: 原来只覆盖「不许从入参取」, 没覆盖「context 压根没有」这一路。
@@ -298,6 +385,22 @@ class ProductProcessWorkflowConfigToolWriteTest {
     }
 
     /** 带一行【已存在】调料绑定的定义 —— 代表库里的真实状态。 */
+    /** 一张【别的产品】的图: 节点 id 与 definitionWithOwner 完全不重叠。 */
+    private Map<String, Object> definitionWithOtherNodeIds() {
+        Map<String, Object> definition =
+                new LinkedHashMap<>(definitionWithOwner("PT-001", 9L));
+        List<Map<String, Object>> nodes = new java.util.ArrayList<>();
+        for (Object raw : (List<?>) definition.get("nodes")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> node = new LinkedHashMap<>((Map<String, Object>) raw);
+            node.put("id", "other-" + node.get("id"));
+            nodes.add(node);
+        }
+        definition.put("nodes", nodes);
+        definition.put("edges", List.of());
+        return definition;
+    }
+
     private Map<String, Object> definitionWithBinding(String productTypeId, Long lockVersion) {
         Map<String, Object> definition =
                 new LinkedHashMap<>(definitionWithOwner(productTypeId, lockVersion));
