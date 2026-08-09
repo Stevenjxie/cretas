@@ -911,8 +911,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"),
-        ("zhipu", "glm-4.5-air"),
-        # 🔴 2026-08-09: 上面 6 个**全部运行时额度耗尽**(5 个 quota_skip + zhipu 超时),
+        # 🔴 2026-08-09: 上面 5 个**全部运行时额度耗尽**(5 个 quota_skip + zhipu 超时),
         #    于是 T3 规划整层 fail-closed, 每个餐饮问句都退化成非 LLM 启发式 ——
         #    症状是「答上了但槽位不全」, 不报错, 从分数上看不出来。
         #    ⛔ 放在**链尾**不是链头: 上面那些有额度时行为逐字不变, 只有全耗尽时
@@ -925,6 +924,13 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-max"),
         ("aliyun_c", "qwen3-max-2025-09-23"),
         ("aliyun_c", "glm-5"),
+        # ⚠️ zhipu 排到**最后**: 实测它在这个槽上稳定超时, 而链是串行且共享一个
+        #    总预算 —— 它排在前面会把预算吃掉, 后面本来 1 秒就能答的候选
+        #    因为分不到时间而**跟着超时**, 连续 2 次就被熔断 60 秒(CB_THRESHOLD=2,
+        #    且 403/超时都计入失败)。2026-08-09 实测: 上面 4 个被这样连坐熔断,
+        #    单独打时它们 0.5-1.1s 全部 HTTP 200。
+        #    ⛔ 判据: **排一个会超时的候选在前面, 等于把它后面的健康候选一起拖下水**。
+        ("zhipu", "glm-4.5-air"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([
