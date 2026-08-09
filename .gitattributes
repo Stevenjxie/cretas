@@ -1,0 +1,6 @@
+# These legacy Windows-console test files intentionally retain CRLF. Keep
+# diff whitespace checks sensitive to spaces while treating CR as EOL syntax.
+backend/python/smartbi/tests/test_auto_learning.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/tests/test_e2e_performance_monitor.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/tests/test_e2e_unified_analyzer.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/conftest.py whitespace=trailing-space,cr-at-eol
