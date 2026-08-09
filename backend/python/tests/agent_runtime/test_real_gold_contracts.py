@@ -72,9 +72,27 @@ class ContractProbeConnection:
             ]
         if "kpi_kind = 'wastage_cost_by_type'" in sql:
             return [{"type": "EXPIRED", "cost": 20.0}]
-        if "kpi_kind = 'stocktaking_shortage_qty'" in sql:
+        if "FROM agg_restaurant_daily_ops" in sql:
+            # resolve_stock_shortage 的「盘亏 top N」。⚠️ 探针缺列会**看起来像生产
+            # 代码崩了**(2026-08-10 实测: KeyError 'shortage_cost' 指向
+            # restaurant_ops_router.py:3106, 实为这里没给这个键)。排查顺序:
+            # 先看探针给了哪些键, 再怀疑被测代码。
             return [
-                {"name": "猪肉", "category": "肉", "unit": "kg", "shortage_qty": 1.0}
+                {
+                    "name": "猪肉", "category": "肉", "unit": "kg",
+                    "shortage_qty": 1.0, "shortage_cost": 12.5,
+                }
+            ]
+        if "kpi_kind = 'stocktaking_shortage_qty'" in sql:
+            # ⚠️ 2026-08-10: 生产的盘点查询后来加了 shortage_cost(金额是唯一能跨
+            #    食材相加的维度), 这条探针分支没跟上 → resolve_stock_shortage 在
+            #    契约测试里 KeyError。探针缺列会**看起来像生产代码崩了**, 排查时
+            #    先看探针给了哪些键。
+            return [
+                {
+                    "name": "猪肉", "category": "肉", "unit": "kg",
+                    "shortage_qty": 1.0, "shortage_cost": 12.5,
+                }
             ]
         if "FROM fact_inventory_snapshot s" in sql:
             return [
@@ -108,6 +126,17 @@ class ContractProbeConnection:
         raise AssertionError(f"unhandled fetch contract: {sql[:120]}")
 
     async def fetchrow(self, sql, *args):
+        if "FROM agg_restaurant_daily_totals" in sql:
+            # ⚠️ 损耗(resolve_wastage_top)与盘点(resolve_stock_shortage)查的是
+            #    **同一张表的不同列**。按表名分支只能有一条, 所以给并集 —— 被测
+            #    代码各取所需, 探针不必猜是谁在问。
+            return {
+                # 损耗侧
+                "total_qty": 3.0, "total_cost": 30.0, "total_count": 4,
+                # 盘点侧
+                "shortage": 1.0, "surplus": 0.5,
+                "shortage_cost": 12.5, "surplus_cost": 6.0, "count": 3,
+            }
         if "MIN(date) AS d0" in sql:
             return {"d0": date(2024, 1, 1), "d1": date(2026, 12, 31)}
         if "COUNT(c.material_cost)" in sql:
@@ -158,7 +187,10 @@ class ContractProbePool:
 def test_actual_gold_callable_signatures_match_all_ten_adapters():
     sources = default_restaurant_sources()
     expected = {
-        "daily_trend": ("pool", "factory_id", "date_range"),
+        # ``store_names`` 是**尾部可选**(default=None) —— 只按门店名过滤时才传,
+        # 适配器仍按 (pool, factory_id, date_range) 调用, 向后兼容。契约钉精确
+        # 签名是刻意的: 任何新增都必须来这里过一眼, 顺便确认它确实是尾部可选。
+        "daily_trend": ("pool", "factory_id", "date_range", "store_names"),
         "period_comparison": ("pool", "factory_id", "start", "end"),
         "store_comparison": ("pool", "factory_id", "date_range"),
         "top_products": ("pool", "factory_id", "date_range", "top_n", "order"),
@@ -171,9 +203,17 @@ def test_actual_gold_callable_signatures_match_all_ten_adapters():
         # ``query`` is optional and trailing: the agent runtime calls this tool
         # with structured params and no free text, so it keeps the historical
         # quantity ranking. Only the NL router passes a question through.
-        "resolve_wastage_top": ("smartbi_pool", "factory_id", "days", "top_n", "query"),
+        # ``date_range`` / ``window_label`` 同样是尾部可选(自然语言路径传自定义
+        # 窗口时才用), agent runtime 仍按前四个位置参数调用。
+        "resolve_wastage_top": (
+            "smartbi_pool", "factory_id", "days", "top_n", "query",
+            "date_range", "window_label",
+        ),
         "resolve_inventory_warning": ("smartbi_pool", "factory_id", "top_n"),
-        "resolve_stock_shortage": ("smartbi_pool", "factory_id", "days", "top_n"),
+        "resolve_stock_shortage": (
+            "smartbi_pool", "factory_id", "days", "top_n",
+            "date_range", "window_label",
+        ),
         "review_summary": ("pool", "factory_id"),
         "review_store_ranking": (
             "pool", "factory_id", "dim", "order", "top_n", "min_reviews"
@@ -200,7 +240,10 @@ async def test_actual_sales_gold_return_keys_used_by_adapters():
     discounts = await sources.discount_summary(pool, "F001", window, top_n=10)
     anomalies = await sources.detect_price_anomalies(pool, "F001")
 
-    assert set(trend) == {"factory_id", "start_date", "end_date", "points"}
+    # store_names 随入参一起回显(未按门店过滤时为 None), 适配器只读它需要的键,
+    # 多一个回显键不影响 —— 但仍钉精确集合, 逼每次新增来这里说明一次。
+    assert set(trend) == {
+        "factory_id", "start_date", "end_date", "points", "store_names"}
     assert "top_products" in products and products["top_products"][0]["revenue"] == 100.0
     assert "stores" in stores and "avgTicket" in stores["stores"][0]
     assert set(period) == {"revenue", "gross_margin_pct", "cost_ratio"}
@@ -217,7 +260,6 @@ async def test_actual_ops_and_review_return_shapes_used_by_adapters():
     pool = ContractProbePool()
     waste = await sources.resolve_wastage_top(pool, "F001", days=9, top_n=10)
     stocktaking = await sources.resolve_stock_shortage(pool, "F001", days=9, top_n=10)
-    inventory = await sources.resolve_inventory_warning(pool, "F001", top_n=10)
     summary = await sources.review_summary(pool, "F001")
     stores = await sources.review_store_ranking(
         pool, "F001", dim="low_star", order="desc", top_n=10, min_reviews=20
@@ -228,7 +270,24 @@ async def test_actual_ops_and_review_return_shapes_used_by_adapters():
 
     assert {kpi["title"] for kpi in waste.kpis} >= {"损耗次数", "损耗金额"}
     assert {kpi["title"] for kpi in stocktaking.kpis} >= {"盘点次数"}
-    assert inventory.meta["snapshot_date"] == "2026-01-10"
     assert set(summary) >= {"factory_id", "connected", "total_reviews", "avg_star"}
     assert "stores" in stores and "review_count" in stores["stores"][0]
     assert "tags" in tags and tags["tags"][0] == {"tag": "太咸", "count": 2}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_actual_inventory_warning_shape_used_by_adapters():
+    """⚠️ 这条**必须**打 integration marker, 不能并进上面那个用例。
+
+    2026-08-09 起 `resolve_inventory_warning` 的数据源改为 **cretas 库**(Java 侧
+    库存底账)。它会自己开另一个库的连接, 假 pool 拦不住 —— 于是这一个调用会把
+    整个用例拖进真库依赖, 连带 5 个本可以纯离线跑的契约断言一起失守。
+
+    判据: **一个用例里只要有一个调用够不到假桩, 整条用例就变成集成测试。**
+    拆开比给整条打 marker 便宜得多。
+    """
+    sources = default_restaurant_sources()
+    pool = ContractProbePool()
+    inventory = await sources.resolve_inventory_warning(pool, "F001", top_n=10)
+    assert inventory.meta["snapshot_date"] == "2026-01-10"
