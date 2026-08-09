@@ -62,19 +62,22 @@ def test_every_chain_entry_is_a_registered_safe_model():
     """Nothing a SLOT chain can call is outside _SAFE_MODELS (ON-toggle allowlist).
 
     ⛔ KNOWN RED as of the 2026-08-09 _SAFE_MODELS rewrite (task 3 of the
-    "llm-router expiry-first chain" plan) — by design, not an oversight. This
-    task's brief explicitly forbids editing SLOT_MODELS/_TEXT_TAIL/_VL_CHAIN
-    ("Task 4 owns those... Your change will leave chains referencing models you
-    deleted from the registry; that is expected and Task 4 fixes it"). The
-    08-09 audit retired far more of SLOT_MODELS' literal content than a partial
-    fix could plausibly repatch (e.g. the entire aliyun_b/aliyun_c
-    qwen3.7-flash* head of CHAT/CHART/MAPPER, all of tencent's REVIEW models bar
-    minimax-m2.7, and every ark entry). Weakening this assertion is explicitly
-    forbidden too — it IS the billing-safety net the whole registry exists to
-    protect, so it must not be watered down or skipped. It will go back to
-    green only once Task 4 rebuilds SLOT_MODELS from _SAFE_MODELS pools.
-    Runtime is still safe in the meantime: _refuse_reason refuses every
-    unregistered entry at call time regardless of what this test says.
+    "llm-router expiry-first chain" plan) — by design, not an oversight.
+
+    This task's own brief (Steps 5-6) demands the full router suite go green,
+    and separately forbids editing SLOT_MODELS/_TEXT_TAIL/_VL_CHAIN (that
+    rewrite is Task 4's job, off pools computed from this registry). Those two
+    requirements cannot both hold simultaneously: the 08-09 audit retired far
+    more of SLOT_MODELS' literal content than a partial, in-task fix could
+    plausibly repatch without touching the forbidden files (e.g. the entire
+    aliyun_b/aliyun_c qwen3.7-flash* head of CHAT/CHART/MAPPER, all of
+    tencent's REVIEW models bar minimax-m2.7, and every ark entry). Weakening
+    this assertion is separately forbidden too — it IS the billing-safety net
+    the whole registry exists to protect, so it must not be watered down or
+    skipped. It will go back to green only once Task 4 rebuilds SLOT_MODELS
+    from _SAFE_MODELS pools. Runtime is still safe in the meantime:
+    _refuse_reason refuses every unregistered entry at call time regardless of
+    what this test currently reports.
     """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
@@ -514,7 +517,25 @@ _CHAT_SMOKE_CHAIN = [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-20
 
 
 @pytest.mark.asyncio
-async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(monkeypatch):
+async def test_call_chain_falls_through_403_to_next(monkeypatch):
+    """Routing smoke test: a 403 on the head candidate falls through to the next
+    chain entry and returns its result.
+
+    2026-08-09 review finding: this used to also assert
+    `(account, model) in llm_router._SAFE_MODELS` for every attempted call. That
+    was a real runtime cross-check back when it walked the REAL
+    `SLOT_MODELS[SLOT.CHAT]` — it could fail if the live chain ever attempted an
+    unregistered pair. Since this test now injects `_CHAT_SMOKE_CHAIN` (a list
+    hand-picked FROM the registry) via monkeypatch, `call_chain` can only ever
+    attempt entries from that list — the assertion became a tautology that can
+    never fail, while the real chain-vs-registry invariant it used to police
+    stayed silently unchecked. That invariant already has a dedicated (currently
+    known-red, pending Task 4) test —
+    `test_every_chain_entry_is_a_registered_safe_model` above — so it is not
+    re-added here as a second, redundant known-red copy. This test now only
+    verifies the fallback ROUTING behavior, which is independent of which
+    models happen to be configured.
+    """
     _patch_keys(monkeypatch)
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
@@ -526,9 +547,7 @@ async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(m
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
     assert result == ok
-    # every model actually attempted must be a registered safe model on its account
-    for account, model in client.call_log:
-        assert (account, model) in llm_router._SAFE_MODELS, f"unsafe call {account}/{model}"
+    assert client.call_log == [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17")]
 
 
 @pytest.mark.asyncio
@@ -934,12 +953,17 @@ def test_ark_models_carry_a_dated_callable_id():
 #
 # 2026-08-09 重审: both now SetLimitExceeded-paused — the measured-viable set is
 # empty. _SAFE_MODELS' ark section was cleared entirely (provider config kept;
-# re-add per-model once the owner supplies a fresh measured-viable list). Note
-# they are STILL literal entries in SLOT_MODELS[SLOT.REVIEW] / _TEXT_TAIL (Task 4
-# owns rewriting those chains off the new registry) — they're deliberately not
-# moved into _ARK_PAUSED below, which is cross-checked against those same
-# still-unmigrated chain literals and would false-positive on a fact this task
-# already made true a different way (unregistered, so _refuse_reason blocks them).
+# re-add per-model once the owner supplies a fresh measured-viable list). They
+# are moved into _ARK_PAUSED below, alongside the previously-paused set — that
+# is a TRUE positive, not a false one: both models are still literal entries in
+# SLOT_MODELS[SLOT.REVIEW] / _TEXT_TAIL (Task 4 owns rewriting those chains off
+# the new registry) AND both are now measured-paused, so
+# test_ark_paused_or_contract_rejected_models_are_not_reachable below correctly
+# reports them as reachable-while-paused. That test is therefore a third
+# KNOWN RED alongside test_every_chain_entry_is_a_registered_safe_model /
+# test_every_ark_chain_entry_is_registered, for the identical reason (Task 4
+# has not yet removed ark from SLOT_MODELS/_TEXT_TAIL) — recording the
+# measured fact here rather than omitting it to stay green.
 _ARK_VIABLE: set = set()
 
 # The former chain is now paused per model by SetLimitExceeded. Keeping any of these
@@ -950,6 +974,9 @@ _ARK_PAUSED = {
     "doubao-seed-2-1-pro-260628",
     "glm-5-2-260617",
     "deepseek-v4-pro-260425",
+    # 2026-08-09: joined the paused set (see _ARK_VIABLE comment above).
+    "doubao-seed-2-1-turbo-260628",
+    "doubao-seed-2-0-lite-260428",
 }
 
 # Callable, but its AOV plan returned intent=null/confidence=0.3 (4/5 overall).
@@ -978,6 +1005,15 @@ def test_ark_registry_is_exactly_the_measured_viable_set():
 
 
 def test_ark_paused_or_contract_rejected_models_are_not_reachable():
+    """⛔ KNOWN RED as of 2026-08-09, third of the set alongside
+    test_every_chain_entry_is_a_registered_safe_model /
+    test_every_ark_chain_entry_is_registered, same reason: the 08-09 audit found
+    doubao-seed-2-1-turbo-260628 and doubao-seed-2-0-lite-260428 both now
+    SetLimitExceeded-paused (moved into _ARK_PAUSED, see its comment), and both
+    are still literal, unmigrated entries in SLOT_MODELS[SLOT.REVIEW] /
+    _TEXT_TAIL. This task may not touch those (Task 4's job). _refuse_reason
+    still refuses both at call time regardless of what this test reports.
+    """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
             assert not (

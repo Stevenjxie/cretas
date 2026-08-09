@@ -85,19 +85,37 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # gate safety on the date, never trust the date for billing).
 #
 # ⛔ PER-(account, model): the SAME model has DIFFERENT toggle state per account —
-# deepseek-v4-pro is ON on aliyun_c but 不支持开启(PAID) on aliyun_b; kimi-k2.7-code /
-# qwen3.5-ocr are ON on a/c but 未开启(BILLS) on b. A global model allow/deny is WRONG.
+# deepseek-v4-pro is ON on aliyun_c but 不支持开启(PAID) on aliyun_b. A global
+# model allow/deny is WRONG.
+#
+# 2026-08-09: kimi-k2.7-code / qwen3.5-ocr were previously logged here as
+# "未开启(BILLS) on b" (per a 2026-06-30 scrape) and excluded from aliyun_b. The
+# 08-09 audit found the opposite: aliyun_b's 「免费额度用完即停」toggle is ON
+# for both. Evidence: aliyun_b's own console screenshot that day lists both with
+# ~1,000,000 remaining free quota, expiring 09-14; and aliyun_b returned 403
+# AllocationQuota.FreeTierOnly for several OTHER models that same day, which is
+# only possible when that account's 用完即停 setting is already ON — so a 200
+# from aliyun_b is free-quota-served, not billed. Both are now registered below.
 #
 # Value = free-grant expiry date (own date from console; account bulk-expiry for
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
 _REGISTRY_AUDIT_DATE = datetime.date(2026, 8, 9)   # 三控制台截图 ∩ 生产探针全量核对
+# 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
+# content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
+# (探针 200 但控制台无余量的最危险: 可能是「用完即停」没覆盖它、其实在计费,
+# glm-5.2 即因此三账号全删)。
+#
+# [SUPERSEDED — 2026-07-26 记录, 已被上面 08-09 的判据取代, 仅存档]
 # (2026-07-26 用户逐账户控制台截图): 所拍 A/B/C 模型均已开启
 # “免费额度用完即停”。这里只收录经任务能力筛选后的通用文本模型，不把
 # OCR/VL/Math/Character/Code 专用 SKU 混入通用链。B/C 两账户的
 # qwen3.7-flash-2026-07-15 与 qwen3.7-flash 均剩 1,000,000/1,000,000，
 # 到期 2026-10-23；它们成为快速文本槽的主链和跨账户故障转移。
+# 2026-08-09 重审推翻: 这两个 (aliyun_b, aliyun_c) 版本当天探针 403, 已从
+# _SAFE_MODELS 整体移除, 只有 aliyun_a 的同名条目存活(见下方注册表 ~08-09
+# 段落) —— 见 test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a。
 _REGISTRY_MAX_AGE_DAYS = 21  # staleness fail-safe: WARN + fall to minimal set beyond this
 _FAR_FUTURE = datetime.date(2099, 1, 1)  # tencent/zhipu + missing dates sort last among safe
 
