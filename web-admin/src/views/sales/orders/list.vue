@@ -1239,7 +1239,7 @@ async function handleCreate() {
     return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
   }
   // 销售单价校验
-  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
   // SKU 重复校验 (只看已选行)
   const productIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
   if (new Set(productIds).size !== productIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
@@ -1766,7 +1766,7 @@ async function handleSave() {
     if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
       return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
     }
-    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
     const editProductIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
     if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
     try {

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.entity.inventory.FgReservationLedger;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.repository.inventory.FgReservationLedgerRepository;
@@ -208,5 +209,26 @@ class FgReservationLedgerServiceTest {
         assertEquals(0, reservedOf(b2.getId()).compareTo(BigDecimal.ZERO));
         List<FgReservationLedger> released2 = ledgerRepo.findBySalesOrderIdAndStatus("SO-M", "RELEASED");
         assertEquals(2, released2.size(), "两行都 RELEASED");
+    }
+
+    @Test
+    @DisplayName("只读预留明细返回精确批次、品名、数量与单位，且不泄漏跨工厂行")
+    void listActiveReservations_returnsExactSameFactoryBatchIdentity() {
+        FinishedGoodsBatch batch = newBatch("FG-EXACT-001", new BigDecimal("2"));
+        batch.setProductName("客户卤牛肉");
+        batchRepo.saveAndFlush(batch);
+        service.reserve(F, "SO-READ", "ITEM-READ", batch, BigDecimal.ONE);
+
+        List<SalesOrderReservationDTO> rows = service.listActiveReservations(F, "SO-READ");
+
+        assertEquals(1, rows.size());
+        SalesOrderReservationDTO row = rows.getFirst();
+        assertEquals(batch.getId(), row.getFinishedGoodsBatchId());
+        assertEquals("FG-EXACT-001", row.getBatchNumber());
+        assertEquals("客户卤牛肉", row.getProductName());
+        assertEquals(0, BigDecimal.ONE.compareTo(row.getReservedQuantity()));
+        assertEquals("盒", row.getUnit());
+        assertEquals("ACTIVE", row.getStatus());
+        assertTrue(service.listActiveReservations("F-OTHER", "SO-READ").isEmpty());
     }
 }

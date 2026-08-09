@@ -90,6 +90,10 @@ describe('sales order supply contract', () => {
     expect(listSource).toContain('const detailResponse = await get(`/${factoryId.value}/sales/orders/${orderId}`)');
     expect(detailSource).toContain('processingModeLabel(order.processingMode)');
     expect(detailSource).toContain('客户自带原料需求');
+    expect(detailSource).toContain('isOrderDrivenCustomerSuppliedOrder');
+    expect(detailSource).toContain('客户已有成品库存');
+    expect(detailSource).toContain('/sales/orders/${orderId.value}/reservations');
+    expect(detailSource).toContain('精确批次');
     expect(detailSource).toContain('前往仓储收货任务');
     expect(detailSource).not.toContain('customer-material-receipts');
     expect(detailSource).not.toContain('客供料入库');
