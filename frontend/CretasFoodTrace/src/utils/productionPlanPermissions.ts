@@ -1,9 +1,9 @@
-const PLAN_CREATOR_ROLES = new Set([
-  'factory_super_admin',
-  'department_admin',
-  'production_manager',
-]);
+/** 生产计划属于 PC 端复杂规划；RN 对所有角色都只展示计划与现场进度。 */
+export function canCreateProductionPlan(_roleCode: string, _isReadOnly: boolean): boolean {
+  return false;
+}
 
-export function canCreateProductionPlan(roleCode: string, isReadOnly: boolean): boolean {
-  return !isReadOnly && PLAN_CREATOR_ROLES.has(roleCode);
+/** 结单不是现场移动动作，必须回 PC 完成。 */
+export function canCompleteProductionPlan(_roleCode: string, _isReadOnly: boolean): boolean {
+  return false;
 }

@@ -42,7 +42,7 @@ describe('统一仓储待收货入口', () => {
   });
 
   it('采购续办既有草稿，客供料按任务一次确认且不伪造第二套草稿', () => {
-    expect(panel).toContain('getPendingPurchaseReceivingTasks');
+    expect(receiveApi).toContain('export function getPendingWarehouseReceivingTasks');
     expect(panel).toContain('getPendingWarehouseReceivingTasks');
     expect(panel).toContain("row.activeReceiptId ? '继续收货' : '收货'");
     expect(panel).toContain('purchaseOrderId: task.purchaseOrderId');
@@ -86,7 +86,7 @@ describe('统一仓储待收货入口', () => {
   });
 
   it('采购任务查询错误不会被吞掉后伪装成空待办', () => {
-    expect(panel).toContain('await getPendingPurchaseReceivingTasks');
+    expect(panel).toContain('await getPendingWarehouseReceivingTasks');
     expect(panel).not.toContain('Promise.allSettled');
   });
 

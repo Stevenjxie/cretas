@@ -69,7 +69,7 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
     private String latestVersion;
 
     /** 低于此版本 (versionName) 强制更新；默认 1.0.0 = 现存用户不被强制 */
-    @Value("${app.version.min:1.0.0}")
+    @Value("${cretas.app.min-version:1.0.0}")
     private String minVersion;
 
     /** Android APK 显式直链；配置后优先返回，用于 bN 文件名绕过 CDN/手机缓存 */
@@ -230,6 +230,7 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
         return MobileDTO.VersionCheckResponse.builder()
                 .currentVersion(currentVersion)
                 .latestVersion(latestVersion)
+                .minimumVersion(minVersion)
                 .updateRequired(updateRequired)
                 .updateAvailable(updateAvailable)
                 .downloadUrl(downloadUrl)

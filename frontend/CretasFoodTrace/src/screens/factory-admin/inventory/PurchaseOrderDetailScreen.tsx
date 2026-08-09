@@ -8,6 +8,8 @@ import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchase
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import { todayIso } from '../../../utils/orderDate';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
+import { useAuthStore } from '../../../store/authStore';
+import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -23,6 +25,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 export default function PurchaseOrderDetailScreen() {
   const navigation = useNavigation<Nav>();
+  const user = useAuthStore((state) => state.user);
+  const isOperationsReadOnly = isMobileBusinessObserver(user);
   const route = useRoute<RouteProp<FAManagementStackParamList, 'PurchaseOrderDetail'>>();
   const { orderId } = route.params;
 
@@ -190,17 +194,17 @@ export default function PurchaseOrderDetailScreen() {
               entityId={String(orderId)}
               refreshKey={attachmentRefreshKey}
             />
-            <AttachmentUploadButton
+            {!isOperationsReadOnly && <AttachmentUploadButton
               entityType="PURCHASE_ORDER"
               entityId={String(orderId)}
               businessTag="PURCHASE_DOC"
               onUploaded={() => setAttachmentRefreshKey(k => k + 1)}
-            />
+            />}
           </Card.Content>
         </Card>
 
         {/* 操作按钮 */}
-        <View style={styles.actionBar}>
+        {!isOperationsReadOnly && <View style={styles.actionBar}>
           {order.status === 'DRAFT' && (
             <>
               <Button mode="contained" onPress={() => handleAction('submit')} style={styles.actionBtn}>提交审批</Button>
@@ -214,7 +218,7 @@ export default function PurchaseOrderDetailScreen() {
               <Button mode="outlined" textColor="#f56c6c" onPress={() => handleAction('reject')} style={styles.actionBtn}>驳回</Button>
             </>
           )}
-        </View>
+        </View>}
 
         <View style={{ height: 30 }} />
       </ScrollView>
