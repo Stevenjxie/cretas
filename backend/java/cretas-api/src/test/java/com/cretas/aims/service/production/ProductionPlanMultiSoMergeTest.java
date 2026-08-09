@@ -106,6 +106,9 @@ class ProductionPlanMultiSoMergeTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        // 老路(LEGACY)删掉后, 没有画布工艺就建不了计划。
+        // 本类测的不是工艺 —— 用共用装配拿一张入场券即可。
+        WorkflowAuthorityTestFixture.install(service, FACTORY_ID, PRODUCT_TYPE_ID);
 
         when(productTypeRepository.existsByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID)).thenReturn(true);
         ProductType productType = new ProductType();
