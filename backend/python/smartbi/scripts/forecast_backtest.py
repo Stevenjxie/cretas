@@ -191,15 +191,23 @@ Series = Sequence[Tuple[dt.date, float]]
 Forecaster = Callable[[Series, int], Optional[List[float]]]
 
 
+def all_origins(series: Series, horizon: int) -> List[int]:
+    return list(range(MIN_TRAIN_DAYS, len(series) - horizon + 1))
+
+
 def rolling_backtest(
     series: Series, forecaster: Forecaster, horizon: int,
+    origins: Optional[List[int]] = None,
 ) -> Tuple[Optional[float], int]:
     """滚动起点回测。返回 (平均 MAPE, 起点数)。
 
     ⚠️ 起点必须**逐日**推进而不是抽样 —— 抽样会让「碰巧好的那几天」主导读数。
+       只有一种例外: 接了 LLM 时按次数收敛(每个起点一次真实调用), 此时**所有**
+       方法都跑同一批 `origins`, 否则比的不是同一件事。
     """
     errs: List[float] = []
-    for i in range(MIN_TRAIN_DAYS, len(series) - horizon + 1):
+    for i in (origins if origins is not None
+              else range(MIN_TRAIN_DAYS, len(series) - horizon + 1)):
         train = series[:i]
         actual = [v for _, v in series[i:i + horizon]]
         try:
@@ -243,6 +251,86 @@ def _make_target_forecaster(compute) -> Forecaster:
     return _f
 
 
+LLM_ROW = "LLM(qwen/glm 链)"
+_LLM_MAX_HISTORY = 42        # 塞给模型的历史天数上限, 再多只是烧 token
+
+
+def _llm_prompt(train: Series, horizon: int) -> str:
+    names = "一二三四五六日"
+    tail = train[-_LLM_MAX_HISTORY:]
+    lines = [f"{d.isoformat()} 周{names[d.weekday()]} {v / 10000:.2f}"
+             for d, v in tail]
+    nxt = [tail[-1][0] + dt.timedelta(days=k + 1) for k in range(horizon)]
+    want = [f"{d.isoformat()} 周{names[d.weekday()]}" for d in nxt]
+    return (
+        "你是餐饮经营分析师。下面是某门店每日营收(单位: 万元), 按日期升序:\n"
+        + "\n".join(lines)
+        + "\n\n请预测接下来这几天的日营收(单位: 万元):\n"
+        + "\n".join(want)
+        + "\n\n只输出一个 JSON 数组, 元素是数字, 长度必须正好 "
+        + f"{horizon}, 顺序与上面一致。不要任何解释、单位或代码块标记。"
+    )
+
+
+async def llm_predictions(
+    series: Series, horizon: int, origins: List[int]
+) -> Dict[int, List[float]]:
+    """给每个起点各问一次 LLM。返回 {len(train): [预测值...]}(万元还原成元)。
+
+    ⚠️ 失败(超时/额度/格式不符)一律**不记入**, 而不是填一个数 —— 填数会让 LLM
+       的 MAPE 被无关的东西拉高或拉低, 量出来的就不是它的能力。
+    """
+    import json
+    import re
+
+    from common.llm_router import SLOT, call_chain
+
+    out: Dict[int, List[float]] = {}
+    for i in origins:
+        train = series[:i]
+        try:
+            resp = await call_chain(
+                SLOT.REVIEW,
+                {"messages": [{"role": "user",
+                               "content": _llm_prompt(train, horizon)}],
+                 "temperature": 0,
+                 "max_tokens": 512},
+                timeout=40.0, total_timeout=90.0,
+            )
+        except Exception as exc:                      # noqa: BLE001
+            logger_warn(f"origin={i} 调用失败: {type(exc).__name__}")
+            continue
+        # ⚠️ 返回是 OpenAI 形状。第一版我写成 resp["content"], 恒为空字符串, 于是
+        #    12/12 全「失败」—— 看起来像一个关于 LLM 能力的发现, 其实是我读错了
+        #    字段。判据: **探针拿到全 0 / 全空时, 先怀疑探针**。
+        try:
+            text = (resp["choices"][0]["message"]["content"] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            logger_warn(f"origin={i} 返回形状不对: {str(resp)[:80]!r}")
+            continue
+        m = re.search(r"\[[^\[\]]*\]", text, re.S)
+        if not m:
+            logger_warn(f"origin={i} 没吐出数组: {text[:60]!r}")
+            continue
+        try:
+            arr = json.loads(m.group(0))
+        except Exception:                             # noqa: BLE001
+            logger_warn(f"origin={i} 数组解析失败: {m.group(0)[:60]!r}")
+            continue
+        if not isinstance(arr, list) or len(arr) != horizon:
+            logger_warn(f"origin={i} 长度不符: 要 {horizon} 得 {len(arr) if isinstance(arr, list) else '非数组'}")
+            continue
+        try:
+            out[i] = [float(x) * 10000.0 for x in arr]
+        except Exception:                             # noqa: BLE001
+            logger_warn(f"origin={i} 元素非数字")
+    return out
+
+
+def logger_warn(msg: str) -> None:
+    print(f"    [llm] {msg}")
+
+
 def load_production_target_compute():
     """**目标测算线上正在用的那个实现**, 原样接进来测。
 
@@ -272,7 +360,7 @@ def load_candidate_target_compute(path: str):
 # ══ 主流程 ══════════════════════════════════════════════════════════════════
 
 async def run(factory_id: str, start: dt.date, end: dt.date, horizon: int,
-              candidate_path: Optional[str] = None) -> int:
+              candidate_path: Optional[str] = None, llm_origins: int = 0) -> int:
     pool = await asyncpg.create_pool(
         host=os.getenv("SMARTBI_DB_HOST", "localhost"),
         user=os.getenv("SMARTBI_DB_USER", "smartbi_user"),
@@ -321,16 +409,34 @@ async def run(factory_id: str, start: dt.date, end: dt.date, horizon: int,
     # ── ③④ 基线与算法 ──
     svc = ForecastService()
 
+    origins = all_origins(series, horizon)
+    llm_by_origin: Dict[int, List[float]] = {}
+    if llm_origins:
+        # ⚠️ 每个起点一次真实 LLM 调用, 所以起点要收敛。收敛后**所有方法**都跑
+        #    这同一批起点 —— 只给 LLM 换一套起点就成了两张不同的考卷。
+        #    取**最近**的 N 个: 近期表现比远期更能代表现在。
+        origins = origins[-llm_origins:]
+        print(f"③ LLM  {len(origins)} 个起点 × 1 次调用 (所有方法同批起点)")
+        llm_by_origin = await llm_predictions(series, horizon, origins)
+        print(f"       成功 {len(llm_by_origin)}/{len(origins)} 次")
+
     rows: List[Tuple[str, Optional[float], int]] = []
     for name, fn in BASELINES.items():
-        m, n = rolling_backtest(series, values_only(fn), horizon)
+        m, n = rolling_backtest(series, values_only(fn), horizon, origins)
         rows.append((name, m, n))
     baseline_best = min(
         (m for _, m, _ in rows if m is not None), default=None)
 
     for algo in ALGORITHMS:
-        m, n = rolling_backtest(series, make_algo_forecaster(svc, algo), horizon)
+        m, n = rolling_backtest(
+            series, make_algo_forecaster(svc, algo), horizon, origins)
         rows.append((algo, m, n))
+
+    if llm_origins:
+        def _llm(train: Series, _h: int) -> Optional[List[float]]:
+            return llm_by_origin.get(len(train))
+        m, n = rolling_backtest(series, _llm, horizon, origins)
+        rows.append((LLM_ROW, m, n))
 
     m, n = rolling_backtest(
         series, _make_target_forecaster(load_production_target_compute()), horizon)
@@ -387,6 +493,10 @@ def main() -> int:
     p.add_argument("--end", required=True)
     p.add_argument("--horizon", type=int, default=7)
     p.add_argument(
+        "--llm-origins", type=int, default=0, metavar="N",
+        help="把 LLM 也放进同一张表比: 取最近 N 个起点, 每个起点一次真实调用"
+             "(所有方法都改跑这批起点, 保证同一张考卷)")
+    p.add_argument(
         "--candidate", default=None, metavar="PATH",
         help="额外测一份改过的 target_forecast.py(按文件路径载入, 不碰部署目录)")
     a = p.parse_args()
@@ -396,6 +506,7 @@ def main() -> int:
         dt.date.fromisoformat(a.end),
         a.horizon,
         a.candidate,
+        a.llm_origins,
     ))
 
 
