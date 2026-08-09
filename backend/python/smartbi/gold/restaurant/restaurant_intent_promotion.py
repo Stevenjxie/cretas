@@ -380,6 +380,47 @@ async def aggregate_candidates(
     return candidates
 
 
+async def _foreign_entity_names(conn, factory_id: Optional[str]) -> List[str]:
+    """别的租户有、本租户**没有**的门店名/菜名 —— 用来把上一个租户遗留的问法
+    剔出待办清单。
+
+    🔴 2026-08-09: 清单里有 8 次是「青花椒徐汇日月光店」「有滋有味北外滩店」
+       「抖音松叶蟹368套餐」这类, 全是 DEMO_REST 时代的实体, 在 MOCK_REST
+       上本就不存在。它们不是能力缺口, 留着会把优先级排歪。
+
+    ⛔ 不写硬编名单: 名单会随租户变, 而「会随环境变的东西只能有一处定义」——
+       这里的唯一定义就是 dim_store / dim_product 本身。查真表, 不查我写的表。
+
+    ⚠️ 必须是「别的租户有 且 本租户没有」, 不能只判「本租户没有」——
+       后者会把用户随口编的词也剔掉, 而那种恰恰**该留在清单里**
+       (说明用户想问一个我们没有的东西)。
+    """
+    if not factory_id:
+        return []
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT x.name FROM (
+                SELECT name, factory_id FROM dim_store
+                UNION ALL SELECT name, factory_id FROM dim_product
+            ) x
+             WHERE x.factory_id <> $1
+               AND x.name IS NOT NULL AND length(x.name) >= 3
+               AND x.name NOT IN (
+                   SELECT name FROM dim_store   WHERE factory_id = $1 AND name IS NOT NULL
+                   UNION
+                   SELECT name FROM dim_product WHERE factory_id = $1 AND name IS NOT NULL
+               )
+            """,
+            factory_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — 只读辅助, 失败就不过滤(fail-open)
+        logger.warning(
+            f"[restaurant-intent-promotion] 外租户实体名查询失败(不过滤): {exc}")
+        return []
+    return [r["name"] for r in rows if r["name"]]
+
+
 async def aggregate_misses(
     pool,
     *,
@@ -424,6 +465,24 @@ async def aggregate_misses(
             OR (agg_meta->>'served') = 'false'
             OR (agg_meta->>'answered_judgment') = 'false'
          GROUP BY trim(query)
+         -- 🔴 2026-08-09 过滤器: 只留**从未成功过**的。
+         --
+         --    没有这一条时清单是 66 组, 而其中 **46 组曾经成功过** ——
+         --    那些失败是瞬时抖动/上下文缺失/供应商池干了, **不是能力缺口**。
+         --    把它们留在清单里, 会让「按被问次数排优先级」指向已经能答的东西。
+         --
+         -- 🔑 这一条同时替代了原本要单独写的「剔除多轮片段」规则:
+         --    「那成本呢」(42 成功/2 失败)、「是否合理」(35/1)、「本月」(92/2)
+         --    在链里都成功过, 自动被这条剔除 —— **不需要按词判断哪些是片段**,
+         --    那会退化成关键词表。实测这三条以及「青花椒徐汇日月光店」全被正确剔除。
+         --
+         -- ⚠️ 「成功」的定义必须包含判定层: 只看 served='true' 会把
+         --    「答了但答非所问」当成成功(客单价那条 44 次 served=true、0 次
+         --    served=false, 单看这个指标它根本不像有问题)。
+        HAVING COUNT(*) FILTER (
+                   WHERE (agg_meta->>'served') = 'true'
+                     AND COALESCE(agg_meta->>'answered_judgment', '') <> 'false'
+               ) = 0
          ORDER BY COUNT(*) DESC, MAX(created_at) DESC
          LIMIT $1
     """
@@ -431,9 +490,11 @@ async def aggregate_misses(
         async with pool.acquire() as conn:
             await _set_rls_guc(conn, factory_id)
             rows = await conn.fetch(sql, limit)
+            foreign_names = await _foreign_entity_names(conn, factory_id)
     except Exception as exc:
         logger.warning(f"[restaurant-intent-promotion] aggregate_misses query failed (fail-open): {exc}")
         return []
+    foreign = set(foreign_names)
     return [
         {
             "query": (r["norm_query"] or "").strip(),
@@ -449,6 +510,8 @@ async def aggregate_misses(
         }
         for r in rows
         if (r["norm_query"] or "").strip()
+        # 剔掉引用了**别的租户实体**的问法(上一个租户遗留的探针/演示问句)。
+        and not any(name in (r["norm_query"] or "") for name in foreign)
     ]
 
 
