@@ -1,5 +1,7 @@
 # Dispatch 完成记录 — 2026-08-09
 
+- `FIX-F006-MULTIBATCH-PRODUCTION-CLOSE-20260809` — `merged` — Owner: `/root` — Base SHA `7699dd8a45e5eed64680b5f9f88b1bf3d2db6a33`；PR #2399 修复 SAFETY_STOCK/客户归属库存生产经过多次小结、形成多个真实成品批次后无法停产结单的问题：逐批核验同一计划、终端 SKU、计量单位、已入库状态与库存归属，按批次合计和小结摘要做数量守恒；单批次保留兼容 ID，多批次不伪造代表批次，也不重复扣料或创建成品库存。缺批次、错 SKU/单位/数量、撤销批次均 fail-closed，已耗尽或质检隔离的真实历史批次仍可关闭计划。Java 停产与结单目标测试 55/55、`git diff --check` 通过；未改 Entity/Repository/Flyway/Security/前端，scope 随本归档释放。生产发布和 F006 客户来料完整写入型 E2E 由同一授权任务继续执行并单独报告。
+
 - `BUG-F006-CUSTOMER-STOCK-INTERIM-OWNERSHIP-20260809` — `merged` — Owner: `/root` — Base SHA `e34717e3d0864d8a66bbe9d2d943aa13b14fb90b`；F006 写入型 Playwright E2E 在客户归属库存生产执行“生产小结”前发现，小结入口创建成品批次时未继承计划的 `outputOwnership/customerId/sourceOrderId`，会把客户来料成品误作公司库存并阻断后续销售订单绑定。修复后小结成品与普通结单入库保持同一归属口径：客户库存生产继承 `CUSTOMER_OWNED` 与同一客户，且没有销售订单时不虚构订单来源；公司库存生产继续保持 `COMPANY_OWNED` 并清空客户归属。`InterimSettleServiceTest` 29/29 通过，scope 随本归档释放；离线 exact-local-main 发布及 F006 小结、成品库存、销售绑定写入型 E2E 由当前协调任务继续记录。
 
 - `SOP-FACTORY-2379-CATEGORY-FALLBACK-20260807` — `merged` — Owner: `/root` — Base SHA `44fb00087a3eb3dd8c588262922dc0ab9d787b9c`；#2379/#2385 的无分段字典类别与用户手填料号口径、工厂 SOP/F006 canonical source/AI Assist 已经由 PR #2382 发布，PR #2389 再把物料类问题强制限定到 `f006-production-full-chain-sop.md` 并从 clean exact main 发布。生产 3 个物料等价问法和固定“BOM 激活后 Workflow 为什么还不能发布？”共 4/4 内容正确，所有 sources 仅为 canonical F006 source；强制顺序、ACTIVE BOM 前置门禁、发布并启用验收命中，禁止错误说法为 0。目标合同 `76 passed`、餐饮共享回归 `432 passed`、CI/Python 发布 smoke 通过，生产 ERP 业务写入为 0；工厂 scope 随本归档释放。
