@@ -18,7 +18,11 @@ import sys
 
 import pytest
 
-from smartbi.scripts.registry_truth_check import _ANCHORS
+from smartbi.scripts.registry_truth_check import (
+    _ABSOLUTE_ANCHORS,
+    _ANCHORS,
+    _CHANNEL_WEIGHTS,
+)
 
 
 def _seed_module():
@@ -63,6 +67,60 @@ def test_anchors_match_the_generator_source():
             f"⛔ 别改副本, 先查是 seed.py 改了还是副本被手改了")
         assert abs(got_cost - food_cost) < 1e-4, (
             f"{dish} 每份食材成本副本 {got_cost} ≠ 源码重算 {food_cost}")
+
+
+def test_absolute_anchors_match_the_generator_source():
+    """绝对量锚(门店/食材/菜品数)必须与源码的种子清单等长。
+
+    🔴 它们补的是比值锚的盲区: 日期/租户过滤写错、采集丢行时, 分子分母一起变,
+       单价照样等于 128 —— 只有绝对量抓得到。
+    """
+    seed = _seed_module()
+    if seed is None:
+        pytest.skip("读不到生成器源码 —— ⚠️ 这是 skip 不是 pass")
+
+    for label, source in (("菜品数", seed._DISHES),
+                          ("门店数", seed._STORES),
+                          ("食材数", seed._INGREDIENTS)):
+        assert _ABSOLUTE_ANCHORS[label] == len(source), (
+            f"{label} 的锚 {_ABSOLUTE_ANCHORS[label]} ≠ 源码清单长度 {len(source)}")
+
+
+def test_channel_weights_match_the_generator_source():
+    """分布锚必须与 `generator.py::_CHANNEL_WEIGHTS` 逐个相等。
+
+    ⚠️ 顺带钉住口径: 权重是**每张订单**抽渠道用的, 所以对账要按**单量**比,
+       ⛔ 不能按营收(各渠道客单价不同, 营收占比会系统性偏离 —— 实测差 1.7 个点)。
+    """
+    seed = _seed_module()
+    if seed is None:
+        pytest.skip("读不到生成器源码 —— ⚠️ 这是 skip 不是 pass")
+    import importlib
+
+    gen = importlib.import_module("mock_platform.world.generator")
+    src = dict(zip(gen._CHANNELS, gen._CHANNEL_WEIGHTS))
+    assert src == _CHANNEL_WEIGHTS, (
+        f"渠道权重副本 {_CHANNEL_WEIGHTS} ≠ 源码 {src} —— "
+        f"⛔ 别改副本, 先查是 generator.py 改了还是副本被手改了")
+    assert abs(sum(src.values()) - 1.0) < 1e-9, "源码里的渠道权重加起来不等于 1"
+
+
+def test_truth_check_compares_channel_by_order_count_not_revenue():
+    """🔴 承重: 渠道分布必须拿**单量**比。
+
+    2026-08-10 实测: 按营收比会差 1.7 个点, 而容差是 2 个点 —— 差一点就
+    天天报一个不存在的问题, 而且报得很像真的。
+    """
+    import io as _io
+    import pathlib as _pathlib
+
+    src = _io.open(_pathlib.Path(__file__).resolve().parents[2]
+                   / "scripts" / "registry_truth_check.py", encoding="utf-8").read()
+    seg = src[src.index("分布锚：渠道抽样权重"):]
+    assert 'metric_key="orders"' in seg, (
+        "渠道分布没有按单量比 —— 按营收比会系统性偏离")
+    assert 'metric_key="revenue"' not in seg.split("missing =")[0], (
+        "渠道分布用了营收口径")
 
 
 def test_anchor_does_not_use_the_deprecated_cost_column():

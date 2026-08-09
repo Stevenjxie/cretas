@@ -68,8 +68,25 @@ _ANCHORS: Dict[str, Tuple[float, float]] = {
     "凉拌木耳": (18.00, 3.3500),
 }
 
-#: 绝对量锚 —— 补比值锚的盲区（同倍缩放时比值不变）。
-_ABSOLUTE_ANCHORS = {"菜品数": len(_ANCHORS)}
+#: 绝对量锚 —— 补比值锚的盲区。
+#:
+#: 🔴 为什么必需：比值锚对「分子分母**同倍**缩放」是瞎的 —— 日期过滤写错、
+#:    租户过滤写错、采集丢了 30% 的行，这些让两边一起变，单价照样等于 128。
+#:    绝对量是唯一能抓到它们的。
+#: 来源：`seed.py` 的 `_STORES`(10) / `_INGREDIENTS`(25) / `_DISHES`(10)。
+_ABSOLUTE_ANCHORS = {"菜品数": len(_ANCHORS), "门店数": 10, "食材数": 25}
+
+#: 分布锚 —— 渠道的抽样权重。来源：`generator.py::_CHANNEL_WEIGHTS`。
+#:
+#: ⚠️ 口径必须是**按单量**不是按营收 —— 权重是**每张订单**按它抽渠道的，
+#:    而各渠道客单价不同，营收占比会系统性偏离。2026-08-10 实测：
+#:        按单量  0.6229 / 0.2782 / 0.0988   与源码差 0.3 个点 ✓
+#:        按营收  0.6372 / 0.2688 / 0.0940   与源码差 1.7 个点 ✗
+#:    先量了口径才没锚错 —— 锚在错的口径上，闸会天天报一个不存在的问题。
+_CHANNEL_WEIGHTS = {"dine_in": 0.62, "takeaway": 0.28, "groupon": 0.10}
+#: 2 个百分点。7 月约 6 万单，比例的标准误约 0.2 个点，这个容差远大于抽样噪音，
+#: 又足够抓到真实的权重改动（如 0.62 → 0.55）。
+_DISTRIBUTION_TOLERANCE = 0.02
 
 #: 1 分钱。单价与食材成本都是「每份恒定」的量，比值应当精确到分。
 _TOLERANCE = 0.011
@@ -130,18 +147,49 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
                       f"{food_cost:12.4f} {(got_cost if got_cost is not None else float('nan')):10.4f} {mark}")
 
             # ── 绝对量锚：比值锚对「同倍缩放」是瞎的，这里补上 ──────────────
-            async with pool.acquire() as c3:
-                await c3.execute(
+            print()
+            for label, (metric, dim) in (("菜品数", ("sales_qty", "product")),
+                                         ("门店数", ("revenue", "store")),
+                                         ("食材数", ("wastage_cost", "ingredient"))):
+                async with pool.acquire() as c3:
+                    await c3.execute(
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id)
+                    r = await execute_cell(
+                        c3, factory_id=factory_id, metric_key=metric,
+                        dimension_key=dim, aggregation_key="compare",
+                        date_range=rng, available_columns=cols)
+                got, want = len(r.rows), _ABSOLUTE_ANCHORS[label]
+                ok = got == want
+                if not ok:
+                    failures.append(f"{label}: 源码 {want}, 算出来 {got}")
+                print(f"绝对量·{label}: 源码 {want}, 算出来 {got} {'' if ok else '❌'}")
+
+            # ── 分布锚：渠道抽样权重。⚠️ 口径是**按单量**不是按营收 ──────────
+            async with pool.acquire() as c4:
+                await c4.execute(
                     "SELECT set_config('app.factory_id', $1, false)", factory_id)
                 r = await execute_cell(
-                    c3, factory_id=factory_id, metric_key="sales_qty",
-                    dimension_key="product", aggregation_key="compare",
+                    c4, factory_id=factory_id, metric_key="orders",
+                    dimension_key="channel", aggregation_key="share",
                     date_range=rng, available_columns=cols)
-            got_dishes = len(r.rows)
-            if got_dishes != _ABSOLUTE_ANCHORS["菜品数"]:
-                failures.append(
-                    f"菜品数: 源码 {_ABSOLUTE_ANCHORS['菜品数']}, 算出来 {got_dishes}")
-            print(f"\n绝对量·菜品数: 源码 {_ABSOLUTE_ANCHORS['菜品数']}, 算出来 {got_dishes}")
+            total = sum(float(x["orders"]) for x in r.rows) or 1.0
+            print()
+            for row in r.rows:
+                ch = str(row.get("dim_label"))
+                want = _CHANNEL_WEIGHTS.get(ch)
+                got = float(row["orders"]) / total
+                if want is None:
+                    failures.append(f"渠道占比: 出现源码里没有的渠道 {ch!r}")
+                    print(f"分布·{ch}: 源码没有这个渠道 ❌")
+                    continue
+                ok = abs(got - want) <= _DISTRIBUTION_TOLERANCE
+                if not ok:
+                    failures.append(
+                        f"渠道占比 {ch}: 源码 {want:.2f}, 算出来 {got:.4f}")
+                print(f"分布·{ch:9s} 源码 {want:.2f}  算出来 {got:.4f} {'' if ok else '❌'}")
+            missing = set(_CHANNEL_WEIGHTS) - {str(x.get("dim_label")) for x in r.rows}
+            if missing:
+                failures.append(f"渠道占比: 源码有但一条都没查到 {sorted(missing)}")
     finally:
         await pool.close()
     return failures
