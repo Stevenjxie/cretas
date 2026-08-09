@@ -550,3 +550,62 @@ def test_data_gap_metrics_are_deliberately_untranslatable():
     for gap in ("net_profit", "table_turnover", "staffing", "stocktaking_shortage"):
         assert spec_to_cell(_Spec(requested_metrics=(gap,))) is None, (
             f"数据缺口项「{gap}」被翻译成了某个格子 —— 会拿相邻指标顶包")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 批 4 · resolver 审计 —— 18 个手写 resolver 逐个判定
+# ═══════════════════════════════════════════════════════════════════════════
+#: 🔴 **审计结论(2026-08-09, prod MOCK_REST 实测)**
+#:
+#: 判据是「数字逐字相等」不是「都能跑」。三处已在 prod 上逐字核对:
+#:     总营收        resolver ¥6,490,180.61  ==  revenue×all×summary   6490180.61
+#:     门店营收榜首  resolver ¥663,083.12    ==  revenue×store×rank     663083.12
+#:     堂食营收      resolver ¥4,114,412     ==  revenue×channel×share  4114412.00
+#:
+#: ⛔ **结论: 不删这 7 个 resolver。** 它们在**取数层面**确实是格子的特例
+#:    (数字等价已证), 但它们的答案里还有格子给不了的东西 —— 建议动作、
+#:    KPI 卡、顺带提示、门店中位数对比。删掉 = 用一个更薄的答案换一个
+#:    更整洁的架构, 那是拿用户价值换代码美观。
+#:
+#: ⚠️ 「倒转路由」这件事本身也被证据否掉了: 重放语料里剩下的 20% 契约失败
+#:    全是「差异的**根本原因**」「下一步**该做什么**」「该重点**改善**哪个指标」——
+#:    `analysis_action=diagnose/optimize`, **结构上就不是取数问题**。
+#:    登记表答不了「为什么」, 倒转路由一条都救不回来。
+#:
+#: ✅ 真正起作用的是**契约失败兜底**(批 2 接的): 格子答得了而 resolver 答不了时
+#:    接住。重放语料「答上了」41% → **44%**, 且电池 [56] 的实际答案已经是
+#:    通用执行器的输出格式 —— 它在 prod 真的接球了。
+_RESOLVER_CELL_EQUIVALENTS = {
+    "resolve_sales_summary": ("revenue", "all", "summary"),
+    "resolve_store_margin": ("revenue", "store", "rank"),
+    "resolve_gross_margin": ("gross_margin", "product", "rank"),
+    "resolve_recipe_cost": ("food_cost", "product", "rank"),
+    "resolve_wastage_top": ("wastage_cost", "ingredient", "rank"),
+    "resolve_channel_mix": ("revenue", "channel", "share"),
+    "resolve_daypart_performance": ("revenue", "meal_period", "compare"),
+}
+
+
+def test_every_audited_resolver_still_has_its_equivalent_cell():
+    """🔴 承重: 审计结论里声称「数字等价」的那 7 个格子必须一直拼得出 SQL。
+
+    ⛔ 拼不出来 = 上面那份审计结论失效了(某次改动把等价关系弄断了), 而它是
+       「不删 resolver」这个决定的**全部依据**。依据没了, 决定就成了想当然。
+    """
+    from smartbi.gold.restaurant.generic_executor import build_sql
+
+    for resolver, cell in _RESOLVER_CELL_EQUIVALENTS.items():
+        sql, requires, _base = build_sql(*cell)
+        assert "SELECT" in sql and "$1" in sql, f"{resolver} 的等价格子拼不出 SQL: {cell}"
+        assert requires, f"{resolver} 的等价格子没声明依赖列 —— 缺列时不会被拦"
+
+
+def test_the_audited_resolvers_all_still_exist():
+    """审计是对**当时存在**的 resolver 做的。有 resolver 被删/改名而审计表没跟上,
+    这份结论就在描述一个不存在的系统。"""
+    from smartbi.gold.restaurant import restaurant_ops_router as _router
+
+    missing = [n for n in _RESOLVER_CELL_EQUIVALENTS if not hasattr(_router, n)]
+    assert not missing, (
+        f"审计表里这些 resolver 已经不在了: {missing} —— 请更新审计结论, "
+        f"⛔ 别直接删断言")
