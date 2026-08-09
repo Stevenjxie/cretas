@@ -119,8 +119,9 @@ export interface CustomerMaterialArrivalTask {
   sourceType: 'CUSTOMER_MATERIAL_ARRIVAL';
   sourceId: string;
   sourceNumber: string;
-  customerId: string;
-  customerName: string;
+  inboundReason: 'CUSTOMER_MATERIAL' | 'GIFT' | 'OTHER';
+  customerId?: string | null;
+  customerName?: string | null;
   expectedArrivalAt?: string | null;
   status: 'OPEN' | 'PARTIALLY_RECEIVED';
   statusLabel: string;

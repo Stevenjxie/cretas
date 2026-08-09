@@ -81,7 +81,7 @@ describe('统一仓储待收货入口', () => {
 
   it('旧采购入库路由兼容重定向且菜单不再暴露割裂入口', () => {
     expect(router).toContain("redirect: (to) => ({ path: '/warehouse/materials'");
-    expect(menu).toContain("title: '原料入库与批次'");
+    expect(menu).toContain("title: '原料 / 物料入库与批次'");
     expect(menu).not.toContain("{ path: '/procurement/receives', title: '采购入库'");
   });
 

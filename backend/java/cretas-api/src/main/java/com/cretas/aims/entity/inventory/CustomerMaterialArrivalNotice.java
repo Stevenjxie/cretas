@@ -2,6 +2,7 @@ package com.cretas.aims.entity.inventory;
 
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
+import com.cretas.aims.entity.enums.UnorderedInboundReason;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -22,7 +23,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Operations coordination document for customer material that may arrive before any sales order.
+ * Operations coordination document for material that may arrive without an upstream order.
  *
  * <p>The notice deliberately has no material or quantity lines: warehouse records the actual
  * material identity and quantity only when the truck arrives. Creating this row never creates or
@@ -52,7 +53,11 @@ public class CustomerMaterialArrivalNotice extends BaseEntity {
     @Column(name = "notice_number", nullable = false, length = 50)
     private String noticeNumber;
 
-    @Column(name = "customer_id", nullable = false, length = 191)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "inbound_reason", nullable = false, length = 32)
+    private UnorderedInboundReason reason = UnorderedInboundReason.CUSTOMER_MATERIAL;
+
+    @Column(name = "customer_id", length = 191)
     private String customerId;
 
     @Formula("(SELECT c.name FROM customers c WHERE c.id = customer_id)")
@@ -90,6 +95,7 @@ public class CustomerMaterialArrivalNotice extends BaseEntity {
     @PrePersist
     void assignDefaults() {
         if (id == null) id = UUID.randomUUID().toString();
+        if (reason == null) reason = UnorderedInboundReason.CUSTOMER_MATERIAL;
         if (status == null) status = CustomerMaterialArrivalStatus.OPEN;
         if (receiptCount == null) receiptCount = 0;
     }

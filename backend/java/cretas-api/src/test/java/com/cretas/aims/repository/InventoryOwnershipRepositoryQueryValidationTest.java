@@ -73,6 +73,7 @@ class InventoryOwnershipRepositoryQueryValidationTest {
         assertThat(salesOrder.getAttribute("customerStockFulfillmentMode")).isNotNull();
 
         var arrivalNotice = entityManager.getMetamodel().entity(CustomerMaterialArrivalNotice.class);
+        assertThat(arrivalNotice.getAttribute("reason")).isNotNull();
         assertThat(arrivalNotice.getAttribute("customerId")).isNotNull();
         assertThat(arrivalNotice.getAttribute("status")).isNotNull();
 
