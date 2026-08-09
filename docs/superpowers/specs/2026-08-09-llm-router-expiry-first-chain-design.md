@@ -289,7 +289,7 @@ SLOT_MODELS = {s: _build_chain(s) for s in SLOT}
 | # | 闸 | 独立来源 | 变异验证 |
 |---|---|---|---|
 | 1 | **golden 快照**:7 个槽算出的链连同到期日打印进 `tests/golden/llm_router_chains.txt`,人审冻结 | 人审冻结表 vs 代码算出的链 | 把 `qwen3.8-max`(11-01)挪到 08-13 那批之前 → diff 必红 |
-| 2 | **地板非空**:每个槽的链末尾至少有一个 `_expiry_of == _FAR_FUTURE` 的条目 | 结构不变量 | 删掉 `zhipu/glm-4.5-air` → 必红 |
+| 2 | **地板非空**:每个**文本槽**的链末尾至少有一个 `_expiry_of == _FAR_FUTURE` 的条目。**VL 槽显式豁免**并在闸里写明理由(见 §9),豁免名单是硬编码的单元素集合 —— 想再豁免一个槽必须改代码并留下 diff | 结构不变量 | 删掉 `zhipu/glm-4.5-air` → 必红;把 VL 加进文本槽集合 → 必红 |
 | 3 | **交互槽无慢模型**:`_SLOT_POOLS[fast] ∩ _SLOW_MODELS == ∅` | `_SLOW_MODELS` 是独立人写的实测名单 | 把 `deepseek-r1` 塞进 CHAT 池 → 必红 |
 | 4 | **池 ⊆ 注册表**:每个池条目 ∈ `_SAFE_MODELS`(现有 CI 闸,沿用) | — | 加一个不在注册表的条目 → 必红 |
 | 5 | **参数约束**:`_REASONING_ONLY` 条目不出现在关思考槽;`_THINKING_OFF_ONLY` 条目不出现在 REASONING | 人写名单 | 把 `MiniMax-M2.5` 塞进 REVIEW 池 → 必红 |
@@ -305,13 +305,26 @@ SLOT_MODELS = {s: _build_chain(s) for s in SLOT}
 
 ---
 
-## 9. 已知缺口(本设计不解决,需单独决策)
+## 9. 已知缺口
 
-**VL 槽在 2026-08-13 之后没有任何模型。** 当前 VL 可用的只有 `aliyun_c/qwen3-vl-32b-instruct` 和 `aliyun_c/qwen3-vl-flash-2026-01-22`,两个都是 08-13 到期;原本的 VL 地板 `zhipu/glm-4.6v` 已因余额不足死亡。4 天后 VL 槽会变成空链。
+### 9.1 VL 槽 2026-08-13 后变空链 —— 已拍板:接受,不投入
 
-三个可能方向(需 owner 拍板):`qwen3.5-ocr`(三账号,09-14)是否能承担通用 VL 需实测验证 / 给 zhipu 充值恢复 `glm-4.6v` / 接入新 provider。
+**owner 决定(2026-08-09):业务用不到 VL,不为它做额外工作。**
 
-**ark 与 tencent 的可用模型待补齐。** 本次按实测把它们收缩到 2 个条目;owner 表示稍后提供这两家的完整可用清单,届时按判据 1 加回 —— 改数据即可,provider 配置与代码路径本次全部保留。
+支撑证据(prod 日志 08-03 → 08-09,共 7 天):`slot=vl` 总计命中 **4 条日志 = 1 次真实请求**(08-07 14:57,两次 403 fallback 后由 `qwen3-vl-plus` 答成),`/vision` 接口访问 **1 次**。代码里有 6 处消费点(`label_qc/analyzer` 与 `hybrid_analyzer`、`efficiency_recognition` 的 `scene_understanding_service` 与 `tracking_service`、`food_kb/manual_chat` 的图片 OCR、`llm/api/endpoints` 的 `POST /vision`),但这些路今天基本不被执行。
+
+**处置**:
+
+- VL 槽**保留**,不删消费点、不删 slot。
+- 08-13 后 `qwen3-vl-32b-instruct` / `qwen3-vl-flash-2026-01-22` 双双过期,`_refuse_reason` 硬拒 → VL 链变空 → `call_chain` 抛 `All providers exhausted for vl`。**这是期望行为**,符合 CLAUDE.md 核心原则 1「禁止降级处理 —— 不返回假数据,明确显示错误」:那 1 次/周 的请求应当明确失败,而不是被静默降级成文本模型的瞎猜。
+- §8.2 闸 2 对 VL 显式豁免(否则 CI 会因 VL 空链常红,而常红的闸最终会被人关掉)。
+- `qwen3.5-ocr`(三账号,09-14,约 300 万 token)**继续留在注册表但不入池**,作为将来 VL 复活时的现成候选;每日探针会持续盯着它。
+
+**若将来 VL 重新启用**,三个方向按成本排序:实测验证 `qwen3.5-ocr` 能否承担通用 VL(零成本)/ 给 zhipu 充值恢复 `glm-4.6v` / 接新 provider。
+
+### 9.2 ark 与 tencent 的可用模型待补齐
+
+本次按实测把这两家收缩到 2 个条目(`tencent/minimax-m2.7`、剔空 ark)。owner 将稍后提供两家的完整可用清单,届时按判据 1 加回 —— **改数据即可**,provider 配置与代码路径本次全部保留,这正是本次不删 ark provider 配置的原因。
 
 ---
 
