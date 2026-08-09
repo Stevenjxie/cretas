@@ -38,6 +38,10 @@ from smartbi.gold.restaurant.metric_registry import (
     DIMENSIONS as _REG_DIMENSIONS,
     render_dimension_vocabulary as _render_dimension_vocabulary,
     canonical_dimensions as _canonical_dimensions,
+    canonical_metrics as _canonical_metrics,
+    METRICS as _REG_METRICS,
+    DERIVED as _REG_DERIVED,
+    render_metric_vocabulary as _render_metric_vocabulary,
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _KITCHEN_OPS_NOUNS,
@@ -928,7 +932,10 @@ _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
 _SEMANTIC_DIMENSIONS = frozenset(_REG_DIMENSIONS) | frozenset(
     {"dish", "time", "customer"})
 _SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
-_SEMANTIC_METRICS = frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
+#: 取值域 = 登记表的键 ∪ 原有(数据缺口项 + 旧别名)。
+#: ⛔ 原有那些必须留着: 计划缓存/已晋升路由里存着它们, 且数据缺口项要能被
+#:    识别出来才谈得上「如实说没有」。
+_SEMANTIC_METRICS = frozenset(_REG_METRICS) | frozenset(_REG_DERIVED) | frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
 
 
 def _repair_backed_by_user_wording(
@@ -2091,6 +2098,9 @@ def _build_spec(
         # invent sales_volume/orders requirements and then reject an otherwise
         # valid revenue overview for failing to echo the invented list.
         requested_metrics = ()
+    # ⛔ 与维度同一时机归一: 下面的意图规划、契约修复都按管线的旧写法
+    #    (sales_volume/recipe_cost/wastage)比对。
+    requested_metrics = _canonical_metrics(requested_metrics)
     if llm_semantics_authoritative:
         wants_margin = bool(llm_wants_margin)
         asks_profitability = bool(llm_asks_profitability)
@@ -5048,9 +5058,11 @@ def _build_t3_prompt(
         "“多少/怎么样/赚钱吗/有没有店亏损/哪家店最好”是 lookup，不是 diagnose；"
         "除非用户明确问原因，否则不得擅自升级为原因诊断。"
         "优化请求必须选 BUSINESS_OPTIMIZATION，不能退化成只报营收的 SALES_SUMMARY。\n"
-        "4. requested_metrics 只能使用 net_profit、table_turnover、recipe_cost、wastage、"
-        "sales_volume、gross_margin、revenue、orders、staffing、return_rate、"
-        "customer_review、production_time、service_speed、process_bottleneck；"
+        # ⛔ 指标可选值由 `render_metric_vocabulary()` 渲染, 不在这里手写。
+        #    ⚠️ 数据缺口项(净利润/翻台率/人效/盘点差异/顾客评价…)**故意不进这张表** ——
+        #       它们没有登记, 由确定性的关键词编译单独识别并走「如实说没有」。
+        #       塞进 prompt 等于让规划器承诺一个系统给不出的东西。
+        "4. requested_metrics 只能使用: " + _render_metric_vocabulary() + "；"
         # ⛔ 维度可选值由 `render_dimension_vocabulary()` 渲染, 不在这里手写。
         "dimensions 只能使用: " + _render_dimension_vocabulary() + "。"
         "每个维度只写一次, ⛔ 不要同时写同义的两个(例如 product 和 dish 只写 product)。"

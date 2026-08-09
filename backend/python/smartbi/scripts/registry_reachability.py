@@ -27,13 +27,14 @@ from smartbi.gold.restaurant.generic_answer import spec_to_cell
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
     canonical_dimensions,
+    canonical_metrics,
     DERIVED,
     DIMENSIONS,
     METRICS,
 )
 from smartbi.gold.restaurant.restaurant_intent import (
-    _REQUEST_METRIC_RULES,
     _SEMANTIC_DIMENSIONS,
+    _SEMANTIC_METRICS,
 )
 
 #: 规格里 `analysis_action` 的**真实**取值域。
@@ -63,7 +64,10 @@ class _ProbeSpec:
 def planner_vocabulary() -> dict:
     """规划器**真正能产出**的取值域。取自它自己的定义，⛔ 不另抄一份。"""
     return {
-        "metrics": [k for k, _ in _REQUEST_METRIC_RULES],
+        # ⚠️ 用 `_SEMANTIC_METRICS`(LLM **输出**的取值域), 不是
+        #    `_REQUEST_METRIC_RULES`(确定性关键词编译表)。批 3 扩的是前者;
+        #    量错了域, 这个闸会报「一点没变」而实际上变了。
+        "metrics": sorted(_SEMANTIC_METRICS),
         "dimensions": sorted(_SEMANTIC_DIMENSIONS),
         "actions": list(_ACTIONS),
         "directions": list(_DIRECTIONS),
@@ -84,7 +88,7 @@ def reachable_cells() -> Set[Tuple[str, str, str]]:
         # ⛔ 必须**跟真实管线一样先归一**: 规格入口会把 product→dish、date→time。
         #    不归一就是在量一个系统实际不做的动作 —— 这个闸就成了自说自话。
         cell = spec_to_cell(_ProbeSpec(
-            requested_metrics=(metric,),
+            requested_metrics=canonical_metrics((metric,)),
             dimensions=canonical_dimensions((dim,)) if dim else (),
             analysis_action=action,
             ranking_direction=direction,

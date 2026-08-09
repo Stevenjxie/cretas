@@ -477,3 +477,76 @@ def test_dimension_normalization_happens_before_its_first_consumer():
         assert i_norm < body.index(consumer), (
             f"🔴 归一排在「{why}」之后 —— 那个消费者会读到未归一的写法, "
             f"比对失败后**静默**走进拒答")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 批 3 · 指标 —— 同一条纪律
+# ═══════════════════════════════════════════════════════════════════════════
+def test_prompt_renders_every_registered_metric():
+    """🔴 承重: 登记表里的每个指标(含派生量)都必须进 prompt。"""
+    from smartbi.gold.restaurant.metric_registry import DERIVED, METRICS
+    from smartbi.gold.restaurant.restaurant_intent import _build_t3_prompt
+
+    prompt = _build_t3_prompt("本月营收多少", None, None, ("模拟·静安嘉里中心店",), None)
+    for key, m in list(METRICS.items()) + list(DERIVED.items()):
+        assert key in prompt, f"指标「{key}」登记了但没进 prompt —— 规划器指不到它"
+        assert m.asks in prompt, f"指标「{key}」的用法说明没进 prompt"
+
+
+def test_data_gap_metrics_stay_out_of_the_prompt():
+    """⛔ 数据缺口项**不进 prompt** —— 它们没有登记, 本来就该走「如实说没有」。
+
+    塞进去等于让规划器承诺一个系统给不出的东西。
+    ⚠️ 但它们必须留在**取值域**里: 确定性的关键词编译会识别出「净利润」,
+       取值域去掉它, 那条识别结果会被校验丢弃 —— 于是连「没有这项数据」
+       都说不出来, 变成答非所问。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _build_t3_prompt, _SEMANTIC_METRICS)
+
+    prompt = _build_t3_prompt("本月营收多少", None, None, ("模拟·静安嘉里中心店",), None)
+    for gap in ("net_profit", "table_turnover", "staffing", "stocktaking_shortage",
+                "customer_review", "production_time", "service_speed"):
+        assert gap not in prompt, f"数据缺口项「{gap}」进了 prompt —— 等于承诺一个给不出的东西"
+        assert gap in _SEMANTIC_METRICS, (
+            f"数据缺口项「{gap}」被移出取值域 —— 确定性编译识别出它之后会被丢弃, "
+            f"连「没有这项数据」都说不出来")
+
+
+def test_planner_metric_domain_follows_the_registry():
+    from smartbi.gold.restaurant.metric_registry import DERIVED, METRICS
+    from smartbi.gold.restaurant.restaurant_intent import _SEMANTIC_METRICS
+
+    missing = (set(METRICS) | set(DERIVED)) - set(_SEMANTIC_METRICS)
+    assert not missing, f"这些已登记指标不在规划器取值域里: {sorted(missing)}"
+
+
+def test_new_metrics_reach_their_cells_without_a_second_list():
+    """新指标靠**同名直通**接上。⚠️ 归一之后管线用旧写法, 所以这里用管线写法测。"""
+    from smartbi.gold.restaurant.metric_registry import canonical_metrics
+    for metric in ("guests", "platform_fee", "avg_ticket", "gross_revenue",
+                   "discount_rate", "tax_amount"):
+        spec = _Spec(requested_metrics=canonical_metrics((metric,)),
+                     dimensions=("store",), ranking_direction="best")
+        cell = spec_to_cell(spec)
+        assert cell is not None and cell[0] == metric, (
+            f"指标 {metric} 没接上 —— 登记了但翻译不出来, 实际 {cell}")
+
+
+def test_legacy_metric_aliases_still_resolve():
+    """sales_volume→销量 / recipe_cost→食材成本 / wastage→损耗成本:
+    计划缓存和已晋升路由里存着旧写法, 回放时必须照旧成立。"""
+    for legacy, expect in (("sales_volume", "sales_qty"),
+                           ("recipe_cost", "food_cost"),
+                           ("wastage", "wastage_cost")):
+        cell = spec_to_cell(_Spec(requested_metrics=(legacy,), dimensions=("store",),
+                                  ranking_direction="best"))
+        assert cell is not None and cell[0] == expect, f"旧别名 {legacy} 失效: {cell}"
+
+
+def test_data_gap_metrics_are_deliberately_untranslatable():
+    """⛔ 数据缺口项翻译不出来 —— 返回 None 走原路径如实说没有,
+    绝不硬凑一个相邻指标顶包。"""
+    for gap in ("net_profit", "table_turnover", "staffing", "stocktaking_shortage"):
+        assert spec_to_cell(_Spec(requested_metrics=(gap,))) is None, (
+            f"数据缺口项「{gap}」被翻译成了某个格子 —— 会拿相邻指标顶包")

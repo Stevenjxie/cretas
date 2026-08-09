@@ -38,15 +38,23 @@ logger = logging.getLogger(__name__)
 #:    customer_review / production_time / service_speed / process_bottleneck)
 #:    是**数据缺口**，翻译不出来 → 返回 None → 走原路径如实说没有，
 #:    ⛔ 绝不硬凑一个相邻指标顶包。
-_SPEC_METRIC_TO_KEY: Dict[str, str] = {
-    "revenue": "revenue",
-    "orders": "orders",
+#: ⛔ 只登记**别名**(管线旧写法 → 登记表 key)。登记表已有的键同名直通,
+#:    不在这里重复列一遍 —— 列了就是第二份清单, 登记表加一行时两处必然漂移。
+#: ⚠️ 没映射的(net_profit/table_turnover/staffing/stocktaking_shortage/
+#:    customer_review/production_time/service_speed/process_bottleneck)是
+#:    **数据缺口**: 翻译不出来 → 返回 None → 走原路径如实说没有,
+#:    ⛔ 绝不硬凑一个相邻指标顶包。
+_SPEC_METRIC_ALIASES: Dict[str, str] = {
     "sales_volume": "sales_qty",
     "recipe_cost": "food_cost",
-    "gross_margin": "gross_margin",
     "wastage": "wastage_cost",
-    "return_rate": "return_rate",
 }
+
+
+def _metric_key(name: str) -> Optional[str]:
+    """规格里的指标名 → 登记表的 key。认不出返回 None(⛔ 不猜)。"""
+    mapped = _SPEC_METRIC_ALIASES.get(name, name)
+    return mapped if (mapped in METRICS or mapped in DERIVED) else None
 
 #: 规划器的维度枚举只有 `_SEMANTIC_DIMENSIONS` 六个。
 #: ⚠️ `customer` 没有对应的登记维度 —— 不映射，让它走原路径，
@@ -86,8 +94,8 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
     metrics = list(getattr(spec, "requested_metrics", ()) or ())
     if not metrics:
         return None
-    metric_key = _SPEC_METRIC_TO_KEY.get(metrics[0])
-    if metric_key is None or (metric_key not in METRICS and metric_key not in DERIVED):
+    metric_key = _metric_key(metrics[0])
+    if metric_key is None:
         return None
 
     dims = list(getattr(spec, "dimensions", ()) or ())

@@ -97,6 +97,9 @@ class Metric:
     #: 这个指标能按哪些维度分组。⛔ 不是所有指标配所有维度 ——
     #: 损耗表里没有收银员，订单表里没有食材。写错会拼出跑不通的 SQL。
     dimensions: Tuple[str, ...] = ()
+    #: 🔴 给规划器看的一句话: 用户怎么问才算要这个指标。
+    #: ⛔ 与 Dimension/Aggregation 的 `asks` 同一条纪律 —— prompt 由它渲染。
+    asks: str = ""
 
     def expr_at(self, grain: str) -> Optional[str]:
         return self.exprs.get(grain)
@@ -120,37 +123,37 @@ _WASTAGE_DIMS = ("all", "ingredient", "wastage_type", "wastage_reason")
 METRICS: Dict[str, Metric] = {
     # ── 金额类（订单粒度） ────────────────────────────────────────────────
     "revenue": Metric(
-        key="revenue", label="营收", unit="money",
+        key="revenue", label="营收", unit="money", asks="营业额/流水/收入/卖了多少钱",
         exprs={"txn": "SUM(t.net_amount)", "item": "SUM(i.amount)"},
         requires=("fact_pos_transaction.net_amount", "fact_pos_item.amount"),
         dimensions=_ITEM_DIMS,
     ),
     "gross_revenue": Metric(
-        key="gross_revenue", label="折前营收", unit="money",
+        key="gross_revenue", label="折前营收", unit="money", asks="打折前的原价总额",
         exprs={"txn": "SUM(t.gross_amount)"},
         requires=("fact_pos_transaction.gross_amount",),
         dimensions=_TXN_DIMS,
     ),
     "discount_amount": Metric(
-        key="discount_amount", label="折扣额", unit="money",
+        key="discount_amount", label="折扣额", unit="money", asks="优惠/折扣一共减了多少钱",
         exprs={"txn": "SUM(t.discount_amount)"},
         requires=("fact_pos_transaction.discount_amount",),
         dimensions=_TXN_DIMS,
     ),
     "tax_amount": Metric(
-        key="tax_amount", label="税额", unit="money",
+        key="tax_amount", label="税额", unit="money", asks="税金/税额",
         exprs={"txn": "SUM(t.tax_amount)"},
         requires=("fact_pos_transaction.tax_amount",),
         dimensions=_TXN_DIMS,
     ),
     "actual_receive": Metric(
-        key="actual_receive", label="实收", unit="money",
+        key="actual_receive", label="实收", unit="money", asks="实际收到手的钱",
         exprs={"txn": "SUM(t.actual_receive)"},
         requires=("fact_pos_transaction.actual_receive",),
         dimensions=_TXN_DIMS,
     ),
     "platform_fee": Metric(
-        key="platform_fee", label="平台抽佣", unit="money",
+        key="platform_fee", label="平台抽佣", unit="money", asks="外卖平台抽成/佣金/服务费",
         # 🔴 数据 2026-08-09 起已按渠道写入，但回答层此前 **0 个消费点** ——
         #    「有数据没人用」和「没数据」在用户那里长得一模一样。登记它就是接上消费点。
         exprs={"txn": "SUM(t.platform_fee_amount)"},
@@ -159,14 +162,14 @@ METRICS: Dict[str, Metric] = {
     ),
     # ── 计数类 ────────────────────────────────────────────────────────────
     "orders": Metric(
-        key="orders", label="订单数", unit="count",
+        key="orders", label="订单数", unit="count", asks="单量/多少单/订单数",
         # DISTINCT 让它在两个粒度上都成立 —— 明细粒度下同一订单只数一次。
         exprs={"txn": "COUNT(DISTINCT t.id)", "item": "COUNT(DISTINCT t.id)"},
         requires=("fact_pos_transaction.id",),
         dimensions=_ITEM_DIMS,
     ),
     "guests": Metric(
-        key="guests", label="客流", unit="count",
+        key="guests", label="客流", unit="count", asks="来了多少人/客流/人数/接待",
         # ⛔ 只有订单粒度。明细粒度下同一张单的人数会被每条明细重复加 ——
         #    不给 item 表达式 = 按菜品维度问客流会被如实拒绝，而不是给个膨胀值。
         exprs={"txn": "SUM(t.customer_count)"},
@@ -174,7 +177,7 @@ METRICS: Dict[str, Metric] = {
         dimensions=_TXN_DIMS,
     ),
     "discount_orders": Metric(
-        key="discount_orders", label="折扣单数", unit="count",
+        key="discount_orders", label="折扣单数", unit="count", asks="有多少单用了优惠",
         exprs={"txn": "COUNT(DISTINCT t.id) FILTER (WHERE t.has_discount)",
                "item": "COUNT(DISTINCT t.id) FILTER (WHERE t.has_discount)"},
         requires=("fact_pos_transaction.has_discount",),
@@ -182,7 +185,7 @@ METRICS: Dict[str, Metric] = {
     ),
     # ── 数量类（明细粒度） ────────────────────────────────────────────────
     "sales_qty": Metric(
-        key="sales_qty", label="销量", unit="qty",
+        key="sales_qty", label="销量", unit="qty", asks="卖了多少份/销量/点了多少",
         # ⛔ 只有明细粒度。订单粒度问「销量」没有意义(一张单卖了几份什么?),
         #    不给 txn 表达式 = 按订单维度问销量会被如实拒绝。
         exprs={"item": "SUM(i.qty)"},
@@ -190,21 +193,21 @@ METRICS: Dict[str, Metric] = {
         dimensions=_ITEM_DIMS,
     ),
     "return_qty": Metric(
-        key="return_qty", label="退菜量", unit="qty",
+        key="return_qty", label="退菜量", unit="qty", asks="退菜/退了多少份",
         exprs={"item": "SUM(i.return_qty)"},
         requires=("fact_pos_item.return_qty",),
         dimensions=_ITEM_DIMS,
     ),
     # ── 成本类 ────────────────────────────────────────────────────────────
     "food_cost": Metric(
-        key="food_cost", label="食材成本", unit="money",
+        key="food_cost", label="食材成本", unit="money", asks="菜品成本/食材成本/配方成本",
         exprs={"item": "SUM(i.qty * COALESCE(c.food_cost, 0))"},
         requires=("fact_pos_item.qty", "agg_restaurant_product_cost.food_cost"),
         dimensions=_ITEM_DIMS,
     ),
     # ── 损耗链（另一张事实表） ────────────────────────────────────────────
     "wastage_cost": Metric(
-        key="wastage_cost", label="损耗成本", unit="money",
+        key="wastage_cost", label="损耗成本", unit="money", asks="损耗/报损/浪费花了多少钱",
         # ⚠️ 这条建在**另一张事实表**(fact_restaurant_wastage)上, 不是 POS 链。
         #    它证明了一件事: 「新增指标是一行」只在**同一张事实表**内成立;
         #    换表还要加一个 GRAINS 条目。
@@ -215,7 +218,7 @@ METRICS: Dict[str, Metric] = {
         dimensions=_WASTAGE_DIMS,
     ),
     "wastage_qty": Metric(
-        key="wastage_qty", label="损耗量", unit="qty",
+        key="wastage_qty", label="损耗量", unit="qty", asks="损耗/报损了多少数量",
         exprs={"wastage": "SUM(w.quantity)"},
         requires=("fact_restaurant_wastage.quantity",),
         dimensions=_WASTAGE_DIMS,
@@ -241,6 +244,8 @@ class Derived:
     left: str        # 指标 key
     right: str       # 指标 key
     unit: str = "count"
+    #: 给规划器看的一句话。派生量在业务嘴里是独立指标, 必须能被指到。
+    asks: str = ""
 
 
 #: ⛔ 这 8 个在业务嘴里都是「指标」，数学上没有一个是新的取数 ——
@@ -250,20 +255,28 @@ class Derived:
 #:    交集为空就拒绝。例如「人均消费 = 营收 ÷ 客流」，客流只有订单粒度，
 #:    于是按菜品问人均消费会被自动拒绝，不需要在这里重复维护一张维度表。
 DERIVED: Dict[str, Derived] = {
-    "avg_ticket": Derived("avg_ticket", "客单价", "ratio", "revenue", "orders", "money"),
+    "avg_ticket": Derived("avg_ticket", "客单价", "ratio", "revenue", "orders", "money",
+                              asks="客单价/每单平均消费"),
     "avg_per_capita": Derived("avg_per_capita", "人均消费", "ratio",
-                              "revenue", "guests", "money"),
-    "gross_profit": Derived("gross_profit", "毛利", "diff", "revenue", "food_cost", "money"),
+                              "revenue", "guests", "money",
+                              asks="人均消费/每人花多少"),
+    "gross_profit": Derived("gross_profit", "毛利", "diff", "revenue", "food_cost", "money",
+                                asks="毛利/赚了多少(金额)"),
     "gross_margin": Derived("gross_margin", "毛利率", "ratio_of_diff",
-                            "gross_profit", "revenue", "pct"),
+                            "gross_profit", "revenue", "pct",
+                            asks="毛利率/利润率(百分比)"),
     "discount_rate": Derived("discount_rate", "折扣率", "ratio_pct",
-                             "discount_amount", "gross_revenue", "pct"),
+                             "discount_amount", "gross_revenue", "pct",
+                             asks="折扣率/优惠力度"),
     "platform_fee_rate": Derived("platform_fee_rate", "抽佣率", "ratio_pct",
-                                 "platform_fee", "revenue", "pct"),
+                                 "platform_fee", "revenue", "pct",
+                                 asks="抽佣率/平台抽成比例"),
     "dishes_per_order": Derived("dishes_per_order", "单均出品数", "ratio",
-                                "sales_qty", "orders", "qty"),
+                                "sales_qty", "orders", "qty",
+                                asks="每单点几个菜/单均出品数"),
     "return_rate": Derived("return_rate", "退菜率", "ratio_pct",
-                           "return_qty", "sales_qty", "pct"),
+                           "return_qty", "sales_qty", "pct",
+                           asks="退菜率"),
 }
 
 
@@ -464,6 +477,9 @@ def assert_registry_self_consistent() -> None:
         assert m.dimensions, f"指标 {m.key} 没声明能按哪些维度分组"
         for d in m.dimensions:
             assert d in DIMENSIONS, f"指标 {m.key} 引用了未登记的维度 {d}"
+        assert m.asks, (
+            f"指标 {m.key} 没写 `asks`(用户怎么问才算要它) —— "
+            f"规划器 prompt 由它渲染, 空着等于登记了一个永远指不到的指标")
         assert m.requires, f"指标 {m.key} 没声明依赖哪些列 —— 列缺时就无法如实说缺"
         assert m.exprs, f"指标 {m.key} 一个粒度的表达式都没有"
         # ⛔ 不在这里手写「合法粒度清单」—— 第一版写死了 ("txn","item"),
@@ -487,6 +503,7 @@ def assert_registry_self_consistent() -> None:
         for side in (d.left, d.right):
             assert side in METRICS or side in DERIVED, (
                 f"派生量 {d.key} 引用了未登记的 {side}")
+        assert d.asks, f"派生量 {d.key} 没写 `asks` —— 规划器指不到它"
         assert d.key not in METRICS, (
             f"{d.key} 同时登记成指标和派生量 —— 两处定义必然打架")
     for d in DIMENSIONS.values():
@@ -570,6 +587,43 @@ def canonical_dimensions(names) -> Tuple[str, ...]:
         if k not in out:
             out.append(k)
     return tuple(out)
+
+
+#: 登记表的键 → **管线内部**使用的指标名。方向与 `_REGISTRY_TO_PIPELINE_DIMENSION`
+#: 一致, 理由也一致: 管线里 `sales_volume`/`recipe_cost`/`wastage` 有大量消费者
+#: (关键词编译表、契约要素表、resolver 选择、已晋升路由、计划缓存)。
+#: ⚠️ 新指标(guests/platform_fee/avg_ticket/…)没有旧名, **原样通过**。
+_REGISTRY_TO_PIPELINE_METRIC: Dict[str, str] = {
+    "sales_qty": "sales_volume",
+    "food_cost": "recipe_cost",
+    "wastage_cost": "wastage",
+}
+
+
+def canonical_metrics(names) -> Tuple[str, ...]:
+    """把指标名归一到**管线内部**的写法, 去重且保序。
+
+    ⛔ 认不出的原样保留 —— 数据缺口项(net_profit/table_turnover/staffing…)
+       正是靠它们原样穿过去, 让下游如实说「这项没有数据」。
+    """
+    out: list = []
+    for n in names or ():
+        k = _REGISTRY_TO_PIPELINE_METRIC.get(n, n)
+        if k not in out:
+            out.append(k)
+    return tuple(out)
+
+
+def render_metric_vocabulary() -> str:
+    """给规划器 prompt 用的指标可选值 —— **唯一来源是本登记表**。
+
+    ⛔ 数据缺口项(净利润/翻台率/人效/盘点差异/顾客评价…)**不在这里** ——
+       它们没有登记, 本来就该走「如实说没有」。把它们塞进 prompt 等于
+       让规划器承诺一个系统给不出的东西。
+    """
+    parts = [f"{m.key}({m.label}, {m.asks})" for m in METRICS.values()]
+    parts += [f"{d.key}({d.label}, {d.asks})" for d in DERIVED.values()]
+    return "、".join(parts)
 
 
 def render_dimension_vocabulary() -> str:
