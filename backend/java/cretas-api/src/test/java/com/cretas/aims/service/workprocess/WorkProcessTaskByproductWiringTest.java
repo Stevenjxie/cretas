@@ -6,7 +6,6 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.bom.ByproductDeclarationResolver;
@@ -42,7 +41,6 @@ import static org.mockito.Mockito.when;
 class WorkProcessTaskByproductWiringTest {
 
     @Mock private WorkProcessTaskRepository taskRepository;
-    @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private WorkProcessRepository workProcessRepository;
     @Mock private UserRepository userRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
@@ -52,7 +50,7 @@ class WorkProcessTaskByproductWiringTest {
 
     private WorkProcessTaskServiceImpl service() {
         WorkProcessTaskServiceImpl service = new WorkProcessTaskServiceImpl(
-                taskRepository, productWorkProcessRepository, workProcessRepository,
+                taskRepository, workProcessRepository,
                 userRepository, productionBatchRepository, productTypeRepository, runtimeService);
         ReflectionTestUtils.setField(service, "byproductDeclarationResolver", resolver);
         return service;

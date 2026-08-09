@@ -387,6 +387,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private PlanUnitAuthority resolvePlanUnitAuthority(
             String factoryId, String productTypeId, List<String> targetFinishedGoodIds,
             Long selectedWorkflowId, Integer selectedWorkflowVersion) {
+        return resolvePlanUnitAuthority(factoryId, productTypeId, targetFinishedGoodIds,
+                selectedWorkflowId, selectedWorkflowVersion, true);
+    }
+
+    /**
+     * @param failClosed true=没有可用画布工艺就当场抛; false=返回 null 交给调用方决定何时抛。
+     *
+     *     <p>🔴 建计划必须传 false: 工艺要求要排在**鉴权与归属校验之后**。否则跨工厂追加
+     *     销售单本该 403, 却会先撞上「该产品尚未配置生产工艺」的 409 —— 越权请求收到一条
+     *     误导性业务提示, 真正的拒绝理由被吞掉。
+     */
+    private PlanUnitAuthority resolvePlanUnitAuthority(
+            String factoryId, String productTypeId, List<String> targetFinishedGoodIds,
+            Long selectedWorkflowId, Integer selectedWorkflowVersion, boolean failClosed) {
         String productionBaseUnit = resolvePlannedOutputUnitForProduct(factoryId, productTypeId);
         boolean hasSelectedId = selectedWorkflowId != null;
         boolean hasSelectedVersion = selectedWorkflowVersion != null;
@@ -429,10 +443,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withHintTarget("selectedWorkflowId");
             }
         }
-        return new PlanUnitAuthority(productionBaseUnit, productionBaseUnit,
-                resolveNetWeightGramsForProduct(factoryId, productTypeId),
-                ProductionBatch.WorkflowSelectionMode.LEGACY,
-                null, null, null, null, Map.of());
+        // 🔴 2026-08-09 (Steve 拍板): 老路(LEGACY)整条下架 —— 系统只认画布工艺。
+        //
+        // 这里原本回落成 LEGACY 权威(工艺/BOM 字段全 null, 报工走 product_work_processes 模板)。
+        // 现在没有已发布并启用的画布工艺 = 不能生产, 当场 fail closed。
+        // ⚠️ 这是**有意的**收紧: 拍板时已知 509 个产品里只有 8 个配了画布工艺,
+        //    其余产品要先补工艺才能建计划。不要因为「挡住了很多产品」就把这里改回回落。
+        if (!failClosed) {
+            return null;
+        }
+        throw workflowRequired();
+    }
+
+    private BusinessException workflowRequired() {
+        return new BusinessException(409, "该产品尚未配置生产工艺，不能生产")
+                .withCode("WORKFLOW_REQUIRED")
+                .withHint("请先在「产品工艺画布」为该产品建立工艺，发布并启用后再建计划")
+                .withHintTarget("productTypeId")
+                .withSeverity("BLOCKING");
     }
 
     private BigDecimal resolveNetWeightGramsForProduct(String factoryId, String productTypeId) {
@@ -1575,10 +1603,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // Resolve by selected terminal outputs, not by the legacy product_type_id anchor.
         // The resolved exact workflow/version is persisted on the plan and later copied to its batch.
+        // failClosed=false: 这里只解析, 不抛。工艺要求排在下面的 SO 归属/跨厂校验之后,
+        // 否则越权请求会先收到「该产品尚未配置生产工艺」而不是 403。
         PlanUnitAuthority planUnitAuthority = resolvePlanUnitAuthority(
                 factoryId, request.getProductTypeId(), request.getTargetFinishedGoodIds(),
-                request.getSelectedWorkflowId(), request.getSelectedWorkflowVersion());
-        if (planUnitAuthority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW) {
+                request.getSelectedWorkflowId(), request.getSelectedWorkflowVersion(), false);
+        if (planUnitAuthority != null
+                && planUnitAuthority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW) {
             if (Boolean.TRUE.equals(request.getSkipProcessReporting())) {
                 throw new BusinessException(400, "Workflow 生产计划必须使用逐道报工")
                         .withCode("WORKFLOW_PLAN_REQUIRES_STEPWISE")
@@ -1598,15 +1629,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
-        request.setPlannedUnit(planUnitAuthority.unit());
+        // plannedUnit 由下面的 applyPlanUnitAuthority 统一赋值(工艺闸通过之后)。
 
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
-        applyPlanUnitAuthority(plan, planUnitAuthority);
 
         // SP5 多 SO 合并: 规范化 sourceOrderIds — 确保 sourceOrderId 也在列表中,
         // 并校验追加的每个 SO 属于本工厂且已财审 (向后兼容: 单 SO 场景 sourceOrderIds 为空时自动补填)。
         normalizeAndValidateSourceOrderIds(factoryId, plan, request);
+
+        // ⛔ 工艺闸放在这里 —— 鉴权(403)与归属契约校验跑完之后, 才轮到「有没有工艺」。
+        if (planUnitAuthority == null) {
+            throw workflowRequired();
+        }
+        applyPlanUnitAuthority(plan, planUnitAuthority);
 
         plan = productionPlanRepository.save(plan);
 

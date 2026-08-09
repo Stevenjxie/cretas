@@ -2,7 +2,6 @@ package com.cretas.aims.service.workprocess.impl;
 
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.common.PageResponse;
-import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -10,7 +9,6 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask.Status;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -46,7 +44,6 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private static final Logger log = LoggerFactory.getLogger(WorkProcessTaskServiceImpl.class);
 
     private final WorkProcessTaskRepository taskRepository;
-    private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
     private final UserRepository userRepository;
     private final ProductionBatchRepository productionBatchRepository;
@@ -218,79 +215,19 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             return workflow.get();
         }
 
-        List<ProductWorkProcess> templates = productWorkProcessRepository
-                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
-
-        // 计划级免工序报工模式判定 (六扇门 Wave2 升级, V20261017_01):
-        //   skip=true 显式选择 OR 产品未配任何工序 (工序 optional) → 走批次级两点报工 spawn。
-        //   这两种情形都不再 422 阻塞 (旧逐道路径才在 0 工序时报 422)。
-        if (templates.isEmpty()) {
-            return spawnBatchLevelTwoPointTasks(
-                    factoryId, productionBatchId, productTypeId,
-                    materialResponsibleId, outputResponsibleId, true);
-        }
-
-        // 一次性查所有 WorkProcess 定义, 用作 unit 默认值 fallback
-        List<String> processIds = templates.stream()
-                .map(ProductWorkProcess::getWorkProcessId)
-                .distinct()
-                .collect(Collectors.toList());
-        Map<String, WorkProcess> definitions = workProcessRepository
-                .findByFactoryIdAndIdIn(factoryId, processIds).stream()
-                .collect(Collectors.toMap(WorkProcess::getId, wp -> wp));
-
-        LocalDateTime now = LocalDateTime.now();
-        List<WorkProcessTask> spawned = templates.stream()
-                .filter(t -> Boolean.TRUE.equals(t.getIsActive()))
-                // Wave2 可配置报工粒度: 跳过免报工序 (reportingRequired=false), 不生成报工任务。
-                // null 视为 true (向后兼容: 老配置行无此字段时仍逐道报)。
-                .filter(t -> !Boolean.FALSE.equals(t.getReportingRequired()))
-                .map(template -> {
-                    WorkProcess def = definitions.get(template.getWorkProcessId());
-                    String unit = template.getUnitOverride() != null
-                            ? template.getUnitOverride()
-                            : (def != null ? def.getUnit() : null);
-                    unit = requireConfiguredUnit(unit, template.getWorkProcessId(), "input");
-                    requireConfiguredUnit(def != null ? def.getOutputUnit() : null,
-                            template.getWorkProcessId(), "output");
-                    Integer estMinutes = template.getEstimatedMinutesOverride() != null
-                            ? template.getEstimatedMinutesOverride()
-                            : (def != null ? def.getEstimatedMinutes() : null);
-
-                    return WorkProcessTask.builder()
-                            .factoryId(factoryId)
-                            .productionBatchId(productionBatchId)
-                            .productWorkProcessId(template.getId())
-                            .workProcessId(template.getWorkProcessId())
-                            .productTypeId(productTypeId)
-                            .processOrder(template.getProcessOrder() != null ? template.getProcessOrder() : 0)
-                            .status(Status.PENDING)
-                            .plannedUnit(unit)
-                            .estimatedMinutes(estMinutes)
-                            .assignedTo(template.getResponsibleWorkerId())
-                            .createdAt(now)
-                            .updatedAt(now)
-                            .build();
-                })
-                .collect(Collectors.toList());
-
-        if (spawned.isEmpty()) {
-            throw new BusinessException(
-                    422,
-                    "产品 " + productTypeId + " 工序配置全部禁用或全部免报, 无可 spawn 任务")
-                    .withHint("请到'产品工序配置'启用并标记至少一道工序需报工 (建议至少保留领料 + 产出两道)");
-        }
-
-        List<WorkProcessTask> saved = taskRepository.saveAll(spawned);
-        log.info("批次 {} 已 spawn {} 道工序任务 (productType={})",
-                productionBatchId, saved.size(), productTypeId);
-
-        // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
-        Map<Long, String> nameMap = loadAssigneeNames(saved);
-        return saved.stream()
-                .map(t -> toDTO(t, definitions.get(t.getWorkProcessId()),
-                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
-                .collect(Collectors.toList());
+        // 🔴 2026-08-09 (Steve 拍板): 老路(LEGACY)整条下架。
+        //
+        // 这里原本有两级回落: 先按 product_work_processes 工序模板逐道 spawn, 模板为空再退到
+        // 批次级两点哨兵任务。两级都是画布之前的老路, 一并删除。画布没能物化出任务 =
+        // 这个批次没有可执行的工艺, 当场 fail closed —— 而不是悄悄换一套规则继续跑
+        // (那正是本仓最常见的「两处口径打架」的来源)。
+        //
+        // ⚠️ 上面**显式**选择的免工序报工(skipProcessReporting=true)保留 —— 那是用户主动的
+        //    报工粒度选择, 不是"找不到工艺时的回落"。
+        throw new BusinessException(409, "该批次没有可用的生产工艺，无法生成报工任务")
+                .withCode("WORKFLOW_REQUIRED")
+                .withHint("请先为该产品在「产品工艺画布」建立工艺，发布并启用后再生成批次")
+                .withSeverity("BLOCKING");
     }
 
     /**
@@ -371,15 +308,6 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .collect(Collectors.toList());
     }
 
-    private String requireConfiguredUnit(String unit, String workProcessId, String unitRole) {
-        if (unit == null || unit.isBlank()) {
-            throw new BusinessException(422,
-                    "legacy process " + unitRole + " unit is not configured: " + workProcessId)
-                    .withCode("PRODUCTION_UNIT_NOT_CONFIGURED")
-                    .withHint("请在产品工序配置中填写投入单位，或改用已发布 Workflow 的端口单位");
-        }
-        return unit.trim();
-    }
 
     /** 哨兵 work_process_id → 友好报工名 (RN/web 展示); 非哨兵返 null。 */
     private String sentinelProcessName(String workProcessId) {
