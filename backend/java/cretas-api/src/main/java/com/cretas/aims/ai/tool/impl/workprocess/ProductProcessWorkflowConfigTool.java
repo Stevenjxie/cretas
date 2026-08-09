@@ -5,6 +5,7 @@ import com.cretas.aims.ai.tool.AbstractTool;
 import com.cretas.aims.constant.SeasoningProcessCategory;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
@@ -65,12 +66,15 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
     private final ProductProcessWorkflowValidator workflowValidator;
+    private final ProductProcessWorkflowService workflowService;
 
     public ProductProcessWorkflowConfigTool(
             ObjectMapper objectMapper,
-            ProductProcessWorkflowValidator workflowValidator) {
+            ProductProcessWorkflowValidator workflowValidator,
+            ProductProcessWorkflowService workflowService) {
         this.objectMapper = objectMapper;
         this.workflowValidator = workflowValidator;
+        this.workflowService = workflowService;
     }
 
     @Override
@@ -221,18 +225,56 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                 return objectMapper.writeValueAsString(refusal);
             }
 
+            ProductProcessWorkflowDTO candidate = validated.candidate();
+
+            // ⛔ factoryId 只从 context 取。AI 能控制 definition 里的任何字段,
+            // 让它决定写哪个租户 = 把租户隔离交给模型自觉。
+            String factoryId = requireFactoryId(context);
+            String productTypeId = candidate.getProductTypeId();
+            if (productTypeId == null || productTypeId.isBlank()) {
+                // ⛔ 不猜: 没有归属就不知道这张画布属于哪个成品, 猜错等于写到别的产品上。
+                return buildSemanticError(
+                        "WORKFLOW_OWNER_REQUIRED", "Workflow definition must carry productTypeId");
+            }
+
+            // ⛔ 只调 saveDraft。它按构造只写 DRAFT, 且自带租户归属校验 + 乐观锁。
+            // 落库的四道闸全在它里面, 这里【一行都不重写】—— 重写等于把那些保证作废。
+            ProductProcessWorkflowDTO saved =
+                    workflowService.saveDraft(factoryId, productTypeId, candidate);
+
             Map<String, Object> data = new LinkedHashMap<>();
-            data.put("status", "VALIDATED");
-            data.put("applied", false);
+            data.put("status", "DRAFT");
+            data.put("applied", true);
+            // 回传新 lockVersion: 不回传的话 agent 只能改一次, 第二次必然 409。
+            data.put("lockVersion", saved.getLockVersion());
+            data.put("hint", "已写入草稿。发布需要人在产品配置页确认。");
             return buildSuccessResult(data);
         } catch (MissingDefinitionException missing) {
             return buildSemanticError(
                     "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required");
-        } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+        } catch (BusinessException business) {
+            // 409 冲突 / 400 归属不符都走这里。⛔ 不吞、不重试 —— 冲突意味着有人在同一张
+            // 画布上工作, 悄悄重试会覆盖掉他。
+            // ⚠️ 用 getErrorCode()(String) 不是 getCode() —— 后者返回 Integer 的 HTTP 码(409),
+            // 传给 buildSemanticError(String, String) 会编译不过。
+            String errorCode = business.getErrorCode() == null
+                    ? "WORKFLOW_WRITE_REJECTED" : business.getErrorCode();
+            return buildSemanticError(errorCode, business.getMessage());
+        } catch (PatchRejectedException | IllegalArgumentException error) {
             return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
         } catch (Exception unexpected) {
             return buildSemanticError("WORKFLOW_PATCH_FAILED", "Workflow patch batch failed");
         }
+    }
+
+    /** ⛔ context 里没有 factoryId 就直接拒 —— 不许回退到入参里的任何值。 */
+    private String requireFactoryId(Map<String, Object> context) {
+        Object raw = context == null ? null : context.get("factoryId");
+        String factoryId = raw == null ? null : raw.toString().trim();
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId missing from execution context");
+        }
+        return factoryId;
     }
 
     private List<Map<String, Object>> sanitizePatches(Object rawPatches) {

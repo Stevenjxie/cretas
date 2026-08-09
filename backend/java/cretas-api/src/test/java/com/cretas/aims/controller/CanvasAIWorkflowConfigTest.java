@@ -15,6 +15,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.governance.ToolSimilarityService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -310,8 +311,11 @@ class CanvasAIWorkflowConfigTest {
 
     @Test
     void realRegistryResolvesRealWorkflowToolForControllerPreview() throws Exception {
+        // 这条只测 preview 路径(realController.chat 走 preview), 不该碰库 —— 落库路径由
+        // ProductProcessWorkflowConfigToolWriteTest 覆盖。
         ProductProcessWorkflowConfigTool realTool = new ProductProcessWorkflowConfigTool(
-                objectMapper, new ProductProcessWorkflowValidator());
+                objectMapper, new ProductProcessWorkflowValidator(),
+                mock(ProductProcessWorkflowService.class));
         ToolRegistry realRegistry = new ToolRegistry();
         Field executors = ToolRegistry.class.getDeclaredField("toolExecutors");
         executors.setAccessible(true);

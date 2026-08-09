@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +17,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class ProductProcessWorkflowConfigToolTest {
 
@@ -24,8 +26,12 @@ class ProductProcessWorkflowConfigToolTest {
 
     @BeforeEach
     void setUp() {
+        // 本类只测 preview 与校验, 落库路径由 ProductProcessWorkflowConfigToolWriteTest 覆盖。
+        // ⛔ 这里给 mock 不是为了让测试变绿, 是因为这些用例本来就不该碰库。
         tool = new ProductProcessWorkflowConfigTool(
-                objectMapper, new ProductProcessWorkflowValidator());
+                objectMapper,
+                new ProductProcessWorkflowValidator(),
+                mock(ProductProcessWorkflowService.class));
     }
 
     @Test
