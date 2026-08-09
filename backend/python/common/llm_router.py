@@ -962,6 +962,33 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen3-max-preview"),
         ("aliyun_c", "glm-5.1"), ("aliyun_c", "deepseek-v3.1"),
+        # ── 2026-08-09: 上面**全部**免费额度耗尽那天补进来的一层 ──────────
+        #
+        # 🔴 当天实测: REVIEW 链 20 个组合里只有 2 个还活着 ——
+        #    `zhipu/glm-4.5-air`(熔断中, 且实测不吐 JSON, 合约 0/3) 与
+        #    `aliyun_c/deepseek-v3.2`(那颗毒丸, confidence 恒负, 合约 0/3)。
+        #    阿里云 a/b/c 全是 403 `Free quota exhausted`, 腾讯全是 402
+        #    `401008 free trial quota exhausted`, 火山是 429 `SetLimitExceeded`。
+        #    于是 T3 规划器整层 fail-closed, 而 66.5% 的餐饮提问走这一层。
+        #
+        # ⛔ 判据不是「能否调通」而是「答对 intent 且 confidence>=0.6」——
+        #    07-30 那轮已经证明「调通但 confidence=-1.0」等于毒丸。
+        #    拿**真实 T3 prompt** 逐个打分(3 个问句 / SALES_SUMMARY, GROSS_MARGIN,
+        #    WASTAGE), 当天仍有额度的候选实测:
+        #      qwen3-vl-plus                  3/3  conf 0.90-0.98   3-4s   ← 选它
+        #      deepseek-r1                    3/3  conf 0.95       13-70s  ✗ 超预算
+        #      qwen3-235b-a22b-thinking-2507  3/3  conf 0.85-0.95  28-46s  ✗ 超预算
+        #      qwen3-vl-32b-instruct          2/3  (把菜品毛利问句判成营收汇总) 3-4s
+        #      qwen3-vl-flash-2026-01-22      2/3  (同上)                    2s
+        #    两个 reasoner 虽然满分, 但 13-70s 直接击穿 REVIEW 的 12s 交互预算,
+        #    故意**不**放进来 —— 放进来只会把「答不出来」换成「等到超时」。
+        #
+        # ⚠️ 它们是 VL(视觉)模型, 这里当纯文本用: 已在 _SAFE_MODELS 白名单内
+        #    (VL 槽在用), 纯文本入参实测正常。放在这一段而不是链头 ——
+        #    上面那些额度恢复后行为逐字不变, 只有全耗尽时才会走到这里。
+        ("aliyun_c", "qwen3-vl-plus"),
+        ("aliyun_c", "qwen3-vl-32b-instruct"),
+        ("aliyun_c", "qwen3-vl-flash-2026-01-22"),
     ] + _TEXT_TAIL + [
         # ⛔ aliyun_c/deepseek-v3.2 必须排在**整条链最后**, _TEXT_TAIL 之后。
         #
