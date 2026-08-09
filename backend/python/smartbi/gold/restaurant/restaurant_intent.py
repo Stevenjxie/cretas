@@ -6946,6 +6946,9 @@ async def log_intent_capture(
     #: ⛔ 判据: **闸否决了什么, 就要记下来它为什么否** —— 与今天早上诊断的
     #:    「6 处否决全部静默」是同一个病, 修法也一样便宜。
     contract_missing: Optional[Sequence[str]] = None,
+    #: 被契约否决掉的那个答案(截断)。⛔ 只记「为什么否」而不记「否了什么」,
+    #: 下次还是只能去线上复现 —— 2026-08-10 就是这么卡住的。
+    rejected_answer: Optional[str] = None,
 ) -> Optional[int]:
     """Fire-and-forget capture of a parse+serve outcome, reusing the existing
     llm_fallback_logger table (no new schema). tier/confidence/contract_pass
@@ -7039,6 +7042,19 @@ async def log_intent_capture(
         #    ⛔ 之前只记了前者, 于是契约否决的理由全丢了。
         if contract_missing:
             agg_meta["contract_missing"] = sorted(set(contract_missing))
+        # 🔴 记「否掉了什么」, 不只是「为什么否」。
+        #
+        #    2026-08-10 实测: optimize 有 141 条契约未过, 而日志里的 `answer`
+        #    存的是**拒绝语本身**(140/141) —— 引擎原本产出了什么**已经丢了**。
+        #    于是「为什么 diagnose 90% 过而 optimize 只有 54%」这个问题,
+        #    从日志里根本回答不了, 只能去线上复现。
+        #
+        #    ⚠️ 更隐蔽的是: 拒绝语里含「原因分析或优化动作」这几个字, 于是
+        #    按关键词统计会看到「138/141 含契约认的词」—— 一个**完全是假象**
+        #    的读数。⛔ 判据: 统计一段文本里有没有某个词之前, 先确认这段文本
+        #    是不是你以为的那一段。
+        if rejected_answer:
+            agg_meta["rejected_answer"] = str(rejected_answer)[:600]
         if judged is False and judge_missing:
             agg_meta["answered_missing"] = judge_missing
 

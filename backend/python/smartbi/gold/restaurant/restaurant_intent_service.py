@@ -1496,6 +1496,7 @@ async def tiered_answer(
                 answer=safe_text, contract_pass=False, served=False,
                 source=capture_source,
                 contract_missing=contract.missing,
+                rejected_answer=answer_text,
             ))
             failed_result = {
                 "kind": "clarification",
