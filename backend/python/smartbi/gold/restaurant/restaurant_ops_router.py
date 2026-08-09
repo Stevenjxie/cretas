@@ -7532,80 +7532,120 @@ async def resolve_trend_analysis(
 async def resolve_inventory_warning(
     smartbi_pool, factory_id: str, *, top_n: int = 15,
 ) -> OpsAnswer:
-    """Stock-level warning: which ingredients are below their reorder point
-    or safe-stock threshold, from the latest snapshot day on record.
+    """Stock-level warning: which ingredients are below their safe-stock level.
 
-    Reads stock_qty from ``fact_inventory_snapshot`` (latest snapshot_date
-    for the factory) and thresholds from ``dim_ingredient_threshold`` (the
-    LIVE/current threshold config — falls back to the snapshot row's own
-    denormalized safe_stock_qty/reorder_point when no threshold row exists
-    for that ingredient, since the snapshot writer always populates those
-    two columns even before a threshold row is ever configured).
+    ⛔ 2026-08-09 起数据源改为 **Java 侧库存底账**(cretas 库的
+    ``raw_material_types`` + ``material_batches``)，不再读 smartbi 侧的
+    ``fact_inventory_snapshot``。原因见函数体内的大段说明：两本账曾对同一个
+    租户给出**相反**的答案 —— 本函数说「还没有接入库存快照数据」，而同一次
+    回答末尾的顺带提示同时在报「罗氏虾 剩 0kg，低于安全线」。
+
+    ⛔ 「要不要补货」的判断逐字沿用 Java 侧
+    ``MaterialBatchServiceImpl.getLowStockWarnings``(可用量 < min_stock)，
+    两个消费者读同一个源、用同一条判断，因此不可能再打架。
 
     No monetary output — this is a quantity/threshold read, not a cost/price
     read, so it carries no PRICE_VIEW_ROLES gate (unlike resolve_gross_margin
     / resolve_store_margin / resolve_sales_summary).
     """
-    async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
-        anchor = await conn.fetchrow(
-            "SELECT MAX(snapshot_date) AS max_date FROM fact_inventory_snapshot WHERE factory_id = $1",
-            factory_id,
+    # ── 数据源：Java 侧库存底账（唯一权威） ─────────────────────────────
+    #
+    # 🔴 2026-08-09 实测的口径打架：同一个租户、同一件事，两个相反的答案 ——
+    #    问「哪些食材快没了」答「还没有接入库存快照数据」，而同一次回答末尾的
+    #    顺带提示正在报「罗氏虾 剩 0kg，低于安全线 2288.42kg」。
+    #    因为两边读的是两本账：本函数原先读 smartbi 侧 `fact_inventory_snapshot`
+    #    （上传型快照，全库只有 DEMO_REST 24 行），而 Java 侧的低库存发现读
+    #    cretas 侧 `raw_material_types` + `material_batches`（7 个租户都有数据）。
+    #
+    # ⛔ 改为**只读 Java 侧底账**，不做「两边取其一」的回落 ——
+    #    回落等于留着两本账，迟早再次给出相反答案。实测确认没有任何租户
+    #    只有快照没有底账（唯一有快照的 DEMO_REST 在底账里有 53 个物料），
+    #    所以切换只增不减：覆盖从 1 个租户变成 7 个。
+    #
+    # ⚠️ 阈值口径随之统一：底账只有一个 `min_stock`（安全库存），
+    #    没有快照表那种「补货点 / 安全库存」两级。这里**不再编第二个阈值** ——
+    #    低于 min_stock = 需补货；低于 min_stock 的 1.2 倍 = 关注。
+    #    倍数是展示分档，不参与「要不要补货」的判断，那条判断逐字沿用
+    #    Java 侧 `MaterialBatchServiceImpl.getLowStockWarnings` 的口径
+    #    （min_stock > 0 且 可用量 < min_stock），两边因此不可能再打架。
+    from smartbi.config import get_cretas_pool
+
+    cretas_pool = await get_cretas_pool()
+    if cretas_pool is None:
+        # 禁降级: 连不上底账就说清楚, 不拿空结果冒充「库存正常」。
+        return OpsAnswer(
+            code="RESTAURANT_OPS_INVENTORY_WARNING",
+            title="库存预警",
+            answer_text=(
+                "库存底账暂时连不上，本次没有给出补货判断，也没有用其他数据替代。"
+                "请稍后重试。"
+            ),
+            charts=[], kpis=[], meta={"no_data": True, "reason": "cretas_pool_unavailable"},
         )
-        max_date = anchor["max_date"] if anchor else None
-        if max_date is None:
-            return OpsAnswer(
-                code="RESTAURANT_OPS_INVENTORY_WARNING",
-                title="库存预警",
-                answer_text=(
-                    "还没有接入库存快照数据，无法判断哪些食材需要补货。"
-                    "请先在库存管理里上传/维护库存快照（含安全库存和补货点），本分析即可运行。"
-                ),
-                charts=[], kpis=[],
-                meta={"no_data": True},
-            )
+
+    async with cretas_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT s.ingredient_id, i.name, i.category, i.unit,
-                   s.stock_qty::float AS stock_qty,
-                   COALESCE(t.safe_stock_qty, s.safe_stock_qty)::float AS safe_stock_qty,
-                   COALESCE(t.reorder_point, s.reorder_point)::float AS reorder_point
-              FROM fact_inventory_snapshot s
-              JOIN dim_ingredient i
-                ON i.ingredient_id = s.ingredient_id AND i.factory_id = s.factory_id
-              LEFT JOIN dim_ingredient_threshold t
-                ON t.factory_id = s.factory_id AND t.ingredient_id = s.ingredient_id
-               AND t.store_id IS NOT DISTINCT FROM s.store_id
-             WHERE s.factory_id = $1 AND s.snapshot_date = $2
-             ORDER BY i.name
+            SELECT t.name,
+                   t.category,
+                   COALESCE(t.unit, '')                                AS unit,
+                   COALESCE(SUM(b.receipt_quantity - b.used_quantity)
+                            FILTER (WHERE b.status = 'AVAILABLE'
+                                      AND b.deleted_at IS NULL), 0)::float AS stock_qty,
+                   t.min_stock::float                                   AS safe_stock_qty
+              FROM raw_material_types t
+              LEFT JOIN material_batches b
+                     ON b.material_type_id = t.id AND b.factory_id = t.factory_id
+             WHERE t.factory_id = $1
+               AND t.is_active
+               AND t.min_stock IS NOT NULL
+               AND t.min_stock > 0
+             GROUP BY t.id, t.name, t.category, t.unit, t.min_stock
+             ORDER BY t.name
             """,
-            factory_id, max_date,
+            factory_id,
         )
+
+    if not rows:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_INVENTORY_WARNING",
+            title="库存预警",
+            answer_text=(
+                "这个门店还没有设置任何食材的安全库存，无法判断哪些需要补货。"
+                "请先在物料管理里给常用食材填上安全库存，本分析即可运行。"
+            ),
+            charts=[], kpis=[], meta={"no_data": True},
+        )
+
+    max_date = date.today()
 
     high: List[Dict[str, Any]] = []
     medium: List[Dict[str, Any]] = []
     ok: List[Dict[str, Any]] = []
+    # ⛔ 分档口径: 「需补货」逐字沿用 Java 侧 getLowStockWarnings 的判断
+    #    (可用量 < min_stock), 两边因此不可能给出相反结论。
+    #    「关注」是本函数自己的展示分档(逼近安全库存), 不参与补货判断。
+    WATCH_RATIO = 1.2
     for r in rows:
         stock = r["stock_qty"] if r["stock_qty"] is not None else 0.0
-        reorder = r["reorder_point"]
         safe = r["safe_stock_qty"]
         entry = {
             "name": r["name"], "category": r["category"], "unit": r["unit"] or "",
-            "stock": stock, "reorder": reorder, "safe": safe,
+            "stock": stock, "reorder": safe, "safe": safe,
         }
-        if reorder is not None and stock < reorder:
+        if safe is not None and stock < safe:
             high.append(entry)
-        elif safe is not None and stock < safe:
+        elif safe is not None and stock < safe * WATCH_RATIO:
             medium.append(entry)
         else:
             ok.append(entry)
 
-    high.sort(key=lambda e: (e["stock"] - e["reorder"]))
+    high.sort(key=lambda e: (e["stock"] - e["safe"]))
     medium.sort(key=lambda e: (e["stock"] - e["safe"]))
 
     high_text = "\n".join([
         f"{i+1}. {'**' + e['name'] + '**' if i == 0 else e['name']} ({e['category'] or '—'}): 剩 {e['stock']:.1f} {e['unit']}，"
-        f"低于补货点 {e['reorder']:.1f} {e['unit']}，需立即补货"
+        f"低于安全库存 {e['safe']:.1f} {e['unit']}，需立即补货"
         for i, e in enumerate(high[:top_n])
     ]) or "(无)"
     medium_text = "、".join([
