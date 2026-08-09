@@ -274,7 +274,7 @@ export function WHInboundListScreen() {
             style={[styles.actionButton, { backgroundColor: '#1565c0' }]}
             labelStyle={styles.actionButtonLabel}
           >
-            采购收货
+            待收货任务
           </Button>
           <Button
             mode="outlined"

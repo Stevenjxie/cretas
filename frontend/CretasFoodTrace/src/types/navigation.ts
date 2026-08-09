@@ -727,6 +727,7 @@ export type WHInboundStackParamList = {
   WHReceiptCreate: { purchaseOrderId: string; orderNumber?: string };
   // SP6 Tier1 #25: 无扫码直接选单收货列表页
   WHPurchaseReceiveList: undefined;
+  WHUnorderedInboundReceive: { noticeId: string; noticeNumber?: string };
 };
 
 export type WHOutboundStackParamList = {
