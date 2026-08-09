@@ -229,6 +229,10 @@ const PERMISSION_MATRIX: Record<string, Record<string, string>> = {
     dashboard: 'read_write', production: 'read_write', warehouse: 'read',
     quality: 'read', procurement: 'read', hr: 'read', equipment: 'read', system: 'read'
   },
+  operations_coordinator: {
+    dashboard: 'read', operations: 'read_write', production: 'read',
+    warehouse: 'read', procurement: 'read', sales: 'read'
+  },
   quality_manager: { dashboard: 'read', production: 'read', quality: 'read_write' },
   workshop_supervisor: {
     dashboard: 'read', production: 'read_write', warehouse: 'read',

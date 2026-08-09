@@ -48,6 +48,14 @@ public interface FgReservationLedgerRepository extends JpaRepository<FgReservati
             + "WHERE l.finishedGoodsBatchId = :batchId AND l.status = 'ACTIVE'")
     BigDecimal sumActiveReservedByBatch(@Param("batchId") String batchId);
 
+    /** Read-side quantity gate for shipment/recommendation of PRESTOCKED customer inventory. */
+    @Query("SELECT COALESCE(SUM(l.reservedQty), 0) FROM FgReservationLedger l "
+            + "WHERE l.salesOrderId = :salesOrderId "
+            + "AND l.finishedGoodsBatchId = :batchId AND l.status = 'ACTIVE'")
+    BigDecimal sumActiveReservedBySalesOrderAndBatch(
+            @Param("salesOrderId") String salesOrderId,
+            @Param("batchId") String batchId);
+
     /** 非锁读 —— 只用于测试/查询, 不参与写路径。 */
     @Query("SELECT l FROM FgReservationLedger l "
             + "WHERE l.salesOrderId = :salesOrderId AND l.status = :status")

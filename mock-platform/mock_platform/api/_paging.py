@@ -170,6 +170,16 @@ def page_orders(conn, *, since_seq: int, limit: int):
         payments = conn.execute(
             "SELECT method, amount_cents FROM payment WHERE order_id = ?", (r["id"],)
         ).fetchall()
+        # 折扣构成: 这笔让利记在哪个活动头上。
+        # ⛔ 不吐这一段的话, 下游只能看到「让了多少」看不到「因为什么」,
+        #    `agg_discount` 永远是空的, 折扣构成端点恒返回 ¥0。
+        discounts = conn.execute(
+            "SELECT c.name, c.kind, c.face_value_cents, c.actual_price_cents, "
+            "       od.amount_cents "
+            "FROM order_discount od JOIN discount_campaign c ON c.id = od.campaign_id "
+            "WHERE od.order_id = ?",
+            (r["id"],),
+        ).fetchall()
         orders.append({
             "orderNo": r["order_no"],
             "shopCode": r["shop_code"],
@@ -179,6 +189,8 @@ def page_orders(conn, *, since_seq: int, limit: int):
             "grossAmount": r["gross_cents"],
             "discountAmount": r["discount_cents"],
             "netAmount": r["net_cents"],
+            # 渠道侧成本(平台抽佣/券核销费)。堂食恒为 0。
+            "platformFee": r["platform_fee_cents"],
             "guestCount": r["guest_count"],
             "items": [
                 {"dishName": i["name"], "dishCategory": i["category"],
@@ -188,6 +200,14 @@ def page_orders(conn, *, since_seq: int, limit: int):
             ],
             "payments": [
                 {"method": p["method"], "amount": p["amount_cents"]} for p in payments
+            ],
+            # 票面价/实售价只对预售型团购券有意义; 平台满减是即时立减, 两列为 0
+            # 表示「这个活动没有票面」, 不是「不知道」。
+            "discounts": [
+                {"name": d["name"], "type": d["kind"], "amount": d["amount_cents"],
+                 "faceValue": d["face_value_cents"],
+                 "actualPrice": d["actual_price_cents"]}
+                for d in discounts
             ],
         })
     next_cursor = rows[-1]["seq"] if rows else since_seq

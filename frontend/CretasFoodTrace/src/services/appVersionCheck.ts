@@ -1,6 +1,7 @@
 import axios from 'axios';
-import Toast from 'react-native-toast-message';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
 import { API_BASE_URL } from '../constants/config';
 import { logger } from '../utils/logger';
 import { compareSemver } from './compareSemver';
@@ -8,59 +9,105 @@ import { compareSemver } from './compareSemver';
 export { compareSemver };
 
 const versionLogger = logger.createContextLogger('AppVersionCheck');
+const VERSION_CHECK_TIMEOUT_MS = 10_000;
 
-interface HealthResponse {
-  status: string;
-  timestamp: number;
-  appMinVersion?: string;
+interface VersionCheckPayload {
+  currentVersion?: string;
+  latestVersion?: string;
+  minimumVersion?: string;
+  updateRequired?: boolean;
+  updateAvailable?: boolean;
+  downloadUrl?: string;
+  releaseNotes?: string;
+  fileSize?: number;
+}
+
+interface VersionCheckEnvelope {
+  success?: boolean;
+  data?: VersionCheckPayload;
+}
+
+export type AppVersionCheckResult =
+  | {
+      status: 'supported';
+      currentVersion: string;
+    }
+  | {
+      status: 'update_required';
+      currentVersion: string;
+      minimumVersion: string;
+      latestVersion: string;
+      downloadUrl: string | null;
+      releaseNotes: string | null;
+    }
+  | {
+      status: 'unavailable';
+      currentVersion: string;
+    };
+
+function getCurrentVersion(): string {
+  return (
+    Constants.nativeAppVersion ??
+    Constants.expoConfig?.version ??
+    '0.0.0'
+  );
 }
 
 /**
- * Fetch /api/mobile/health and compare server's appMinVersion against this
- * app's installed version (Constants.expoConfig.version).
- *
- * If installed < min: show non-dismissable update Toast.
- * Errors (network / parse / missing field) are logged and silently ignored —
- * version check failure must never block app startup.
- *
- * Per PR #309 B5.
+ * Check the anonymous version endpoint before mounting any login or business
+ * navigation. A confirmed unsupported binary is fail-closed. A network error
+ * is fail-open so an already supported build can retain offline field use.
  */
-export async function checkAppMinVersion(): Promise<void> {
+export async function checkAppMinVersion(): Promise<AppVersionCheckResult> {
+  const currentVersion = getCurrentVersion();
+
+  // The minimum binary version applies only to the native RN application.
+  if (Platform.OS === 'web') {
+    return { status: 'supported', currentVersion };
+  }
+
   try {
-    const currentVersion =
-      (Constants.expoConfig?.version as string | undefined) ?? '0.0.0';
+    const response = await axios.get<VersionCheckEnvelope>(
+      `${API_BASE_URL}/api/mobile/version/check`,
+      {
+        params: {
+          currentVersion,
+          platform: Platform.OS === 'ios' ? 'ios' : 'android',
+        },
+        timeout: VERSION_CHECK_TIMEOUT_MS,
+      },
+    );
 
-    // Bare axios call (no auth required, /health is public).
-    // Don't reuse apiClient — its interceptor unwraps response.data, which would
-    // strip the envelope we need. Plus we want to fail silently independent of
-    // the auth flow.
-    const resp = await axios.get<HealthResponse>(`${API_BASE_URL}/api/mobile/health`, {
-      timeout: 10000,
-    });
-
-    const minVersion = resp.data?.appMinVersion;
-    if (!minVersion) {
-      versionLogger.debug('Server did not return appMinVersion, skipping check');
-      return;
+    const payload = response.data?.data;
+    if (!payload) {
+      throw new Error('Version response did not contain data');
     }
 
-    versionLogger.info(`App version check: current=${currentVersion}, min=${minVersion}`);
+    const minimumVersion = payload.minimumVersion?.trim() || '';
+    const latestVersion = payload.latestVersion?.trim() || minimumVersion;
+    const updateRequired =
+      payload.updateRequired === true ||
+      (minimumVersion.length > 0 &&
+        compareSemver(currentVersion, minimumVersion) < 0);
 
-    if (compareSemver(currentVersion, minVersion) < 0) {
-      Toast.show({
-        type: 'error',
-        text1: '请更新版本',
-        text2: `当前版本 ${currentVersion} 已过旧，请更新到 ${minVersion} 或更高版本`,
-        autoHide: false,
-        position: 'top',
-        topOffset: 60,
-      });
-      versionLogger.warn(
-        `App version ${currentVersion} is below minimum ${minVersion}, prompted update`
-      );
+    versionLogger.info(
+      `App version check: current=${currentVersion}, minimum=${minimumVersion || 'unknown'}, latest=${latestVersion || 'unknown'}, required=${updateRequired}`,
+    );
+
+    if (!updateRequired) {
+      return { status: 'supported', currentVersion };
     }
-  } catch (err) {
-    // Silent fail — version check must not block app startup.
-    versionLogger.warn('App version check failed (non-fatal)', err);
+
+    return {
+      status: 'update_required',
+      currentVersion,
+      minimumVersion: minimumVersion || latestVersion || '—',
+      latestVersion: latestVersion || minimumVersion || '—',
+      downloadUrl: payload.downloadUrl?.trim() || null,
+      releaseNotes: payload.releaseNotes?.trim() || null,
+    };
+  } catch (error) {
+    versionLogger.warn('App version check failed; preserving offline access', error);
+    return { status: 'unavailable', currentVersion };
   }
 }

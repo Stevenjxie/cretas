@@ -11,6 +11,8 @@ import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
+import { useAuthStore } from '../../../store/authStore';
+import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -45,6 +47,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 export default function SalesOrderListScreen() {
   const navigation = useNavigation<Nav>();
+  const user = useAuthStore((state) => state.user);
+  const isOperationsReadOnly = isMobileBusinessObserver(user);
   const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -124,7 +128,7 @@ export default function SalesOrderListScreen() {
       <Card style={styles.card}
         testID={`sales-order-card-${item.id}`}
         onPress={() => navigation.navigate('SalesOrderDetail', { orderId: item.id })}
-        onLongPress={() => openSheet(item)}>
+        onLongPress={isOperationsReadOnly ? undefined : () => openSheet(item)}>
         <Card.Content>
           <View style={styles.cardHeader}>
             <Text variant="titleMedium" style={styles.orderNumber}>{item.orderNumber}</Text>
@@ -153,7 +157,7 @@ export default function SalesOrderListScreen() {
               <Text style={[styles.lrsText, hasShortage && styles.lrsTextShortage]}>缺:{shortageQty}</Text>
             </View>
           </View>
-          {item.status === 'DRAFT' && (
+          {!isOperationsReadOnly && item.status === 'DRAFT' && (
             <View style={styles.actions}>
               <Button mode="contained" compact testID={`sales-order-confirm-${item.id}`} onPress={() => handleAction(item.id, 'confirm')} style={styles.actionBtn}>确认</Button>
               <Button mode="outlined" compact testID={`sales-order-cancel-${item.id}`} onPress={() => handleAction(item.id, 'cancel')} style={styles.actionBtn}>取消</Button>
@@ -169,7 +173,9 @@ export default function SalesOrderListScreen() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="销售订单" />
-        <Appbar.Action icon="plus" testID="sales-order-create-action" onPress={() => navigation.navigate('SalesOrderCreate')} />
+        {!isOperationsReadOnly && (
+          <Appbar.Action icon="plus" testID="sales-order-create-action" onPress={() => navigation.navigate('SalesOrderCreate')} />
+        )}
         <Appbar.Action icon="refresh" onPress={onRefresh} />
       </Appbar.Header>
 
@@ -202,7 +208,7 @@ export default function SalesOrderListScreen() {
         )}
       </View>
 
-      <StickyFooterSummary
+      {!isOperationsReadOnly && <StickyFooterSummary
         stats={summary?.stats ?? []}
         loading={summary == null && !loading}
         onAIAnalyze={() =>
@@ -214,9 +220,9 @@ export default function SalesOrderListScreen() {
             },
           }))
         }
-      />
+      />}
 
-      <RowActionBottomSheet
+      {!isOperationsReadOnly && <RowActionBottomSheet
         visible={actionSheetVisible}
         onClose={() => setActionSheetVisible(false)}
         actions={rowActions}
@@ -229,7 +235,7 @@ export default function SalesOrderListScreen() {
             params: { entityType: 'SALES_ORDER', initialMessage: `${selectedOrder.orderNumber}: ` },
           }));
         }}
-      />
+      />}
     </View>
   );
 }

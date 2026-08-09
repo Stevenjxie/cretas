@@ -717,6 +717,13 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
         detected = tuple(metric for metric in detected if metric != "sales_volume")
         if "requisition_cost" not in detected:
             detected = (*detected, "requisition_cost")
+    if _is_food_cost_ratio_query(text):
+        # Revenue is the denominator of one food-cost metric, not a second
+        # report request. Keeping both creates RECIPE_COST + SALES_SUMMARY,
+        # neither of which can establish the requested period ratio.
+        detected = tuple(metric for metric in detected if metric != "revenue")
+        if "recipe_cost" not in detected:
+            detected = (*detected, "recipe_cost")
     return detected
 
 
@@ -855,7 +862,7 @@ def _is_daypart_business_query(text: str) -> bool:
     return bool(
         any(token in text for token in _DAYPART_WORDS)
         and any(token in text for token in (
-            "生意", "营收", "客流", "人效", "情况", "忙不忙",
+            "生意", "营收", "营业额", "销售额", "客流", "人效", "情况", "忙不忙",
         ))
         and any(token in text for token in (
             "怎么样", "如何", "好不好", "多少", "忙不忙",
@@ -863,6 +870,35 @@ def _is_daypart_business_query(text: str) -> bool:
             "最好", "最忙", "最高", "最差",
         ))
     )
+
+
+def _is_food_cost_ratio_query(text: str) -> bool:
+    """True only for an all-store food-cost-to-revenue ratio question.
+
+    A named ingredient remains an ingredient-grain question and a named dish
+    remains unit economics.  This closes the production failure where a single
+    period ratio was split into an all-dish recipe-cost ranking plus sales.
+    """
+    query = (text or "").strip()
+    if not query or _query_names_an_ingredient(query):
+        return False
+    named_subject = re.search(
+        r"([^，。；;？！?\s]{1,24})的(?:食材|原料|原材料|食品)成本",
+        query,
+    )
+    if named_subject and not any(
+        named_subject.group(1).endswith(scope)
+        for scope in ("全店", "整店", "本店", "全部门店", "所有门店", "各门店")
+    ):
+        return False
+    has_food_cost = any(token in query for token in (
+        "食材成本", "原料成本", "原材料成本", "食品成本",
+    ))
+    has_ratio = any(token in query for token in (
+        "成本率", "成本占", "占营收", "占营业额", "占销售额",
+        "占收入", "成本占比",
+    ))
+    return has_food_cost and has_ratio
 
 
 _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
@@ -941,6 +977,12 @@ def _plan_requested_intents(
         "RESTAURANT_OPS_PLAYBOOK",
         "RESTAURANT_OPS_STORE_DIRECTORY",
         "RESTAURANT_OPS_CHANNEL_MIX",
+        # Discount summary is a complete descriptive capability: it owns the
+        # revenue denominator, discount amount/rate and discount-type
+        # composition as one grounded answer.  A provider may redundantly emit
+        # requested_metrics=["revenue"] for that ratio; do not rewrite the
+        # selected discount capability into the neighbouring sales summary.
+        "RESTAURANT_OPS_DISCOUNT_SUMMARY",
         # Forecast staffing is already the complete optimisation capability
         # for reservation + trend + skill/hour constraints.  A planner may
         # legitimately label “怎么排班” as analysis_action=optimize; that must
@@ -3046,60 +3088,7 @@ async def _replay_zero_token_plan(
             query,
         )
 
-    # ─── L1 结构解析 ───────────────────────────────────────────────────────
-    # ⛔ 排在最后是刻意的: 人审晋升(上面)与已验证计划缓存(上面)都比结构推断更有
-    #    依据 —— L1 只在**谁都不认识这句话**时才开口, 而且只在闭集证据能唯一定
-    #    终点时才授权, 歧义一律沉默交给 planner。它替代的是「同一形状换个说法就
-    #    要重跑 3.2k token」, 不是替代任何一层已有权威。
-    structural = _structural_zero_token_spec(
-        query,
-        available_stores=available_stores,
-        suggested_stores=suggested_stores,
-    )
-    if structural is not None:
-        return structural
-
     return None
-
-
-def _structural_zero_token_spec(
-    query: str,
-    *,
-    available_stores: Sequence[str],
-    suggested_stores: Sequence[str],
-) -> Optional[Tuple[RestaurantQuerySpec, str]]:
-    """L1: 闭集槽位唯一确定意图时, 直接编译成计划(零 token)。
-
-    与内建晋升表走**同一条** `_build_spec`(tier/authority/require_explicit_time
-    逐字相同) —— 时间槽照旧由既有优先级链处理, 这里绝不发明默认值。
-    """
-    from smartbi.gold.restaurant.restaurant_intent_service import (
-        _RESOLVER_DIMENSIONS,
-    )
-    from smartbi.gold.restaurant.structural_route import resolve_structurally
-
-    match = resolve_structurally(query, candidate_intents=tuple(_RESOLVER_DIMENSIONS))
-    if match is None or match.intent not in _VALID_CODES:
-        return None
-
-    spec = _build_spec(
-        match.intent,
-        query,
-        confidence=1.0,
-        tier="exact",
-        planner_authority="promoted_exact",
-        store_options=suggested_stores or available_stores,
-        require_explicit_time=True,
-    )
-    logger.info(
-        "[restaurant-intent] zero-token structural hit: intent=%s "
-        "clarification=%s evidence=%s query=%s",
-        spec.intent,
-        spec.clarification_needed,
-        match.evidence,
-        query,
-    )
-    return spec, "structural_route"
 
 
 def _replay_plan_spec(
@@ -3843,13 +3832,24 @@ def _trusted_context_dish_followup_spec(
         candidate_code = match_restaurant_ops(query)
     except Exception:
         return None
-    # The initial keyword code is only a candidate. A diagnosis such as
-    # "为什么销量低" may have no ranking/report keyword at all; typed
-    # server-restored dish+metric+time+store slots still compile through the
-    # scoped unit-economics resolver. The strict checks below authorize only
-    # the final sealed dish plan, never this raw hint.
+    # 🔴 2026-08-08 移除「关键词没认出来就默认成菜品毛利」。
+    #
+    # 原代码是 `if candidate_code is None: candidate_code = GROSS_MARGIN`,
+    # 理由是「后面 16 道严格检查只授权最终封装的计划, 不授权这个 raw hint」。
+    # 那个理由是**真的**(检查确实很严), 但它答的不是被问的问题:
+    #
+    #   缺证据时给一个默认值, 等于在**没有任何东西指向毛利**的情况下,
+    #   把「毛利」当成起点往下走。后面的检查只能验「这个计划自洽吗」,
+    #   验不了「用户问的是不是这个」—— 那个信息在这一步已经被默认值抹掉了。
+    #
+    # ⇒ 判据(Steve 定的): 确定性层只能**认得**, 不能**猜**。认不出来就交给 LLM。
+    #    `_TRUSTED_CONTEXT_DISH_INTENTS` 有三个成员, 无证据时挑其中一个就是猜。
+    #
+    # prod 实测(近两周 961 条 trusted_context): 933 条由关键词认出,
+    # **28 条靠这个默认值兜**。去掉后这 28 条回落 planner —— 慢一点、贵一点,
+    # 但不再有「没认出来也给了个答案」。
     if candidate_code is None:
-        candidate_code = "RESTAURANT_OPS_GROSS_MARGIN"
+        return None
 
     spec = _build_spec(
         candidate_code,
@@ -4750,16 +4750,22 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 # 的 12 s 管 semantic-first, 都在 Java 的 30 s 之内。)
 _T3_PROVIDER_TIMEOUT_SECONDS = 2.5
 _T3_TOTAL_TIMEOUT_SECONDS = 6.0
+_T3_MAX_TOKENS = 500
 # Authenticated restaurant chat uses the LLM as its natural-language front
 # door.  The shared MAPPER slot deliberately carries an aggressive interactive
 # budget, but a cold quota/circuit state can consume that budget before any
 # healthy fallback receives a meaningful attempt.  REVIEW starts with the
 # verified non-thinking Max pair and remains behind the same free-tier
 # allowlist/expiry guards in ``common.llm_router``.  Give that high-accuracy
-# semantic-first path enough time to reach its Plus tail without changing the
-# shared router or the legacy T3 latency contract.
-_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 5.0
-_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0
+# semantic-first path enough time to reach its verified tail without changing
+# the shared router or the legacy T3 latency contract. 2026-08-09 production
+# evidence: the last reachable REVIEW provider returned a valid restaurant
+# intent in 6.6-9.7 s, while 500 tokens truncated its JSON at ``confidence``.
+# Keep the whole cascade inside Java's independent 30 s deadline, but give the
+# semantic planner enough time and output room to finish one validated plan.
+_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 10.0
+_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 25.0
+_SEMANTIC_MAX_TOKENS = 1000
 _T3_MIN_CONFIDENCE = 0.6
 
 
@@ -5346,6 +5352,7 @@ def _semantic_spec_from_t3(
         store_scope = "single" if len(store_names) == 1 else "multiple"
     explicit_store_directory = _is_explicit_store_directory_query(query)
     daypart_contract_repair = _is_daypart_business_query(query)
+    food_cost_ratio_contract_repair = _is_food_cost_ratio_query(query)
     store_directory_contract_repair = bool(
         explicit_store_directory
         and (
@@ -5460,6 +5467,17 @@ def _semantic_spec_from_t3(
         clarification_needed = False
         clarification_question = None
         clarification_options = ()
+    elif food_cost_ratio_contract_repair:
+        # A period food-cost ratio is one atomic metric. It must not fan out to
+        # an all-dish theoretical recipe-cost ranking and a sales summary.
+        code = "RESTAURANT_OPS_RECIPE_COST"
+        confidence = max(confidence, 0.99)
+        requested_metrics = ("recipe_cost",)
+        dimensions = ()
+        analysis_action = "lookup"
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
     if not code or confidence < _T3_MIN_CONFIDENCE:
         # 2026-07-30: 区分「模型说不准」和「模型压根不报置信度」。REVIEW 链在
         # Max/Plus 额度耗尽后落到 deepseek-v3.2, 它给出的计划内容完全正确却把
@@ -5517,7 +5535,11 @@ def _semantic_spec_from_t3(
         clarification_options=clarification_options,
         planner_authority=(
             "llm_contract_repair"
-            if store_directory_contract_repair or daypart_contract_repair
+            if (
+                store_directory_contract_repair
+                or daypart_contract_repair
+                or food_cost_ratio_contract_repair
+            )
             else "llm"
         ),
         require_explicit_time=True,
@@ -5526,6 +5548,9 @@ def _semantic_spec_from_t3(
         # 实际走的是这一个。判据: 改函数出口前先数清它有几个 return。
         allow_time_default=allow_time_default,
         llm_semantics_authoritative=True,
+        allow_explicit_slot_repair=not (
+            daypart_contract_repair or food_cost_ratio_contract_repair
+        ),
     )
 
 
@@ -5622,7 +5647,9 @@ async def _t3_llm_parse(
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0,
-            "max_tokens": 500,
+            "max_tokens": (
+                _SEMANTIC_MAX_TOKENS if prefer_high_accuracy else _T3_MAX_TOKENS
+            ),
         }
         with llm_caller_context("restaurant_intent"):
             result = await call_chain(

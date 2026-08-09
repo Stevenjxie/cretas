@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -22,6 +23,9 @@ public interface SalesService {
     SalesOrder createSalesOrder(String factoryId, CreateSalesOrderRequest request, Long userId);
 
     SalesOrder getSalesOrderById(String factoryId, String orderId);
+
+    /** PRESTOCKED 销售订单当前生效的精确成品批次预留。 */
+    List<SalesOrderReservationDTO> getActiveReservations(String factoryId, String orderId);
 
     PageResponse<SalesOrder> getSalesOrders(String factoryId, int page, int size);
 

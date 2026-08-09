@@ -7,6 +7,7 @@ import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.ClosePurchaseReceivingTaskRequest;
 import com.cretas.aims.dto.inventory.CustomerSuppliedMaterialReceiptRequest;
 import com.cretas.aims.dto.inventory.CustomerSuppliedMaterialReceivingTaskResponse;
+import com.cretas.aims.dto.inventory.CustomerMaterialArrivalReceiptRequest;
 import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
@@ -18,6 +19,7 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesOrderSuppliedMaterialRequirementService;
+import com.cretas.aims.service.inventory.CustomerMaterialArrivalNoticeService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -52,6 +54,7 @@ public class WarehouseReceivingController {
     private final WarehouseResolver warehouseResolver;
     private final FactoryWarehouseRepository factoryWarehouseRepository;
     private final SalesOrderSuppliedMaterialRequirementService suppliedMaterialRequirementService;
+    private final CustomerMaterialArrivalNoticeService arrivalNoticeService;
 
     @RequireModule("warehouse")
     @GetMapping("/tasks")
@@ -63,12 +66,15 @@ public class WarehouseReceivingController {
             @RequestParam(required = false) String orderNumber,
             @RequestParam(required = false) String salesOrderId,
             @RequestParam(required = false) String salesOrderNo,
+            @RequestParam(required = false) String arrivalNoticeId,
             @RequestParam(required = false) String sourceType) {
         boolean allSources = sourceType == null || sourceType.isBlank();
         boolean purchaseSource = allSources || "PURCHASE".equalsIgnoreCase(sourceType);
         boolean customerSource = allSources
                 || CustomerSuppliedMaterialReceivingTaskResponse.SOURCE
                 .equalsIgnoreCase(sourceType);
+        boolean arrivalSource = allSources
+                || CustomerMaterialArrivalNoticeService.SOURCE_TYPE.equalsIgnoreCase(sourceType);
         List<PurchaseReceivingTaskResponse> tasks = new ArrayList<>();
         if (purchaseSource && isBlank(salesOrderId) && isBlank(salesOrderNo)) {
             List<PurchaseReceivingTaskResponse> purchases =
@@ -82,6 +88,32 @@ public class WarehouseReceivingController {
                     .getPendingReceivingTasks(factoryId, salesOrderId, salesOrderNo)
                     .stream()
                     .map(this::toUnifiedTask)
+                    .toList());
+        }
+        if (arrivalSource && isBlank(purchaseOrderId) && isBlank(orderNumber)
+                && isBlank(salesOrderId) && isBlank(salesOrderNo)) {
+            tasks.addAll(arrivalNoticeService.list(factoryId, true).stream()
+                    .filter(notice -> isBlank(arrivalNoticeId)
+                            || arrivalNoticeId.equals(notice.getId()))
+                    .map(notice -> PurchaseReceivingTaskResponse.builder()
+                            .taskId(notice.getId())
+                            .sourceType(CustomerMaterialArrivalNoticeService.SOURCE_TYPE)
+                            .sourceId(notice.getId())
+                            .sourceNumber(notice.getNoticeNumber())
+                            .inboundReason(notice.getReason() == null
+                                    ? "CUSTOMER_MATERIAL" : notice.getReason().name())
+                            .counterpartyType(notice.getCustomerId() == null ? "NONE" : "CUSTOMER")
+                            .counterpartyId(notice.getCustomerId())
+                            .counterpartyName(notice.getCustomerName())
+                            .customerId(notice.getCustomerId())
+                            .customerName(notice.getCustomerName())
+                            .expectedArrivalAt(notice.getExpectedArrivalAt())
+                            .status(notice.getStatus().name())
+                            .statusLabel(notice.getStatus() == com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus.PARTIALLY_RECEIVED
+                                    ? "已部分收货" : "待收货")
+                            .responsibleName("待仓储核实实际物料、数量与仓库")
+                            .items(List.of())
+                            .build())
                     .toList());
         }
         return ApiResponse.success("查询成功", tasks);
@@ -99,6 +131,20 @@ public class WarehouseReceivingController {
         return ApiResponse.success("客户来料收货成功",
                 suppliedMaterialRequirementService.receive(
                         factoryId, taskId, request, extractUserId(authorization)));
+    }
+
+    @RequireModule("warehouse")
+    @PostMapping("/arrival-notices/{noticeId}/receipts")
+    @Operation(summary = "按无订单入库申请确认实际收货并生成对应所有权库存")
+    @RequirePermission({"warehouse:read_write", "inventory:write"})
+    public ApiResponse<MaterialBatchDTO> receiveCustomerMaterialArrival(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String noticeId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody CustomerMaterialArrivalReceiptRequest request) {
+        return ApiResponse.success("无订单入库收货成功",
+                arrivalNoticeService.receive(
+                        factoryId, noticeId, request, extractUserId(authorization)));
     }
 
     @RequireModule("warehouse")

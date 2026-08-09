@@ -137,7 +137,7 @@ async function submitConfirmDelivery() {
       { actualQuantities }
     );
     if (res.success) {
-      ElMessage.success('发货确认成功, 库存已扣减');
+      ElMessage.success('出库完成，成品库存已扣减');
       confirmDialogVisible.value = false;
       confirmingDelivery.value = null;
       loadPendingSalesDeliveries();
@@ -314,8 +314,7 @@ function getStatusText(status: string) {
           >
             <template #title>
               <span style="font-size: 13px;">
-                销售员创建的发货单 (任务单) 列在这里. 仓库确认实际发货数量后, 系统扣减成品库存并生成送货单.
-                (六扇门 May10 客户决定)
+                销售创建的发货任务列在这里。仓管只需核对实发数量并确认出库；客户已有库存会自动匹配本销售订单预留的精确批次。
               </span>
             </template>
           </el-alert>
@@ -351,7 +350,7 @@ function getStatusText(status: string) {
                   size="small"
                   :icon="Check"
                   @click="openConfirmDialog(row)"
-                >确认并发货</el-button>
+                >确认并出库</el-button>
               </template>
             </el-table-column>
           </el-table>

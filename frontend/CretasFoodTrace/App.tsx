@@ -1,10 +1,14 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Toast from 'react-native-toast-message';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { useLanguageStore } from './src/store/languageStore';
-import { checkAppMinVersion } from './src/services/appVersionCheck';
+import {
+  checkAppMinVersion,
+  type AppVersionCheckResult,
+} from './src/services/appVersionCheck';
 import { scheduleBackgroundOtaCheck } from './src/services/otaUpdateService';
 import UpdateOverlay from './src/components/common/UpdateOverlay';
+import MandatoryUpdateGate from './src/components/common/MandatoryUpdateGate';
 
 // 初始化 i18n（必须在 App 组件之前导入）
 import './src/i18n';
@@ -22,14 +26,37 @@ import './src/i18n';
  */
 export default function App() {
   const initializeLanguage = useLanguageStore((state) => state.initializeLanguage);
+  const [checkingVersion, setCheckingVersion] = useState(true);
+  const [versionResult, setVersionResult] = useState<AppVersionCheckResult | null>(null);
+
+  const runVersionCheck = useCallback(async (): Promise<void> => {
+    setCheckingVersion(true);
+    const result = await checkAppMinVersion();
+    setVersionResult(result);
+    setCheckingVersion(false);
+
+    if (result.status !== 'update_required') {
+      scheduleBackgroundOtaCheck();
+    }
+  }, []);
 
   useEffect(() => {
     // 初始化语言设置
     initializeLanguage();
-    // 检查 App 最低版本 (PR #309 B5) — 失败时静默忽略, 不阻塞启动
-    checkAppMinVersion();
-    scheduleBackgroundOtaCheck();
-  }, [initializeLanguage]);
+    void runVersionCheck();
+  }, [initializeLanguage, runVersionCheck]);
+
+  if (checkingVersion || versionResult?.status === 'update_required') {
+    return (
+      <MandatoryUpdateGate
+        checking={checkingVersion}
+        result={
+          versionResult?.status === 'update_required' ? versionResult : null
+        }
+        onRetry={() => void runVersionCheck()}
+      />
+    );
+  }
 
   return (
     <>

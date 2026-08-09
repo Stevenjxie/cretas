@@ -15,6 +15,30 @@ public interface FindingService {
     Result detectInline(String factoryId, String domain);
 
     /**
+     * 同时取多个 domain 的发现，排序与 inline 截断在**合并之后**做一次。
+     *
+     * <p>🔴 2026-08-08 起餐饮的「顺带提示」要用它：低库存发现由
+     * {@code LowStockFindingProvider} 提供，而它声明的 domain 是
+     * {@code "inventory"} —— 与餐饮那三条(谜题菜品/损耗集中/损耗占比突增)
+     * 不同域。原来的单域调用写死 {@code "restaurant"}，**库存异常因此永远
+     * 到不了店长眼前**：能力在、数据通道在，只差这一根线没连。
+     *
+     * <p>⛔ 不能用「调两次再拼」代替：inline 上限要在合并后的全集上截断，
+     * 分别截断会让两个域各占名额，把真正最要紧的那条挤掉。
+     */
+    Result detectInline(String factoryId, java.util.Collection<String> domains);
+
+    /**
+     * 指定排序口径。⛔ **排序由出口选, 不记在发现上** —— 见 {@link FindingOrdering}。
+     *
+     * <p>不传的两个重载一律走 {@link FindingOrdering#IMPACT_FIRST}(既有行为),
+     * 所以现存 5 个调用点(物料工具/损耗工具/REST 端点/行动方案/顺带提示)
+     * 逐字不变, 只有主动选 ACT_NOW 的才改变顺序。
+     */
+    Result detectInline(String factoryId, java.util.Collection<String> domains,
+                        FindingOrdering ordering);
+
+    /**
      * @param findings     已排序并截断到 inline 上限的发现（可能为空）
      * @param checkedRules **实际成功跑完**的规则名。抛异常的规则不在此列——
      *                     否则 UI 会说出「已检查 X，均正常」这种假话。

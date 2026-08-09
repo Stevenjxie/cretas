@@ -55,6 +55,7 @@ const statistics = ref({
 const INVITABLE_ROLE_CODES = [
   'factory_super_admin',
   'hr_admin',
+  'operations_coordinator',
   'dispatcher',
   'quality_manager',
   'quality_inspector',

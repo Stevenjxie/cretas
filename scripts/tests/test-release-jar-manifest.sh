@@ -150,6 +150,45 @@ git -C "$FIXTURE_REPO" reset -q --hard "$SQUASH_COMMIT"
 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION" \
     || fail "squash commit with identical backend tree was rejected"
 
+# GitHub-blocked offline deployment keeps the manifest/JAR trust checks but
+# anchors the source tree on a clean detached HEAD that must exactly equal the
+# local main ref. A stale origin/main must fail without the explicit escape
+# hatch and pass with it.
+git -C "$FIXTURE_REPO" checkout -q --detach "$SQUASH_COMMIT"
+git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main "$BASE_COMMIT"
+if release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION"; then
+    fail "stale origin/main was accepted without SKIP_GIT_CHECK=1"
+fi
+SKIP_GIT_CHECK=1 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION" \
+    || fail "clean detached exact local main was rejected in offline mode"
+
+# The escape hatch must not make a feature branch deployable, even if its
+# backend tree is byte-identical to local main.
+git -C "$FIXTURE_REPO" switch -q -c offline-feature "$SQUASH_COMMIT"
+if SKIP_GIT_CHECK=1 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION"; then
+    fail "offline mode accepted a checked-out feature branch"
+fi
+
+# A detached commit that is not the local main tip is also out of scope, even
+# when it has the same tree. This prevents arbitrary detached snapshots from
+# borrowing the offline release exception.
+OFFLINE_OTHER_COMMIT=$(printf 'same tree, different detached commit\n' \
+    | git -C "$FIXTURE_REPO" commit-tree "$FEATURE_TREE" -p "$SQUASH_COMMIT")
+git -C "$FIXTURE_REPO" checkout -q --detach "$OFFLINE_OTHER_COMMIT"
+if SKIP_GIT_CHECK=1 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION"; then
+    fail "offline mode accepted a detached commit different from local main"
+fi
+
+# Cleanliness remains mandatory in offline mode.
+git -C "$FIXTURE_REPO" checkout -q --detach "$SQUASH_COMMIT"
+printf 'dirty offline release\n' > "$FIXTURE_REPO/offline-dirty.txt"
+if SKIP_GIT_CHECK=1 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION"; then
+    fail "offline mode accepted a dirty exact local main worktree"
+fi
+rm "$FIXTURE_REPO/offline-dirty.txt"
+git -C "$FIXTURE_REPO" switch -q main
+git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main "$SQUASH_COMMIT"
+
 # A backend tree change must reject the old manifest. The deploy contract then
 # immediately selects one local clean package, never a second Java compile.
 (

@@ -14,7 +14,13 @@ import hashlib
 import hmac
 import time
 
-from .models import FetchPage, NormalizedItem, NormalizedOrder, NormalizedPayment
+from .models import (
+    FetchPage,
+    NormalizedDiscount,
+    NormalizedItem,
+    NormalizedOrder,
+    NormalizedPayment,
+)
 
 PLATFORM = "keruyun"
 
@@ -121,6 +127,8 @@ class KeruyunAdapter:
             gross_cents=_i(raw["grossAmount"], "grossAmount"),
             discount_cents=_i(raw["discountAmount"], "discountAmount"),
             net_cents=_i(raw["netAmount"], "netAmount"),
+            # 老平台不给这个字段时按 0 —— 不是编 0, 是「这个渠道没有抽佣」的真值。
+            platform_fee_cents=_i(raw.get("platformFee", 0), "platformFee"),
             guest_count=_i(raw.get("guestCount", 1), "guestCount"),
             items=[
                 NormalizedItem(
@@ -140,5 +148,18 @@ class KeruyunAdapter:
                     amount_cents=_i(p["amount"], "payments[].amount"),
                 )
                 for p in raw.get("payments", [])
+            ],
+            # 折扣构成。缺这个字段 = 平台不给构成(老报文), 空列表是如实,
+            # 不是把「不知道」写成「没有折扣」—— 总额仍在 discount_cents 里。
+            discounts=[
+                NormalizedDiscount(
+                    name=d["name"],
+                    discount_type=(d.get("type") or ""),
+                    amount_cents=_i(d["amount"], "discounts[].amount"),
+                    face_value_cents=_i(d.get("faceValue", 0), "discounts[].faceValue"),
+                    actual_price_cents=_i(
+                        d.get("actualPrice", 0), "discounts[].actualPrice"),
+                )
+                for d in raw.get("discounts", [])
             ],
         )

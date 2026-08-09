@@ -61,6 +61,7 @@ import {
 } from './salesOrderUnitContract';
 import {
   MATERIAL_SUPPLY_MODE_OPTIONS,
+  CUSTOMER_STOCK_FULFILLMENT_OPTIONS,
   SALES_PROCESSING_MODE_OPTIONS,
   materialSupplyModeLabel,
   newSalesOrderSupplyContract,
@@ -68,6 +69,7 @@ import {
   suppliedMaterialsValidationError,
   supplyContractValidationError,
   type CustomerSuppliedMaterialRequirement,
+  type CustomerStockFulfillmentMode,
   type MaterialSupplyMode,
   type SalesProcessingMode,
 } from './salesOrderSupplyContract';
@@ -489,6 +491,7 @@ const form = ref({
   customerId: '',
   processingMode: 'STANDARD_SALE' as SalesProcessingMode | '',
   materialSupplyMode: 'FACTORY_SUPPLIED' as MaterialSupplyMode | '',
+  customerStockFulfillmentMode: 'ORDER_DRIVEN' as CustomerStockFulfillmentMode,
   requiredDeliveryDate: '',
   deliveryAddress: '',
   remark: '',
@@ -577,12 +580,26 @@ function onProcessingModeChange() {
     form.value.materialSupplyMode = 'FACTORY_SUPPLIED';
     form.value.suppliedMaterials = [];
   }
+  if (form.value.processingMode !== 'TOLL_PROCESSING') {
+    form.value.customerStockFulfillmentMode = 'ORDER_DRIVEN';
+  }
 }
 
 function onMaterialSupplyModeChange() {
   if (form.value.materialSupplyMode !== 'CUSTOMER_SUPPLIED') {
     form.value.suppliedMaterials = [];
+    form.value.customerStockFulfillmentMode = 'ORDER_DRIVEN';
   } else if (form.value.suppliedMaterials.length === 0) {
+    addSuppliedMaterial();
+  }
+}
+
+function onCustomerStockFulfillmentModeChange() {
+  if (form.value.customerStockFulfillmentMode === 'PRESTOCKED') {
+    form.value.suppliedMaterials = [];
+  } else if (form.value.processingMode === 'TOLL_PROCESSING'
+    && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED'
+    && form.value.suppliedMaterials.length === 0) {
     addSuppliedMaterial();
   }
 }
@@ -590,6 +607,7 @@ function onMaterialSupplyModeChange() {
 function suppliedMaterialsPayload(): CustomerSuppliedMaterialRequirement[] {
   return form.value.processingMode === 'TOLL_PROCESSING'
     && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED'
+    && form.value.customerStockFulfillmentMode === 'ORDER_DRIVEN'
     ? form.value.suppliedMaterials.map((row) => ({
         ...row,
         expectedArrivalAt: row.expectedArrivalAt.length === 10
@@ -1221,7 +1239,7 @@ async function handleCreate() {
     return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
   }
   // 销售单价校验
-  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
   // SKU 重复校验 (只看已选行)
   const productIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
   if (new Set(productIds).size !== productIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
@@ -1653,6 +1671,9 @@ async function handleEdit(row: TableRow) {
     customerId: String(row.customerId || row.customer?.id || ''),
     processingMode: String(row.processingMode || '') as SalesProcessingMode | '',
     materialSupplyMode: String(row.materialSupplyMode || '') as MaterialSupplyMode | '',
+    customerStockFulfillmentMode: String(
+      row.customerStockFulfillmentMode || 'ORDER_DRIVEN',
+    ) as CustomerStockFulfillmentMode,
     requiredDeliveryDate: String(row.requiredDeliveryDate || ''),
     deliveryAddress: String(row.deliveryAddress || ''),
     remark: String(row.remark || ''),
@@ -1745,7 +1766,7 @@ async function handleSave() {
     if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
       return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
     }
-    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
     const editProductIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
     if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
     try {
@@ -2614,6 +2635,34 @@ function handleMergePurchase() {
         </el-row>
         <el-form-item
           v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED'"
+          label="客户库存来源"
+          required
+        >
+          <el-radio-group
+            v-model="form.customerStockFulfillmentMode"
+            @change="onCustomerStockFulfillmentModeChange"
+          >
+            <el-radio-button
+              v-for="option in CUSTOMER_STOCK_FULFILLMENT_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </el-radio-button>
+          </el-radio-group>
+          <div class="form-help-text">
+            {{ CUSTOMER_STOCK_FULFILLMENT_OPTIONS.find((option) => option.value === form.customerStockFulfillmentMode)?.description }}
+          </div>
+          <el-alert
+            v-if="form.customerStockFulfillmentMode === 'PRESTOCKED'"
+            type="info"
+            :closable="false"
+            show-icon
+            title="财审后系统只预留该客户名下、尚未绑定其他销售订单的成品；不足时不会占用公司库存。"
+          />
+        </el-form-item>
+        <el-form-item
+          v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED' && form.customerStockFulfillmentMode === 'ORDER_DRIVEN'"
           label="客户自带原料"
           required
         >

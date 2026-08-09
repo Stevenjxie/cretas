@@ -21,6 +21,7 @@ class WarehouseReceivingControllerTest {
 
         for (String name : List.of(
                 "getTasks", "receiveCustomerSuppliedMaterial",
+                "receiveCustomerMaterialArrival",
                 "getDefaultWarehouse", "createReceipt",
                 "getReceipt", "getReceiptsByOrder", "confirmReceipt",
                 "closePurchaseTaskShort")) {
@@ -37,7 +38,7 @@ class WarehouseReceivingControllerTest {
     @Test
     void creatingReceiptWithoutApprovedPurchaseSourceFailsBeforeAnyWrite() {
         WarehouseReceivingController controller = new WarehouseReceivingController(
-                null, null, null, null, null);
+                null, null, null, null, null, null);
         CreateReceiveRecordRequest request = new CreateReceiveRecordRequest();
 
         BusinessException error = assertThrows(BusinessException.class,

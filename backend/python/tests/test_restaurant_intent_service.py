@@ -2246,13 +2246,26 @@ def test_named_entity_followups_use_server_restored_context():
     ]
 
 
-def test_r24_vector_tier_threshold_gate():
-    high = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS",
-                 source_tier="vector", confidence=0.9)
-    low = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS",
-                source_tier="vector", confidence=0.7)
-    assert should_delegate(high) is True
-    assert should_delegate(low) is False
+def test_vector_tier_never_delegates_on_similarity_alone():
+    """🔴 2026-08-08 起：向量层**不论相似度多高都不直通**。
+
+    原测试（`test_r24_vector_tier_threshold_gate`）钉的是 R24 加的高分口子：
+    `vector and confidence >= 0.85` 就直通。那条被撤除了。
+
+    ⇒ 判据(Steve 定的): **置信度不作授权依据。** 相似度是连续量、不可证伪 ——
+      「一段很长的话里只有一个字不一样(高 vs 低)，整体相似度还是很高的」，
+      而那一个字正是意图的全部差别。0.85 这个数挡不住那种情况。
+
+    📌 这不是新规矩, 是回到 R24 之前: `should_delegate` 的注释里原本就把向量
+      列为保留例外「T2 向量层置信弱, 仍须经上面的显式规则(选错意图会答错域)」。
+
+    ⚠️ 向量 tier 仍可能因**槽位**(dish_slot/store_slot)或上面的显式规则被委派 ——
+      那些走的是可证伪的证据, 不是相似度。这里只钉「光凭分数不行」。
+    """
+    for sim in (0.99, 0.9, 0.85, 0.7):
+        spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS",
+                     source_tier="vector", confidence=sim)
+        assert should_delegate(spec) is False, f"相似度 {sim} 也不该直通"
 
 
 def test_store_scope_clarification_returns_buttons_with_real_store_names():

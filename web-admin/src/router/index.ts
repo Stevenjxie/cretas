@@ -94,6 +94,18 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' }
       },
       {
+        path: 'operations/customer-material-arrivals',
+        name: 'CustomerMaterialArrivals',
+        redirect: () => ({ path: '/warehouse/materials', query: { view: 'receiving', action: 'unordered-inbound' } }),
+        meta: {
+          requiresAuth: true,
+          title: '无订单入库申请',
+          icon: 'Connection',
+          module: 'operations',
+          hidden: true,
+        },
+      },
+      {
         path: 'dashboard/production-progress',
         name: 'ProductionProgressDashboard',
         component: () => import('@/views/dashboard/production-progress.vue'),

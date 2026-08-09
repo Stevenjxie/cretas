@@ -141,7 +141,7 @@ const rawMenuConfig: MenuItem[] = [
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/warehouse/materials', title: '原料入库与批次', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
+      { path: '/warehouse/materials', title: '原料 / 物料入库与批次', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)

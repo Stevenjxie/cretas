@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
@@ -595,6 +596,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
         batch.setStorageLocation("库存生产小结入库");
         batch.setProductionPlanId(plan.getId());
+        // 客户归属存货生产仍走 SAFETY_STOCK 小结，但成品法律归属必须来自创建计划时固定的快照。
+        // 与普通结单/仓库实收成品创建保持同一口径；否则客户来料会在最后一步被悄悄改成公司库存，
+        // 后续销售订单的同客户预存货匹配也会被错误排除。
+        batch.setOwnership(plan.getOutputOwnership());
+        batch.setOwnerCustomerId(plan.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED
+                ? plan.getCustomerId() : null);
+        batch.setSourceSalesOrderId(plan.getSourceOrderId());
+        batch.setSourceSalesOrderItemId(plan.getSourceOrderItemId());
         batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(plan.getFactoryId()));
         // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 若该生产计划下任一生产批次质检已判 FAILED, 小结产出的
         // 成品批次不得直接可售 —— 隔离为 DEFECTIVE。覆盖"先质检失败, 后小结产出"的时序 (与

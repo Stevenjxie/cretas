@@ -57,7 +57,7 @@ _DAILY_UPSERT_SQL = """
 INSERT INTO agg_daily (
     factory_id, date, store_id,
     gross_amount, discount_amount, net_amount, actual_receive,
-    bill_count, customer_count, item_count,
+    bill_count, customer_count, item_count, platform_fee_amount,
     version, computed_at
 )
 SELECT factory_id, date, store_id,
@@ -68,6 +68,8 @@ SELECT factory_id, date, store_id,
        COUNT(*)             AS bill_count,
        SUM(COALESCE(customer_count, 0))::INT AS customer_count,
        SUM(COALESCE(item_count, 0))::INT     AS item_count,
+       -- 渠道侧成本(外卖抽佣/团购券核销费)。堂食为 0 —— 那是真值不是缺失。
+       SUM(COALESCE(platform_fee_amount, 0)) AS platform_fee_amount,
        1, NOW()
   FROM fact_pos_transaction
  WHERE factory_id = $1
@@ -80,6 +82,7 @@ ON CONFLICT (factory_id, date, store_id) DO UPDATE SET
     actual_receive  = EXCLUDED.actual_receive,
     bill_count      = EXCLUDED.bill_count,
     customer_count  = EXCLUDED.customer_count,
+    platform_fee_amount = EXCLUDED.platform_fee_amount,
     item_count      = EXCLUDED.item_count,
     version         = agg_daily.version + 1,
     computed_at     = NOW()

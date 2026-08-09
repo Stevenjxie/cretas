@@ -5,7 +5,9 @@ import com.cretas.aims.dto.approval.ExecutionContext;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
@@ -18,6 +20,7 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -323,6 +326,7 @@ public class SalesServiceImpl implements SalesService {
                 request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
         validateSuppliedMaterialPayload(
                 request.getProcessingMode(), request.getMaterialSupplyMode(),
+                normalizeCustomerStockFulfillmentMode(request.getCustomerStockFulfillmentMode()),
                 request.getSuppliedMaterials(), false);
         // Canvas V2: DB-driven validation — pre-compute totalAmount so rules can reference it
         BigDecimal preComputedTotal = BigDecimal.ZERO;
@@ -402,6 +406,8 @@ public class SalesServiceImpl implements SalesService {
         order.setExternalOrderTitle(request.getExternalOrderTitle());
         order.setProcessingMode(request.getProcessingMode());
         order.setMaterialSupplyMode(request.getMaterialSupplyMode());
+        order.setCustomerStockFulfillmentMode(
+                normalizeCustomerStockFulfillmentMode(request.getCustomerStockFulfillmentMode()));
         order.setCreatedBy(userId);
 
         // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 1→2 层 prefill:
@@ -732,6 +738,18 @@ public class SalesServiceImpl implements SalesService {
         }
         org.hibernate.Hibernate.initialize(order.getSuppliedMaterials());
         return order;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SalesOrderReservationDTO> getActiveReservations(String factoryId, String orderId) {
+        getSalesOrderById(factoryId, orderId);
+        if (reservationLedgerService == null) {
+            throw new BusinessException(503, "成品预留服务暂不可用")
+                    .withCode("FG_RESERVATION_SERVICE_UNAVAILABLE")
+                    .withHint("请稍后刷新订单详情；不要改用普通库存代替客户预留库存");
+        }
+        return reservationLedgerService.listActiveReservations(factoryId, orderId);
     }
 
     @Override
@@ -2027,11 +2045,18 @@ public class SalesServiceImpl implements SalesService {
 
         validateSupplyContract(
                 request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
+        CustomerStockFulfillmentMode requestedFulfillmentMode =
+                request.getCustomerStockFulfillmentMode() != null
+                        ? request.getCustomerStockFulfillmentMode()
+                        : normalizeCustomerStockFulfillmentMode(
+                                order.getCustomerStockFulfillmentMode());
         validateSuppliedMaterialPayload(
                 request.getProcessingMode(), request.getMaterialSupplyMode(),
+                requestedFulfillmentMode,
                 request.getSuppliedMaterials(), true);
         order.setProcessingMode(request.getProcessingMode());
         order.setMaterialSupplyMode(request.getMaterialSupplyMode());
+        order.setCustomerStockFulfillmentMode(requestedFulfillmentMode);
 
         // Canvas V2: DB-driven validation for UPDATE — pre-compute totalAmount if items changed
         BigDecimal updateTotal = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
@@ -2337,6 +2362,8 @@ public class SalesServiceImpl implements SalesService {
         newOrder.setBoxQuantity(source.getBoxQuantity());
         newOrder.setProcessingMode(source.getProcessingMode());
         newOrder.setMaterialSupplyMode(source.getMaterialSupplyMode());
+        newOrder.setCustomerStockFulfillmentMode(
+                normalizeCustomerStockFulfillmentMode(source.getCustomerStockFulfillmentMode()));
         // 重置状态字段
         newOrder.setStatus(SalesOrderStatus.DRAFT);
         newOrder.setCreatedBy(userId);
@@ -3157,8 +3184,83 @@ public class SalesServiceImpl implements SalesService {
             }
         }
 
+        autoAllocatePrestockedReservations(factoryId, record);
+
         // 复用 shipDelivery 逻辑 — 含批次分配校验 + 扣库存 + 自动 AR
         return shipDelivery(factoryId, deliveryId, userId);
+    }
+
+    /**
+     * 客户已有成品库存已经在财审时精确预留；仓管只核对实发数量，不应返回销售模块再选批次。
+     * 推荐必须完整覆盖每一行后才写分配，任何不足都在扣库存前失败并由外层事务整体回滚。
+     */
+    private void autoAllocatePrestockedReservations(String factoryId, SalesDeliveryRecord record) {
+        if (record == null || record.getSalesOrderId() == null) {
+            return;
+        }
+        SalesOrder salesOrder = salesOrderRepository.findById(record.getSalesOrderId())
+                .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
+                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+        if (!factoryId.equals(salesOrder.getFactoryId())) {
+            throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
+                    .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
+        }
+        if (salesOrder.getCustomerStockFulfillmentMode()
+                != CustomerStockFulfillmentMode.PRESTOCKED) {
+            return;
+        }
+        if (batchAllocationService == null) {
+            throw new BusinessException(503, "客户预留批次分配服务暂不可用")
+                    .withCode("PRESTOCKED_BATCH_ALLOCATION_UNAVAILABLE")
+                    .withHint("请稍后重试；系统未扣减任何成品库存");
+        }
+
+        for (SalesDeliveryItem item : record.getItems()) {
+            String deliveryItemId = String.valueOf(item.getId());
+            if (batchAllocationService.isFullyAllocated(factoryId, deliveryItemId)) {
+                continue;
+            }
+            BigDecimal required = item.getDeliveredQuantity();
+            if (required == null || required.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "产品 " + item.getProductName() + " 的实发数量必须大于 0")
+                        .withCode("DELIVERY_ACTUAL_QUANTITY_INVALID")
+                        .withHint("请填写本次实际装车数量；系统未扣减任何成品库存");
+            }
+
+            List<Map<String, Object>> recommendations = batchAllocationService.recommendFifo(
+                    factoryId,
+                    deliveryItemId,
+                    item.getProductTypeId(),
+                    required,
+                    item.getUnit(),
+                    item.getSourceWarehouseCode());
+            BigDecimal recommendedTotal = recommendations.stream()
+                    .map(row -> row.get("recommendedQuantity"))
+                    .filter(Objects::nonNull)
+                    .map(value -> value instanceof BigDecimal decimal
+                            ? decimal : new BigDecimal(String.valueOf(value)))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (recommendedTotal.compareTo(required) != 0) {
+                throw new BusinessException(409, "产品 " + item.getProductName()
+                        + " 的客户预留库存不足：需 " + required + item.getUnit()
+                        + "，可匹配 " + recommendedTotal + item.getUnit())
+                        .withCode("PRESTOCKED_RESERVATION_INSUFFICIENT")
+                        .withHint("请核对销售订单预留数量，或把实发数量改为本次实际可发数量；系统未扣减任何库存")
+                        .withHintTarget("仓储管理 → 出货管理");
+            }
+
+            List<BatchAllocationDTO> allocations = recommendations.stream()
+                    .map(row -> {
+                        BatchAllocationDTO allocation = new BatchAllocationDTO();
+                        allocation.setFinishedGoodsBatchId(String.valueOf(row.get("batchId")));
+                        Object quantity = row.get("recommendedQuantity");
+                        allocation.setAllocatedQty(quantity instanceof BigDecimal decimal
+                                ? decimal : new BigDecimal(String.valueOf(quantity)));
+                        return allocation;
+                    })
+                    .toList();
+            batchAllocationService.allocateBatches(factoryId, deliveryItemId, allocations);
+        }
     }
 
     @Override
@@ -3578,6 +3680,13 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
                     .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
         }
+        boolean prestockedCustomerStock = salesOrder != null
+                && salesOrder.getCustomerStockFulfillmentMode()
+                == CustomerStockFulfillmentMode.PRESTOCKED;
+        if (prestockedCustomerStock && reservationLedgerService == null) {
+            throw new IllegalStateException(
+                    "FgReservationLedgerService is required for PRESTOCKED customer shipment");
+        }
         // 🔴 (2026-07-06): HONOR the operator's batch allocation. The P0-13 allocation dialog lets
         // the warehouse pick EXACTLY which FG batches to ship (e.g. 近效期清库存 / 指定批次追溯), and
         // shipDelivery even HARD-GATES on 「批次分配完成」(isFullyAllocated). Historically the deduction
@@ -3609,14 +3718,22 @@ public class SalesServiceImpl implements SalesService {
         List<FinishedGoodsBatch> batches;
         if (hasExplicitSource) {
             String warehouseId = warehouseResolver.resolveId(factoryId, sourceCode);
-            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+            batches = prestockedCustomerStock
+                    ? finishedGoodsBatchRepository.findShippablePrestockedBatchesByWarehouse(
+                            factoryId, item.getProductTypeId(), warehouseId,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
                     ? finishedGoodsBatchRepository.findShippableCustomerOwnedBatchesByWarehouse(
                             factoryId, item.getProductTypeId(), warehouseId,
                             salesOrder.getCustomerId(), salesOrder.getId())
                     : finishedGoodsBatchRepository.findShippableBatchesByWarehouse(
                             factoryId, item.getProductTypeId(), warehouseId);
         } else {
-            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+            batches = prestockedCustomerStock
+                    ? finishedGoodsBatchRepository.findShippablePrestockedBatchesAllWarehousesExcluding(
+                            factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
                     ? finishedGoodsBatchRepository.findShippableCustomerOwnedBatchesAllWarehousesExcluding(
                             factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD,
                             salesOrder.getCustomerId(), salesOrder.getId())
@@ -3642,7 +3759,7 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal remaining = item.getDeliveredQuantity();
 
         // Pass 1: 先扣未被预留的可用量 (available = produced - shipped - reserved) —— 不动任何预留。
-        for (FinishedGoodsBatch batch : batches) {
+        for (FinishedGoodsBatch batch : prestockedCustomerStock ? List.<FinishedGoodsBatch>of() : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
             SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
                     salesOrder, batch, "finishedGoodsBatchId");
@@ -3670,10 +3787,16 @@ public class SalesServiceImpl implements SalesService {
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
             for (FinishedGoodsBatch batch : batches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+                BigDecimal orderReserved = prestockedCustomerStock
+                        ? reservationLedgerService.getActiveReservedForOrderAndBatch(
+                                salesOrderId, batch.getId())
+                        : (batch.getReservedQuantity() != null
+                                ? batch.getReservedQuantity() : BigDecimal.ZERO);
                 SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
-                        salesOrder, batch, "finishedGoodsBatchId");
-                BigDecimal reserved = batch.getReservedQuantity() != null
-                        ? batch.getReservedQuantity() : BigDecimal.ZERO;
+                        salesOrder, batch,
+                        !prestockedCustomerStock || orderReserved.compareTo(BigDecimal.ZERO) > 0,
+                        "finishedGoodsBatchId");
+                BigDecimal reserved = orderReserved;
                 BigDecimal physicalUnshipped = batch.getProducedQuantity()
                         .subtract(batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO);
                 // 本批可从预留中发出的物理量 = min(reserved, 物理未发量)
@@ -3706,7 +3829,9 @@ public class SalesServiceImpl implements SalesService {
             String warehouseDisplay = hasExplicitSource ? sourceCode : "全部可售仓库(除研发库)";
             throw new BusinessException(String.format("成品库存不足: 产品=%s, 仓库=%s, 缺少数量=%s",
                 item.getProductTypeId(), warehouseDisplay, remaining.toPlainString()))
-                .withHint("请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
+                .withHint(prestockedCustomerStock
+                        ? "请先完成该订单的客户已有库存预留，再按预留数量发货"
+                        : "请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
                 .withHintTarget("生产计划");
         }
     }
@@ -3730,6 +3855,13 @@ public class SalesServiceImpl implements SalesService {
      */
     private void deductByAllocations(String factoryId, SalesOrder salesOrder, SalesDeliveryItem item,
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations) {
+        boolean prestockedCustomerStock = salesOrder != null
+                && salesOrder.getCustomerStockFulfillmentMode()
+                == CustomerStockFulfillmentMode.PRESTOCKED;
+        if (prestockedCustomerStock && reservationLedgerService == null) {
+            throw new IllegalStateException(
+                    "FgReservationLedgerService is required for PRESTOCKED customer shipment");
+        }
         String targetUnit = item.getUnit();
         // Defensive null-check: legacy unit tests may construct with null productTypeRepository.
         BigDecimal gramsPerUnit = productTypeRepository != null
@@ -3750,8 +3882,16 @@ public class SalesServiceImpl implements SalesService {
                 throw new BusinessException(403, "分配的成品批次不属于当前工厂: " + alloc.getBatchNumber())
                         .withHint("跨工厂数据被拒绝, 请重新分配批次").withHintTarget("finishedGoodsBatchId");
             }
+            BigDecimal orderReservedNative = prestockedCustomerStock
+                    ? reservationLedgerService.getActiveReservedForOrderAndBatch(
+                            salesOrder.getId(), batch.getId())
+                    : BigDecimal.ZERO;
             SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
-                    salesOrder, batch, "finishedGoodsBatchId");
+                    salesOrder,
+                    batch,
+                    !prestockedCustomerStock
+                            || orderReservedNative.compareTo(BigDecimal.ZERO) > 0,
+                    "finishedGoodsBatchId");
             String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : targetUnit;
             // 分配量换算到 targetUnit (通常 allocUnit==targetUnit → 恒等), 统一在发货单位记账。
             BigDecimal allocQtyInTarget = FgQuantityUnitConverter
@@ -3766,7 +3906,12 @@ public class SalesServiceImpl implements SalesService {
                 continue;
             }
             // 批次可用量 (与 FIFO Pass1 同口径: produced − shipped − reserved)。
-            BigDecimal availableNative = batch.getAvailableQuantity();
+            BigDecimal physicalUnshipped = batch.getProducedQuantity().subtract(
+                    batch.getShippedQuantity() != null
+                            ? batch.getShippedQuantity() : BigDecimal.ZERO);
+            BigDecimal availableNative = prestockedCustomerStock
+                    ? orderReservedNative.min(physicalUnshipped)
+                    : batch.getAvailableQuantity();
             BigDecimal availableInTarget = convertBatchToDeliveryUnit(
                     availableNative, batch, item, gramsPerUnit);
             if (availableInTarget == null) {
@@ -3790,8 +3935,13 @@ public class SalesServiceImpl implements SalesService {
             if (shipNative == null || shipNative.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
-            // 扣可用部分 (未预留), releaseReserved=0 — 与 FIFO Pass1 同, 守 available≥0 不变式。
-            applyShipment(batch, shipNative, BigDecimal.ZERO);
+            // PRESTOCKED 发的是本订单台账预留；普通订单仍扣未预留可用量。
+            applyShipment(batch, shipNative,
+                    prestockedCustomerStock ? shipNative : BigDecimal.ZERO);
+            if (prestockedCustomerStock) {
+                reservationLedgerService.syncReleaseOnShipment(
+                        salesOrder.getId(), batch.getId(), shipNative);
+            }
             recordDeductedBatch(item, batch);
             remaining = remaining.subtract(shipInTarget);
         }
@@ -4182,24 +4332,40 @@ public class SalesServiceImpl implements SalesService {
     private void validateSuppliedMaterialPayload(
             SalesProcessingMode processingMode,
             MaterialSupplyMode materialSupplyMode,
+            CustomerStockFulfillmentMode fulfillmentMode,
             List<CreateSalesOrderRequest.SuppliedMaterialRequirementDTO> suppliedMaterials,
             boolean nullMeansPreserve) {
         boolean customerSuppliedToll = processingMode == SalesProcessingMode.TOLL_PROCESSING
                 && materialSupplyMode == MaterialSupplyMode.CUSTOMER_SUPPLIED;
+        CustomerStockFulfillmentMode normalizedMode =
+                normalizeCustomerStockFulfillmentMode(fulfillmentMode);
+        if (!customerSuppliedToll && normalizedMode == CustomerStockFulfillmentMode.PRESTOCKED) {
+            throw new BusinessException(400,
+                    "只有代加工且客户自带原料的订单可以使用客户已有库存")
+                    .withCode("CUSTOMER_STOCK_FULFILLMENT_MODE_INVALID")
+                    .withHintTarget("customerStockFulfillmentMode");
+        }
         boolean hasPayload = suppliedMaterials != null && !suppliedMaterials.isEmpty();
         if (customerSuppliedToll
+                && normalizedMode == CustomerStockFulfillmentMode.ORDER_DRIVEN
                 && (!nullMeansPreserve || suppliedMaterials != null)
                 && !hasPayload) {
             throw new BusinessException(400, "代加工且客户自带原料时必须填写客供物料需求")
                     .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_REQUIRED")
                     .withHintTarget("suppliedMaterials");
         }
-        if (!customerSuppliedToll && hasPayload) {
+        if ((!customerSuppliedToll
+                || normalizedMode == CustomerStockFulfillmentMode.PRESTOCKED) && hasPayload) {
             throw new BusinessException(400,
-                    "只有代加工且客户自带原料的销售订单可以携带 suppliedMaterials")
+                    "使用客户已有库存时不能再创建本订单客供物料需求")
                     .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_MODE_INVALID")
                     .withHintTarget("suppliedMaterials");
         }
+    }
+
+    private CustomerStockFulfillmentMode normalizeCustomerStockFulfillmentMode(
+            CustomerStockFulfillmentMode mode) {
+        return mode != null ? mode : CustomerStockFulfillmentMode.ORDER_DRIVEN;
     }
 
     private SalesOrderSuppliedMaterialRequirementService requireSuppliedMaterialRequirementService() {
@@ -4212,6 +4378,12 @@ public class SalesServiceImpl implements SalesService {
 
     private void validatePersistedSupplyContract(SalesOrder source) {
         validateSupplyContract(source.getProcessingMode(), source.getMaterialSupplyMode(), null);
+        validateSuppliedMaterialPayload(
+                source.getProcessingMode(),
+                source.getMaterialSupplyMode(),
+                normalizeCustomerStockFulfillmentMode(source.getCustomerStockFulfillmentMode()),
+                null,
+                true);
         if (source.getItems() == null) {
             return;
         }

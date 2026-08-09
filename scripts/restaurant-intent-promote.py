@@ -169,6 +169,66 @@ async def _list_candidates(min_confidence: float, min_count: int, limit: int,
     )
 
 
+async def _llm_review_desk(min_count: int, limit: int, factory_id: str) -> None:
+    """人审台第一道 —— 模型先审一遍, 结果分三堆交给人。
+
+    ⛔ 这里**不写任何库**。产出只有一张给人看的表: 哪些可以快速点头,
+       哪些必须停下来看。晋升仍然要人跑 --apply。
+    """
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.restaurant.promotion_llm_review import (
+        review_candidate,
+        summarize,
+    )
+    from smartbi.gold.restaurant.restaurant_intent import _INTENT_DESCRIPTIONS
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id)
+            rows = await conn.fetch(
+                "SELECT query, agg_meta->'planned_intents'->>0 AS code, count(*) AS n"
+                "  FROM smart_bi_llm_fallback_log"
+                " WHERE factory_id = $1"
+                "   AND agg_meta->'planned_intents'->>0 IS NOT NULL"
+                " GROUP BY 1, 2 HAVING count(*) >= $2"
+                " ORDER BY 3 DESC LIMIT $3",
+                factory_id, int(min_count), int(limit),
+            )
+            promoted = {
+                r["normalized_phrase"] for r in await conn.fetch(
+                    "SELECT normalized_phrase FROM ai_promoted_routes "
+                    "WHERE domain = 'restaurant'")
+            }
+
+    todo = [r for r in rows if r["query"] not in promoted]
+    print(f"候选 {len(rows)} 条, 其中未晋升 {len(todo)} 条 -> 交模型复判")
+    print("")
+
+    pairs = []
+    for r in todo:
+        verdict = await review_candidate(
+            r["query"], r["code"], dict(_INTENT_DESCRIPTIONS))
+        pairs.append((verdict, int(r["n"])))
+
+    grouped = summarize([v for v, _ in pairs])
+    counts = {v.query: n for v, n in pairs}
+
+    print(f"=== 需要你停下来看的: {grouped['needs_attention']} 条 ===")
+    for bucket, label in (("disagree", "❗分歧"), ("unsure", "❓模型也不确定")):
+        for v in grouped[bucket]:
+            print(f"  {label} [{counts.get(v.query, 0):>3}次] {v.query}")
+            print(f"        飞轮记录={v.recorded_intent}")
+            print(f"        模型复判={v.llm_intent}  ({v.reason})")
+    print("")
+    print(f"=== 模型与飞轮一致, 可快速复核后晋升: {len(grouped['agree'])} 条 ===")
+    for v in grouped["agree"]:
+        print(f"  ✅ [{counts.get(v.query, 0):>3}次] {v.query}  -> {v.llm_intent}")
+    print("")
+    print("⛔ 本命令不写库。确认后把要晋升的写进 JSON, 再跑 --apply。")
+
+
 async def _list_misses(limit: int, factory_id: str) -> None:
     from smartbi.config import get_pg_pool
 
@@ -329,6 +389,11 @@ if __name__ == "__main__":
         "--reviewed-by", default=None, dest="reviewed_by",
         help="人审签名, 写入 ai_promoted_routes.reviewed_by",
     )
+    ap.add_argument(
+        "--llm-review", action="store_true", dest="llm_review",
+        help="人审台第一道: 让模型独立复判每条候选的意图, 与飞轮记录比对后分堆。"
+             "⛔ 只分堆, 不写库、不晋升 —— 每一条仍要人点头 (连库, 会调 LLM)",
+    )
     ap.add_argument("--min-confidence", type=float, default=0.75, dest="min_confidence")
     ap.add_argument("--min-count", type=int, default=1, dest="min_count")
     ap.add_argument("--limit", type=int, default=200)
@@ -345,6 +410,8 @@ if __name__ == "__main__":
         _apply(args.apply_ledger)
     elif args.list_routes:
         asyncio.run(_list_routes(args.factory_id))
+    elif args.llm_review:
+        asyncio.run(_llm_review_desk(args.min_count, args.limit, args.factory_id))
     elif args.list:
         asyncio.run(_list_candidates(
             args.min_confidence, args.min_count, args.limit, args.factory_id))

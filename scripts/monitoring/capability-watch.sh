@@ -115,6 +115,23 @@ else
     SUMMARY="${SUMMARY}gate=ok "
 fi
 
+# ==================== Probe 3b: LLM 供应商池 (餐饮 T3 规划器的地基) ====================
+# 🔴 2026-08-09 补: REVIEW 槽 20 个 (账号,模型) 曾**全部**被配额耗尽/熔断吃掉,
+#    T3 规划器整层 fail-closed, 而 66.5% 的餐饮提问走这一层。日志显示这个状态
+#    从 08-03 起断续出现、**已 6 天没有任何告警** —— 直到有人手工翻日志才发现。
+# ⛔ 判定用路由器自己的三道闸(白名单/熔断/配额退避), 不另写一套 ——
+#    另写一套迟早漂移, 那时告警说「健康」而用户在收 fail-closed 文案。
+POOL_OUT=$(cd /www/wwwroot/cretas/code/backend/python 2>/dev/null \
+    && set -a && . /www/wwwroot/cretas/.env.prod 2>/dev/null && set +a \
+    && ./venv-current/bin/python -m smartbi.scripts.llm_pool_health --slot review --min 2 2>&1)
+POOL_RC=$?
+POOL_USABLE=$(printf '%s' "$POOL_OUT" | grep -oE 'usable=[0-9]+/[0-9]+' | head -1)
+if [ "$POOL_RC" -ne 0 ]; then
+    emit "ALERT llm_pool: ${POOL_OUT}"
+    ALERT=1
+fi
+SUMMARY="${SUMMARY}llm_pool=${POOL_USABLE:-unknown} "
+
 # ==================== Probe 4: error rate from journald (last 15 min) ====================
 # grep -c returns exit 1 when no matches but still prints "0" — don't `|| echo "0"`
 # because that creates "0\n0". Just suppress the exit code and trust grep's count.

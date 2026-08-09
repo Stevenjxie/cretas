@@ -18,6 +18,24 @@ _PAY_BY_CHANNEL = {
     "groupon": ("platform", "wechat"),
 }
 
+# 🔴 2026-08-09 补的建模缺口: **渠道侧成本**(平台抽佣 / 券核销费)。
+#
+# 此前订单只有「毛额 - 折扣 = 净额」, 没有任何渠道成本。后果实测:
+# 三个渠道的毛利率是 67.66% / 67.68% / 67.81% —— 几乎完全相同, 因为成本只跟
+# 菜品配方走、与渠道无关。于是「渠道毛利倒挂」这条发现规则**永远产出 0 条**,
+# 而那恰恰是真实餐饮里最要紧的问题之一:「外卖做得越大越不赚钱」。
+#
+# ⛔ 费率区间取自公开的行业口径, 不是拍的:
+#   · 外卖平台佣金普遍在 18%–23%(按实付金额抽), 不同品类/等级有差
+#   · 团购券核销另有技术服务费, 通常低于外卖, 约 4%–8%
+#   · 堂食走微信/支付宝/现金, 支付通道费很低, 建模上按 0 处理
+# ⚠️ 按**实付净额**抽, 不是毛额: 平台抽的是顾客真实付的那笔钱。
+_PLATFORM_FEE_RATE = {
+    "takeaway": (0.18, 0.23),
+    "groupon": (0.04, 0.08),
+    "dine_in": (0.0, 0.0),
+}
+
 
 def _next_seq(conn: sqlite3.Connection) -> int:
     row = conn.execute('SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM "order"').fetchone()
@@ -229,6 +247,10 @@ def _generate_orders_inner(conn, *, store_id: int, biz_date: str,
     dishes = conn.execute("SELECT id, price_cents, groupon_eligible FROM dish").fetchall()
     if not dishes:
         raise RuntimeError("菜品表为空，先跑 seed_world")
+    # 每渠道可投放的活动 id。一次查完 —— 这是主数据, 每单查一次纯属浪费。
+    campaigns: dict = {}
+    for row in conn.execute("SELECT id, channel FROM discount_campaign").fetchall():
+        campaigns.setdefault(row["channel"], []).append(row["id"])
     seq = _next_seq(conn)
     placed_base = datetime.datetime.fromisoformat(biz_date).replace(
         hour=minute_of_day // 60, minute=minute_of_day % 60
@@ -253,14 +275,17 @@ def _generate_orders_inner(conn, *, store_id: int, biz_date: str,
         elif channel == "takeaway":
             discount = int(gross * rng.uniform(0.0, 0.12))
         net = gross - discount
+        # 渠道侧成本: 按实付净额抽。堂食为 0。
+        lo, hi = _PLATFORM_FEE_RATE[channel]
+        platform_fee = int(net * rng.uniform(lo, hi)) if hi > 0 else 0
         order_no = f"MK{placed_base:%Y%m%d}{store_id:02d}{seq:08d}"
         placed_at = (placed_base + datetime.timedelta(seconds=rng.randint(0, 59))).isoformat()
         cur = conn.execute(
             'INSERT INTO "order"(order_no, store_id, channel, placed_at, biz_date, '
-            "gross_cents, discount_cents, net_cents, guest_count, seq) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "gross_cents, discount_cents, net_cents, guest_count, platform_fee_cents, seq) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (order_no, store_id, channel, placed_at, biz_date,
-             gross, discount, net, guest_count, seq),
+             gross, discount, net, guest_count, platform_fee, seq),
         )
         order_id = cur.lastrowid
         conn.executemany(
@@ -268,6 +293,22 @@ def _generate_orders_inner(conn, *, store_id: int, biz_date: str,
             "VALUES (?,?,?,?,?)",
             [(order_id, d, q, p, a) for d, q, p, a in lines],
         )
+        # 折扣归属: 让利记在哪个活动头上。
+        # ⛔ 不改金额 —— 整笔 discount 原样落到一个活动上, 合计恒等于
+        #    order.discount_cents。拆成两个活动会让「构成加总 = 订单折扣」
+        #    这条最容易被下游依赖的恒等式变成近似, 不值得。
+        if discount > 0:
+            pool_c = campaigns.get(channel) or []
+            if not pool_c:
+                # 禁降级: 有折扣却没有可归属的活动 = 种子没种全, 说清楚而不是丢掉。
+                raise RuntimeError(
+                    f"渠道 {channel} 有折扣 {discount} 却没有任何投放活动 —— "
+                    "检查 seed._DISCOUNT_CAMPAIGNS 的 channel 列")
+            conn.execute(
+                "INSERT INTO order_discount(order_id, campaign_id, amount_cents) "
+                "VALUES (?,?,?)",
+                (order_id, rng.choice(pool_c), discount),
+            )
         method = rng.choice(_PAY_BY_CHANNEL[channel])
         conn.execute(
             "INSERT INTO payment(order_id, method, amount_cents) VALUES (?,?,?)",

@@ -352,6 +352,40 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("customerId") String customerId,
             @Param("salesOrderId") String salesOrderId);
 
+    /** Customer-owned stock received before a sales order, for customer-specific inventory production. */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId IS NULL " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
+    List<MaterialBatch> findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId IS NULL " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
+    List<MaterialBatch> findAvailableUnassignedCustomerOwnedBatchesFEFOByWarehouseForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId);
+
     /**
      * 正式报工自动分摊专用：锁定生产库候选批次，串行化并发分配。
      * 生产库中的 batch 是调拨入库时新生成，createdAt 即不可变的转入顺序。
@@ -531,6 +565,19 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("customerId") String customerId,
             @Param("salesOrderId") String salesOrderId);
 
+    @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId IS NULL " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+    BigDecimal sumAvailableUnassignedCustomerOwnedRawStock(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId);
+
     /**
      * T144: 读取指定原料类型的可用批次实际库存单位 (MaterialBatch.quantityUnit, e.g. "kg")。
      *
@@ -583,6 +630,19 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("materialTypeId") String materialTypeId,
             @Param("customerId") String customerId,
             @Param("salesOrderId") String salesOrderId);
+
+    @Query("SELECT m.quantityUnit FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId IS NULL " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.quantityUnit ORDER BY COUNT(m) DESC")
+    List<String> findUnassignedCustomerOwnedRawStockUnits(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId);
 
     /**
      * 汇总指定原料类型在指定 warehouse 的可用库存总量。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。

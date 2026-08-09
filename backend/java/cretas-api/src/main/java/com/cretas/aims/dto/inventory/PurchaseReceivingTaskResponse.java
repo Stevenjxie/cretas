@@ -28,6 +28,7 @@ public class PurchaseReceivingTaskResponse {
     private String sourceType;
     private String sourceId;
     private String sourceNumber;
+    private String inboundReason;
     private String counterpartyType;
     private String counterpartyId;
     private String counterpartyName;

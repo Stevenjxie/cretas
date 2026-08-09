@@ -2,6 +2,7 @@ package com.cretas.aims.service.finding.impl;
 
 import com.cretas.aims.service.finding.Finding;
 import com.cretas.aims.service.finding.FindingNotApplicableException;
+import com.cretas.aims.service.finding.FindingOrdering;
 import com.cretas.aims.service.finding.FindingProvider;
 import com.cretas.aims.service.finding.FindingService;
 import lombok.extern.slf4j.Slf4j;
@@ -39,13 +40,24 @@ public class FindingServiceImpl implements FindingService {
 
     @Override
     public Result detectInline(String factoryId, String domain) {
+        return detectInline(factoryId, java.util.List.of(domain));
+    }
+
+    @Override
+    public Result detectInline(String factoryId, java.util.Collection<String> domains) {
+        return detectInline(factoryId, domains, FindingOrdering.IMPACT_FIRST);
+    }
+
+    @Override
+    public Result detectInline(String factoryId, java.util.Collection<String> domains,
+                               FindingOrdering ordering) {
         List<Finding> all = new ArrayList<>();
         List<String> checked = new ArrayList<>();
         List<String> failed = new ArrayList<>();
         List<SkippedRule> skipped = new ArrayList<>();
 
         for (FindingProvider provider : providers) {
-            if (!provider.domain().equals(domain)) {
+            if (!domains.contains(provider.domain())) {
                 continue;
             }
             try {
@@ -55,11 +67,11 @@ public class FindingServiceImpl implements FindingService {
                 // 数据不足以判断 —— 诚实跳过, 不是故障。必须在 catch(Exception)
                 // 之前, 否则会被下面那条当成失败吞掉, 用户看到的就成了「服务坏了」。
                 log.info("Finding 规则数据不足, 诚实跳过: rule={}, domain={}, factoryId={}, reason={}",
-                        provider.ruleName(), domain, factoryId, notApplicable.reason());
+                        provider.ruleName(), provider.domain(), factoryId, notApplicable.reason());
                 skipped.add(new SkippedRule(provider.ruleName(), notApplicable.reason()));
             } catch (Exception e) {
                 log.warn("Finding 规则执行失败, 已从 checkedRules 剔除: rule={}, domain={}, factoryId={}",
-                        provider.ruleName(), domain, factoryId, e);
+                        provider.ruleName(), provider.domain(), factoryId, e);
                 failed.add(provider.ruleName());
             }
         }
@@ -69,7 +81,7 @@ public class FindingServiceImpl implements FindingService {
             countsByCode.merge(f.code(), 1, Integer::sum);
         }
 
-        all.sort(Comparator.comparingInt(Finding::rankScore).reversed());
+        all.sort(ordering.comparator());
         int total = all.size();
         List<Finding> top = total > inlineMax ? all.subList(0, inlineMax) : all;
 

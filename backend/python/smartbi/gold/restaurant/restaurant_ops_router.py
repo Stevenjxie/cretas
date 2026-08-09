@@ -901,6 +901,21 @@ def _date_from_any(value: Any) -> Optional[date]:
     return None
 
 
+def _closing(pool_name: str, query: Optional[str]) -> str:
+    """收尾建议句：同一问句**同一天**给同一句，跨天才换。
+
+    ⛔ 不调 LLM(措辞的不确定性不值得那个延迟), 纯查表 + 取模。
+    ⛔ 带免责义务的池(折扣/比价)每条变体都必须含 `REQUIRED_TOKENS` 里的标记 ——
+       **说法可以变, 「说了这件事」不可以省**, 由 test_phrasing_rotation 强制。
+
+    取不到池就返回空串(fail-open): 宁可少一句建议, 不要因为措辞打断问答。
+    """
+    from smartbi.gold.restaurant import phrasing
+
+    variants = getattr(phrasing, pool_name, ())
+    return phrasing.pick_variant(variants, f"{pool_name}|{query or ''}")
+
+
 def _range_text(start_date: Any, end_date: Any) -> str:
     """Render a date range; a single-day range reads as one date, not "X 至 X"."""
     if start_date and end_date and _date_text(start_date) == _date_text(end_date):
@@ -3133,14 +3148,150 @@ async def resolve_stock_shortage(
     )
 
 
+async def _resolve_food_cost_ratio(
+    smartbi_pool,
+    factory_id: str,
+    *,
+    days: int,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]],
+    window_label: Optional[str],
+) -> OpsAnswer:
+    """Read a period food-cost ratio without substituting recipe snapshots."""
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        row = await conn.fetchrow(
+            """
+            WITH revenue AS (
+                SELECT COALESCE(SUM(net_amount), 0)::float AS amount,
+                       COUNT(*)::bigint AS transaction_count
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int - 1))
+                   AND ($4::date IS NULL OR date <= $4::date)
+            ),
+            food_cost AS (
+                SELECT SUM(f.amount)::float AS amount,
+                       COUNT(*)::bigint AS line_count,
+                       ARRAY_AGG(DISTINCT f.source_type ORDER BY f.source_type) AS source_types,
+                       ARRAY_AGG(DISTINCT c.name ORDER BY c.name) AS categories
+                  FROM fact_cost_line f
+                  JOIN dim_cost_category c
+                    ON c.category_id = f.category_id
+                   AND c.factory_id = f.factory_id
+                 WHERE f.factory_id = $1
+                   AND f.date >= COALESCE($3::date, CURRENT_DATE - ($2::int - 1))
+                   AND ($4::date IS NULL OR f.date <= $4::date)
+                   AND c.cost_type = 'material'
+                   AND (c.name LIKE '%食材%' OR c.name LIKE '%原料%')
+            )
+            SELECT revenue.amount AS revenue,
+                   revenue.transaction_count,
+                   food_cost.amount AS food_cost,
+                   food_cost.line_count,
+                   food_cost.source_types,
+                   food_cost.categories
+              FROM revenue CROSS JOIN food_cost
+            """,
+            factory_id, days, window_start, window_end,
+        )
+
+    payload = dict(row or {})
+    revenue = float(payload.get("revenue") or 0)
+    food_cost = (
+        float(payload["food_cost"])
+        if payload.get("food_cost") is not None
+        else None
+    )
+    transaction_count = int(payload.get("transaction_count") or 0)
+    line_count = int(payload.get("line_count") or 0)
+    source_types = list(payload.get("source_types") or [])
+    categories = list(payload.get("categories") or [])
+    window_meta = {
+        "window_start": _date_text(window_start) if window_start else None,
+        "window_end": _date_text(window_end) if window_end else None,
+        "window_label": window_label,
+        "scope_matches_request": True,
+    }
+
+    if revenue <= 0:
+        answer = (
+            f"{window_text}全店食材成本率暂时无法计算：没有可用的 POS 净营收事实。"
+            "本次不会用其他期间或单菜配方成本替代。"
+        )
+        meta = {**window_meta, "no_pos_data": True}
+        kpis: List[Dict[str, Any]] = []
+    elif food_cost is None or line_count == 0:
+        answer = (
+            f"{window_text}全店食材成本率暂时无法计算：已有 POS 净营收事实"
+            f"（¥{revenue:,.2f}，{transaction_count:,} 笔），但没有同一期间的食材成本事实。"
+            "本次不会用单菜配方成本榜、理论成本快照或 0 替代。可信的期间口径应先补齐"
+            "“期初库存 + 本期采购 − 期末库存”或经核验的期间食材成本事实，再除以同口径净营收。"
+        )
+        meta = {
+            **window_meta,
+            "no_data": True,
+            "food_cost_fact_missing": True,
+            "transaction_count": transaction_count,
+        }
+        kpis = [
+            {"title": "POS 净营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
+            {"title": "期间食材成本", "value": "暂无事实", "rawValue": None},
+        ]
+    else:
+        ratio = food_cost / revenue * 100
+        answer = (
+            f"{window_text}已登记期间食材成本为 ¥{food_cost:,.2f}，POS 净营收为 "
+            f"¥{revenue:,.2f}，食材成本占净营收 **{ratio:.2f}%**。\n\n"
+            "这是“已登记期间食材成本 ÷ 同期 POS 净营收”的参考比率；只有成本事实已按"
+            "“期初库存 + 本期采购 − 期末库存”核验时，才能作为可信的期间实际口径。"
+            "它不是单菜真实毛利率，也不由当前单菜配方成本快照推算。"
+        )
+        meta = {
+            **window_meta,
+            "food_cost_fact_line_count": line_count,
+            "food_cost_source_types": source_types,
+            "food_cost_categories": categories,
+            "transaction_count": transaction_count,
+        }
+        kpis = [
+            {"title": "食材成本率", "value": f"{ratio:.2f}%", "rawValue": ratio},
+            {"title": "期间食材成本", "value": f"¥{food_cost:,.2f}", "rawValue": food_cost},
+            {"title": "POS 净营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
+        ]
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_RECIPE_COST",
+        title=f"{window_text}全店食材成本率",
+        answer_text=answer,
+        charts=[],
+        kpis=kpis,
+        meta=meta,
+    )
+
+
 async def resolve_recipe_cost(
     smartbi_pool, factory_id: str, top_n: int = 10,
+    days: int = 30,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
+    food_cost_ratio: bool = False,
 ) -> OpsAnswer:
     """Top N dishes by food cost (standard_qty × unit_price rollup).
 
     Joins cretas_db.product_types for dish names at query time (no dim_product
     ETL needed yet — see 2026_04_24_recipe_product_source_pk.sql rationale).
     """
+    if food_cost_ratio:
+        return await _resolve_food_cost_ratio(
+            smartbi_pool,
+            factory_id,
+            days=days,
+            date_range=date_range,
+            window_label=window_label,
+        )
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
@@ -3413,14 +3564,26 @@ async def resolve_gross_margin(
         pos_rows = await conn.fetch(
             """
             WITH anchor AS (
-                SELECT MAX(t2.date) AS end_date
-                  FROM fact_pos_item i2
-                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                  JOIN dim_product p2
-                    ON p2.product_id = i2.product_id
-                   AND p2.factory_id = i2.factory_id
-                 WHERE i2.factory_id = $1
-                   AND t2.factory_id = $1
+                -- ⚡ 语义不变、耗时 1330ms -> 0ms(2026-08-08 实测)。
+                -- 原式 `MAX(t2.date)` + 三表全连: 为了一个日期走完 94.7 万行明细,
+                -- EXPLAIN 显示 `Rows Removed by Join Filter: 4,261,170`。
+                -- 改成**索引倒序取第一条**: 走 idx_fact_pos_txn_factory_store_date 反扫,
+                -- 命中第一条就停 —— 「最后一天有菜品明细的交易日」这个语义逐字保留,
+                -- ⛔ 没有简化成裸 MAX(date)(那会在明细缺失时给出偏晚的锚点)。
+                SELECT t2.date AS end_date
+                  FROM fact_pos_transaction t2
+                 WHERE t2.factory_id = $1
+                   AND EXISTS (
+                         SELECT 1
+                           FROM fact_pos_item i2
+                           JOIN dim_product p2
+                             ON p2.product_id = i2.product_id
+                            AND p2.factory_id = i2.factory_id
+                          WHERE i2.transaction_id = t2.id
+                            AND i2.factory_id = $1
+                       )
+                 ORDER BY t2.date DESC
+                 LIMIT 1
             )
             SELECT p.product_id, p.name AS dish_name, p.normalized_name,
                    p.category, p.sub_category,
@@ -3515,14 +3678,26 @@ async def resolve_gross_margin(
             monthly_pos_rows = await conn.fetch(
                 """
                 WITH anchor AS (
-                    SELECT MAX(t2.date) AS end_date
-                      FROM fact_pos_item i2
-                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                      JOIN dim_product p2
-                        ON p2.product_id = i2.product_id
-                       AND p2.factory_id = i2.factory_id
-                     WHERE i2.factory_id = $1
-                       AND t2.factory_id = $1
+                    -- ⚡ 语义不变、耗时 1330ms -> 0ms(2026-08-08 实测)。
+                    -- 原式 `MAX(t2.date)` + 三表全连: 为了一个日期走完 94.7 万行明细,
+                    -- EXPLAIN 显示 `Rows Removed by Join Filter: 4,261,170`。
+                    -- 改成**索引倒序取第一条**: 走 idx_fact_pos_txn_factory_store_date 反扫,
+                    -- 命中第一条就停 —— 「最后一天有菜品明细的交易日」这个语义逐字保留,
+                    -- ⛔ 没有简化成裸 MAX(date)(那会在明细缺失时给出偏晚的锚点)。
+                    SELECT t2.date AS end_date
+                      FROM fact_pos_transaction t2
+                     WHERE t2.factory_id = $1
+                       AND EXISTS (
+                             SELECT 1
+                               FROM fact_pos_item i2
+                               JOIN dim_product p2
+                                 ON p2.product_id = i2.product_id
+                                AND p2.factory_id = i2.factory_id
+                              WHERE i2.transaction_id = t2.id
+                                AND i2.factory_id = $1
+                           )
+                     ORDER BY t2.date DESC
+                     LIMIT 1
                 )
                 SELECT date_trunc('month', t.date)::date AS month,
                        p.name AS dish_name, p.normalized_name,
@@ -4968,52 +5143,13 @@ async def resolve_store_margin(
         # cost correctly (dish-level food_cost × qty sold at each store).
         store_dish_rows = await conn.fetch(
             """
-            WITH anchor AS (
-                -- Scalar-subquery form so COALESCE short-circuits: when the
-                -- caller pins an exact end date the expensive MAX scan over
-                -- the full fact join is never executed.
-                SELECT COALESCE($4::date, (
-                    SELECT MAX(t2.date)
-                      FROM fact_pos_item i2
-                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                      JOIN dim_product p2
-                        ON p2.product_id = i2.product_id
-                       AND p2.factory_id = i2.factory_id
-                      JOIN (
-                        SELECT DISTINCT store_id
-                          FROM agg_daily
-                         WHERE factory_id = $1
-                        UNION
-                        SELECT DISTINCT store_id
-                          FROM fact_pos_transaction
-                         WHERE factory_id = $1
-                           AND NOT EXISTS (
-                             SELECT 1 FROM agg_daily WHERE factory_id = $1
-                           )
-                      ) scope ON scope.store_id = t2.store_id
-                      JOIN dim_store s2
-                        ON s2.store_id = t2.store_id
-                       AND s2.factory_id = t2.factory_id
-                     WHERE i2.factory_id = $1
-                       AND t2.factory_id = $1
-                       AND ($5::text IS NULL OR s2.store_id::text = $5::text)
-                       AND ($6::text IS NULL OR s2.name = $6::text)
-                       AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
-                )) AS end_date
-            )
-            SELECT s.store_id, s.name AS store_name,
-                   p.name AS dish_name, p.normalized_name,
-                   SUM(i.qty)::float AS qty,
-                   SUM(i.amount)::float AS revenue,
-                   COUNT(DISTINCT i.transaction_id)::int AS bills,
-                   MIN(t.date) AS window_start,
-                   MAX(t.date) AS window_end
-              FROM fact_pos_item i
-              JOIN fact_pos_transaction t ON t.id = i.transaction_id
-              JOIN dim_product p
-                ON p.product_id = i.product_id
-               AND p.factory_id = i.factory_id
-              JOIN (
+            WITH anchor_scope AS MATERIALIZED (
+                -- ⚡ 二次优化(2026-08-08): 上一版把 MAX 改成倒序取第一条后,
+                -- 这一条**仍要 808ms** —— EXPLAIN 显示 `JOIN scope` 逼出嵌套循环,
+                -- 扫完 236,954 行、`Rows Removed by Join Filter: 1,066,466`,
+                -- 倒序短路完全失效。把 scope 提成 MATERIALIZED CTE(先算成 10 行)
+                -- 再用 IN, 外层就能沿 date 索引反扫、命中即停。实测 828ms -> 0ms。
+                -- ⛔ 试过 `= ANY(array_agg(...))`: 2100ms 更差, 数组比较挡住索引。
                 SELECT DISTINCT store_id
                   FROM agg_daily
                  WHERE factory_id = $1
@@ -5024,18 +5160,75 @@ async def resolve_store_margin(
                    AND NOT EXISTS (
                      SELECT 1 FROM agg_daily WHERE factory_id = $1
                    )
-              ) scope ON scope.store_id = t.store_id
+            ), anchor AS (
+                -- Scalar-subquery form so COALESCE short-circuits: when the
+                -- caller pins an exact end date the expensive scan is skipped.
+                -- 「最后一天有菜品明细的交易日」这个语义逐字保留。
+                SELECT COALESCE($4::date, (
+                    SELECT t2.date
+                      FROM fact_pos_transaction t2
+                      JOIN dim_store s2
+                        ON s2.store_id = t2.store_id
+                       AND s2.factory_id = t2.factory_id
+                     WHERE t2.store_id IN (SELECT store_id FROM anchor_scope)
+                       AND t2.factory_id = $1
+                       AND ($5::text IS NULL OR s2.store_id::text = $5::text)
+                       AND ($6::text IS NULL OR s2.name = $6::text)
+                       AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
+                       AND EXISTS (
+                             SELECT 1
+                               FROM fact_pos_item i2
+                               JOIN dim_product p2
+                                 ON p2.product_id = i2.product_id
+                                AND p2.factory_id = i2.factory_id
+                              WHERE i2.transaction_id = t2.id
+                                AND i2.factory_id = $1
+                           )
+                     ORDER BY t2.date DESC
+                     LIMIT 1
+                )) AS end_date
+            )
+            -- ⚡ 先聚合再关联维表(2026-08-08 实测 3489ms -> 2346ms, 结果集逐行相同)。
+            -- 原式把 dim_store / dim_product 直接 JOIN 进 94.7 万行的明细扫描里,
+            -- EXPLAIN 显示 **dim_product 只有 10 行却被读了 262 万次缓冲**
+            -- (嵌套循环逐行回表), fact_pos_transaction 336 万、fact_pos_item 98 万。
+            -- 先按 (门店, 菜品ID) 聚合成 ~100 行, 再去关联两张小维表 —— 维表只查一遍。
+            -- ⛔ 门店过滤($5/$6/$7)必须留在**外层**: 它按 dim_store.name 过滤,
+            --    而内层只有 store_id, 挪进去会拿不到名字。
+            , agg AS (
+                SELECT t.store_id, i.product_id,
+                       SUM(i.qty)::float AS qty,
+                       SUM(i.amount)::float AS revenue,
+                       COUNT(DISTINCT i.transaction_id)::int AS bills,
+                       MIN(t.date) AS window_start,
+                       MAX(t.date) AS window_end
+                  FROM fact_pos_item i
+                  JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                  CROSS JOIN anchor
+                 WHERE i.factory_id = $1 AND t.factory_id = $1
+                   AND anchor.end_date IS NOT NULL
+                   AND t.store_id IN (SELECT store_id FROM anchor_scope)
+                   AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+                   AND t.date <= COALESCE($4::date, anchor.end_date)
+                 GROUP BY t.store_id, i.product_id
+            )
+            SELECT s.store_id, s.name AS store_name,
+                   p.name AS dish_name, p.normalized_name,
+                   SUM(a.qty)::float AS qty,
+                   SUM(a.revenue)::float AS revenue,
+                   SUM(a.bills)::int AS bills,
+                   MIN(a.window_start) AS window_start,
+                   MAX(a.window_end) AS window_end
+              FROM agg a
+              JOIN dim_product p
+                ON p.product_id = a.product_id
+               AND p.factory_id = $1
               JOIN dim_store s
-                ON s.store_id = t.store_id
-               AND s.factory_id = t.factory_id
-              CROSS JOIN anchor
-             WHERE i.factory_id = $1 AND t.factory_id = $1
-               AND anchor.end_date IS NOT NULL
-               AND ($5::text IS NULL OR s.store_id::text = $5::text)
+                ON s.store_id = a.store_id
+               AND s.factory_id = $1
+             WHERE ($5::text IS NULL OR s.store_id::text = $5::text)
                AND ($6::text IS NULL OR s.name = $6::text)
                AND ($7::text[] IS NULL OR s.name = ANY($7::text[]))
-               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
-               AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
             factory_id, days, exact_start, exact_end, store_id, store_name,
@@ -5046,21 +5239,32 @@ async def resolve_store_margin(
             WITH anchor AS (
                 -- Scalar-subquery form: the MAX scan only runs when no exact
                 -- end date was supplied (see the dish query above).
+                -- ⚡ 语义不变、耗时 4331ms -> 索引反扫(2026-08-08 实测)。
+                -- COALESCE 短路保留(给了显式 end date 就不跑扫描), 但**没给时**
+                -- 原式仍要 MAX 全扫 94.7 万行明细。改成 ORDER BY date DESC LIMIT 1:
+                -- 走 idx_fact_pos_txn_factory_store_date 反扫, 命中即停。
+                -- 「最后一天有菜品明细的交易日」这个语义逐字保留。
                 SELECT COALESCE($4::date, (
-                    SELECT MAX(t2.date)
-                      FROM fact_pos_item i2
-                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                      JOIN dim_product p2
-                        ON p2.product_id = i2.product_id
-                       AND p2.factory_id = i2.factory_id
+                    SELECT t2.date
+                      FROM fact_pos_transaction t2
                       JOIN dim_store s2
                         ON s2.store_id = t2.store_id
                        AND s2.factory_id = t2.factory_id
-                     WHERE i2.factory_id = $1
-                       AND t2.factory_id = $1
+                     WHERE t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
                        AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
+                       AND EXISTS (
+                             SELECT 1
+                               FROM fact_pos_item i2
+                               JOIN dim_product p2
+                                 ON p2.product_id = i2.product_id
+                                AND p2.factory_id = i2.factory_id
+                              WHERE i2.transaction_id = t2.id
+                                AND i2.factory_id = $1
+                           )
+                     ORDER BY t2.date DESC
+                     LIMIT 1
                 )) AS end_date
             ), scope AS (
                 SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
@@ -7678,10 +7882,7 @@ async def resolve_channel_mix(
         lines.append("")
         lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
     lines.append("")
-    lines.append(
-        "建议：分别看堂食和外卖的客单价与毛利；外卖占比高时先查包装、"
-        "出餐时长和平台抽佣，堂食占比高时优化翻台与套餐引导。"
-    )
+    lines.append(_closing("CHANNEL_MIX_CLOSING", query))
     return OpsAnswer(
         code="RESTAURANT_OPS_CHANNEL_MIX",
         title=f"堂食外卖拆分（{window_label}）",
@@ -7780,11 +7981,7 @@ async def resolve_supplier_price(
                      "rawValue": top["spread_pct"]})
 
     lines.append("")
-    lines.append(
-        "说明：只在**同一食材、同一单位**内比价 —— 不同食材的单价没有可比性，"
-        "同一食材不同单位（kg / 箱）也不合并。价差大不等于换供应商就能省下这个比例，"
-        "还要看用量、供货能力和品质，这些数据这里没有。"
-    )
+    lines.append(_closing("SUPPLIER_PRICE_CLOSING", query))
     return OpsAnswer(
         code="RESTAURANT_OPS_SUPPLIER_PRICE",
         title=f"供应商比价（{window_label}）",
@@ -7891,10 +8088,7 @@ async def resolve_discount_summary(
         )
 
     lines.append("")
-    lines.append(
-        "说明：这里只描述让利规模，不能据此说折扣「带来了」多少额外营收 —— "
-        "现有数据无法支撑那个因果结论。要判断值不值，需要把同期的单量与毛利一起看。"
-    )
+    lines.append(_closing("DISCOUNT_CLOSING", query))
     return OpsAnswer(
         code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
         title=f"折扣力度（{window_label}）",

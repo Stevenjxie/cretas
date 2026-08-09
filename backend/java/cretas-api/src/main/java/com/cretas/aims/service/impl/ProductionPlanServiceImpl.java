@@ -119,6 +119,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private final ExcelUtil excelUtil;
     private final SalesOrderRepository salesOrderRepository;
     private final SalesOrderItemRepository salesOrderItemRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CustomerRepository customerRepository;
     /** Sprint 3 Track-F: unified cross-business link service (double-write w/ sourceOrderId). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
@@ -1193,8 +1195,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                 String materialTypeId) {
         if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
             requireCustomerSuppliedPlanLineage(plan, "原料库存");
-            return materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
-                    factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+            return isBlank(plan.getSourceOrderId())
+                    ? materialBatchRepository.sumAvailableUnassignedCustomerOwnedRawStock(
+                            factoryId, materialTypeId, plan.getCustomerId())
+                    : materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
+                            factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
         }
         // Repository contract excludes customer-owned inventory while retaining
         // null ownership only for read-compatible legacy company stock.
@@ -1211,8 +1216,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             java.util.List<String> units;
             if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
                 requireCustomerSuppliedPlanLineage(plan, "原料库存单位");
-                units = materialBatchRepository.findCustomerSuppliedRawStockUnits(
-                        factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+                units = isBlank(plan.getSourceOrderId())
+                        ? materialBatchRepository.findUnassignedCustomerOwnedRawStockUnits(
+                                factoryId, materialTypeId, plan.getCustomerId())
+                        : materialBatchRepository.findCustomerSuppliedRawStockUnits(
+                                factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
             } else {
                 units = materialBatchRepository.findRawStockUnitsByMaterialType(factoryId, materialTypeId);
             }
@@ -1245,8 +1253,39 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void validateAndEnrichSalesOrderSource(String factoryId, CreateProductionPlanRequest request) {
         if (request.getSourceType() != PlanSourceType.CUSTOMER_ORDER) {
-            // Request snapshot fields are never authoritative. New non-sales plans
-            // always produce ordinary company-owned inventory.
+            boolean customerOwnedInventoryProduction = request.getSourceType() == PlanSourceType.SAFETY_STOCK
+                    && request.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED;
+            if (customerOwnedInventoryProduction) {
+                if (isBlank(request.getCustomerId())) {
+                    throw new BusinessException(400, "客户专属库存生产必须选择归属客户")
+                            .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_REQUIRED")
+                            .withHintTarget("customerId");
+                }
+                if (!isBlank(request.getSourceOrderId()) || !isBlank(request.getSourceOrderItemId())) {
+                    throw new BusinessException(400, "客户专属库存生产不能同时关联销售订单")
+                            .withCode("CUSTOMER_INVENTORY_PRODUCTION_ORDER_FORBIDDEN")
+                            .withHint("如已有销售订单，请改用销售订单生产")
+                            .withHintTarget("sourceOrderId");
+                }
+                if (customerRepository == null) {
+                    throw new BusinessException(500, "客户资料校验服务不可用，不能创建客户专属库存生产")
+                            .withCode("CUSTOMER_VALIDATION_UNAVAILABLE");
+                }
+                var customer = customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
+                        .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
+                        .orElseThrow(() -> new BusinessException(400, "归属客户不存在、已停用或不属于当前工厂")
+                                .withCode("CUSTOMER_INVENTORY_PRODUCTION_CUSTOMER_INVALID")
+                                .withHintTarget("customerId"));
+                request.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+                request.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+                request.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+                request.setSourceOrderId(null);
+                request.setSourceOrderItemId(null);
+                request.setSourceOrderIds(new java.util.ArrayList<>());
+                request.setSourceCustomerName(customer.getName());
+                return;
+            }
+            // Every other non-sales plan remains ordinary company-owned inventory.
             request.setCustomerId(null);
             request.setProcessingMode(null);
             request.setMaterialSupplyMode(null);
@@ -5144,7 +5183,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * 把 BY_STOCK 小结的库存真值桥接为仓库确认所需的唯一结单元数据。
+     * 把 BY_STOCK 小结的库存真值桥接为仓库确认所需的结单元数据。
      *
      * <p>历史上 {@code interim-settle} 与普通 {@code settle} 各写一张互不相通的表：前者已经扣料并
      * 创建可用 FG，后者才是仓库列表 GET/确认入口读取的表。这里在计划行悲观锁内做一次严格派生，
@@ -5227,17 +5266,40 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
             summarizedFinishedQuantity = summarizedFinishedQuantity.add(sessionFinished);
         }
-        if (batchNumbers.size() != 1 || summarizedFinishedQuantity.signum() <= 0) {
-            throw invalidInterimFinishedGoods("仓库单数量确认仅支持唯一成品批次, 当前批次数=" + batchNumbers.size());
+        if (batchNumbers.isEmpty() || summarizedFinishedQuantity.signum() <= 0) {
+            throw invalidInterimFinishedGoods("小结没有可核验的成品批次或成品数量");
         }
 
-        String batchNumber = batchNumbers.iterator().next();
-        FinishedGoodsBatch finishedGoods = finishedGoodsBatchRepository
-                .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
-                .orElseThrow(() -> invalidInterimFinishedGoods("小结记录的成品批次不存在: " + batchNumber));
-        validateInterimFinishedGoods(plan, finishedGoods, summarizedFinishedQuantity);
-        if (!com.cretas.aims.entity.inventory.FinishedGoodsBatch.Status.AVAILABLE.equals(finishedGoods.getStatus())) {
-            throw invalidInterimFinishedGoods("小结成品批次尚未进入 AVAILABLE 状态: " + finishedGoods.getStatus());
+        List<FinishedGoodsBatch> finishedGoodsBatches = new ArrayList<>();
+        BigDecimal producedQuantity = BigDecimal.ZERO;
+        String quantityUnit = null;
+        String canonicalQuantityUnit = null;
+        for (String batchNumber : batchNumbers) {
+            FinishedGoodsBatch finishedGoods = finishedGoodsBatchRepository
+                    .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                    .orElseThrow(() -> invalidInterimFinishedGoods("小结记录的成品批次不存在: " + batchNumber));
+            validateInterimFinishedGoodsIdentity(plan, finishedGoods);
+
+            String batchUnit = trimToNull(finishedGoods.getUnit());
+            String canonicalBatchUnit = canonicalReceiptUnit(batchUnit);
+            if (canonicalQuantityUnit == null) {
+                quantityUnit = batchUnit;
+                canonicalQuantityUnit = canonicalBatchUnit;
+            } else if (!Objects.equals(canonicalQuantityUnit, canonicalBatchUnit)) {
+                throw invalidInterimFinishedGoods("多次小结的成品批次计量单位不一致: "
+                        + quantityUnit + " / " + batchUnit);
+            }
+
+            BigDecimal batchProduced = zeroIfNull(finishedGoods.getProducedQuantity());
+            if (batchProduced.signum() <= 0) {
+                throw invalidInterimFinishedGoods("小结成品批次数量无效: " + batchNumber);
+            }
+            producedQuantity = producedQuantity.add(batchProduced);
+            finishedGoodsBatches.add(finishedGoods);
+        }
+        if (producedQuantity.compareTo(summarizedFinishedQuantity) != 0) {
+            throw invalidInterimFinishedGoods("小结摘要数量与成品批次合计不一致: 摘要="
+                    + summarizedFinishedQuantity + ", 批次合计=" + producedQuantity);
         }
 
         ProductionInterimSettlement latestSession = sessions.get(sessions.size() - 1);
@@ -5250,21 +5312,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setPlanNumber(plan.getPlanNumber());
         settlement.setIdempotencyKey("by-stock-interim:" + latestSession.getId());
         settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
-        settlement.setActualFinishedQuantity(finishedGoods.getProducedQuantity());
+        settlement.setActualFinishedQuantity(producedQuantity);
         settlement.setActualSemiFinishedQuantity(BigDecimal.ZERO);
-        settlement.setQuantityUnit(trimToNull(finishedGoods.getUnit()));
+        settlement.setQuantityUnit(quantityUnit);
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         /*
          * SAFETY_STOCK 采用“生产小结即入库”的单一真值：InterimSettle 已经完成扣料并创建
-         * AVAILABLE 成品批次，桥接表只镜像同一过账事实，绝不再要求仓库二次确认。
+         * 成品批次，桥接表只镜像同一过账事实，绝不再要求仓库二次确认。
          */
         settlement.setPostingStatus("POSTED");
-        settlement.setPostingMessage("生产小结已完成扣料并入库；成品库存可用，无需重复仓库确认");
-        settlement.setFinishedGoodsBatchId(finishedGoods.getId());
+        settlement.setPostingMessage("生产小结已完成扣料并入库；共 " + finishedGoodsBatches.size()
+                + " 个成品批次，无需重复仓库确认");
+        // 兼容旧的单批次标量；多批次不能伪造某一批次作为整张结单的代表。
+        settlement.setFinishedGoodsBatchId(finishedGoodsBatches.size() == 1
+                ? finishedGoodsBatches.get(0).getId() : null);
         settlement.setSettledBy(latestSession.getPostedBy());
         settlement.setSettledAt(latestSession.getPostedAt());
         settlement.setWarehouseReceiptIdempotencyKey("by-stock-interim:" + latestSession.getId());
-        settlement.setWarehouseReceivedQuantity(finishedGoods.getProducedQuantity());
+        settlement.setWarehouseReceivedQuantity(producedQuantity);
         settlement.setWarehouseVarianceQuantity(BigDecimal.ZERO);
         settlement.setWarehouseVarianceReason(null);
         settlement.setWarehouseResponsibilitySide(null);
@@ -5273,14 +5338,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setWarehouseReceivedBy(latestSession.getPostedBy());
         settlement.setWarehouseReceivedAt(latestSession.getPostedAt());
         ProductionSettlement saved = productionSettlementRepository.save(settlement);
-        log.info("BY_STOCK 结单桥接已对齐小结入库真值: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatch={}, quantity={} {}",
-                factoryId, planId, saved.getId(), sessions.size(), finishedGoods.getBatchNumber(),
-                finishedGoods.getProducedQuantity(), finishedGoods.getUnit());
+        log.info("BY_STOCK 结单桥接已对齐小结入库真值: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatches={}, quantity={} {}",
+                factoryId, planId, saved.getId(), sessions.size(), batchNumbers,
+                producedQuantity, quantityUnit);
         return saved;
     }
 
     private void validateInterimFinishedGoods(ProductionPlan plan, FinishedGoodsBatch finishedGoods,
                                               BigDecimal summarizedFinishedQuantity) {
+        validateInterimFinishedGoodsIdentity(plan, finishedGoods);
+        BigDecimal produced = zeroIfNull(finishedGoods.getProducedQuantity());
+        if (produced.signum() <= 0 || produced.compareTo(summarizedFinishedQuantity) != 0) {
+            throw invalidInterimFinishedGoods("小结摘要数量与成品批次数量不一致");
+        }
+    }
+
+    private void validateInterimFinishedGoodsIdentity(ProductionPlan plan, FinishedGoodsBatch finishedGoods) {
         if (!plan.getId().equals(finishedGoods.getProductionPlanId())) {
             throw invalidInterimFinishedGoods("小结成品批次不属于当前生产计划");
         }
@@ -5294,16 +5367,32 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (!Objects.equals(expectedProductTypeId, trimToNull(finishedGoods.getProductTypeId()))) {
             throw invalidInterimFinishedGoods("小结成品 SKU 与计划终端 SKU 不一致");
         }
-        BigDecimal produced = zeroIfNull(finishedGoods.getProducedQuantity());
-        if (produced.signum() <= 0 || produced.compareTo(summarizedFinishedQuantity) != 0) {
-            throw invalidInterimFinishedGoods("小结摘要数量与唯一成品批次数量不一致");
-        }
         if (isBlank(finishedGoods.getUnit())) {
             throw invalidInterimFinishedGoods("小结成品批次缺少计量单位");
         }
+        String status = trimToNull(finishedGoods.getStatus());
+        if (status == null || !Set.of(
+                FinishedGoodsBatch.Status.AVAILABLE,
+                FinishedGoodsBatch.Status.DEPLETED,
+                FinishedGoodsBatch.Status.EXPIRED,
+                FinishedGoodsBatch.Status.FROZEN,
+                FinishedGoodsBatch.Status.DEFECTIVE).contains(status)) {
+            throw invalidInterimFinishedGoods("小结成品批次不是有效的已入库真值: " + status);
+        }
+        InventoryOwnership expectedOwnership = Optional.ofNullable(plan.getOutputOwnership())
+                .orElse(InventoryOwnership.COMPANY_OWNED);
+        InventoryOwnership batchOwnership = Optional.ofNullable(finishedGoods.getOwnership())
+                .orElse(InventoryOwnership.COMPANY_OWNED);
+        if (!Objects.equals(expectedOwnership, batchOwnership)) {
+            throw invalidInterimFinishedGoods("小结成品批次库存归属与生产计划不一致");
+        }
+        if (expectedOwnership == InventoryOwnership.CUSTOMER_OWNED
+                && !Objects.equals(trimToNull(plan.getCustomerId()), trimToNull(finishedGoods.getOwnerCustomerId()))) {
+            throw invalidInterimFinishedGoods("小结成品批次归属客户与生产计划不一致");
+        }
     }
 
-    /** BY_STOCK 仓库确认只确认小结已创建的唯一 FG，禁止再建第二个成品批次。 */
+    /** 兼容历史未完成桥接：单批次 BY_STOCK 仓库确认只复用小结已创建的 FG，禁止再建第二批。 */
     private FinishedGoodsBatch requireInterimFinishedGoodsForReceipt(ProductionPlan plan,
                                                                      ProductionSettlement settlement,
                                                                      BigDecimal reported,

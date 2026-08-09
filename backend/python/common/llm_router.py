@@ -962,6 +962,54 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen3-max-preview"),
         ("aliyun_c", "glm-5.1"), ("aliyun_c", "deepseek-v3.1"),
+        # ── 2026-08-09: 上面**全部**免费额度耗尽那天补进来的一层 ──────────
+        #
+        # 🔴 当天实测: REVIEW 链 20 个组合里只有 2 个还活着 ——
+        #    `zhipu/glm-4.5-air`(熔断中, 且实测不吐 JSON, 合约 0/3) 与
+        #    `aliyun_c/deepseek-v3.2`(那颗毒丸, confidence 恒负, 合约 0/3)。
+        #    阿里云 a/b/c 全是 403 `Free quota exhausted`, 腾讯全是 402
+        #    `401008 free trial quota exhausted`, 火山是 429 `SetLimitExceeded`。
+        #    于是 T3 规划器整层 fail-closed, 而 66.5% 的餐饮提问走这一层。
+        #
+        # ⛔ 判据不是「能否调通」而是「答对 intent 且 confidence>=0.6」——
+        #    07-30 那轮已经证明「调通但 confidence=-1.0」等于毒丸。
+        #    拿**真实 T3 prompt** 逐个打分(3 个问句 / SALES_SUMMARY, GROSS_MARGIN,
+        #    WASTAGE), 当天仍有额度的候选实测:
+        #      qwen3-vl-plus                  3/3  conf 0.90-0.98   3-4s   ← 选它
+        #      deepseek-r1                    3/3  conf 0.95       13-70s  ✗ 超预算
+        #      qwen3-235b-a22b-thinking-2507  3/3  conf 0.85-0.95  28-46s  ✗ 超预算
+        #      qwen3-vl-32b-instruct          2/3  (把菜品毛利问句判成营收汇总) 3-4s
+        #      qwen3-vl-flash-2026-01-22      2/3  (同上)                    2s
+        #    两个 reasoner 虽然满分, 但 13-70s 直接击穿 REVIEW 的 12s 交互预算,
+        #    故意**不**放进来 —— 放进来只会把「答不出来」换成「等到超时」。
+        #
+        # ⚠️ 它们是 VL(视觉)模型, 这里当纯文本用: 已在 _SAFE_MODELS 白名单内
+        #    (VL 槽在用), 纯文本入参实测正常。放在这一段而不是链头 ——
+        #    上面那些额度恢复后行为逐字不变, 只有全耗尽时才会走到这里。
+        #    满分档(3/3)在前, 2/3 档随后, 都在 12s 预算内:
+        # ⚠️ 2026-08-09 判别实验: 先把 qwen3-vl-plus 放链头, 电池连续两轮
+        #    在**多轮上下文继承**用例上退化([07][08] 菜品链延续 /
+        #    [74][75][76] 澄清乱序链), 而换型前两轮这些全过。我的合约测试
+        #    只测了**单轮**, 这是验证里的缺口。故改成纯文本的 deepseek-v3 打头,
+        #    VL 模型退到其后 —— 若多轮恢复, 说明 VL 模型不适合承担会话继承。
+        ("aliyun_c", "deepseek-v3"),            # 3/3  conf 0.90-0.95  3-4s  纯文本
+        ("aliyun_c", "qwen3-vl-plus"),          # 3/3  conf 0.90-0.98  3-4s
+        # ⚠️ deepseek-v3 与链尾那颗毒丸 deepseek-v3.2 同族, 但 confidence 正常 ——
+        #    同族不同版本行为可以完全相反, 只能实测, 不能按家族推断。
+        ("aliyun_c", "kimi-k2.6"),              # 2/3  2-3s (菜品毛利判成营收汇总)
+        ("aliyun_c", "qwen3-vl-32b-instruct"),  # 2/3  3-4s (同上)
+        ("aliyun_c", "qwen3-vl-flash-2026-01-22"),  # 2/3  2s (同上)
+        # ⛔ 实测仍有额度但**故意不放**的: glm-4.7(23-37s) / glm-5(64-89s) /
+        #    deepseek-r1(13-70s) / qwen3-235b-a22b-thinking(28-46s) ——
+        #    全部击穿 REVIEW 的 12s 交互预算, 放进来只是把「答不出来」换成「等到超时」。
+        #
+        # ⚠️ 上面五个**全在 aliyun_c 一个账号上**, 且该账号免费额度 2026-08-13 到期。
+        #    跨账号冗余做不到, 不是因为没有可用模型 —— 2026-08-09 宽扫实测
+        #    aliyun_a/b、腾讯、火山各自都还有能调通的模型(共 24 个组合) ——
+        #    而是因为它们**不在 `_SAFE_MODELS` 白名单**里: 白名单的语义是
+        #    「该账号上这个模型的『免费额度用完即停』已确认开启」, 而
+        #    「HTTP 200」**分辨不出免费还是计费**。要接它们必须先在控制台逐个确认开关。
+        #    ⛔ 不要因为「探针能通」就往白名单里加 —— 那正是这条计费红线要挡的事。
     ] + _TEXT_TAIL + [
         # ⛔ aliyun_c/deepseek-v3.2 必须排在**整条链最后**, _TEXT_TAIL 之后。
         #
@@ -1080,6 +1128,17 @@ _TOKENHUB_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
 # all 8 reachable Ark models — none rejected the field.
 _ARK_DISABLE_THINKING: Dict[str, Any] = {"type": "disabled"}
 
+# Zhipu's OpenAI-compatible endpoint uses the same object shape for GLM-4.5+
+# (not DashScope's ``enable_thinking`` boolean).  Without this translation the
+# model defaults to dynamic thinking and can spend the caller's entire output
+# budget in ``reasoning_content``, leaving an empty ``content`` even on HTTP
+# 200.  Keep the allowlist explicit so an older/future incompatible Zhipu SKU
+# cannot inherit the parameter merely because it shares the provider account.
+_ZHIPU_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
+    "glm-4.5-air",
+    "glm-4.6v",
+})
+
 
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1108,6 +1167,15 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
     # must keep it.
     if account == "ark" and prof.get("enable_thinking") is False:
         p["thinking"] = dict(_ARK_DISABLE_THINKING)
+    # Zhipu GLM-4.5+ also requires the provider-specific object.  This belongs
+    # after the Aliyun branch: never leak DashScope's ``enable_thinking`` into
+    # Zhipu's OpenAI-compatible request.
+    if (
+        account == "zhipu"
+        and model in _ZHIPU_THINKING_OBJECT_MODELS
+        and prof.get("enable_thinking") is False
+    ):
+        p["thinking"] = {"type": "disabled"}
     # TokenHub is provider-compatible but not parameter-uniform. Follow its official
     # per-model guides instead of assuming DashScope or Ark semantics.
     if account == "tencent" and prof.get("enable_thinking") is False:

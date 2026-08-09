@@ -1,9 +1,11 @@
 export type SalesProcessingMode = 'STANDARD_SALE' | 'TOLL_PROCESSING';
 export type MaterialSupplyMode = 'CUSTOMER_SUPPLIED' | 'FACTORY_SUPPLIED';
+export type CustomerStockFulfillmentMode = 'ORDER_DRIVEN' | 'PRESTOCKED';
 
 export interface SalesOrderSupplyContract {
   processingMode: SalesProcessingMode | '';
   materialSupplyMode: MaterialSupplyMode | '';
+  customerStockFulfillmentMode: CustomerStockFulfillmentMode;
 }
 
 export interface CustomerSuppliedMaterialRequirement {
@@ -37,6 +39,23 @@ export const MATERIAL_SUPPLY_MODE_OPTIONS: ReadonlyArray<{
   { value: 'CUSTOMER_SUPPLIED', label: '客户自带原料' },
 ];
 
+export const CUSTOMER_STOCK_FULFILLMENT_OPTIONS: ReadonlyArray<{
+  value: CustomerStockFulfillmentMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'ORDER_DRIVEN',
+    label: '本订单后续送料',
+    description: '销售登记预计来料，仓储按本订单收货后再生产。',
+  },
+  {
+    value: 'PRESTOCKED',
+    label: '使用客户已有库存',
+    description: '使用此前已为该客户生产入库、尚未绑定销售订单的成品。',
+  },
+];
+
 const processingModeLabels: Record<SalesProcessingMode, string> = {
   STANDARD_SALE: '普通销售',
   TOLL_PROCESSING: '代加工',
@@ -51,6 +70,7 @@ export function newSalesOrderSupplyContract(): SalesOrderSupplyContract {
   return {
     processingMode: 'STANDARD_SALE',
     materialSupplyMode: 'FACTORY_SUPPLIED',
+    customerStockFulfillmentMode: 'ORDER_DRIVEN',
   };
 }
 
@@ -82,6 +102,11 @@ export function supplyContractValidationError(contract: SalesOrderSupplyContract
     && contract.materialSupplyMode === 'CUSTOMER_SUPPLIED') {
     return '普通销售不能选择客户自带原料；请改为代加工，或选择工厂备料';
   }
+  if ((contract.processingMode !== 'TOLL_PROCESSING'
+    || contract.materialSupplyMode !== 'CUSTOMER_SUPPLIED')
+    && contract.customerStockFulfillmentMode === 'PRESTOCKED') {
+    return '使用客户已有库存只适用于“代加工 + 客户自带原料”';
+  }
   return null;
 }
 
@@ -90,7 +115,8 @@ export function suppliedMaterialsValidationError(
   requirements: CustomerSuppliedMaterialRequirement[],
 ): string | null {
   if (contract.processingMode !== 'TOLL_PROCESSING'
-    || contract.materialSupplyMode !== 'CUSTOMER_SUPPLIED') {
+    || contract.materialSupplyMode !== 'CUSTOMER_SUPPLIED'
+    || contract.customerStockFulfillmentMode === 'PRESTOCKED') {
     return null;
   }
   if (requirements.length === 0) return '请至少添加一项客户自带原料需求';

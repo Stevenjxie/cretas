@@ -52,6 +52,12 @@ public enum FactoryUserRole {
     sales_manager("销售主管", "客户、订单、出货", 10, "sales"),
 
     /**
+     * 运营协调员
+     * 创建跨部门来源/协调单并查看履约状态；不直接执行仓储、销售、生产或财务写操作。
+     */
+    operations_coordinator("运营协调员", "跨部门来源单、到料预告与履约协调", 10, "operations"),
+
+    /**
      * 调度
      * 生产调度、数据分析、趋势监控、全局视图
      */
@@ -325,6 +331,8 @@ public enum FactoryUserRole {
                 return "procurement";
             case sales_manager:
                 return "sales";
+            case operations_coordinator:
+                return "operations";
             case dispatcher:
             case production_manager:
             case workshop_supervisor:

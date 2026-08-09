@@ -6,11 +6,12 @@ import { Document, Refresh } from '@element-plus/icons-vue';
 import { get, post } from '@/api/request';
 import {
   createCustomerSuppliedReceipt,
+  createCustomerMaterialArrivalReceipt,
   closePurchaseReceivingTask,
-  getPendingPurchaseReceivingTasks,
   getPendingWarehouseReceivingTasks,
   getPurchaseInboundDefaultWarehouse,
   type CustomerSuppliedReceivingTask,
+  type CustomerMaterialArrivalTask,
   type PurchaseReceivingTask,
   type PurchaseReceivingTaskItem,
   type PurchaseReceivingCloseReason,
@@ -108,6 +109,27 @@ const customerConfirming = ref(false);
 const customerAttachmentRefreshKey = ref(0);
 const customerAttachmentQueue = ref({ pending: 0, failed: 0 });
 const customerIdempotencyKey = ref('');
+const arrivalDialogVisible = ref(false);
+const selectedArrivalTask = ref<CustomerMaterialArrivalTask | null>(null);
+const arrivalConfirming = ref(false);
+const materialOptions = ref<Array<{ id: string; name: string; code?: string; unit?: string; measurementUnit?: string }>>([]);
+const arrivalForm = ref({
+  materialTypeId: '',
+  materialName: '',
+  warehouseId: '',
+  receivedQuantity: 0,
+  unit: '',
+  productionDate: '',
+  expireDate: '',
+  externalBatchNumber: '',
+  contractNumber: '',
+  factoryNumber: '',
+  boxCount: undefined as number | undefined,
+  originPlace: '',
+  notes: '',
+  completeNotice: true,
+  idempotencyKey: '',
+});
 // 厂号沿用手工入库那套「选厂商登记 → 自动带产地」, 不新造自由文本口径
 // (materials/list.vue#handleManufacturerChange)。allow-create 保留现场临时录入。
 const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
@@ -192,6 +214,8 @@ const requestedSourceType = computed(() => {
   const sourceType = String(route.query.sourceType || '').trim().toUpperCase();
   return sourceType === 'SALES_ORDER_CUSTOMER_SUPPLIED'
     ? 'SALES_ORDER_CUSTOMER_SUPPLIED' as const
+    : sourceType === 'CUSTOMER_MATERIAL_ARRIVAL'
+      ? 'CUSTOMER_MATERIAL_ARRIVAL' as const
     : sourceType === 'PURCHASE'
       ? 'PURCHASE' as const
       : undefined;
@@ -204,6 +228,10 @@ function isPurchaseTask(task: WarehouseReceivingTask): task is PurchaseReceiving
 
 function isCustomerSuppliedTask(task: WarehouseReceivingTask): task is CustomerSuppliedReceivingTask {
   return task.sourceType === 'SALES_ORDER_CUSTOMER_SUPPLIED';
+}
+
+function isCustomerMaterialArrivalTask(task: WarehouseReceivingTask): task is CustomerMaterialArrivalTask {
+  return task.sourceType === 'CUSTOMER_MATERIAL_ARRIVAL';
 }
 
 function localDateText(): string {
@@ -257,17 +285,12 @@ async function loadTasks() {
   if (!props.factoryId) return;
   loading.value = true;
   try {
-    const response = exactSalesOrderId.value || exactSalesOrderNumber.value || requestedSourceType.value
-      ? await getPendingWarehouseReceivingTasks(props.factoryId, {
+    const response = await getPendingWarehouseReceivingTasks(props.factoryId, {
           purchaseOrderId: exactPurchaseOrderId.value || undefined,
           orderNumber: exactPurchaseOrderId.value ? undefined : exactOrderNumber.value || undefined,
           salesOrderId: exactSalesOrderId.value || undefined,
           salesOrderNo: exactSalesOrderId.value ? undefined : exactSalesOrderNumber.value || undefined,
           sourceType: requestedSourceType.value,
-        })
-      : await getPendingPurchaseReceivingTasks(props.factoryId, {
-          purchaseOrderId: exactPurchaseOrderId.value || undefined,
-          orderNumber: exactPurchaseOrderId.value ? undefined : exactOrderNumber.value || undefined,
         });
     const rows = response.success && Array.isArray(response.data) ? response.data : [];
     tasks.value = rows.filter((task) => {
@@ -280,6 +303,15 @@ async function loadTasks() {
   } finally {
     loading.value = false;
   }
+}
+
+async function loadMaterialOptions() {
+  const response = await get(`/${props.factoryId}/raw-material-types/active`, { _silent: true } as never);
+  materialOptions.value = Array.isArray(response.data)
+    ? response.data
+    : Array.isArray((response.data as { content?: unknown[] } | undefined)?.content)
+      ? (response.data as { content: typeof materialOptions.value }).content
+      : [];
 }
 
 async function loadWarehouses() {
@@ -611,16 +643,93 @@ async function confirmCustomerReceipt() {
   }
 }
 
+async function openArrivalReceive(task: CustomerMaterialArrivalTask) {
+  if (openingTaskId.value) return;
+  openingTaskId.value = task.taskId;
+  try {
+    selectedArrivalTask.value = task;
+    await Promise.all([loadWarehouses(), loadMaterialOptions()]);
+    arrivalForm.value = {
+      materialTypeId: '', materialName: '',
+      warehouseId: defaultPurchaseReceiveWarehouseId(warehouseOptions.value, null),
+      receivedQuantity: 0, unit: '', productionDate: '', expireDate: '',
+      externalBatchNumber: '', contractNumber: '', factoryNumber: '',
+      boxCount: undefined, originPlace: '', notes: '', completeNotice: true,
+      idempotencyKey: `arrival-${task.taskId}-${Date.now().toString(36)}`,
+    };
+    arrivalDialogVisible.value = true;
+  } finally {
+    openingTaskId.value = '';
+  }
+}
+
+function onArrivalMaterialChange() {
+  const material = materialOptions.value.find((option) => option.id === arrivalForm.value.materialTypeId);
+  arrivalForm.value.materialName = material?.name || '';
+  arrivalForm.value.unit = String(material?.unit || material?.measurementUnit || '');
+}
+
+function arrivalReasonLabel(task: CustomerMaterialArrivalTask): string {
+  const labels: Record<CustomerMaterialArrivalTask['inboundReason'], string> = {
+    CUSTOMER_MATERIAL: '客户来料',
+    GIFT: '赠予',
+    OTHER: '其他无订单入库',
+  };
+  return labels[task.inboundReason || 'CUSTOMER_MATERIAL'];
+}
+
+function arrivalOwnershipLabel(task: CustomerMaterialArrivalTask): string {
+  return task.inboundReason === 'CUSTOMER_MATERIAL'
+    ? `客户所有（${task.customerName || '客户待核对'}，未绑定销售订单）`
+    : '公司所有（本厂普通库存）';
+}
+
+async function confirmArrivalReceipt() {
+  const task = selectedArrivalTask.value;
+  if (!task || arrivalConfirming.value) return;
+  if (!arrivalForm.value.materialTypeId) return ElMessage.warning('请选择现场实际收到的原料');
+  if (!arrivalForm.value.warehouseId) return ElMessage.warning('请选择实际入库仓库');
+  if (!(Number(arrivalForm.value.receivedQuantity) > 0)) return ElMessage.warning('本次实收必须大于 0');
+  arrivalConfirming.value = true;
+  try {
+    await ElMessageBox.confirm(
+      `申请：${task.sourceNumber}\n原因：${arrivalReasonLabel(task)}\n关联客户：${task.customerName || '不关联客户'}\n物料：${arrivalForm.value.materialName}\n实收：${fmtQty(arrivalForm.value.receivedQuantity)}${displayUnit(arrivalForm.value.unit)}\n所有权：${arrivalOwnershipLabel(task)}\n\n确认后直接生成原料库存批次，不触发来料质检。`,
+      '确认无订单入库',
+      { type: 'warning', confirmButtonText: '确认入库', cancelButtonText: '返回核对' },
+    );
+    const response = await createCustomerMaterialArrivalReceipt(props.factoryId, task.taskId, {
+      ...arrivalForm.value,
+      externalBatchNumber: blankToUndefined(arrivalForm.value.externalBatchNumber),
+      contractNumber: blankToUndefined(arrivalForm.value.contractNumber),
+      factoryNumber: blankToUndefined(arrivalForm.value.factoryNumber),
+      originPlace: blankToUndefined(arrivalForm.value.originPlace),
+      notes: blankToUndefined(arrivalForm.value.notes),
+    });
+    if (!response.success) return;
+    ElMessage.success(arrivalForm.value.completeNotice
+      ? '无订单入库完成，申请已结束'
+      : '本次到货已入库，申请保留等待下一次到货');
+    arrivalDialogVisible.value = false;
+    await loadTasks();
+    emit('refreshed');
+  } finally {
+    arrivalConfirming.value = false;
+  }
+}
+
 function sourceLabel(task: WarehouseReceivingTask): string {
-  return isPurchaseTask(task) ? '采购入库' : '客户来料';
+  if (isPurchaseTask(task)) return '采购入库';
+  return isCustomerMaterialArrivalTask(task) ? arrivalReasonLabel(task) : '销售订单来料';
 }
 
 function sourceNumber(task: WarehouseReceivingTask): string {
-  return isPurchaseTask(task) ? task.orderNumber : task.salesOrderNo;
+  if (isPurchaseTask(task)) return task.orderNumber;
+  return isCustomerMaterialArrivalTask(task) ? task.sourceNumber : task.salesOrderNo;
 }
 
 function counterparty(task: WarehouseReceivingTask): string {
-  return isPurchaseTask(task) ? (task.supplierName || task.supplierId) : task.customerName;
+  if (isPurchaseTask(task)) return task.supplierName || task.supplierId;
+  return task.customerName || '不关联客户';
 }
 
 function expectedArrival(task: WarehouseReceivingTask): string {
@@ -657,8 +766,10 @@ function taskRowClass({ row }: { row: WarehouseReceivingTask }) {
   const focused = isPurchaseTask(row)
     ? Boolean(highlightedOrder.value
       && (row.orderNumber === highlightedOrder.value || row.purchaseOrderId === highlightedOrder.value))
-    : Boolean((exactSalesOrderId.value && row.salesOrderId === exactSalesOrderId.value)
-      || (exactSalesOrderNumber.value && row.salesOrderNo === exactSalesOrderNumber.value));
+    : isCustomerSuppliedTask(row)
+      ? Boolean((exactSalesOrderId.value && row.salesOrderId === exactSalesOrderId.value)
+        || (exactSalesOrderNumber.value && row.salesOrderNo === exactSalesOrderNumber.value))
+      : false;
   return focused
     ? 'pending-receive-row pending-receive-row--focused'
     : 'pending-receive-row';
@@ -673,7 +784,7 @@ defineExpose({ loadTasks });
     <div class="task-heading">
       <div>
         <h3>待收货 / 待入库任务</h3>
-        <p>审批完成的采购订单和客户自带原料会进入这里；打开和刷新只查询数据，不会创建收货单或库存。</p>
+        <p>审批完成的采购订单、销售订单客供料和无订单入库申请会进入这里；打开和刷新只查询数据，不会创建收货单或库存。</p>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新待办</el-button>
     </div>
@@ -756,9 +867,14 @@ defineExpose({ loadTasks });
               </span>
             </el-tooltip>
           </div>
-          <el-button v-else-if="canWrite" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
+          <el-button v-else-if="canWrite && isCustomerSuppliedTask(row)" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
             :loading="openingTaskId === row.taskId" @click="openCustomerReceive(row)">
             {{ row.activeReceiptId ? '继续收货' : '收货' }}
+          </el-button>
+          <el-button v-else-if="canWrite && isCustomerMaterialArrivalTask(row)" type="danger"
+            :disabled="Boolean(openingTaskId)" :loading="openingTaskId === row.taskId"
+            @click="openArrivalReceive(row)">
+            核实并入库
           </el-button>
           <span v-else>只读</span>
         </template>
@@ -891,6 +1007,83 @@ defineExpose({ loadTasks });
         <el-button v-else-if="receipt.status === 'DRAFT'" type="success" :loading="confirming"
               :disabled="!!receiptBlockReason" :title="receiptBlockReason || undefined"
               @click="confirmReceipt">确认收货入库</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="arrivalDialogVisible"
+      :title="`无订单入库收货 — ${selectedArrivalTask?.sourceNumber || ''}`"
+      width="min(760px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="selectedArrivalTask">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="申请只登记到货原因和可选客户。物料、数量和仓库以现场实物为准；本流程不做来料质检。"
+        />
+        <el-descriptions :column="2" border class="customer-task-context">
+          <el-descriptions-item label="申请单号">{{ selectedArrivalTask.sourceNumber }}</el-descriptions-item>
+          <el-descriptions-item label="入库原因">{{ arrivalReasonLabel(selectedArrivalTask) }}</el-descriptions-item>
+          <el-descriptions-item label="关联客户">{{ selectedArrivalTask.customerName || '不关联客户' }}</el-descriptions-item>
+          <el-descriptions-item label="所有权">{{ arrivalOwnershipLabel(selectedArrivalTask) }}</el-descriptions-item>
+          <el-descriptions-item label="预计到达">{{ expectedArrival(selectedArrivalTask) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="112px" class="receive-form">
+          <el-form-item label="实际原料" required>
+            <el-select v-model="arrivalForm.materialTypeId" filterable placeholder="按现场实物选择" style="width: 100%" @change="onArrivalMaterialChange">
+              <el-option
+                v-for="material in materialOptions"
+                :key="material.id"
+                :label="`${material.name} (${material.code || '无编码'})`"
+                :value="material.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="本次实收" required>
+                <el-input-number v-model="arrivalForm.receivedQuantity" :min="0.01" :precision="2" :controls="false" style="width: 100%" />
+                <span class="unit-suffix">{{ displayUnit(arrivalForm.unit) || '按物料库存单位' }}</span>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="实际仓库" required>
+                <el-select v-model="arrivalForm.warehouseId" filterable placeholder="选择入库仓库" style="width: 100%">
+                  <el-option
+                    v-for="warehouse in warehouseOptions"
+                    :key="warehouse.id"
+                    :label="`${warehouse.name} (${warehouse.code})`"
+                    :value="warehouse.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="arrivalForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="arrivalForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
+          </el-row>
+          <el-form-item label="外部批次号"><el-input v-model="arrivalForm.externalBatchNumber" maxlength="100" /></el-form-item>
+          <el-form-item label="合同号"><el-input v-model="arrivalForm.contractNumber" maxlength="100" /></el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12"><el-form-item label="厂号"><el-input v-model="arrivalForm.factoryNumber" maxlength="100" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="件数"><el-input-number v-model="arrivalForm.boxCount" :min="0" :precision="0" :controls="false" style="width:100%" /></el-form-item></el-col>
+          </el-row>
+          <el-form-item label="产地"><el-input v-model="arrivalForm.originPlace" maxlength="200" /></el-form-item>
+          <el-form-item label="备注"><el-input v-model="arrivalForm.notes" type="textarea" :rows="2" maxlength="500" /></el-form-item>
+          <el-form-item label="本次后">
+            <el-radio-group v-model="arrivalForm.completeNotice">
+              <el-radio-button :value="true">货已全部到齐，结束预告</el-radio-button>
+              <el-radio-button :value="false">还有下一车，保留待办</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="arrivalDialogVisible = false">关闭</el-button>
+        <el-button type="success" :loading="arrivalConfirming" @click="confirmArrivalReceipt">确认入库</el-button>
       </template>
     </el-dialog>
 

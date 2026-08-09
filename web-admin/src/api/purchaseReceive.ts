@@ -114,14 +114,36 @@ export interface CustomerSuppliedReceivingTask {
   items: PurchaseReceivingTaskItem[];
 }
 
-export type WarehouseReceivingTask = PurchaseReceivingTask | CustomerSuppliedReceivingTask;
+export interface CustomerMaterialArrivalTask {
+  taskId: string;
+  sourceType: 'CUSTOMER_MATERIAL_ARRIVAL';
+  sourceId: string;
+  sourceNumber: string;
+  inboundReason: 'CUSTOMER_MATERIAL' | 'GIFT' | 'OTHER';
+  customerId?: string | null;
+  customerName?: string | null;
+  expectedArrivalAt?: string | null;
+  status: 'OPEN' | 'PARTIALLY_RECEIVED';
+  statusLabel: string;
+  warehouseId?: string | null;
+  warehouseName?: string | null;
+  responsibleName?: string | null;
+  activeReceiptId?: string | null;
+  activeReceiptNumber?: string | null;
+  activeReceiptCount: number;
+  receiptConflict: boolean;
+  items: PurchaseReceivingTaskItem[];
+}
+
+export type WarehouseReceivingTask = PurchaseReceivingTask | CustomerSuppliedReceivingTask | CustomerMaterialArrivalTask;
 
 export interface WarehouseReceivingTaskFilters {
   purchaseOrderId?: string;
   orderNumber?: string;
   salesOrderId?: string;
   salesOrderNo?: string;
-  sourceType?: 'PURCHASE' | 'SALES_ORDER_CUSTOMER_SUPPLIED';
+  arrivalNoticeId?: string;
+  sourceType?: 'PURCHASE' | 'SALES_ORDER_CUSTOMER_SUPPLIED' | 'CUSTOMER_MATERIAL_ARRIVAL';
 }
 
 export interface CreateCustomerSuppliedReceiptRequest {
@@ -186,9 +208,38 @@ export function getPendingWarehouseReceivingTasks(
       orderNumber: filters?.orderNumber || undefined,
       salesOrderId: filters?.salesOrderId || undefined,
       salesOrderNo: filters?.salesOrderNo || undefined,
+      arrivalNoticeId: filters?.arrivalNoticeId || undefined,
       sourceType: filters?.sourceType || undefined,
     },
   });
+}
+
+export interface CreateCustomerMaterialArrivalReceiptRequest {
+  idempotencyKey: string;
+  materialTypeId: string;
+  warehouseId: string;
+  receivedQuantity: number;
+  unit?: string;
+  productionDate?: string;
+  expireDate?: string;
+  externalBatchNumber?: string;
+  contractNumber?: string;
+  factoryNumber?: string;
+  boxCount?: number;
+  originPlace?: string;
+  notes?: string;
+  completeNotice: boolean;
+}
+
+export function createCustomerMaterialArrivalReceipt(
+  factoryId: string,
+  noticeId: string,
+  request: CreateCustomerMaterialArrivalReceiptRequest,
+) {
+  return post<CustomerSuppliedReceiptResult>(
+    `/${factoryId}/warehouse/receiving/arrival-notices/${noticeId}/receipts`,
+    request,
+  );
 }
 
 export function createCustomerSuppliedReceipt(
