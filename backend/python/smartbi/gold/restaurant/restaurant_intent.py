@@ -699,6 +699,13 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
         detected = tuple(metric for metric in detected if metric != "sales_volume")
         if "requisition_cost" not in detected:
             detected = (*detected, "requisition_cost")
+    if _is_food_cost_ratio_query(text):
+        # Revenue is the denominator of one food-cost metric, not a second
+        # report request. Keeping both creates RECIPE_COST + SALES_SUMMARY,
+        # neither of which can establish the requested period ratio.
+        detected = tuple(metric for metric in detected if metric != "revenue")
+        if "recipe_cost" not in detected:
+            detected = (*detected, "recipe_cost")
     return detected
 
 
@@ -837,7 +844,7 @@ def _is_daypart_business_query(text: str) -> bool:
     return bool(
         any(token in text for token in _DAYPART_WORDS)
         and any(token in text for token in (
-            "生意", "营收", "客流", "人效", "情况", "忙不忙",
+            "生意", "营收", "营业额", "销售额", "客流", "人效", "情况", "忙不忙",
         ))
         and any(token in text for token in (
             "怎么样", "如何", "好不好", "多少", "忙不忙",
@@ -845,6 +852,35 @@ def _is_daypart_business_query(text: str) -> bool:
             "最好", "最忙", "最高", "最差",
         ))
     )
+
+
+def _is_food_cost_ratio_query(text: str) -> bool:
+    """True only for an all-store food-cost-to-revenue ratio question.
+
+    A named ingredient remains an ingredient-grain question and a named dish
+    remains unit economics.  This closes the production failure where a single
+    period ratio was split into an all-dish recipe-cost ranking plus sales.
+    """
+    query = (text or "").strip()
+    if not query or _query_names_an_ingredient(query):
+        return False
+    named_subject = re.search(
+        r"([^，。；;？！?\s]{1,24})的(?:食材|原料|原材料|食品)成本",
+        query,
+    )
+    if named_subject and not any(
+        named_subject.group(1).endswith(scope)
+        for scope in ("全店", "整店", "本店", "全部门店", "所有门店", "各门店")
+    ):
+        return False
+    has_food_cost = any(token in query for token in (
+        "食材成本", "原料成本", "原材料成本", "食品成本",
+    ))
+    has_ratio = any(token in query for token in (
+        "成本率", "成本占", "占营收", "占营业额", "占销售额",
+        "占收入", "成本占比",
+    ))
+    return has_food_cost and has_ratio
 
 
 _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
@@ -5165,6 +5201,7 @@ def _semantic_spec_from_t3(
         store_scope = "single" if len(store_names) == 1 else "multiple"
     explicit_store_directory = _is_explicit_store_directory_query(query)
     daypart_contract_repair = _is_daypart_business_query(query)
+    food_cost_ratio_contract_repair = _is_food_cost_ratio_query(query)
     store_directory_contract_repair = bool(
         explicit_store_directory
         and (
@@ -5257,6 +5294,17 @@ def _semantic_spec_from_t3(
         clarification_needed = False
         clarification_question = None
         clarification_options = ()
+    elif food_cost_ratio_contract_repair:
+        # A period food-cost ratio is one atomic metric. It must not fan out to
+        # an all-dish theoretical recipe-cost ranking and a sales summary.
+        code = "RESTAURANT_OPS_RECIPE_COST"
+        confidence = max(confidence, 0.99)
+        requested_metrics = ("recipe_cost",)
+        dimensions = ()
+        analysis_action = "lookup"
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
     if not code or confidence < _T3_MIN_CONFIDENCE:
         # 2026-07-30: 区分「模型说不准」和「模型压根不报置信度」。REVIEW 链在
         # Max/Plus 额度耗尽后落到 deepseek-v3.2, 它给出的计划内容完全正确却把
@@ -5313,11 +5361,18 @@ def _semantic_spec_from_t3(
         clarification_options=clarification_options,
         planner_authority=(
             "llm_contract_repair"
-            if store_directory_contract_repair or daypart_contract_repair
+            if (
+                store_directory_contract_repair
+                or daypart_contract_repair
+                or food_cost_ratio_contract_repair
+            )
             else "llm"
         ),
         require_explicit_time=True,
         llm_semantics_authoritative=True,
+        allow_explicit_slot_repair=not (
+            daypart_contract_repair or food_cost_ratio_contract_repair
+        ),
     )
 
 
