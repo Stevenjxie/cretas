@@ -15,6 +15,11 @@ import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
 import { getTransferDocumentTrace } from '@/api/documentTrace';
 import type { TableRow } from '@/types/api';
 import { listWarehouses } from '@/api/factoryWarehouse';
+import {
+  aggregateTransferDemand,
+  isTransferRowShortage,
+  type TransferDetailItemRow,
+} from './transferCreate';
 
 const route = useRoute();
 const router = useRouter();
@@ -266,15 +271,19 @@ function formatStock(v: unknown): string {
   return n.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
 }
 
+/**
+ * 本单对每个物料的<b>合计</b>需求 —— 逐行比库存对"同一物料写成多行"完全沉默。
+ *
+ * <p>2026-08-09 六膳门 TRF-20260809-1790: 「金蒜牛排调味料 滚揉用」两行各 1000kg, 主仓只有
+ * 1000kg。currentStock 是<b>按物料</b>查的实时可用量, 两行都返回 1,000 —— 逐行比 1000 ≤ 1000
+ * 都不标红, 确认按钮照常可点; 但两行扣的是同一批库存, 后端第二行必然扣不到。
+ * 建单侧已禁止重复行, 这里承接的是禁令之前落库的存量单据。
+ */
+const demandByIdentity = computed(() => aggregateTransferDemand(
+  (transfer.value?.items as TransferDetailItemRow[] | undefined) ?? []));
+
 function isStockShortage(row: Record<string, unknown>): boolean {
-  const stock = row.currentStock as number | string | null | undefined;
-  const qty = row.quantity as number | string | null | undefined;
-  if (stock === null || stock === undefined) return false;
-  if (qty === null || qty === undefined) return false;
-  const sn = typeof stock === 'number' ? stock : Number(stock);
-  const qn = typeof qty === 'number' ? qty : Number(qty);
-  if (Number.isNaN(sn) || Number.isNaN(qn)) return false;
-  return sn < qn;
+  return isTransferRowShortage(row as TransferDetailItemRow, demandByIdentity.value);
 }
 
 // Issue #744: 调拨单缺库存预检 — 任何一行库存不足时,禁用「确认发运」按钮 (调出方视角).
@@ -288,8 +297,12 @@ const shipBlockedReason = computed(() => {
   if (!hasStockShortage.value) return '';
   const shortageRows = (transfer.value?.items as Record<string, unknown>[] | undefined)
     ?.filter(isStockShortage) ?? [];
-  const names = shortageRows.map(r => transferItemName(r));
-  return `库存不足 (${names.join(', ')}). 请先采购或调入补足后再发货.`;
+  // 重复行会让同一物料出现两次, 名字去重 —— 报"缺 A, A"读起来像两种东西各缺一份。
+  const names = [...new Set(shortageRows.map(r => transferItemName(r)))];
+  const duplicated = shortageRows.length > names.length;
+  return `库存不足 (${names.join(', ')}).`
+    + (duplicated ? ' 该物料在本单里写了多行, 多行会各自去扣同一批库存 —— 请取消本单, 合并成一行后重建.' : '')
+    + ' 请先采购或调入补足后再发货.';
 });
 
 // ==================== B1 两阶段批次选择 (PR #309 B1=C, 2026-05-11) ====================
@@ -477,11 +490,14 @@ async function submitDecide() {
           <div class="header-right" v-if="transfer && canWrite">
             <el-button v-if="transfer.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('request')">提交 OA 审批</el-button>
             <el-button v-if="transfer.status === 'REQUESTED'" type="primary" plain @click="goToOaProgress">查看审批进度</el-button>
+            <!-- 同厂仓间调拨此前被 `!isIntraFactory` 排除在这道闸之外, 落到下面的 v-else-if
+                 分支 → 库存不足也照常可点「确认调拨入库」, 直到后端 409 才知道 (2026-08-09
+                 六膳门 TRF-20260809-1790 走的正是这条路)。同厂/跨厂共用同一道闸, 只换按钮文案。 -->
             <el-tooltip
-              v-if="transfer.status === 'APPROVED' && isOutbound && !isIntraFactory && hasStockShortage"
+              v-if="transfer.status === 'APPROVED' && isOutbound && hasStockShortage"
               :content="shipBlockedReason" placement="top">
               <span>
-                <el-button type="primary" disabled>确认发运</el-button>
+                <el-button type="primary" disabled>{{ isIntraFactory ? '确认调拨入库' : '确认发运' }}</el-button>
               </span>
             </el-tooltip>
             <el-button

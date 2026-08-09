@@ -332,6 +332,7 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(400, "调拨行项目不能为空")
                     .withHint("请至少添加一行要调拨的原料、包材或成品");
         }
+        assertNoDuplicateItemRows(request.getItems());
         String sourceWarehouseId = trimToNull(request.getSourceWarehouseId());
         for (CreateTransferRequest.TransferItemDTO item : request.getItems()) {
             TransferItemType itemType;
@@ -388,6 +389,62 @@ public class TransferServiceImpl implements TransferService {
                 }
             }
         }
+    }
+
+    /**
+     * 同一物料在一张调拨单里只允许一行 (原料/包材按 materialTypeId, 成品按 productTypeId)。
+     *
+     * <p><b>为什么建单就拒, 而不是在下游放宽</b> (2026-08-09 六膳门 prod 事故):
+     * {@code TRF-20260809-1790} 把「金蒜牛排调味料 滚揉用」写成两行各 1000kg, 而主仓该原料
+     * 只有 1000kg。建单表单、{@link #ensureCreateQuantityAvailable}、调拨详情页的
+     * {@code isStockShortage} 三处都是<b>按行</b>比可用量 —— 每行 1000 ≤ 1000 全部合法,
+     * 合计 2000 无人过问。直到审批通过后点「确认调拨入库」,
+     * {@link #deductSourceInventory} 第一行扣光批次、第二行 FEFO 查不到批次, 才抛
+     * "原料库存不足 … 缺少 1000"; 而此时明细已不可编辑 (只有 DRAFT 能改数量), 用户只能取消重建。
+     *
+     * <p>禁止重复行之后, "逐行需求" 与 "该物料在本单的合计需求" 恒等, 三处闸的口径差异从根上
+     * 消失 —— 好过在三个地方各写一份聚合逻辑 (三份 = 三个各自漂移的入口)。
+     */
+    private void assertNoDuplicateItemRows(List<CreateTransferRequest.TransferItemDTO> items) {
+        Map<String, List<CreateTransferRequest.TransferItemDTO>> rowsByKey = new LinkedHashMap<>();
+        for (CreateTransferRequest.TransferItemDTO item : items) {
+            boolean finishedGoods = TransferItemType.FINISHED_GOODS.name()
+                    .equals(trimToNull(item.getItemType()));
+            String id = finishedGoods ? trimToNull(item.getProductTypeId()) : trimToNull(item.getMaterialTypeId());
+            // identity 缺失 (没选物料) 交给后面的逐行校验报更准确的错, 这里不抢答。
+            if (id == null) continue;
+            rowsByKey.computeIfAbsent((finishedGoods ? "P:" : "M:") + id, k -> new ArrayList<>()).add(item);
+        }
+        for (Map.Entry<String, List<CreateTransferRequest.TransferItemDTO>> entry : rowsByKey.entrySet()) {
+            List<CreateTransferRequest.TransferItemDTO> rows = entry.getValue();
+            if (rows.size() < 2) continue;
+            CreateTransferRequest.TransferItemDTO first = rows.get(0);
+            String name = trimToNull(first.getItemName()) != null
+                    ? first.getItemName() : entry.getKey().substring(2);
+            throw new BusinessException(400, String.format(
+                    "「%s」在本单里重复出现 %d 行%s，同一物料请合并成一行",
+                    name, rows.size(), describeDuplicateTotal(rows)))
+                    .withCode("TRANSFER_DUPLICATE_ITEM_ROWS")
+                    .withHint("请删除多余的行, 把数量合并写在一行里 —— 分成多行时每行都会各自去扣同一批库存, "
+                            + "看着每行都够, 审批通过后确认入库才会失败");
+        }
+    }
+
+    /**
+     * 重复行的合计量 —— 仅当各行单位一致时才敢相加 (同一原料可能一行按箱、一行按 kg,
+     * 包装换算要等 {@link #normalizeRawTransferPackaging} 之后才成立, 此处尚未发生)。
+     * 单位不一致时只报行数, 不编一个把箱和 kg 加在一起的假数。
+     */
+    private String describeDuplicateTotal(List<CreateTransferRequest.TransferItemDTO> rows) {
+        String unit = trimToNull(rows.get(0).getUnit());
+        BigDecimal total = BigDecimal.ZERO;
+        for (CreateTransferRequest.TransferItemDTO row : rows) {
+            if (row.getQuantity() == null || !Objects.equals(unit, trimToNull(row.getUnit()))) {
+                return "";
+            }
+            total = total.add(row.getQuantity());
+        }
+        return String.format(" (合计 %s %s)", total.stripTrailingZeros().toPlainString(), unit);
     }
 
     private void ensureCreateQuantityAvailable(CreateTransferRequest.TransferItemDTO item,
