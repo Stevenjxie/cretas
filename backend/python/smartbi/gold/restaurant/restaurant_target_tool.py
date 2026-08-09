@@ -24,6 +24,17 @@ from datetime import date, timedelta
 
 logger = logging.getLogger(__name__)
 
+# target_forecast.compute_rolling_forecast 会吐出的每一种 model_type → 给用户
+# 看的说法。缺一条就会被当成「近期均值（数据较少）」说出去 —— 见
+# test_target_forecast_model_labels_cover_every_model_type(它从预测端源码里
+# 数出实际会出现的 model_type, 不是抄这张表, 否则就成了自己验自己)。
+_MODEL_LABELS = {
+    "linear_trend_dow": "线性趋势 + 周内规律",
+    "linear_trend": "线性趋势",
+    "mean_fallback": "近期均值（数据较少）",
+    "no_data": "无数据",
+}
+
 _LEVEL_MAP = {
     "week": "week", "周": "week", "本周": "week",
     "month": "month", "月": "month", "本月": "month",
@@ -203,10 +214,14 @@ class RestaurantTargetForecastTool:
             total = sum(p["forecast_amount"] for p in points)
             lo = sum(p["lower_bound"] for p in points)
             hi = sum(p["upper_bound"] for p in points)
-            model = (
-                "线性趋势" if result["model_type"] == "linear_trend"
-                else "近期均值（数据较少）"
-            )
+            # ⚠️ 这里曾是 `"线性趋势" if ... == "linear_trend" else "近期均值"`。
+            #    2026-08-10 给预测加周内项后 model_type 变成 linear_trend_dow,
+            #    那个三元式会**静默落到 else**, 把变强的模型说成「数据较少」——
+            #    模型对了, 话说反了。改成显式对照表, 并由
+            #    test_target_forecast_model_labels_cover_every_model_type 盯着:
+            #    预测端新增一种 model_type 而这里没跟上, 测试会红。
+            model = _MODEL_LABELS.get(
+                result["model_type"], "近期均值（数据较少）")
             message = (
                 f"未来 {horizon} 天营收预测（{model}）：\n"
                 f"预计合计 {_money(total)}（区间 {_money(lo)} ~ {_money(hi)}，80% 置信）\n"
