@@ -20,7 +20,6 @@ Fake asyncpg harness mirrors test_analysis_restaurant_ops.py / test_restaurant_m
 from __future__ import annotations
 
 import asyncio
-from datetime import date
 from typing import Any, Optional
 from unittest.mock import AsyncMock
 
@@ -90,31 +89,57 @@ class _FakePool:
 # ============================================================
 
 
-def _inventory_rows():
+def _patch_cretas_pool(monkeypatch, pool):
+    """把 ``smartbi.config.get_cretas_pool`` 换成返回 ``pool`` 的桩。
+
+    ⛔ 2026-08-09 (commit 0347ef8e7e) 起, resolve_inventory_warning 的数据源
+       从 smartbi 侧 ``fact_inventory_snapshot`` 换成 Java 侧库存底账
+       (``raw_material_types`` + ``material_batches``), 池子改成函数体内
+       ``from smartbi.config import get_cretas_pool`` 现取 —— 传进来的
+       ``smartbi_pool`` 形参**已完全不被使用**。夹具池必须打在这里,
+       打在第一个形参上等于没打(CI 会真去连 localhost:5432 然后 OSError)。
+    """
+    import smartbi.config as _cfg
+
+    async def _fake_get_cretas_pool():
+        return pool
+
+    monkeypatch.setattr(_cfg, "get_cretas_pool", _fake_get_cretas_pool)
+
+
+def _ledger_rows():
+    """Java 侧底账聚合后的行形状 (见 restaurant_ops_router 里那条 SQL)。
+
+    分档口径: stock < min_stock = 需补货(逐字沿用 Java 侧 getLowStockWarnings);
+    min_stock <= stock < 1.2*min_stock = 关注; 其余正常。
+    """
     return [
         {
-            "ingredient_id": 1, "name": "活鱼", "category": "水产", "unit": "斤",
-            "stock_qty": 8.0, "safe_stock_qty": 50.0, "reorder_point": 20.0,
-        },  # HIGH: 8 < 20
+            "name": "活鱼", "category": "水产", "unit": "斤",
+            "stock_qty": 8.0, "safe_stock_qty": 50.0,
+        },  # HIGH: 8 < 50
         {
-            "ingredient_id": 2, "name": "青花椒底料", "category": "调料", "unit": "kg",
-            "stock_qty": 45.0, "safe_stock_qty": 30.0, "reorder_point": 10.0,
-        },  # OK: 45 >= 30
+            "name": "青花椒底料", "category": "调料", "unit": "kg",
+            "stock_qty": 45.0, "safe_stock_qty": 30.0,
+        },  # OK: 45 >= 30 * 1.2 = 36
         {
-            "ingredient_id": 3, "name": "毛肚", "category": "肉类", "unit": "kg",
-            "stock_qty": 20.0, "safe_stock_qty": 35.0, "reorder_point": 15.0,
-        },  # MEDIUM: 15 <= 20 < 35
+            "name": "毛肚", "category": "肉类", "unit": "kg",
+            "stock_qty": 38.0, "safe_stock_qty": 35.0,
+        },  # MEDIUM: 35 <= 38 < 35 * 1.2 = 42
     ]
 
 
-def test_resolve_inventory_warning_three_tier_classification():
-    conn = _FakeConn(
-        fetchrow_map={"MAX(snapshot_date)": {"max_date": date(2026, 7, 7)}},
-        fetch_map={"FROM fact_inventory_snapshot s": _inventory_rows()},
-    )
-    pool = _FakePool(conn)
+# ⛔ 第一个形参 smartbi_pool 现已是死参(见 _patch_cretas_pool 的说明),
+#    这里一律传 object() —— 让「它被忽略」这件事在用例里显式可见,
+#    传一个像模像样的假池反而会掩盖签名与实现已经脱节。
+_DEAD_POOL_ARG = object
 
-    result = asyncio.run(resolve_inventory_warning(pool, "DEMO_REST"))
+
+def test_resolve_inventory_warning_three_tier_classification(monkeypatch):
+    conn = _FakeConn(fetch_map={"FROM raw_material_types t": _ledger_rows()})
+    _patch_cretas_pool(monkeypatch, _FakePool(conn))
+
+    result = asyncio.run(resolve_inventory_warning(_DEAD_POOL_ARG(), "DEMO_REST"))
 
     assert isinstance(result, OpsAnswer)
     assert result.code == "RESTAURANT_OPS_INVENTORY_WARNING"
@@ -128,28 +153,67 @@ def test_resolve_inventory_warning_three_tier_classification():
     assert result.answer_text.index("活鱼") < result.answer_text.index("毛肚")
 
 
-def test_resolve_inventory_warning_no_money_output():
-    conn = _FakeConn(
-        fetchrow_map={"MAX(snapshot_date)": {"max_date": date(2026, 7, 7)}},
-        fetch_map={"FROM fact_inventory_snapshot s": _inventory_rows()},
-    )
-    pool = _FakePool(conn)
+def test_resolve_inventory_warning_reorder_boundary_matches_java(monkeypatch):
+    """「需补货」的边界必须是 ``可用量 < min_stock``(严格小于)。
 
-    result = asyncio.run(resolve_inventory_warning(pool, "DEMO_REST"))
+    这条边界是 2026-08-09「两本账合一」的承重点: Java 侧
+    MaterialBatchServiceImpl.getLowStockWarnings 用的就是严格小于。
+    这里若放宽成 <=, Python 侧会比 Java 侧多报一项 —— 同一个租户、
+    同一件事又会出现两个答案, 正是那次合并要根治的东西。
+    """
+    conn = _FakeConn(fetch_map={"FROM raw_material_types t": [
+        {"name": "恰好等于安全线", "category": "冻品", "unit": "kg",
+         "stock_qty": 35.0, "safe_stock_qty": 35.0},   # 不算需补货
+        {"name": "差一点点", "category": "冻品", "unit": "kg",
+         "stock_qty": 34.9, "safe_stock_qty": 35.0},   # 算需补货
+    ]})
+    _patch_cretas_pool(monkeypatch, _FakePool(conn))
+
+    result = asyncio.run(resolve_inventory_warning(_DEAD_POOL_ARG(), "DEMO_REST"))
+
+    assert result.meta["high_count"] == 1
+    assert result.meta["high_ingredients"] == ["差一点点"]
+
+
+def test_resolve_inventory_warning_no_money_output(monkeypatch):
+    conn = _FakeConn(fetch_map={"FROM raw_material_types t": _ledger_rows()})
+    _patch_cretas_pool(monkeypatch, _FakePool(conn))
+
+    result = asyncio.run(resolve_inventory_warning(_DEAD_POOL_ARG(), "DEMO_REST"))
     assert "¥" not in result.answer_text
     for kpi in result.kpis:
         assert "¥" not in str(kpi.get("value"))
 
 
-def test_resolve_inventory_warning_empty_data_honest_disclosure():
-    conn = _FakeConn(fetchrow_map={"MAX(snapshot_date)": {"max_date": None}})
-    pool = _FakePool(conn)
+def test_resolve_inventory_warning_empty_data_honest_disclosure(monkeypatch):
+    # 底账连得上, 但这个租户一个物料都没填安全库存。
+    conn = _FakeConn(fetch_map={})
+    _patch_cretas_pool(monkeypatch, _FakePool(conn))
 
-    result = asyncio.run(resolve_inventory_warning(pool, "NO_DATA_FACTORY"))
+    result = asyncio.run(resolve_inventory_warning(_DEAD_POOL_ARG(), "NO_DATA_FACTORY"))
     assert result.meta.get("no_data") is True
     assert result.charts == []
     assert result.kpis == []
-    assert "上传" in result.answer_text or "库存管理" in result.answer_text
+    # 指路要指到真正能填的地方 —— 现在是物料管理里的安全库存,
+    # 不再是原先那个「上传库存快照」。
+    assert "安全库存" in result.answer_text
+    assert "物料管理" in result.answer_text
+
+
+def test_resolve_inventory_warning_pool_unavailable_refuses_to_downgrade(monkeypatch):
+    """底账连不上时必须说连不上 —— 禁降级。
+
+    空结果和「库存都正常」长得一模一样, 这里一旦回落成前者,
+    用户读到的就是一句自信的错话。
+    """
+    _patch_cretas_pool(monkeypatch, None)
+
+    result = asyncio.run(resolve_inventory_warning(_DEAD_POOL_ARG(), "DEMO_REST"))
+    assert result.meta.get("no_data") is True
+    assert result.meta.get("reason") == "cretas_pool_unavailable"
+    assert result.charts == []
+    assert result.kpis == []
+    assert "正常" not in result.answer_text
 
 
 # ============================================================
