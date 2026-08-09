@@ -250,12 +250,22 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             ProductProcessWorkflowDTO saved =
                     workflowService.saveDraft(factoryId, productTypeId, candidate);
 
+            // ⚠️ status 必须读 saved 的真实值, ⛔ 不许硬编码 "DRAFT"。
+            // saveDraft 有一条【不建草稿】的早退路径: 无草稿 + 有已发布 + 图相同时
+            // 直接 return 已发布那行, 一个字节都没写(ProductProcessWorkflowServiceImpl:93-99)。
+            // 硬编码会把「库里一行没动」报成「已写入草稿」, 用户去画布找草稿会找不到 ——
+            // 那是把「没写成」伪装成「写成了」, 本仓明令禁止。
+            boolean actuallyWroteDraft =
+                    "DRAFT".equals(saved.getStatus() == null ? null : saved.getStatus().toString());
+
             Map<String, Object> data = new LinkedHashMap<>();
-            data.put("status", "DRAFT");
-            data.put("applied", true);
+            data.put("status", saved.getStatus() == null ? "UNKNOWN" : saved.getStatus().toString());
+            data.put("applied", actuallyWroteDraft);
             // 回传新 lockVersion: 不回传的话 agent 只能改一次, 第二次必然 409。
             data.put("lockVersion", saved.getLockVersion());
-            data.put("hint", "已写入草稿。发布需要人在产品配置页确认。");
+            data.put("hint", actuallyWroteDraft
+                    ? "已写入草稿。发布需要人在产品配置页确认。"
+                    : "这批改动与当前生效版本一致，没有产生新草稿。");
             return buildSuccessResult(data);
         } catch (MissingDefinitionException missing) {
             return buildSemanticError(

@@ -49,6 +49,9 @@ class ProductProcessWorkflowConfigToolWriteTest {
     @DisplayName("🔴 承重: 补丁落到 saveDraft, 且 factoryId 来自 context 不是 AI 入参")
     void validPatchIsWrittenToDraftWithFactoryIdFromContext() throws Exception {
         ProductProcessWorkflowDTO saved = new ProductProcessWorkflowDTO();
+        // ⚠️ 桩必须带 status: 工具现在按 saved 的【真实状态】判有没有真写进去
+        // (saveDraft 有一条不建草稿的早退路径)。桩不设 status 会被正确地判成「没写」。
+        saved.setStatus("DRAFT");
         saved.setLockVersion(7L);
         when(workflowService.saveDraft(any(), any(), any())).thenReturn(saved);
 
@@ -75,6 +78,9 @@ class ProductProcessWorkflowConfigToolWriteTest {
     @DisplayName("🔴 承重: AI 入参里的 factoryId 【不得】覆盖 context 的")
     void factoryIdInArgumentsIsIgnored() throws Exception {
         ProductProcessWorkflowDTO saved = new ProductProcessWorkflowDTO();
+        // ⚠️ 桩必须带 status: 工具现在按 saved 的【真实状态】判有没有真写进去
+        // (saveDraft 有一条不建草稿的早退路径)。桩不设 status 会被正确地判成「没写」。
+        saved.setStatus("DRAFT");
         saved.setLockVersion(1L);
         when(workflowService.saveDraft(any(), any(), any())).thenReturn(saved);
 
@@ -205,7 +211,44 @@ class ProductProcessWorkflowConfigToolWriteTest {
                 Map.of("factoryId", "F006"), definitionWithOwner("PT-001", 3L));
 
         assertEquals(Boolean.FALSE, envelope.get("success"));
-        assertNotNull(envelope.get("errorCode"));
+        // ⚠️ 原来只断 assertNotNull(errorCode) —— buildSemanticError 的【每个】分支都带
+        // errorCode, 所以把 catch(BusinessException) 整块删掉(409 落到 catch(Exception)
+        // 变成 WORKFLOW_PATCH_FAILED)那条断言照样绿。「冲突不吞」被列为承重项却无人守。
+        // 现在断具体错误码与消息透传, 才真正钉住「不吞」。
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", envelope.get("errorCode"));
+        assertTrue(String.valueOf(envelope.get("message")).contains("已被其他人更新")
+                || String.valueOf(envelope.get("error")).contains("已被其他人更新"));
+    }
+
+    @Test
+    @DisplayName("🔴 承重: saveDraft 走「不建草稿」早退路径时, ⛔ 不许报 applied=true")
+    void unchangedGraphIsNotReportedAsWritten() throws Exception {
+        // saveDraft 有一条早退: 无草稿 + 有已发布 + 图相同 -> 直接返回【已发布那行】,
+        // 一个字节都没写(ProductProcessWorkflowServiceImpl:93-99)。
+        // 工具若硬编码 status="DRAFT"/applied=true, 就把「库里一行没动」报成「已写入草稿」,
+        // 用户去画布找草稿会找不到 —— 那是把「没写成」伪装成「写成了」。
+        ProductProcessWorkflowDTO published = new ProductProcessWorkflowDTO();
+        published.setStatus("PUBLISHED");
+        published.setLockVersion(4L);
+        when(workflowService.saveDraft(any(), any(), any())).thenReturn(published);
+
+        Map<String, Object> envelope = execute(
+                Map.of("factoryId", "F006"), definitionWithOwner("PT-001", 3L));
+
+        assertTrue((Boolean) envelope.get("success"));
+        Map<String, Object> data = asMap(envelope.get("data"));
+        assertEquals(Boolean.FALSE, data.get("applied"));
+        assertEquals("PUBLISHED", data.get("status"));
+    }
+
+    @Test
+    @DisplayName("context 里没有 factoryId -> 拒, 且【不许】回退到入参里的任何值")
+    void missingFactoryIdInContextIsRejected() throws Exception {
+        // M1: 原来只覆盖「不许从入参取」, 没覆盖「context 压根没有」这一路。
+        Map<String, Object> envelope = execute(Map.of(), definitionWithOwner("PT-001", 3L));
+
+        assertEquals(Boolean.FALSE, envelope.get("success"));
+        verify(workflowService, never()).saveDraft(any(), any(), any());
     }
 
     private Map<String, Object> execute(
