@@ -1568,7 +1568,7 @@ async function submitPlan() {
     }
   } catch (error: unknown) {
     // 409 WORKFLOW_RESOLUTION_NOT_COVERED: 双保险 — interceptor 已弹 sticky toast,
-    // 这里额外给「去产品工序配置」跳转按钮 (Rule 5: 不留死胡同)。
+    // 这里额外给「去产品工艺画布」跳转按钮 (Rule 5: 不留死胡同)。
     const err = error as { status?: number; code?: string; message?: string };
     if (err?.status === 409 && err?.code === 'WORKFLOW_SELECTED_VERSION_CHANGED') {
       resetWorkflowResolutionState();
@@ -1585,7 +1585,7 @@ async function submitPlan() {
           ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
           : '未找到共享的工序 Workflow，请分开创建生产计划'),
         '工序图未覆盖',
-        { confirmButtonText: '去产品工序配置', cancelButtonText: '取消', type: 'warning' }
+        { confirmButtonText: '去产品工艺画布', cancelButtonText: '取消', type: 'warning' }
       ).then(() => {
         goToWorkflowConfig(planForm.value.targetFinishedGoodIds);
       }).catch(() => { /* 用户取消, 静默 */ });
@@ -4903,9 +4903,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </template>
           <template v-else-if="productWorkProcessList.length === 0">
             <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
-              该产品未配置工序，后端将自动走两点报工。如需逐道，请先到
-              <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工序配置</el-link>
-              中配置工序。
+              该产品尚未发布并启用画布工艺，无法建计划。请先到
+              <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工艺画布</el-link>
+              建立工艺并发布启用。
             </span>
           </template>
           <template v-else>

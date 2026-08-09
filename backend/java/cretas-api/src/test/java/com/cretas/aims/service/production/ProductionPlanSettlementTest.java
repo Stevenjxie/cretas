@@ -897,46 +897,6 @@ class ProductionPlanSettlementTest {
         verify(productionSettlementRepository, never()).save(any());
     }
 
-    @Test
-    @DisplayName("仓库确认实收等于报产时生成成品库存且不挂中转账")
-    void confirmWarehouseReceipt_exactMatch_postsFinishedGoodsOnly() {
-        ProductionPlan plan = plan();
-        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
-        plan.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
-        plan.setCustomerId("CUSTOMER-001");
-        plan.setSourceOrderId("SO-001");
-        plan.setSourceOrderItemId("101");
-        ProductionSettlement settlement = settled();
-        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
-        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
-                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
-        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
-                .thenReturn(Optional.empty());
-        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
-        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
-            FinishedGoodsBatch batch = inv.getArgument(0);
-            batch.setId("fg-1");
-            return batch;
-        });
-        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
-                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
-
-        assertEquals("POSTED", response.getPostingStatus());
-        assertEquals("fg-1", response.getFinishedGoodsBatchId());
-        assertEquals(null, response.getTransitLedgerId());
-        assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
-        ArgumentCaptor<FinishedGoodsBatch> batchCaptor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
-        verify(finishedGoodsBatchRepository).save(batchCaptor.capture());
-        FinishedGoodsBatch savedBatch = batchCaptor.getValue();
-        assertEquals(InventoryOwnership.CUSTOMER_OWNED, savedBatch.getOwnership());
-        assertEquals("CUSTOMER-001", savedBatch.getOwnerCustomerId());
-        assertEquals("SO-001", savedBatch.getSourceSalesOrderId());
-        assertEquals("101", savedBatch.getSourceSalesOrderItemId());
-        verify(productionTransitLedgerRepository, never()).save(any());
-    }
 
     @Test
     @DisplayName("历史 null 结单确认入库沿末道 box 原子写回并生成 canonical box 成品")

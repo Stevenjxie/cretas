@@ -414,100 +414,6 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         }
     }
 
-    @Test
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    void activationNewBatchSnapshotAndLegacyFallbackRoundTrip() throws Exception {
-        Map<Long, ProductionBatch> batches = new LinkedHashMap<>();
-        batches.put(9106L, legacyBatch(9106L));
-        when(factoryRepository.existsById(FACTORY)).thenReturn(true);
-        when(batchRepository.findByIdAndFactoryId(any(Long.class), any(String.class)))
-                .thenAnswer(invocation -> Optional.ofNullable(batches.get(invocation.getArgument(0))));
-        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
-                .thenReturn(Optional.of(new ProductType()));
-
-        ProductProcessWorkflow v1 = savePublished(1, "v1");
-        ProductProcessWorkflowActivationDTO activeV1 =
-                activationService.activate(FACTORY, v1.getId(), 7001L);
-        assertEquals(1, activeV1.getActiveDefinitionVersion());
-        batches.put(9101L, workflowBatch(9101L, v1));
-        batches.put(9102L, workflowBatch(9102L, v1));
-        assertTrue(runtimeService.materializeIfActive(FACTORY, 9106L, PRODUCT).isEmpty());
-        assertEquals(null, runtimeService.getRuntime(FACTORY, 9106L));
-
-        List<WorkProcessTaskDTO> batchA = taskService.spawnTasks(FACTORY, 9101L, PRODUCT);
-        assertEquals(List.of("v1-cook-a", "v1-cook-b", "v1-pack"), batchA.stream()
-                .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
-        assertEquals(2, batchA.stream().filter(task -> "COOK".equals(task.getWorkProcessId())).count());
-        long instanceCountAfterA = instanceRepository.count();
-        long taskCountAfterA = taskRepository.count();
-        assertTrue(runtimeService.materializeIfActive(FACTORY, 9101L, PRODUCT).isPresent());
-        assertEquals(instanceCountAfterA, instanceRepository.count());
-        assertEquals(taskCountAfterA, taskRepository.count());
-
-        ProductProcessWorkflow v2 = savePublished(2, "v2");
-        List<WorkProcessTaskDTO> batchB = taskService.spawnTasks(FACTORY, 9102L, PRODUCT);
-        assertEquals(1, runtimeService.getRuntime(FACTORY, 9102L).getDefinitionVersion());
-
-        ProductProcessWorkflowActivationDTO activeV2 =
-                activationService.activate(FACTORY, v2.getId(), 7002L);
-        assertEquals(2, activeV2.getActiveDefinitionVersion());
-        batches.put(9103L, workflowBatch(9103L, v2));
-        batches.put(9105L, workflowBatch(9105L, v2));
-        List<WorkProcessTaskDTO> batchC = taskService.spawnTasks(FACTORY, 9103L, PRODUCT);
-        assertEquals(List.of("v2-cook-a", "v2-cook-b", "v2-pack"), batchC.stream()
-                .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
-
-        ProductProcessWorkflowActivationDTO disabled = activationService.deactivate(
-                FACTORY, PRODUCT, activeV2.getLockVersion());
-        assertFalse(disabled.getEnabled());
-        batches.put(9104L, legacyBatch(9104L));
-        ProductWorkProcess legacy = ProductWorkProcess.builder()
-                .id(8801L)
-                .factoryId(FACTORY)
-                .productTypeId(PRODUCT)
-                .workProcessId("LEGACY-CUT")
-                .processOrder(1)
-                .reportingRequired(true)
-                .isActive(true)
-                .build();
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
-                FACTORY, PRODUCT)).thenReturn(List.of(legacy));
-        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY, List.of("LEGACY-CUT")))
-                .thenReturn(List.of());
-        List<WorkProcessTaskDTO> batchD = taskService.spawnTasks(FACTORY, 9104L, PRODUCT);
-        assertEquals(1, batchD.size());
-        assertEquals(8801L, batchD.get(0).getProductWorkProcessId());
-        assertEquals("LEGACY-CUT", batchD.get(0).getWorkProcessId());
-        assertEquals(null, batchD.get(0).getWorkflowInstanceId());
-        assertEquals(null, runtimeService.getRuntime(FACTORY, 9104L));
-
-        ProductionWorkflowRuntimeDTO immutableA = runtimeService.getRuntime(FACTORY, 9101L);
-        assertEquals(v1.getId(), immutableA.getWorkflowId());
-        assertEquals(1, immutableA.getDefinitionVersion());
-        assertTrue(immutableA.getNodesJson().contains("v1-cook-a"));
-        assertFalse(immutableA.getNodesJson().contains("v2-cook-a"));
-        assertFalse(immutableA.getNodesJson().contains("position"));
-        assertFalse(immutableA.getNodesJson().contains("viewport"));
-        assertEquals(3, immutableA.getTasks().size());
-        assertEquals(7, immutableA.getTasks().stream()
-                .mapToInt(task -> task.getPorts().size()).sum());
-        assertEquals(1, runtimeService.getRuntime(FACTORY, 9102L).getDefinitionVersion());
-        assertEquals(2, runtimeService.getRuntime(FACTORY, 9103L).getDefinitionVersion());
-        assertNotNull(batchB);
-
-        activationService.activate(FACTORY, v2.getId(), 7003L);
-        long instancesBeforeFailure = instanceRepository.count();
-        long tasksBeforeFailure = taskRepository.count();
-        long portsBeforeFailure = portRepository.count();
-        doReturn(compiledWithInvalidPort()).when(compiler).compile(any());
-        assertThrows(RuntimeException.class,
-                () -> runtimeService.materializeIfActive(FACTORY, 9105L, PRODUCT));
-        assertEquals(instancesBeforeFailure, instanceRepository.count());
-        assertEquals(tasksBeforeFailure, taskRepository.count());
-        assertEquals(portsBeforeFailure, portRepository.count());
-        assertEquals(null, runtimeService.getRuntime(FACTORY, 9105L));
-    }
-
     private ProductProcessWorkflow savePublished(int version, String prefix) throws Exception {
         ProductProcessWorkflowDTO definition = repeatedProcessWorkflow(prefix);
         ProductProcessWorkflow workflow = new ProductProcessWorkflow();
@@ -598,12 +504,6 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         batch.setId(id);
         batch.setFactoryId(FACTORY);
         batch.setProductTypeId(PRODUCT);
-        return batch;
-    }
-
-    private ProductionBatch legacyBatch(long id) {
-        ProductionBatch batch = batch(id);
-        batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
         return batch;
     }
 

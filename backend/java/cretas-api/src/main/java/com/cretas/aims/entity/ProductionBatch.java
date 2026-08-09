@@ -72,8 +72,17 @@ public class ProductionBatch extends BaseEntity {
     @Column(name = "product_type_id", nullable = false, length = 100)
     private String productTypeId;
 
+    /**
+     * 批次的工艺来源 —— 2026-08-09 (Steve 拍板) 起<b>只剩画布工艺一种</b>。
+     *
+     * <p>原有 LEGACY 值代表「没有画布工艺时回落到 product_work_processes 工序模板」的老路。
+     * 老路已整条下架: Java 侧两级回落删除、DB 触发器改 RAISE EXCEPTION (V20261029_77)、
+     * 存量整行备份后清空 (V20261029_78, prod 实测清掉 20 个批次)。
+     *
+     * <p>不要把 LEGACY 加回来。枚举里存在这个值, 就意味着有代码路径能产出它, 而那条路径
+     * 正是「两处口径打架」的来源。要放宽只能是产品决策, 不是补个枚举值。
+     */
     public enum WorkflowSelectionMode {
-        LEGACY,
         WORKFLOW
     }
 
