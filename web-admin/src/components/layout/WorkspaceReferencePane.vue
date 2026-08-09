@@ -60,4 +60,3 @@ iframe { width: 100%; height: 100%; border: 0; background: #f4f6f9; }
   .reference-pane { width: 44%; min-width: 320px; }
 }
 </style>
-
