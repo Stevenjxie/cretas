@@ -165,7 +165,8 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 仅取 code 字段减少传输量; 前缀区分大小写(编码全大写).
      */
     @Query(value = "SELECT code FROM raw_material_types " +
-           "WHERE factory_id = :factoryId AND UPPER(code) LIKE UPPER(CONCAT(:prefix, '%')) " +
+           "WHERE factory_id = :factoryId " +
+           "AND UPPER(code) LIKE UPPER(CONCAT(CAST(:prefix AS VARCHAR), '%')) " +
            "ORDER BY code", nativeQuery = true)
     List<String> findCodesByFactoryIdAndCodePrefix(@Param("factoryId") String factoryId,
                                                    @Param("prefix") String prefix);
