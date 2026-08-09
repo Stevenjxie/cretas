@@ -43,33 +43,32 @@
 #     判据: **一个用例里只要有一个调用够不到假桩, 整条用例就变成集成测试**;
 #     拆开比给整条打 marker 便宜 —— 否则 5 个纯离线的契约断言一起失守。
 
-# ── ① 需要 PostgreSQL (22 个) ────────────────────────────────────────────────
-# 全部 `OSError: Connect call failed 127.0.0.1:5432`。它们是**真·集成测试**,
-# 但没打 `integration` marker, 所以 `-k "not integration"` 筛不掉。
-# 两条出路 (都不在本 PR 范围): 给 workflow 加 postgres service container,
-# 或给这些文件补上 `@pytest.mark.integration`。补 marker 更便宜, 且让本地也能跳过。
-tests/golden/f001_qhj/test_regression.py
-tests/test_agent_budget_tracker.py
-tests/test_agent_invalidate_on_upload_hook.py
-tests/test_agent_narrative_cache.py
-tests/test_agent_orchestrator.py
-tests/test_backfill_silver.py
-tests/test_dim_resolver.py
-tests/test_factory_provenance_config.py
-tests/test_field_registry.py
-tests/test_gold_aggregations.py
-tests/test_gold_analysis_results_batch.py
-tests/test_gold_materializer.py
-tests/test_gold_pipeline.py
-tests/test_gold_triggers.py
-tests/test_provenance_audit.py
-tests/test_rls_isolation.py
-tests/test_silver_cost.py
-tests/test_silver_dimensions.py
-tests/test_silver_facts.py
-tests/test_silver_normalizer.py
-tests/test_tenant_ctx_plumbing.py
-tests/test_top_products_provenance.py
+# ── ① 需要 PostgreSQL —— ✅ 已清空 (2026-08-10) ──────────────────────────────
+# 曾有 22 个文件, 全部 `OSError: Connect call failed 127.0.0.1:5432` (149 errors)。
+#
+# 真因**不是**「缺 PG」, 而是: 这些文件里 18 个**本来就写着**
+#     if not settings.postgres_url:
+#         pytest.skip("No Postgres configured")
+# 而 `Settings.postgres_url` 是拼出来的字符串(f"postgresql://{u}:{p}@{h}:{port}/{db}",
+# 各字段都有默认值) → **永远非空**。那个守卫是结构性的死代码, 从来没生效过一次。
+# 于是「没有 PG」这个状态被表达成了 149 个 error, 整组被挂上台账好几个月。
+#
+# 判据: **写「没配就跳过」的守卫时, 要确认「没配」这个状态真的表达得出来。**
+#       一个恒为真的表达式后面跟着 skip, 和没写守卫是一回事。
+#
+# 修法在 tests/conftest.py: 会话开始时探一次可达性, 连不上就把 postgres_url 置空,
+# 让那些守卫按作者本来的意图生效。不改生产语义。
+# ⚠️ 探针本身也踩了一次同形状的坑: 第一版用 socket.create_connection 判「端口通」,
+#    而本机那个端口上确实有东西 accept 但不是可用的 PG(握手后即断,
+#    ConnectionResetError WinError 64) → 探针判定「可达」并放行, 什么都没改善。
+#    改成真的 connect + `SELECT 1` 才对。
+#    判据: **判别式要验「只有真东西才有的特征」, 不能验代理指标。**
+#
+# ⛔ 这不增加覆盖: 22 个文件里 146 个用例仍然是 skip, 只是从「伪装成错误」变成
+#    「如实报告」。但同组另外 **61 个用例本来就不需要真库**, 它们此前被整文件排除,
+#    现在真正进了门禁 —— 这部分是净增的守护。
+#    要让那 146 个也真跑, 得给 workflow 加 postgres service container + 应用
+#    smartbi/database/migrations 下的 160 个迁移, 那是独立一件事。
 
 # ── ② event loop 取法过时 —— ✅ 已清空 (2026-08-01) ──────────────────────────
 # 曾有 5 个文件, 全部 `RuntimeError: There is no current event loop in thread 'MainThread'`。
@@ -85,14 +84,24 @@ tests/test_top_products_provenance.py
 #        smartbi/gold/tests/test_review_connected_contract.py`
 #        —— 改前 41 failed / 406 passed, 改后 447 passed。
 
-# ── ③ 断言失败, 需逐个 triage (6 个) ─────────────────────────────────────────
-# 这一组最值得先看 —— 断言失败意味着「测试说的和代码做的不一致」, 可能是过期测试,
-# 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
-tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
-tests/test_store_kpi_dashboard.py                                        # 'skipped' != 'ok'
+# ── ③ 断言失败 —— ✅ 已清空 (2026-08-10) ────────────────────────────────────
+# 曾有 6 个。清账过程见上方两批注释。最后两条:
+#   · tests/test_smartbi_api.py —— docstring 第一行就写着「E2E Tests」, fixture 是
+#     指向活服务的 httpx.AsyncClient。python-gate.yml 用 `-k "not e2e"` 筛 E2E, 但
+#     `-k` 匹配名字与 marker, 而本文件模块名/类名/用例名里一个 "e2e" 都没有 → 从来
+#     没被筛掉。补 `pytest.mark.e2e`。
+#     判据: **「靠名字筛」的机制, 要么给被筛对象一个显式 marker, 要么它迟早漏掉。**
+#   · tests/test_store_kpi_dashboard.py —— 随 ① 组的可达性闸一起自动好了(它的失败
+#     真因也是连不上真库, 而不是断言错)。
 
-# ── ④ 缺可选依赖 pyarrow (1 个) ──────────────────────────────────────────────
-# `ImportError: pyarrow is required for converting a pandas dataframe to Polars`。
-# 最便宜的解法是给 workflow 的 pip 装一行 pyarrow; 没做是因为要先确认生产环境
-# 是否也依赖它 —— 若生产不装 pyarrow, 那这条代码路径在线上本来就是坏的, 那是另一个问题。
-smartbi/services/materialized_analytics/templates/test_reviews_sentiment_live.py
+# ── ④ 缺可选依赖 pyarrow —— ✅ 已清空 (2026-08-10) ──────────────────────────
+# `pl.from_pandas` 需要 pyarrow。按台账原话「先确认生产环境是否也依赖它」查了:
+#   prod venv 实测 polars 1.43.0 / pandas 1.5.3 / **pyarrow 缺席**, requirements
+#   也只声明 polars。而全仓 grep `from_pandas` / `to_polars`, **非测试代码里一次
+#   都没出现** —— 生产只在原生 polars 上工作, pandas→polars 只存在于本用例读 Excel
+#   夹具的那一步。
+# 所以正解是 `pytest.importorskip("pyarrow")`(测试专属依赖缺席 → 跳过), 而不是给
+# 生产装一个它不需要的包。
+
+# ⛔ 清单为空 —— 门禁现在守着全部文件。往这里加一条之前, 先把上面四组的判据读一遍:
+#    半数以上的「失败」最后查出来是**测试自己过期或守卫失效**, 不是代码坏了。

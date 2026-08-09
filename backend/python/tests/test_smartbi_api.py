@@ -12,7 +12,17 @@ Run:
 import pytest
 import httpx
 
-pytestmark = pytest.mark.asyncio
+# ⚠️ 2026-08-10: 补 `e2e` marker。本文件的 docstring 第一行就写着「E2E Tests」,
+#    fixture 是指向**活服务**的 httpx.AsyncClient(Python :8083 + Java :10010),
+#    没有服务时命中的是别的东西 → 404 / KeyError / 200≠400 这类**看起来像契约
+#    缺陷**的读数, 而不是干净的连接失败。
+#    python-gate.yml 用 `-k "not e2e and not integration"` 筛 E2E, 但 `-k` 匹配的是
+#    名字与 marker —— 本文件的模块名/类名/用例名里一个 "e2e" 都没有, 所以从来没被
+#    筛掉, 只能整文件挂进 ci-gate-excludes.txt。
+#    判据: **「靠名字筛」的机制, 要么给被筛对象一个显式 marker, 要么它迟早漏掉。**
+#    ⛔ 这不是把问题藏起来: 文件仍然可收集、可单独跑(`pytest -k e2e`), 只是不再在
+#       没有活服务的门禁里制造假失败。
+pytestmark = [pytest.mark.asyncio, pytest.mark.e2e]
 
 
 # ═══════════════════════════════════════════════════════════════

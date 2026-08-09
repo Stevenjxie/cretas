@@ -45,6 +45,17 @@ def qhj_reviews_df():
         pytest.skip(f"qhj Q3 review xlsx not found at {path}")
     # Use pandas + openpyxl (already on this env) and convert to polars —
     # avoids the optional fastexcel dep that pl.read_excel requires.
+    #
+    # ⚠️ 2026-08-10: `pl.from_pandas` 需要 pyarrow, 而**生产环境没有装它**
+    #    (实测 prod venv: polars 1.43.0 / pandas 1.5.3 / pyarrow 缺席), 仓里的
+    #    requirements 也只声明了 polars。这不是缺陷 —— 全仓 grep `from_pandas` /
+    #    `to_polars`, 非测试代码里**一次都没出现**: 生产只在原生 polars 上工作,
+    #    pandas→polars 这一步只存在于本用例读 Excel 夹具的路径上。
+    #    所以正解是 importorskip(测试专属依赖缺席 → 跳过), 不是给生产装 pyarrow。
+    #    判据(台账原话): 「先确认生产环境是否也依赖它 —— 若生产不装, 那这条代码
+    #    路径在线上本来就是坏的, 那是另一个问题」。查完: 生产根本不走这条路。
+    pytest.importorskip(
+        "pyarrow", reason="pl.from_pandas 需要 pyarrow; 仅本用例读 Excel 夹具时用到")
     import pandas as pd
     pdf = pd.read_excel(path, engine="openpyxl")
     return pl.from_pandas(pdf)

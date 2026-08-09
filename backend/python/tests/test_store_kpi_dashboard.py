@@ -384,15 +384,24 @@ def test_section_self_query_empty_gold_skipped(monkeypatch):
 
 
 def test_section_self_query_ok(monkeypatch):
+    """自查询路径拿到数据 → status=ok。
+
+    ⚠️ 2026-08-10: 原本打的桩是 `mod._get_pg_pool`, 但那个函数**在本文件里一个调用
+    点都没有** —— `_self_query` 早已改成在当前事件循环里内联建一个短命池(见它上方
+    注释: 共享池绑在主 uvicorn 循环上, 在 asyncio.run 的新循环里用会
+    "got Future attached to a different loop")。于是这个桩是死的, 用例实际走进真
+    连库路径 → 失败, 并被挂进 ci-gate-excludes.txt。
+    判据: **打桩前先确认那个符号真的在被测路径上被调用**(grep 调用点, 别看它存在)。
+    改成打 `_self_query` —— 它才是「拿到数据」与「怎么拿」的分界。
+    """
     import smartbi.services.restaurant.sections.store_kpi_dashboard as mod
 
-    async def fake_compute(pool, factory_id, date_range, role, store_name=None):
-        return {"kpis": [{"key": "daily_revenue", "rawValue": 1.0}], "overall_health": "GOOD"}
-    monkeypatch.setattr(mod, "compute_store_kpi_dashboard", fake_compute)
-
-    async def fake_pool():
-        return object()
-    monkeypatch.setattr(mod, "_get_pg_pool", fake_pool)
+    async def fake_self_query(self, factory_id, date_range, role, store_name):
+        assert factory_id == "F-TEST"
+        assert role == "factory_super_admin"
+        return {"kpis": [{"key": "daily_revenue", "rawValue": 1.0}],
+                "overall_health": "GOOD"}
+    monkeypatch.setattr(mod.StoreKpiDashboardHandler, "_self_query", fake_self_query)
 
     resp = StoreKpiDashboardHandler().compute(_req({"role": "factory_super_admin"}), {})
     assert resp.status.value == "ok"
