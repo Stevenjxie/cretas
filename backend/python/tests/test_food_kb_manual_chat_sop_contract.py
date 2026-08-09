@@ -424,7 +424,13 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
     assert "泛指“食材”不再被误标成某个具体食材维度" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
-    assert "折扣力度问法仍未闭环" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "按折扣金额、折扣率和优惠构成作描述性汇总" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "不把同期变化写成折扣导致营收变化" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "折扣力度问法仍未闭环" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
     assert "仍缺历史时段表现 resolver" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
 
 
@@ -942,7 +948,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "历史时段表现 resolver",
             "无时间戳记录不硬塞入夜宵",
             "全店比率处理",
-            "折扣力度多大”仍未闭环",
+            "折扣金额、折扣率与优惠构成",
             "数据库表/字段只进入工程侧缺口元数据",
             "指定区间、繁体范围词与输出偏好",
             "月度经营报告：预览、导出与数据截至时间",
@@ -970,7 +976,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "最近30天食材成本占营收多少",
             "历史时段表现 resolver",
             "泛指“食材”不是具体食材维度",
-            "折扣力度多大”仍未闭环",
+            "折扣金额、折扣率与优惠构成",
             "数据库表/字段只进入工程侧元数据",
             "精确日期、范围词与输出偏好",
             "月度经营报告",
@@ -997,7 +1003,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "最近30天折扣力度多大",
             "无时间戳记录不归入夜宵",
             "全店食材成本率",
-            "折扣力度多大”仍未闭环",
+            "折扣金额、折扣率和优惠构成",
             "数据库表/字段只进入工程侧元数据",
             "wastage_cost",
             "requisition_cost",
@@ -1036,7 +1042,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "最近30天哪个时段生意最好" in ai_assist
     assert "历史时段表现 resolver" in ai_assist
     assert "食材成本占营收多少" in ai_assist
-    assert "折扣力度多大」仍未闭环" in ai_assist
+    assert "折扣金额、折扣率与优惠构成" in ai_assist
+    assert "折扣力度多大」仍未闭环" not in ai_assist
     assert "仍缺历史时段表现 resolver" not in ai_assist
     assert "数据库表/字段只进入工程侧元数据" in ai_assist
     assert "agg_supplier_price" not in ai_assist
