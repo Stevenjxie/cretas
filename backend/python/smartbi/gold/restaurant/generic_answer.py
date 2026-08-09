@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 #: ⛔ 这**不是词表**：左边是规划器输出的**结构化枚举值**（不是用户原话），
 #:    右边是登记 key。两套内部标识之间的对照必须显式，否则就是靠名字巧合。
 #:    ⚠️ 对不上时**拒绝**，不猜 —— 猜错会答非所问。
+#: ⛔ 左边**必须是 `_REQUEST_METRIC_RULES` 里真实存在的枚举值**。
+#:    没映射的(net_profit / table_turnover / staffing / stocktaking_shortage /
+#:    customer_review / production_time / service_speed / process_bottleneck)
+#:    是**数据缺口**，翻译不出来 → 返回 None → 走原路径如实说没有，
+#:    ⛔ 绝不硬凑一个相邻指标顶包。
 _SPEC_METRIC_TO_KEY: Dict[str, str] = {
     "revenue": "revenue",
     "orders": "orders",
@@ -40,22 +45,19 @@ _SPEC_METRIC_TO_KEY: Dict[str, str] = {
     "recipe_cost": "food_cost",
     "gross_margin": "gross_margin",
     "wastage": "wastage_cost",
+    "return_rate": "return_rate",
 }
 
+#: 规划器的维度枚举只有 `_SEMANTIC_DIMENSIONS` 六个。
+#: ⚠️ `customer` 没有对应的登记维度 —— 不映射，让它走原路径，
+#:    ⛔ 别用「门店」之类近似的顶上去。
 _SPEC_DIMENSION_TO_KEY: Dict[str, str] = {
     "store": "store",
     "dish": "product",
     "product": "product",
     "channel": "channel",
     "ingredient": "ingredient",
-}
-
-#: analysis_action → 聚合形态。缺省是汇总。
-_SPEC_ACTION_TO_AGG: Dict[str, str] = {
-    "rank": "rank",
-    "top": "rank",
-    "compare": "compare",
-    "summary": "summary",
+    "time": "date",
 }
 
 
@@ -65,6 +67,13 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
     ⛔ 返回 None 是**正常出口**，不是失败：它表示「这个问题不是一个
        指标×维度×聚合的取数问题」（预测、建议、归因都会走到这里）。
        调用方应当继续走原有路径，⛔ 不要把 None 当成「答不出来」。
+
+    🔴 2026-08-09 修正：第一版按 `analysis_action` 里的 "rank"/"top" 判排名 ——
+       而规格里 `analysis_action` **只有 lookup|compare|diagnose|optimize 四个值**，
+       "rank"/"top" 规划器一次都不会产出。于是所有排名问句都静默退化成汇总：
+       问「哪家店最高」得到「全部门店合计 ¥2,872 万」，答的不是那个问题。
+       判据 = **写枚举对照表前，先去看产出方**真正会给哪些值，
+       ⛔ 别按自己觉得合理的词去映射 —— 对不上时它不会报错，只会静默走别的分支。
     """
     metrics = list(getattr(spec, "requested_metrics", ()) or ())
     if not metrics:
@@ -81,15 +90,39 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
             dim_key = mapped
             break
 
+    # 排名方向是**独立的槽**，不在 analysis_action 里。
+    direction = (getattr(spec, "ranking_direction", None) or "").lower()
     action = (getattr(spec, "analysis_action", "") or "").lower()
-    agg_key = _SPEC_ACTION_TO_AGG.get(action, "summary")
+    if direction == "best":
+        agg_key = "rank"
+    elif direction == "worst":
+        agg_key = "bottom"
+    elif action == "compare":
+        agg_key = "compare"
+    elif dim_key == "date":
+        # 按时间分组而没说排名 = 走势。⛔ 用排名去答趋势会把时间序列打乱。
+        agg_key = "trend"
+    else:
+        agg_key = "summary"
     if agg_key not in AGGREGATIONS:
         agg_key = "summary"
-    # 「排名」要有分组对象；规格说排名但没给维度时退回汇总，而不是拒绝 ——
+    # 需要分组对象的形态而规格没给维度时退回汇总，而不是拒绝 ——
     # 用户问「哪个最高」而没说按什么分，给一个总数比什么都不给强。
     if AGGREGATIONS[agg_key].needs_dimension and dim_key == "all":
         agg_key = "summary"
     return metric_key, dim_key, agg_key
+
+
+def spec_limit(spec) -> Optional[int]:
+    """用户说了要几条就给几条。
+
+    ⛔ 不用聚合登记里的默认 5：规格里 `ranking_limit` 是**用户说的**，
+       问「前 10」却回 5 条是答非所问，而且它长得像答对了。
+    """
+    n = getattr(spec, "ranking_limit", None)
+    if isinstance(n, int) and 0 < n <= 100:
+        return n
+    return None
 
 
 def _fmt(value: Any, unit: str) -> str:
@@ -129,17 +162,66 @@ def render(result: CellResult, window_label: str) -> str:
         value = result.rows[0].get(key)
         return f"{window_label}全部门店{label}合计 **{_fmt(value, unit)}**。"
 
-    items = [(r.get("dim_label") or r.get("dim_key"), r.get(key)) for r in result.rows]
-    if result.aggregation_key == "rank":
-        head = f"{window_label}{dim_label}{label}排行："
+    # ⛔ 分组值为 NULL 时显示「未填写」，不是 "None" —— 前者是句实话
+    #    (这家店没录台位号)，后者看着像个叫 None 的门店。
+    #    ⚠️ 用 `is None` 判而不是 `or`：0 和空字符串是**合法的分组值**，
+    #       用 `or` 会把「台位 0」也说成未填写。
+    def _name(r: Dict[str, Any]) -> str:
+        n = r.get("dim_label")
+        if n is None:
+            n = r.get("dim_key")
+        return "未填写" if n is None else str(n)
+
+    items = [(_name(r), r.get(key), r) for r in result.rows]
+    agg = result.aggregation_key
+
+    if agg in ("rank", "bottom"):
+        word = "排行" if agg == "rank" else "倒数排行"
         body = "\n".join(
-            f"{i + 1}. {'**' + str(n) + '**' if i == 0 else str(n)} — {_fmt(v, unit)}"
-            for i, (n, v) in enumerate(items))
-        return head + "\n" + body
-    if result.aggregation_key == "compare":
-        body = "、".join(f"{n} {_fmt(v, unit)}" for n, v in items)
+            f"{i + 1}. {'**' + n + '**' if i == 0 else n} — {_fmt(v, unit)}"
+            for i, (n, v, _) in enumerate(items))
+        return f"{window_label}{dim_label}{label}{word}：\n{body}"
+
+    if agg == "trend":
+        # 按维度自身顺序 —— 不加重任何一项，加重会把趋势读成排行榜。
+        body = "\n".join(f"- {n}: {_fmt(v, unit)}" for n, v, _ in items)
+        return f"{window_label}{label}按{dim_label}的走势：\n{body}"
+
+    if agg == "share":
+        body = "\n".join(
+            f"- {n}: {_fmt(v, unit)}（{_fmt(r.get('share'), 'pct')}）"
+            for n, v, r in items)
+        return f"{window_label}各{dim_label}{label}及占比：\n{body}"
+
+    if agg == "concentration":
+        last = items[-1][2] if items else {}
+        body = "\n".join(
+            f"{i + 1}. {n} — {_fmt(v, unit)}（占 {_fmt(r.get('share'), 'pct')}，"
+            f"累计 {_fmt(r.get('cum_share'), 'pct')}）"
+            for i, (n, v, r) in enumerate(items))
+        return (f"{window_label}{len(items)} 个{dim_label}贡献了 "
+                f"{_fmt(last.get('cum_share'), 'pct')} 的{label}：\n{body}")
+
+    if agg == "extremes":
+        if len(items) < 2:
+            return f"{window_label}只有一个{dim_label}有{label}数据，无法给出两端。"
+        (hn, hv, _), (ln, lv, _) = items[0], items[-1]
+        return (f"{window_label}{label}最高的{dim_label}是 **{hn}**（{_fmt(hv, unit)}），"
+                f"最低的是 {ln}（{_fmt(lv, unit)}）。")
+
+    if agg == "above_avg":
+        if not items:
+            return f"{window_label}没有{dim_label}的{label}高于平均线。"
+        thr = items[0][2].get("_threshold")
+        body = "\n".join(f"- {n}: {_fmt(v, unit)}" for n, v, _ in items)
+        return (f"{window_label}{label}高于平均线（{_fmt(thr, unit)}）的"
+                f"{dim_label}有 {len(items)} 个：\n{body}")
+
+    if agg == "compare":
+        body = "、".join(f"{n} {_fmt(v, unit)}" for n, v, _ in items)
         return f"{window_label}各{dim_label}{label}对比：{body}。"
-    body = "\n".join(f"- {n}: {_fmt(v, unit)}" for n, v in items)
+
+    body = "\n".join(f"- {n}: {_fmt(v, unit)}" for n, v, _ in items)
     return f"{window_label}各{dim_label}{label}：\n{body}"
 
 
@@ -167,7 +249,8 @@ async def try_generic_answer(
             result = await execute_cell(
                 conn, factory_id=factory_id, metric_key=metric_key,
                 dimension_key=dim_key, aggregation_key=agg_key,
-                date_range=rng, available_columns=cols)
+                date_range=rng, available_columns=cols,
+                limit_override=spec_limit(spec))
     except UnsupportedCell as exc:
         logger.info("[generic-answer] 组合不成立, 交回原路径: %s", exc)
         return None

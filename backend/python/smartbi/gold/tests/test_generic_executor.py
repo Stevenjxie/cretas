@@ -68,9 +68,34 @@ def test_unregistered_metric_is_refused_not_guessed():
 
 
 def test_metric_cannot_use_a_dimension_its_fact_table_lacks():
-    """销量建在明细表上, 没有渠道这一维 —— 拼出来会是跑不通的 SQL。"""
+    """指标不能按它所在事实表没有的维度分组 —— 拼出来会是跑不通的 SQL。
+
+    ⚠️ 这条原本断言的是 `sales_qty × channel`。扩表(22 指标/16 维度/9 聚合)之后
+       那个组合**真的成立了**: 渠道列在订单表上, 销量在明细表上, 按 `t.order_type`
+       分组求 `SUM(i.qty)` 是「各渠道卖了多少份菜」—— 没有扇出, 口径正确。
+       旧登记表只是没给 sales_qty 声明这一维, 不是这个组合不可算。
+       ⛔ 所以这里换成**真的不可能**的组合, 不是放宽断言。
+    """
+    # 损耗链与 POS 链不共表: 销量在明细表, 食材维度在损耗表上。
     with pytest.raises(UnsupportedCell):
-        build_sql("sales_qty", "channel", "rank")
+        build_sql("sales_qty", "ingredient", "rank")
+    # 反向: 损耗成本按门店 —— 损耗表上没有门店。
+    with pytest.raises(UnsupportedCell):
+        build_sql("wastage_cost", "store", "rank")
+
+
+def test_order_grain_metric_refuses_item_dimension_instead_of_fanning_out():
+    """🔴 承重: 订单级指标按菜品分组必须**拒绝**, ⛔ 不许硬凑。
+
+    客流(customer_count)在订单表上。按菜品分组要 join 明细, 那时同一张单的
+    人数会被每条明细各加一遍 —— 一桌 4 人点 6 道菜会变成 24 人。
+    SQL 跑得通、数字看着像那么回事、结论完全错, 与 08-09 实测的营收 57 倍扇出同型。
+    """
+    with pytest.raises(UnsupportedCell):
+        build_sql("guests", "product", "rank")
+    # 派生量同理: 人均消费 = 营收 ÷ 客流, 客流只有订单粒度 ⇒ 按菜品问要被拒。
+    with pytest.raises(UnsupportedCell):
+        build_sql("avg_per_capita", "product", "rank")
 
 
 def test_rank_requires_a_dimension():
@@ -112,3 +137,107 @@ def test_gross_margin_reaches_through_two_levels_of_derivation():
     _sql, req, base = build_sql("gross_margin", "store", "summary")
     assert set(base) == {"revenue", "food_cost"}, base
     assert any("food_cost" in r for r in req), "成本列没进 requires, 缺列时不会被拦"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 扩表后新增的 4 种行处理形态 —— 它们不改 SQL, 全在行上做
+# ═══════════════════════════════════════════════════════════════════════════
+from smartbi.gold.restaurant.generic_executor import _post_process  # noqa: E402
+from smartbi.gold.restaurant.metric_registry import (  # noqa: E402
+    AGGREGATIONS, DERIVED, DIMENSIONS, METRICS, registry_size,
+)
+
+
+def _rows(*values):
+    return [{"dim_key": f"d{i}", "dim_label": f"D{i}", "revenue": v}
+            for i, v in enumerate(values)]
+
+
+def test_share_percentages_sum_to_one_hundred():
+    out = _post_process(_rows(50, 30, 20), AGGREGATIONS["share"], "revenue")
+    assert [round(r["share"], 6) for r in out] == [50.0, 30.0, 20.0]
+    assert round(sum(r["share"] for r in out), 6) == 100.0
+
+
+def test_concentration_stops_once_it_covers_eighty_percent():
+    """帕累托: 累计到 80% 就停 —— 多列一项就不是「几个贡献了八成」了。"""
+    out = _post_process(_rows(50, 30, 15, 5), AGGREGATIONS["concentration"], "revenue")
+    assert len(out) == 2, "80% 由前两项达成, 不该继续往下列"
+    assert round(out[-1]["cum_share"], 6) == 80.0
+
+
+def test_concentration_covers_everything_when_it_is_flat():
+    """完全均匀时 80% 需要更多项 —— ⛔ 不许固定取前 N。"""
+    out = _post_process(_rows(*([10] * 10)), AGGREGATIONS["concentration"], "revenue")
+    assert len(out) == 8, f"均匀分布下要 8 项才到 80%, 实际 {len(out)}"
+
+
+def test_extremes_keeps_both_ends_not_just_the_top():
+    out = _post_process(_rows(100, 60, 40, 10), AGGREGATIONS["extremes"], "revenue")
+    assert [r["revenue"] for r in out] == [100, 10]
+
+
+def test_extremes_needs_two_rows_to_have_two_ends():
+    out = _post_process(_rows(100), AGGREGATIONS["extremes"], "revenue")
+    assert len(out) == 1, "只有一行时不该伪造出「两端」"
+
+
+def test_above_average_threshold_is_computed_not_hardcoded():
+    """🔴 承重: 阈值必须来自数据。写死一个数会让它在别的租户上毫无意义。"""
+    out = _post_process(_rows(100, 50, 30, 20), AGGREGATIONS["above_avg"], "revenue")
+    assert [r["revenue"] for r in out] == [100], "均值 50, 只有 100 严格高于它"
+    assert out[0]["_threshold"] == 50.0
+
+
+def test_share_refuses_when_total_is_not_positive():
+    """⛔ 总额 ≤0 时不算占比 —— 「占比 -340%」比没有占比更能误导。"""
+    rows = _rows(10, -20)
+    out = _post_process(rows, AGGREGATIONS["share"], "revenue")
+    assert all("share" not in r for r in out)
+
+
+def test_null_values_do_not_crash_or_become_zero():
+    """列在但全 NULL(实测 tax_amount/table_no 就是这样) —— 不许当 0 参与占比。"""
+    rows = [{"dim_key": "a", "dim_label": "A", "revenue": None},
+            {"dim_key": "b", "dim_label": "B", "revenue": 100}]
+    out = _post_process(rows, AGGREGATIONS["share"], "revenue")
+    assert out[0]["share"] is None, "NULL 被当成 0 算进占比了"
+    assert round(out[1]["share"], 6) == 100.0
+
+
+def test_trend_orders_by_dimension_not_by_value():
+    """🔴 承重: 趋势按维度自身排。按值排会把时间序列打乱成排行榜 ——
+    图还画得出来, 但它表达的不是用户问的那件事。"""
+    sql, _req, _base = build_sql("revenue", "date", "trend")
+    order_line = [ln for ln in sql.splitlines() if "ORDER BY" in ln][0]
+    assert "dim_key" in order_line, f"趋势没有按维度排: {order_line}"
+    sql_rank, _r2, _b2 = build_sql("revenue", "date", "rank")
+    assert "dim_key" not in [ln for ln in sql_rank.splitlines()
+                             if "ORDER BY" in ln][0], "排名却按维度排了"
+
+
+def test_registry_reached_the_agreed_size():
+    """🔴 冻结表 vs 量出来的数 —— ⛔ 两边不许算自同一份数据。
+
+    2026-08-09 的教训: 我写过一个「自洽」断言, 左右两侧都从同一个 dict 算出来,
+    它是个恒真式, 一次都红不了。这里左边是**人写死的目标**(22/16/9, 判据原文),
+    右边是**从登记表量出来的**。改小登记表 → 这条红。
+    """
+    size = registry_size()
+    assert len(METRICS) + len(DERIVED) == 22, (
+        f"指标应为 22(基础+派生), 实际 {len(METRICS)}+{len(DERIVED)}")
+    assert size["dimensions"] == 16, f"维度应为 16, 实际 {size['dimensions']}"
+    assert size["aggregations"] == 9, f"聚合应为 9, 实际 {size['aggregations']}"
+    # 加法 vs 乘法: 47 条登记撑起 2000+ 个格子, 这个差距就是方案的全部理由。
+    assert size["cells"] > 20 * size["registrations"], (
+        f"格子数({size['cells']})相对登记数({size['registrations']})没有拉开 —— "
+        f"说明登记项之间没有真正正交, 退化成了「一个登记一个格子」")
+
+
+def test_every_registered_dimension_is_reachable_by_some_metric():
+    """⛔ 登记了却没有任何指标能用的维度 = 一个永远拼不出 SQL 的死条目。"""
+    reachable = set()
+    for m in METRICS.values():
+        reachable.update(m.dimensions)
+    orphans = set(DIMENSIONS) - reachable
+    assert not orphans, f"这些维度没有任何指标声明可用: {sorted(orphans)}"

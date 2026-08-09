@@ -118,7 +118,8 @@ def _base_metrics_of(item) -> List[str]:
     return uniq
 
 
-def build_sql(metric_key: str, dimension_key: str, aggregation_key: str) -> Tuple[str, Tuple[str, ...], List[str]]:
+def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
+              limit_override: Optional[int] = None) -> Tuple[str, Tuple[str, ...], List[str]]:
     """返回 (SQL, 依赖的列, 参与计算的基础指标)。
 
     参数占位：$1=factory_id, $2=起始日期, $3=结束日期。
@@ -187,10 +188,79 @@ def build_sql(metric_key: str, dimension_key: str, aggregation_key: str) -> Tupl
     if group_cols:
         sql += f" GROUP BY {', '.join(group_cols)}\n"
     if agg.order:
-        sql += f" ORDER BY {order_target} {agg.order.upper()} NULLS LAST\n"
-    if agg.limit:
-        sql += f" LIMIT {int(agg.limit)}\n"
+        # 🔴 「趋势」按**维度自身**排(1 号→31 号), 其余按**值**排(最高的在前)。
+        #    用值排序做趋势会把时间序列打乱成排行榜 —— 图还是画得出来, 但它
+        #    表达的东西完全不是用户问的那个。
+        target = "dim_key" if agg.order_by == "dim" else order_target
+        sql += f" ORDER BY {target} {agg.order.upper()} NULLS LAST\n"
+    # 用户说了要几条就给几条；没说才用登记的默认值。
+    # ⛔ 只对**本来就有 limit** 的形态生效 —— 给「对比」「趋势」加 limit 会
+    #    悄悄截断结果，而截断过的清单和完整清单长得一模一样。
+    effective_limit = limit_override if (agg.limit and limit_override) else agg.limit
+    if effective_limit:
+        sql += f" LIMIT {int(effective_limit)}\n"
     return sql, tuple(dict.fromkeys(requires)), base_keys
+
+
+def _as_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _post_process(rows: List[Dict[str, Any]], agg, value_key: str) -> List[Dict[str, Any]]:
+    """聚合形态的**行处理** —— ⛔ 全部在这里做，不改 SQL。
+
+    Why：同一个指标在 9 种形态下必须是**同一个数**。如果每种形态各写一段 SQL，
+    「本月营收」和「本月营收占比里的营收」就会有两处口径，而它们迟早会不一致 ——
+    这正是 20 个 resolver 各自硬编取数时发生过的事。
+
+    ⚠️ 这些形态都依赖顺序（两端 / 累计到 80%），而顺序由 SQL 的 ORDER BY 保证。
+       登记表里有一条断言强制「要做行处理就必须声明排序」，就是为了守这个前提。
+    """
+    if not agg.post or not rows:
+        return rows
+    values = [_as_float(r.get(value_key)) for r in rows]
+    known = [v for v in values if v is not None]
+
+    if agg.post == "extremes":
+        # 「最好和最差分别是哪个」—— 只有 ≥2 行才有「两端」可言。
+        return rows if len(rows) < 2 else [rows[0], rows[-1]]
+
+    if agg.post == "above_avg":
+        if not known:
+            return rows
+        mean = sum(known) / len(known)
+        # ⚠️ 阈值是**算出来的**不是拍的; 附上均值让用户能核对这条线画在哪。
+        # ⚠️ 严格大于, 不是 >= —— 「高于平均」里正好等于平均的那家**不算高于**。
+        #    这不是抠字眼: 均匀分布时用 >= 会把全部项都列进「高于平均」,
+        #    于是这个形态永远返回全集, 等于什么都没筛。
+        out = []
+        for r, v in zip(rows, values):
+            if v is not None and v > mean:
+                out.append({**r, "_threshold": mean})
+        return out
+
+    total = sum(known)
+    if total <= 0:
+        # ⛔ 总额为 0 或负时不算占比 —— 除出来的百分比没有意义, 而一个
+        #    「占比 -340%」比没有占比更容易让人得出错误结论。
+        return rows
+    if agg.post == "share":
+        return [{**r, "share": (v / total * 100) if v is not None else None}
+                for r, v in zip(rows, values)]
+    if agg.post == "concentration":
+        out, cum = [], 0.0
+        for r, v in zip(rows, values):
+            if v is None:
+                continue
+            cum += v
+            out.append({**r, "share": v / total * 100, "cum_share": cum / total * 100})
+            if cum / total >= 0.8:
+                break
+        return out
+    return rows
 
 
 def _derived_expr(d, grain: str = "txn") -> str:
@@ -202,6 +272,11 @@ def _derived_expr(d, grain: str = "txn") -> str:
         return f"({left} - {right})"
     if d.op == "ratio":
         return f"({left} / NULLIF({right}, 0))"
+    if d.op == "ratio_pct":
+        # 折扣率 / 抽佣率 / 退菜率 —— 与 ratio 的差别只有「乘 100」，
+        # 但登记成两种运算而不是让叙述层去猜单位：单位是**数据的属性**，
+        # 猜错的方向是把 0.32 显示成「32%」或把 32 显示成「32%」，两者都错得很像对。
+        return f"({left} / NULLIF({right}, 0) * 100)"
     if d.op == "ratio_of_diff":
         inner = _derived_expr(DERIVED[d.left], grain)
         return f"({inner} / NULLIF({right}, 0) * 100)"
@@ -217,10 +292,12 @@ async def execute_cell(
     aggregation_key: str,
     date_range: Tuple[date, date],
     available_columns: Optional[set] = None,
+    limit_override: Optional[int] = None,
 ) -> CellResult:
     """执行一个格子。缺列时**不发 SQL**，直接回「缺什么」。"""
     item, dim, agg = _resolve_spec(metric_key, dimension_key, aggregation_key)
-    sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key)
+    sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key,
+                                     limit_override=limit_override)
 
     cols = available_columns if available_columns is not None else await existing_columns(conn)
     missing = tuple(c for c in requires if c not in cols)
@@ -235,7 +312,9 @@ async def execute_cell(
 
     start, end = date_range
     rows = await conn.fetch(sql, factory_id, start, end)
+    # 值列名: 派生量用它自己的 key, 基础指标用它的 key —— 两者都是 item.key。
+    processed = _post_process([dict(r) for r in rows], agg, getattr(item, "key", metric_key))
     return CellResult(
         metric_key, label, dimension_key, aggregation_key, unit,
-        [dict(r) for r in rows], (), sql,
+        processed, (), sql,
     )
