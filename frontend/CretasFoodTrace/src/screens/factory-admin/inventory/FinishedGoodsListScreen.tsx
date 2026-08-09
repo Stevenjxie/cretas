@@ -7,10 +7,14 @@ import { salesApiClient, FinishedGoodsBatch } from '../../../services/api/salesA
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import { RowActionBottomSheet } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
+import { useAuthStore } from '../../../store/authStore';
+import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 export default function FinishedGoodsListScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('warehouse');
+  const user = useAuthStore((state) => state.user);
+  const isOperationsReadOnly = isMobileBusinessObserver(user);
   const [batches, setBatches] = useState<FinishedGoodsBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,7 +67,7 @@ export default function FinishedGoodsListScreen() {
     const ratio = item.totalQuantity > 0 ? item.availableQuantity / item.totalQuantity : 0;
 
     return (
-      <Card style={styles.card} onLongPress={() => openSheet(item)}>
+      <Card style={styles.card} onLongPress={isOperationsReadOnly ? undefined : () => openSheet(item)}>
         <Card.Content>
           <View style={styles.cardHeader}>
             <View style={{ flex: 1 }}>
@@ -126,7 +130,7 @@ export default function FinishedGoodsListScreen() {
         />
       )}
 
-      <RowActionBottomSheet
+      {!isOperationsReadOnly && <RowActionBottomSheet
         visible={actionSheetVisible}
         onClose={() => setActionSheetVisible(false)}
         actions={rowActions}
@@ -139,7 +143,7 @@ export default function FinishedGoodsListScreen() {
             params: { entityType: 'INVENTORY', initialMessage: `${selectedBatch.batchNumber}: ` },
           }));
         }}
-      />
+      />}
     </View>
   );
 }

@@ -35,6 +35,12 @@ import SalesManagerNavigator from "./SalesManagerNavigator";
 import ProcurementManagerNavigator from "./ProcurementManagerNavigator";
 import ViewerNavigator from "./ViewerNavigator";
 import FinanceNavigator from "./FinanceNavigator";
+import OperationsNavigator from "./OperationsNavigator";
+import ProductionManagerNavigator from "./ProductionManagerNavigator";
+import RestrictedRoleNavigator from "./RestrictedRoleNavigator";
+import BossNavigator from "./BossNavigator";
+import { isRestaurant } from "../utils/factoryType";
+import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
 
 const Stack = createNativeStackNavigator();
 
@@ -83,7 +89,7 @@ function RoleBasedNavigator() {
 
   // factory_super_admin 使用工厂管理员界面
   if (userRole === "factory_super_admin") {
-    return <FactoryAdminNavigator />;
+    return isRestaurant(user) ? <FactoryAdminNavigator /> : <BossNavigator />;
   }
 
   // hr_admin (HR管理员) 使用HR专属界面
@@ -96,14 +102,27 @@ function RoleBasedNavigator() {
     return <WorkshopSupervisorNavigator />;
   }
 
-  // warehouse_manager / warehouse_worker 使用仓储专属界面
-  if (userRole === "warehouse_manager" || userRole === "warehouse_worker") {
+  // 仓储主管保留完整仓储工作台；仓库员直接进入现场任务
+  if (userRole === "warehouse_manager") {
     return <WarehouseManagerNavigator />;
+  }
+  if (userRole === "warehouse_worker") {
+    return <WarehouseWorkerNavigator />;
   }
 
   // dispatcher (调度员) 使用调度专属界面
   if (userRole === "dispatcher") {
     return <DispatcherNavigator />;
+  }
+
+  // production_manager 是历史兼容角色；RN 只查看计划与现场进度
+  if (userRole === "production_manager") {
+    return <ProductionManagerNavigator />;
+  }
+
+  // 运营协调员只进入有限写入的运营工作台
+  if (userRole === "operations_coordinator") {
+    return <OperationsNavigator />;
   }
 
   // quality_inspector (质检员) 使用质检专属界面
@@ -135,8 +154,17 @@ function RoleBasedNavigator() {
     return <ViewerNavigator />;
   }
 
-  // 其他角色使用原有界面
-  return <MainNavigator />;
+  // 已知的管理/平台兼容角色继续使用原有界面；未知角色进入锁定页
+  if (
+    userRole === "platform_admin"
+    || userRole === "equipment_admin"
+    || userRole === "quality_manager"
+    || userRole === "permission_admin"
+  ) {
+    return <MainNavigator />;
+  }
+
+  return <RestrictedRoleNavigator />;
 }
 
 function FeatureLoadingScreen() {
