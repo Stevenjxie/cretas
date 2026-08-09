@@ -334,8 +334,18 @@ def test_non_aliyun_registry_matches_frozen_probe_result():
 def test_registry_audit_date_is_not_stale():
     """审计日期过期(>21d) → router 收缩到 _MINIMAL_SAFE_SET。
 
-    2026-08-09 发现现值 07-26 距 staleness 只剩 7 天。这道闸让"忘了复审"
-    在 CI 里先红, 而不是某天在 prod 悄悄退化成 13 个模型。
+    ⏰ 这是一道**故意的定时闸, 不是缺陷**。它会在 _REGISTRY_AUDIT_DATE + 21 天
+    那一刻变红, 与任何人改了什么代码无关 —— 这正是它存在的意义。
+
+    红了怎么办: 去三个控制台核对余量 + 跑 scripts/probe_llm_registry, 按判据
+    (控制台有余量 ∩ 探针非空内容)更新 _SAFE_MODELS 与本文件的冻结表, 然后把
+    _REGISTRY_AUDIT_DATE 推到复审当天。⛔ 不许只推日期不复审 —— 那等于把这道
+    闸拆了。
+
+    为什么必须是红灯而不是告警: 2026-08-09 之所以出事, 恰恰是因为没人盯这个
+    日期(现值 07-26, 距 staleness 只剩 7 天), 而 prod 里同时有 23 个模型在
+    额度退避、约 1800 万 token 可用额度 router 够不着 —— 告警在那 6 天里
+    每天都发, 没人处理。红灯拦得住, 告警拦不住。
     """
     assert not llm_router._registry_stale(llm_router._today())
 ```
@@ -557,6 +567,33 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 
 
 # ══ 候选池 ══════════════════════════════════════════════════════════════
+# INSIGHTS 与 REVIEW 共用同一个质量档池: 两者判据逐字相同(质量优先 + 关思考档
+# ≤4s), 各写一份 21 行迟早漂移成两张不一致的表。将来若真分化(例如 REVIEW 需要
+# 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
+_QUALITY_TIER_POOL: List[Tuple[str, str]] = [
+    ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
+    ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
+    ("aliyun_c", "qwen3-max-2025-09-23"),          # 08-13  1.6s
+    ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
+    ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
+    ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
+    ("aliyun_c", "qwen3.7-max"),                   # 08-20  1.2s
+    ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
+    ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 08-24  3.2s
+    ("aliyun_b", "qwen3.7-max-2026-05-17"),        # 08-24  3.9s
+    ("aliyun_c", "kimi-k2.7-code"),                # 09-14  1.8s
+    ("aliyun_b", "kimi-k2.7-code"),                # 09-14  1.8s
+    ("aliyun_a", "kimi-k2.7-code"),                # 09-14  2.1s
+    ("aliyun_a", "qwen3.7-flash"),                 # 10-23  0.5s
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"),      # 10-23  0.6s
+    ("aliyun_b", "deepseek-v4-flash-0731"),        # 10-31  1.3s
+    ("aliyun_a", "deepseek-v4-flash-0731"),        # 10-31  1.5s
+    ("aliyun_c", "qwen3.8-max"),                   # 11-01  1.0s
+    ("aliyun_a", "qwen3.8-max"),                   # 11-01  1.1s
+    ("aliyun_b", "qwen3.8-max"),                   # 11-01  1.1s
+]
+
 # 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
 # 它只在「同一到期日」时生效(_build_chain 用稳定排序), 表达的是质量优先级。
 # 跨到期日的先后由 _build_chain 按到期日升序算, 人不要在这里排。
@@ -608,56 +645,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_b", "deepseek-v4-flash-0731"),
         ("aliyun_a", "deepseek-v4-flash-0731"),
     ],
-    # INSIGHTS — 经营分析, 质量优先, 关思考档 ≤4s。
-    SLOT.INSIGHTS: [
-        ("aliyun_c", "deepseek-v3.2"),
-        ("aliyun_c", "glm-4.6"),
-        ("aliyun_c", "qwen3-max-2025-09-23"),
-        ("aliyun_c", "qwen3.5-plus-2026-02-15"),
-        ("aliyun_c", "qwen3.6-plus-2026-04-02"),
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
-        ("aliyun_c", "qwen3.7-max-2026-05-20"),
-        ("aliyun_c", "qwen3.7-max"),
-        ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
-        ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 08-24  3.2s
-        ("aliyun_b", "qwen3.7-max-2026-05-17"),        # 08-24  3.9s
-        ("aliyun_c", "kimi-k2.7-code"),                # 09-14  1.8s
-        ("aliyun_b", "kimi-k2.7-code"),                # 09-14  1.8s
-        ("aliyun_a", "kimi-k2.7-code"),                # 09-14  2.1s
-        ("aliyun_a", "qwen3.7-flash"),
-        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "deepseek-v4-flash-0731"),
-        ("aliyun_a", "deepseek-v4-flash-0731"),
-        ("aliyun_c", "qwen3.8-max"),
-        ("aliyun_a", "qwen3.8-max"),
-        ("aliyun_b", "qwen3.8-max"),
-    ],
-    # REVIEW — 中文 critique, 12s 交互预算, 关思考档 ≤4s。与 INSIGHTS 同池。
-    # ⛔ 慢模型(deepseek-r1 等)故意不进 —— 放进来只会把「答不出来」换成
-    #    「等到超时」, 这条判据 2026-07-30 已被生产证明过一次。
-    SLOT.REVIEW: [
-        ("aliyun_c", "deepseek-v3.2"),
-        ("aliyun_c", "glm-4.6"),
-        ("aliyun_c", "qwen3-max-2025-09-23"),
-        ("aliyun_c", "qwen3.5-plus-2026-02-15"),
-        ("aliyun_c", "qwen3.6-plus-2026-04-02"),
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
-        ("aliyun_c", "qwen3.7-max-2026-05-20"),
-        ("aliyun_c", "qwen3.7-max"),
-        ("aliyun_c", "qwen3.7-max-2026-05-17"),
-        ("aliyun_a", "qwen3.7-max-2026-05-17"),
-        ("aliyun_b", "qwen3.7-max-2026-05-17"),
-        ("aliyun_c", "kimi-k2.7-code"),
-        ("aliyun_b", "kimi-k2.7-code"),
-        ("aliyun_a", "kimi-k2.7-code"),
-        ("aliyun_a", "qwen3.7-flash"),
-        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "deepseek-v4-flash-0731"),
-        ("aliyun_a", "deepseek-v4-flash-0731"),
-        ("aliyun_c", "qwen3.8-max"),
-        ("aliyun_a", "qwen3.8-max"),
-        ("aliyun_b", "qwen3.8-max"),
-    ],
+    # INSIGHTS / REVIEW — 共用质量档池, 见下方 _QUALITY_TIER_POOL 定义。
+    SLOT.INSIGHTS: list(_QUALITY_TIER_POOL),
+    SLOT.REVIEW: list(_QUALITY_TIER_POOL),
     # REASONING — 允许慢, profile 为 {} (不设 enable_thinking)。
     SLOT.REASONING: [
         ("aliyun_c", "deepseek-v3.2"),
@@ -849,7 +839,9 @@ def test_every_text_slot_has_a_floor():
         assert chain[-1] in floors, f"{slot.value} 末位不是地板: {chain[-1]}"
 
 
-@pytest.mark.parametrize("slot", [SLOT.CHAT, SLOT.CHART, SLOT.MAPPER, SLOT.REVIEW])
+@pytest.mark.parametrize(
+    "slot", [SLOT.CHAT, SLOT.CHART, SLOT.MAPPER, SLOT.REVIEW, SLOT.INSIGHTS]
+)
 def test_interactive_pools_exclude_slow_models(slot):
     """交互槽的候选池不能含实测慢模型。
 
