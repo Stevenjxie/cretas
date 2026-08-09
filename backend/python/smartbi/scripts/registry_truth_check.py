@@ -164,6 +164,76 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
                     failures.append(f"{label}: 源码 {want}, 算出来 {got}")
                 print(f"绝对量·{label}: 源码 {want}, 算出来 {got} {'' if ok else '❌'}")
 
+            # ── 跨粒度对账：全店汇总类格子的锚 ────────────────────────────
+            #
+            # 🔴 为什么需要：实测 **78% 的真实提问**落在「全店汇总」这类格子上
+            #    (销量×全店 2298 次、营收×全店 1691 次、毛利率×全店 660 次)，
+            #    而它们**一个锚都没有** —— 单价锚只覆盖菜品维度。
+            #
+            # ⛔ 这不是「各维度求和 == 全店合计」那种恒真式(我在第 3 轮审计里
+            #    否掉过它)。差别在于**两边走不同的粒度、不同的表、不同的表达式**：
+            #      左边  Σ(revenue×菜品)  → 明细表 SUM(i.amount)
+            #      右边  折前营收×全店     → 交易表 SUM(t.gross_amount)
+            #    扇出只会让**左边**爆炸(每张订单被每条明细重算)，右边纹丝不动 → 红。
+            #    实测两边差 **0.00**。
+            print()
+            async with pool.acquire() as c5:
+                await c5.execute(
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id)
+
+                async def cell(metric: str, dim: str, agg: str):
+                    return await execute_cell(
+                        c5, factory_id=factory_id, metric_key=metric,
+                        dimension_key=dim, aggregation_key=agg,
+                        date_range=rng, available_columns=cols)
+
+                by_dish = await cell("revenue", "product", "compare")
+                gross = await cell("gross_revenue", "all", "summary")
+                disc = await cell("discount_amount", "all", "summary")
+                net = await cell("revenue", "all", "summary")
+                margin = await cell("gross_margin", "all", "summary")
+                cost_by_dish = await cell("food_cost", "product", "compare")
+
+            def _one(r, key):
+                return float(r.rows[0][key]) if (r.ok and r.rows) else None
+
+            sum_items = sum(float(x["revenue"]) for x in by_dish.rows) if by_dish.rows else None
+            g, d, n = _one(gross, "gross_revenue"), _one(disc, "discount_amount"), _one(net, "revenue")
+
+            # ① 明细加总 == 折前营收（跨粒度，扇出必红）
+            if sum_items is None or g is None:
+                failures.append("跨粒度对账: 取不到数")
+            else:
+                ok = abs(sum_items - g) <= max(1.0, abs(g) * 1e-6)
+                if not ok:
+                    failures.append(f"Σ(各菜品营收) {sum_items:.2f} ≠ 折前营收 {g:.2f}")
+                print(f"跨粒度·Σ(各菜品营收) {sum_items:15.2f}  折前营收 {g:15.2f} {'' if ok else '❌'}")
+
+            # ② 折前 − 折扣 == 净额（三个不同的列，采集写错任一个就红）
+            if None in (g, d, n):
+                failures.append("净额恒等: 取不到数")
+            else:
+                ok = abs((g - d) - n) <= max(1.0, abs(n) * 1e-6)
+                if not ok:
+                    failures.append(f"折前 {g:.2f} − 折扣 {d:.2f} ≠ 净额 {n:.2f}")
+                print(f"恒等·折前−折扣 {g - d:15.2f}  净额     {n:15.2f} {'' if ok else '❌'}")
+
+            # ③ 全店毛利率 == 由**各菜品**的营收与成本算出来的加权值
+            #    ⚠️ 两条路都走登记表, 但一条是 all 维度上的派生表达式、
+            #       另一条是 product 维度逐行再加权 —— 派生表达式写错时只有一边变。
+            m_all = _one(margin, "gross_margin")
+            sum_cost = (sum(float(x["food_cost"]) for x in cost_by_dish.rows)
+                        if cost_by_dish.rows else None)
+            if None in (m_all, sum_items, sum_cost) or not sum_items:
+                failures.append("毛利率一致性: 取不到数")
+            else:
+                m_from_dish = (sum_items - sum_cost) / sum_items * 100
+                ok = abs(m_all - m_from_dish) <= 0.5
+                if not ok:
+                    failures.append(
+                        f"全店毛利率 {m_all:.2f}% ≠ 由各菜品加权算出的 {m_from_dish:.2f}%")
+                print(f"一致·全店毛利率 {m_all:14.2f}%  各菜品加权 {m_from_dish:12.2f}% {'' if ok else '❌'}")
+
             # ── 分布锚：渠道抽样权重。⚠️ 口径是**按单量**不是按营收 ──────────
             async with pool.acquire() as c4:
                 await c4.execute(
