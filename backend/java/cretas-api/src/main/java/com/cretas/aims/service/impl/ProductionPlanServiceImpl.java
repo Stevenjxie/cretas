@@ -503,7 +503,30 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
             dropCompiledRuntime(factoryId, batch.getId());
             copyPlanAuthorityToBatch(factoryId, plan.getId(), batch.getId());
+            rematerializeRuntime(factoryId, plan, batch);
         }
+    }
+
+    /**
+     * 按新权威当场重编译运行时 —— 复用<b>转批次时同一个</b> {@code spawnTasks}。
+     *
+     * <p>只删不建是不行的: 读路径不会自动物化, 真机实测报
+     * {@code WORKFLOW_RUNTIME_NOT_MATERIALIZED}「运行时快照尚未生成」, 等于把批次弄坏,
+     * 而界面已经说「已更新到当前生效配方」。
+     *
+     * <p>刷掉一级缓存再建: 上面刚原生 UPDATE 了 production_batches, 持久化上下文里那份
+     * ProductionBatch 还是旧权威, 编译器读到旧值就白搬了。
+     */
+    private void rematerializeRuntime(String factoryId, ProductionPlan plan, ProductionBatch batch) {
+        if (workProcessTaskService == null) {
+            throw new BusinessException(500, "工序任务服务未初始化，配方更新已回滚")
+                    .withCode("WORK_PROCESS_TASK_SERVICE_UNAVAILABLE");
+        }
+        entityManager.flush();
+        entityManager.clear();
+        Long responsibleId = plan.getAssignedSupervisorId();
+        workProcessTaskService.spawnTasks(factoryId, batch.getId(), batch.getProductTypeId(),
+                plan.getSkipProcessReporting(), responsibleId, responsibleId);
     }
 
     /**
