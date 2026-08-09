@@ -10,8 +10,21 @@
 #   6136 passed / 153 failed / 149 errors —— 问题集中在 41 个文件。
 #   其中 6 个已在本 PR 修好 (JWT secret 顺序依赖, 同一指纹扫出来的), 余下 35 个列在下面。
 #
-# 清账进度: 35 → 34 (golden 快照过期, 2026-08-01) → 29 (event loop 5 条, 2026-08-01)。
-# 当前列表实际条数: 22 (需 PG) + 6 (断言失败) + 1 (缺 pyarrow) = 29。
+# 清账进度: 35 → 34 (golden 快照过期, 2026-08-01) → 29 (event loop 5 条, 2026-08-01)
+#           → 28 (gold 契约测试, 2026-08-10)。
+# 当前列表实际条数: 22 (需 PG) + 5 (断言失败) + 1 (缺 pyarrow) = 28。
+#
+# 2026-08-10 清掉 tests/agent_runtime/test_real_gold_contracts.py, 三条失败的真因:
+#   · daily_trend / resolve_wastage_top / resolve_stock_shortage 新增了**尾部可选**
+#     参数(store_names / date_range / window_label), 契约钉的是精确签名 → 良性漂移。
+#     契约保持精确钉法(逼每次新增来过一眼), 只更新期望值并写明为何无害。
+#   · 探针 ContractProbeConnection 缺 agg_restaurant_daily_ops / _totals 两条分支,
+#     表现为 `KeyError: 'shortage_cost'` **指向生产代码行号** —— 看起来像生产崩了,
+#     实为探针没给这个键。判据: 排查顺序是先看探针给了哪些键, 再怀疑被测代码。
+#   · resolve_inventory_warning 2026-08-09 起读 cretas 库(Java 侧库存底账), 自己开
+#     另一个库的连接, 假 pool 拦不住 → 单独拆成 @pytest.mark.integration。
+#     判据: **一个用例里只要有一个调用够不到假桩, 整条用例就变成集成测试**;
+#     拆开比给整条打 marker 便宜 —— 否则 5 个纯离线的契约断言一起失守。
 
 # ── ① 需要 PostgreSQL (22 个) ────────────────────────────────────────────────
 # 全部 `OSError: Connect call failed 127.0.0.1:5432`。它们是**真·集成测试**,
@@ -60,7 +73,6 @@ tests/test_top_products_provenance.py
 # 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
 smartbi/services/materialized_analytics/tests/test_llm_materializer.py   # 'router:INSIGHTS' != 'qwen3-max'
 smartbi/services/materialized_analytics/tests/test_query_router.py       # 'top_n_by_dim' != 'dish_sales_top_n'
-tests/agent_runtime/test_real_gold_contracts.py                          # daily_trend 断言
 tests/test_price_strip_kpi_pilot.py                                      # RbacForbiddenException role=warehouse
 tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
 tests/test_store_kpi_dashboard.py                                        # 'skipped' != 'ok'
