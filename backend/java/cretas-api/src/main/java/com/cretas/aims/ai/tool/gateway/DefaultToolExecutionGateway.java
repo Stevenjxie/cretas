@@ -235,31 +235,6 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                         payload,
                         "Tool execution succeeded");
             }
-            // 工具【明确拒绝】且什么都没做 —— 与「不知道写没写」是两回事。
-            // ⛔ 这一档【纯增量】: 今天没有任何工具发 DECLINED, 既有行为一个字节不变。
-            // 它存在的意义是让「结构上确定没写入」的拒绝不再被记成疑似写入的脏账。
-            if ("DECLINED".equals(payload.path("status").asText())) {
-                if (!safelyResolve(lease, false)) {
-                    return finishReserved(
-                            command,
-                            idempotencyRecord,
-                            auditEventId,
-                            ToolExecutionIdempotencyRecord.State.IN_DOUBT,
-                            ToolExecutionStatus.OUTCOME_UNKNOWN,
-                            GatewayResultCode.CONFIRMATION_RESOLUTION_UNCERTAIN,
-                            emptyPayload(),
-                            "Execution outcome requires reconciliation");
-                }
-                return finishReserved(
-                        command,
-                        idempotencyRecord,
-                        auditEventId,
-                        ToolExecutionIdempotencyRecord.State.FAILED,
-                        ToolExecutionStatus.FAILED,
-                        GatewayResultCode.TOOL_DECLINED,
-                        payload,
-                        "Tool declined the request without performing any write");
-            }
             if ("NEED_MORE_INFO".equals(payload.path("status").asText())) {
                 if (!safelyResolve(lease, false)) {
                     return finishReserved(
