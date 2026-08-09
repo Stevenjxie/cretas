@@ -984,7 +984,11 @@ def test_http_200_with_empty_content_is_not_ok():
 
 
 def test_free_quota_exhausted_is_quota():
-    assert classify_probe_result(403, '{"message":"Free quota exhausted"}', "") == "quota"
+    # ⚠️ 报文必须用真实厂商格式。`_is_quota_exhausted` 的 403 分支只认
+    # "FreeTierOnly" / "AllocationQuota" 子串 —— 写成人话版的
+    # "Free quota exhausted" 会被判成 "error", 这条断言就成了假的。
+    # (2026-08-09 prod 实测原文即 403 AllocationQuota.FreeTierOnly)
+    assert classify_probe_result(403, '{"message":"AllocationQuota.FreeTierOnly"}', "") == "quota"
 
 
 def test_tokenhub_401008_is_quota():
