@@ -905,12 +905,35 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 即切换。链尾只保留 GLM/Plus/Zhipu，不追加通用 _TEXT_TAIL：
     # Max/DeepSeek/Kimi 对短 JSON 分类既慢又浪费，生产已证明会放大超时。
     # 深度经营分析继续由 INSIGHTS/REASONING 槽负责。
+    # ⛔ 2026-08-09 曾把 qwen3.7-max / qwen3-max-2025-09-23 加进本链(它们在 REVIEW
+    #    打分 3/3), 但 MAPPER 的契约是「快而有界」——
+    #    test_mapper_uses_bounded_fast_models_without_max_or_reasoners 明确禁止 model
+    #    名里出现 max / deepseek / kimi。2026-08-10 移除。
+    #    判据: **一个模型在 A 槽表现好, 不构成把它放进 B 槽的理由** —— 槽的契约
+    #    (延迟上界 / 成本 / 是否强制 thinking)先于打分。
     SLOT.MAPPER: _dedup_chain([
         ("aliyun_c", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "qwen3.7-flash-2026-07-15"),
         ("aliyun_c", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"),
+        # 🔴 2026-08-09: 上面 5 个**全部运行时额度耗尽**(5 个 quota_skip + zhipu 超时),
+        #    于是 T3 规划整层 fail-closed, 每个餐饮问句都退化成非 LLM 启发式 ——
+        #    症状是「答上了但槽位不全」, 不报错, 从分数上看不出来。
+        #    ⛔ 放在**链尾**不是链头: 上面那些有额度时行为逐字不变, 只有全耗尽时
+        #       才走到这里。它们比 flash 贵/慢一点, 但「贵一点」远好过「不规划」。
+        #    ⛔ 只从 _SAFE_MODELS 内挑, 一条白名单都没新增(计费闸需 Steve 确认)。
+        #    实测(真实 T3 prompt / 3 问句 / 答对 intent 且 conf>=0.6):
+        #      glm-4.7 3/3 3.0s   qwen3.7-max 3/3 3.0s
+        #      qwen3-max-2025-09-23 3/3 3.8s   glm-5 3/3 4.4s
+        ("aliyun_c", "glm-4.7"),
+        ("aliyun_c", "glm-5"),
+        # ⚠️ zhipu 排到**最后**: 实测它在这个槽上稳定超时, 而链是串行且共享一个
+        #    总预算 —— 它排在前面会把预算吃掉, 后面本来 1 秒就能答的候选
+        #    因为分不到时间而**跟着超时**, 连续 2 次就被熔断 60 秒(CB_THRESHOLD=2,
+        #    且 403/超时都计入失败)。2026-08-09 实测: 上面 4 个被这样连坐熔断,
+        #    单独打时它们 0.5-1.1s 全部 HTTP 200。
+        #    ⛔ 判据: **排一个会超时的候选在前面, 等于把它后面的健康候选一起拖下水**。
         ("zhipu", "glm-4.5-air"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
@@ -992,11 +1015,47 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         #    [74][75][76] 澄清乱序链), 而换型前两轮这些全过。我的合约测试
         #    只测了**单轮**, 这是验证里的缺口。故改成纯文本的 deepseek-v3 打头,
         #    VL 模型退到其后 —— 若多轮恢复, 说明 VL 模型不适合承担会话继承。
+        # ⚠️ 2026-08-09 当天晚些时候: deepseek-v3 与 qwen3-vl-plus **免费额度双双用尽**
+        #    (403 Free quota exhausted), 链路落到 2/3 档, 回归电池 80 → 75。
+        #    复测发现 kimi-k2.6 这次是 **3/3 且 2 秒** —— 上午测得 2/3 是抖动不是上限
+        #    (同一模型两次结果不同)。判据: **单次合约打分不足以定档, 至少复测一次**。
+        #    故提到链头; 原两个满分模型留在后面等额度恢复。
+        # 🔴 2026-08-09 三轮判别实验的结论 —— ⛔ 别再换链头模型试图恢复 80/85:
+        #      deepseek-v3 打头 → 80/85, 平均 ~6s        (⚠️ 免费额度当日耗尽)
+        #      kimi-k2.6   打头 → 76/85, 平均 4.0s       (挂 [07][08][09] 多轮继承)
+        #      deepseek-r1 打头 → 73/85, 平均 10.7s      (挂 [04]-[09], 更差且 p95 17.5s
+        #                                                 击穿 REVIEW 的 12s 交互预算)
+        #    → 80/85 这个基线**绑在 deepseek-v3 上**。差的那几条全是多轮指代继承
+        #      (「那成本呢」「是否合理」要继承上一轮的菜名), 而这恰好是链头模型的能力差异,
+        #      不是本仓代码的回归。deepseek-v3 额度恢复后电池会自己回到 80。
+        #    ⛔ 判据: 电池掉到 76 时先看链头是谁, 别去改用例或加豁免。
+        # 🔑 2026-08-09 第四轮: 前三轮都在**已经在链里**的模型之间换来换去, 全部失败。
+        #    真正没做的是**去白名单里找没进过链的**: `_SAFE_MODELS` 有 86 个组合,
+        #    REVIEW 链只用了 25 个。拿真实 T3 prompt 给链外候选逐个打分, 当场找到
+        #    七个 3/3 且在 12s 预算内的强文本模型 —— 它们一整天都有额度, 只是没人接。
+        #    ⛔ 判据: 「模型池耗尽」要分清是**白名单耗尽**还是**链耗尽**。
+        #       `llm_pool_health` 报的 usable=3/25 是**链内**的数, 不是可用总量;
+        #       我拿它当「没得选了」的证据, 而链外还有 61 个组合没数过。
+        #    ⛔ 只在 _SAFE_MODELS 内挑, 一条白名单都没新增(计费闸, AI 不能自批)。
+        #    实测(真实 T3 prompt / 3 问句 / 判据=答对 intent 且 conf>=0.6 且 <=12s):
+        #      qwen3.7-max            3/3  conf 0.95       3.0s  ← 链头
+        #      glm-4.7                3/3  conf 0.90-0.98  3.0s
+        #      qwen3-max-2025-09-23   3/3  conf 0.95       3.8s
+        #      glm-5                  3/3  conf 0.98-0.99  4.4s
+        #      qwen3.7-max-preview(b) 3/3  conf 0.95       4.4s
+        #      minimax-m2.7(tencent)  3/3  conf 0.95-0.99 13.4s  ✗ 超预算, 故意不放
+        #    ⚠️ 上面那段旧注释说 "05-17/preview Max 强制 enable_thinking=true 与
+        #       REVIEW 契约冲突" —— 本轮用 `_apply_slot_params(SLOT.REVIEW,...)`
+        #       实测这几个全部 200 且 3-4s。**注释是当时的观测, 不是当前的事实**。
+        ("aliyun_c", "qwen3.7-max"),            # 3/3  conf 0.95       3.0s
+        ("aliyun_c", "glm-4.7"),                # 3/3  conf 0.90-0.98  3.0s
+        ("aliyun_c", "qwen3-max-2025-09-23"),   # 3/3  conf 0.95       3.8s
+        ("aliyun_c", "glm-5"),                  # 3/3  conf 0.98-0.99  4.4s
+        ("aliyun_c", "kimi-k2.6"),              # 3/3  conf 0.90-0.95  2s (复测)
         ("aliyun_c", "deepseek-v3"),            # 3/3  conf 0.90-0.95  3-4s  纯文本
         ("aliyun_c", "qwen3-vl-plus"),          # 3/3  conf 0.90-0.98  3-4s
         # ⚠️ deepseek-v3 与链尾那颗毒丸 deepseek-v3.2 同族, 但 confidence 正常 ——
         #    同族不同版本行为可以完全相反, 只能实测, 不能按家族推断。
-        ("aliyun_c", "kimi-k2.6"),              # 2/3  2-3s (菜品毛利判成营收汇总)
         ("aliyun_c", "qwen3-vl-32b-instruct"),  # 2/3  3-4s (同上)
         ("aliyun_c", "qwen3-vl-flash-2026-01-22"),  # 2/3  2s (同上)
         # ⛔ 实测仍有额度但**故意不放**的: glm-4.7(23-37s) / glm-5(64-89s) /

@@ -31,8 +31,10 @@ class _AcquireCtx:
 
 
 class _FakeConn:
-    def __init__(self, rows=None, exc=None):
+    def __init__(self, rows=None, exc=None, foreign_rows=None):
         self.rows = rows or []
+        # 「别的租户有、本租户没有」的实体名; 默认空 = 不剔任何条目。
+        self.foreign_rows = foreign_rows or []
         self.exc = exc
         self.calls = []
         self.guc_calls = []  # set_config 调用 (RLS GUC — 2026-07-23 修)
@@ -44,6 +46,15 @@ class _FakeConn:
         self.calls.append((sql, args))
         if self.exc:
             raise self.exc
+        # ⚠️ 2026-08-10: 原实现对**任何**查询都返回 self.rows。生产侧 2026-08-09
+        #    给 aggregate_misses 加了第二条查询 `_foreign_entity_names`
+        #    (查 dim_store / dim_product, 剔掉别的租户才有的实体名), 它拿到的是
+        #    miss 行 → `KeyError: 'name'` → 被 fail-open 吞掉 → 整个函数返回 []。
+        #    症状是「out 是空的」, 离真因(假桩不区分查询)很远。
+        #    判据: **假连接必须按查询区分应答** —— 对所有 SQL 返回同一批行, 等于
+        #    默认「被测代码只发一条查询」, 而那是一个会过期的假设。
+        if "FROM dim_store" in sql:
+            return self.foreign_rows
         return self.rows
 
 

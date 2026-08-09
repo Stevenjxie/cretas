@@ -18,6 +18,9 @@ from smartbi.gold.customer_text import (
 )
 
 from smartbi.gold.restaurant import answer_contract as _contract
+from smartbi.gold.restaurant.metric_registry import (
+    canonical_dimensions as _canonical_dimensions,
+)
 from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     STORE_SCOPE_CLARIFICATION_QUESTION,
@@ -81,7 +84,10 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_SUPPLIER_PRICE": frozenset({"ingredient"}),
     # 时段本身是 time 维度; 结果里也带门店无关的全店汇总, 故只声明 time。
     # ⛔ 声明的是**这个 resolver 真能出的粒度**, 不是「希望它能出」的。
-    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time"}),
+    # 餐段本身就是这个 resolver 的输出粒度 —— 2026-08-09 放开 `meal_period` 维度后
+    # 补上它。⛔ 补的依据是**它真能出**(结果按午市/晚市/夜宵分), 不是为了让某条
+    #    用例过; 能力表写的是真能出的粒度, 写宽了下游会拿它当承诺。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time", "meal_period"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
@@ -94,12 +100,14 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_SALES_SUMMARY": frozenset({"store"}),
     "RESTAURANT_OPS_TREND_ANALYSIS": frozenset({"time"}),
     "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
+    # ⚠️ daypart 就是 `meal_period` 维度 —— 2026-08-09 放开该维度后补进声明,
+    #    否则「下个月各店人效安排」会被判成「查询维度超出能力范围」而拒答。
     # Staffing facts are keyed by store and daypart (午市/晚市/夜宵), and the
     # resolver returns every store by default.  Both grains are therefore
     # executable.  Omitting ``store`` made normal questions such as
     # “明天各门店怎么排班” pass planning but fail the execution contract before
     # the grounded FactBook/LLM path could run.
-    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset({"store", "time"}),
+    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset({"store", "time", "meal_period"}),
 }
 
 _READ_ONLY_MUTATION_TOKENS = (
@@ -252,10 +260,14 @@ def _execution_mismatch(
         for code in plan
     ):
         return "门店范围不能由全店或全门店 resolver 代答"
-    supported_dimensions = set().union(
+    # ⛔ 两侧都归一到登记表的 key 再比。`_RESOLVER_DIMENSIONS` 写的是旧词汇
+    #    (dish/time), 而规格现在给的是登记表的键(product/date) —— 不归一就是
+    #    「口径不同的两个集合做子集判断」, 结果是**恒不成立**: 2026-08-09 实测
+    #    「本月米饭的销量」这种最基础的问句被判成「查询维度超出能力范围」。
+    supported_dimensions = set(_canonical_dimensions(sorted(set().union(
         *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
-    )
-    if not set(spec.dimensions).issubset(supported_dimensions):
+    ))))
+    if not set(_canonical_dimensions(spec.dimensions)).issubset(supported_dimensions):
         return "查询维度超出计划 resolver 的能力范围"
     return None
 
@@ -1402,6 +1414,73 @@ async def tiered_answer(
         )
         displayable = has_displayable_business_result(answer_text)
         if not contract.passed or not displayable:
+            # ── 通用执行器兜底 (2026-08-09) ──────────────────────────────────
+            #
+            # 🔴 挂在这里而不是 resolver 层, 是查证过的:
+            #    18 个手写 resolver 里 **14 个没有任何「我答不出来」的出口** ——
+            #    它们把答不出来**写进答案文字**("0/10 个菜品有完整成本数据"),
+            #    不给信号。要在那一层兜底就得给 14 个函数各加一个失败出口,
+            #    每个都要判断「什么算答不出来」—— 那正是这套改造要治的病的形状。
+            #    而 `_contract.validate` 是**单一调用点、每个答案都过**的统一闸。
+            #
+            # ⛔ 只在契约**判失败**的分支里跑: 契约通过时一行都不执行,
+            #    现有能答对的问句行为逐字不变。
+            # ⛔ 它答不了(返回 None / 没有行)就继续走下面原样的拒绝语 ——
+            #    兜底不该扩大失败面, 也不该把「如实拒绝」换成一个勉强的数。
+            generic = None
+            try:
+                from smartbi.gold.restaurant.generic_answer import try_generic_answer
+                generic = await try_generic_answer(
+                    spec, pool, factory_id,
+                    window_label=str(getattr(spec, "window_label", "") or ""),
+                )
+            except Exception:  # noqa: BLE001 — 兜底坏了不该连累主链路
+                logger.exception("[contract-fallback] 通用执行器异常, 走原拒绝语")
+            if generic and generic.get("served"):
+                # 🔴 承重: 兜底的答案**也要过同一道契约**。
+                #
+                #    2026-08-10 的事故: 第一版直接 return, 于是兜底成了一个
+                #    **绕过唯一那道闸的后门** —— 用户问「本月营收比上月低是什么
+                #    原因」, 契约正确判定「没覆盖原因分析」准备拒答, 兜底接住后
+                #    回了一句「本月全部门店营收合计 ¥6,490,180.61。」,
+                #    用一个数字回答了「为什么」。
+                #
+                #    ⛔ 判据: **绕过闸的路径迟早会走进闸本来要挡的那件事。**
+                #       正解不是给兜底加一条条守卫(那是补丁, 只堵已知的那种),
+                #       是让它**走同一道闸** —— 归因问题的兜底答案在这里会
+                #       原样再失败一次, 而多指标问题的兜底答案会通过。
+                fb_raw = str(generic.get("answer_text") or "")
+                fb_contract = _contract.validate(
+                    _drop_planner_invented_metrics(spec, query), fb_raw)
+                if not fb_contract.passed or not has_displayable_business_result(fb_raw):
+                    logger.info(
+                        "[contract-fallback] 兜底答案自己也没过契约, 走原拒绝语: "
+                        "missing=%s query=%r", fb_contract.missing, query[:60])
+                    generic = None
+            if generic and generic.get("served"):
+                logger.info(
+                    "[contract-fallback] 契约未过, 通用执行器接住: cell=%s query=%r",
+                    generic.get("cell"), query[:60])
+                fallback_text = _prepend_action_warning(
+                    str(generic.get("answer_text") or ""), action_warning)
+                asyncio.create_task(log_intent_capture(
+                    pool, spec, factory_id=factory_id, query=query,
+                    answer=fallback_text, contract_pass=False, served=True,
+                    source=capture_source,
+                    contract_missing=contract.missing,
+                ))
+                out = {
+                    "kind": "answer",
+                    "answer_text": fallback_text,
+                    "contract_pass": False,
+                    "spec": spec,
+                    # ⚠️ 标出来是兜底路径 —— 不标的话没人能量它命中多少次,
+                    #    而「接住了几条」正是判断这条路值不值得存在的唯一依据。
+                    "served_by": "generic_executor_fallback",
+                }
+                if action_warning:
+                    out["warning"] = action_warning
+                return out
             missing = (
                 _contract.describe_missing(contract.missing)
                 if contract.missing
@@ -1416,6 +1495,8 @@ async def tiered_answer(
                 pool, spec, factory_id=factory_id, query=query,
                 answer=safe_text, contract_pass=False, served=False,
                 source=capture_source,
+                contract_missing=contract.missing,
+                rejected_answer=answer_text,
             ))
             failed_result = {
                 "kind": "clarification",

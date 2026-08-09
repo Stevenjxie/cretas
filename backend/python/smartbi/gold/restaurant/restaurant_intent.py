@@ -31,6 +31,18 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+# ⛔ 规划器的聚合可选值**只能**来自登记表 —— 手写第二份清单就是第四个膨胀点。
+from smartbi.gold.restaurant.metric_registry import (
+    AGGREGATIONS as _AGGREGATIONS,
+    render_aggregation_vocabulary as _render_aggregation_vocabulary,
+    DIMENSIONS as _REG_DIMENSIONS,
+    render_dimension_vocabulary as _render_dimension_vocabulary,
+    canonical_dimensions as _canonical_dimensions,
+    canonical_metrics as _canonical_metrics,
+    METRICS as _REG_METRICS,
+    DERIVED as _REG_DERIVED,
+    render_metric_vocabulary as _render_metric_vocabulary,
+)
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _KITCHEN_OPS_NOUNS,
     catalogue_has_no_dish_mention as _catalogue_has_no_dish_mention,
@@ -230,6 +242,17 @@ class RestaurantQuerySpec:
     analysis_action: str = "lookup"  # lookup | compare | diagnose | optimize
     ranking_direction: Optional[str] = None  # best | worst
     ranking_limit: int = 5
+    #: 结果要**组织成什么形态**（占比 / 走势 / 集中度 / 两端 / 高于平均 …）。
+    #:
+    #: 🔴 2026-08-09 加。此前形态只能由 `analysis_action` + `ranking_direction`
+    #:    间接推出来，而那两个槽合起来只能表达 5 种形态，登记表里有 9 种 ——
+    #:    占比 / 集中度 / 两端 / 高于平均**规划器一次都产出不了**，
+    #:    问「外卖占多少」只能退化成汇总。
+    #: ⛔ 取值域来自 `metric_registry.AGGREGATIONS`，prompt 由
+    #:    `render_aggregation_vocabulary()` 渲染 —— **不在别处再写一份清单**。
+    #: ⚠️ None = 规划器没表态，由 `spec_to_cell` 按旧规则推断（与加这个槽之前
+    #:    逐字同义），所以这是**纯增量**：模型不填它，行为一点不变。
+    aggregation: Optional[str] = None
     excluded_entities: Tuple[str, ...] = ()
     store_scope: Optional[str] = None  # all | single | multiple
     store_slots: Tuple[str, ...] = ()
@@ -902,9 +925,17 @@ def _is_food_cost_ratio_query(text: str) -> bool:
 
 
 _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
-_SEMANTIC_DIMENSIONS = frozenset({"store", "dish", "ingredient", "channel", "customer", "time"})
+#: 规划器**允许产出**的维度取值域 = 登记表的键 ∪ 旧别名。
+#: ⛔ 旧别名(dish/time/customer)必须保留: 计划缓存和已晋升的整句路由里存着
+#:    它们, 去掉会让那些旧计划回放时校验失败 —— 而失败是静默的(整条规格作废)。
+#: ⛔ 不手写新维度: 它们从 `_REG_DIMENSIONS` 来, 登记表加一行这里自动跟上。
+_SEMANTIC_DIMENSIONS = frozenset(_REG_DIMENSIONS) | frozenset(
+    {"dish", "time", "customer"})
 _SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
-_SEMANTIC_METRICS = frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
+#: 取值域 = 登记表的键 ∪ 原有(数据缺口项 + 旧别名)。
+#: ⛔ 原有那些必须留着: 计划缓存/已晋升路由里存着它们, 且数据缺口项要能被
+#:    识别出来才谈得上「如实说没有」。
+_SEMANTIC_METRICS = frozenset(_REG_METRICS) | frozenset(_REG_DERIVED) | frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
 
 
 def _repair_backed_by_user_wording(
@@ -1957,6 +1988,9 @@ def _build_spec(
     llm_requested_metrics: Optional[Tuple[str, ...]] = None,
     llm_dimensions: Optional[Tuple[str, ...]] = None,
     llm_analysis_action: Optional[str] = None,
+    #: 规划器直接给出的结果形态(占比/走势/集中度/…)。取值域 = 登记表的 AGGREGATIONS。
+    #: None = 它没表态, 由 `spec_to_cell` 按旧规则推断 —— 与加这个槽之前逐字同义。
+    llm_aggregation: Optional[str] = None,
     llm_store_scope: Optional[str] = None,
     # 门店范围是**代码补的默认值**(不是用户说的)时为 True —— 只影响披露, 不影响 SQL。
     store_scope_defaulted: bool = False,
@@ -2064,6 +2098,9 @@ def _build_spec(
         # invent sales_volume/orders requirements and then reject an otherwise
         # valid revenue overview for failing to echo the invented list.
         requested_metrics = ()
+    # ⛔ 与维度同一时机归一: 下面的意图规划、契约修复都按管线的旧写法
+    #    (sales_volume/recipe_cost/wastage)比对。
+    requested_metrics = _canonical_metrics(requested_metrics)
     if llm_semantics_authoritative:
         wants_margin = bool(llm_wants_margin)
         asks_profitability = bool(llm_asks_profitability)
@@ -2193,7 +2230,13 @@ def _build_spec(
         and not _asks_store_breakdown(effective_query)
     ):
         dimension_list.remove("store")
-    dimensions = tuple(dimension_list)
+    # 🔴 归一必须在**这里**, 不能等到构造 spec 的那一行 —— 下面的契约修复、
+    #    门店×菜品组合判断、时间对比剥离全都直接读这个局部变量。
+    #    2026-08-09 实测: 归一放在末尾时, 契约修复看到的仍是 ('product','dish'),
+    #    与 resolver 声明的 ['dish','time'] 比不上 → 修复被跳过 → 停在错的
+    #    resolver 上 → 「本月米饭的销量」答成「问题对象与分析范围不一致」。
+    #    ⛔ 判据: 归一要放在**第一个消费者之前**, 不是放在出口。
+    dimensions = _canonical_dimensions(tuple(dimension_list))
     comparison = sales_spec.comparison_kind or _detect_comparison(effective_query)
     if comparison and "time" in dimensions:
         # Two explicit windows are immutable filters/baselines, not a request
@@ -2494,6 +2537,7 @@ def _build_spec(
         output_preference=output_preference,
         analysis_action=analysis_action,
         ranking_direction=ranking_direction,
+        aggregation=(llm_aggregation if llm_aggregation in _AGGREGATIONS else None),
         ranking_limit=requested_ranking_limit,
         excluded_entities=excluded_entities,
         store_scope=store_scope,
@@ -2692,6 +2736,11 @@ def _routing_rules_fingerprint() -> str:
         repr(_REQUEST_METRIC_RULES),
         repr(sorted(_INTENT_DESCRIPTIONS)),
         _REQUISITION_SPEND_RE.pattern,
+        # 🔴 2026-08-09 补: 规划器**可选值**现在由登记表渲染进 prompt。
+        #    不把它并进指纹, 批 2/3 扩词汇表后旧计划会被原样回放 ——
+        #    症状是「新维度/新形态部署了但一直不生效」, 而且完全不报错。
+        #    这与上面那段注释记的 #2043 事故是**同一个形状**。
+        _render_aggregation_vocabulary(),
     ))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
 
@@ -4887,7 +4936,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_SALES_SUMMARY", "time_range": {"type": "relative", '
         '"unit": "month", "count": 2}, "wants_margin": true, "asks_profitability": true, '
         '"requested_metrics": ["revenue", "orders", "gross_margin"], '
-        '"analysis_action": "lookup", "dimensions": [], "comparison": null, '
+        '"analysis_action": "lookup", "aggregation": null, "dimensions": [], "comparison": null, '
         '"dish": null, "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.9, '
         '"clarification_needed": false, "missing_fields": [], '
@@ -4896,7 +4945,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_GROSS_MARGIN", "time_range": {"type": "relative", '
         '"unit": "day", "count": 30}, "wants_margin": true, "asks_profitability": false, '
         '"requested_metrics": [], '
-        '"analysis_action": "lookup", "dimensions": ["dish"], "comparison": null, '
+        '"analysis_action": "lookup", "aggregation": null, "dimensions": ["dish"], "comparison": null, '
         '"dish": "水煮鱼", "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.85, '
         '"clarification_needed": false, "missing_fields": [], '
@@ -4905,7 +4954,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_STAFFING_ADVICE", '
         '"time_range": {"type": "named", "value": "this_month"}, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"requested_metrics": [], "analysis_action": "lookup", "aggregation": null, '
         '"dimensions": ["time"], "comparison": null, "dish": null, '
         '"store": null, "stores": [], "store_scope": "all", '
         '"confidence": 0.95, "clarification_needed": false, '
@@ -4915,7 +4964,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION", '
         '"time_range": {"type": "named", "value": "this_week"}, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": ["revenue"], "analysis_action": "optimize", '
+        '"requested_metrics": ["revenue"], "analysis_action": "optimize", "aggregation": null, '
         '"dimensions": [], "comparison": null, "dish": null, "store": null, '
         '"stores": [], "store_scope": null, "confidence": 0.95, '
         '"clarification_needed": true, "missing_fields": ["store_scope"], '
@@ -4924,7 +4973,7 @@ def _build_t3_prompt(
         '示例5: "我们现在有几家店" -> '
         '{"intent": "RESTAURANT_OPS_STORE_DIRECTORY", "time_range": null, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"requested_metrics": [], "analysis_action": "lookup", "aggregation": null, '
         '"dimensions": ["store"], "comparison": null, "dish": null, "store": null, '
         '"stores": [], "store_scope": "all", "confidence": 0.99, '
         '"clarification_needed": false, "missing_fields": [], '
@@ -4932,7 +4981,7 @@ def _build_t3_prompt(
         '示例6: "库存"（用户点击经营指标里的“库存”）-> '
         '{"intent": "RESTAURANT_OPS_INVENTORY_WARNING", "time_range": null, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"requested_metrics": [], "analysis_action": "lookup", "aggregation": null, '
         '"dimensions": ["ingredient"], "comparison": null, "dish": null, "store": null, '
         '"stores": [], "store_scope": null, "confidence": 0.95, '
         '"clarification_needed": false, "missing_fields": [], '
@@ -4941,7 +4990,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_STORE_MARGIN", "time_range": null, '
         '"wants_margin": false, "asks_profitability": false, '
         '"requested_metrics": ["revenue", "orders", "sales_volume"], '
-        '"analysis_action": "lookup", "dimensions": ["store"], "comparison": null, '
+        '"analysis_action": "lookup", "aggregation": null, "dimensions": ["store"], "comparison": null, '
         '"dish": null, "store": "鲜行者打浦桥日月光店", '
         '"stores": ["鲜行者打浦桥日月光店"], "store_scope": "single", '
         '"confidence": 0.95, "clarification_needed": true, '
@@ -4951,7 +5000,7 @@ def _build_t3_prompt(
         '示例8: "鲜行者打浦桥日月光店买得最好的是哪道菜" -> '
         '{"intent": "RESTAURANT_OPS_STORE_MARGIN", "time_range": null, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": ["sales_volume"], "analysis_action": "lookup", '
+        '"requested_metrics": ["sales_volume"], "analysis_action": "lookup", "aggregation": null, '
         '"dimensions": ["store", "dish"], "comparison": null, "dish": null, '
         '"store": "鲜行者打浦桥日月光店", '
         '"stores": ["鲜行者打浦桥日月光店"], "store_scope": "single", '
@@ -4963,7 +5012,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_STORE_MARGIN", '
         '"time_range": {"type": "all_history"}, '
         '"wants_margin": false, "asks_profitability": false, '
-        '"requested_metrics": ["revenue"], "analysis_action": "lookup", '
+        '"requested_metrics": ["revenue"], "analysis_action": "lookup", "aggregation": null, '
         '"dimensions": ["store"], "comparison": null, "dish": null, '
         '"store": "有滋有味北外滩店", "stores": ["有滋有味北外滩店"], '
         '"store_scope": "single", "confidence": 0.97, '
@@ -4972,7 +5021,7 @@ def _build_t3_prompt(
         '示例2: "情况怎么样" (完全没有可判断的对象/指标) -> '
         '{"intent": null, "time_range": null, "wants_margin": false, '
         '"asks_profitability": false, "requested_metrics": [], '
-        '"analysis_action": "lookup", "dimensions": [], "comparison": null, '
+        '"analysis_action": "lookup", "aggregation": null, "dimensions": [], "comparison": null, '
         '"dish": null, "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.2, "clarification_needed": true, '
         '"missing_fields": ["metric"], '
@@ -5009,12 +5058,22 @@ def _build_t3_prompt(
         "“多少/怎么样/赚钱吗/有没有店亏损/哪家店最好”是 lookup，不是 diagnose；"
         "除非用户明确问原因，否则不得擅自升级为原因诊断。"
         "优化请求必须选 BUSINESS_OPTIMIZATION，不能退化成只报营收的 SALES_SUMMARY。\n"
-        "4. requested_metrics 只能使用 net_profit、table_turnover、recipe_cost、wastage、"
-        "sales_volume、gross_margin、revenue、orders、staffing、return_rate、"
-        "customer_review、production_time、service_speed、process_bottleneck；"
-        "dimensions 只能使用 store、dish、ingredient、channel、customer、time。"
+        # ⛔ 指标可选值由 `render_metric_vocabulary()` 渲染, 不在这里手写。
+        #    ⚠️ 数据缺口项(净利润/翻台率/人效/盘点差异/顾客评价…)**故意不进这张表** ——
+        #       它们没有登记, 由确定性的关键词编译单独识别并走「如实说没有」。
+        #       塞进 prompt 等于让规划器承诺一个系统给不出的东西。
+        "4. requested_metrics 只能使用: " + _render_metric_vocabulary() + "；"
+        # ⛔ 维度可选值由 `render_dimension_vocabulary()` 渲染, 不在这里手写。
+        "dimensions 只能使用: " + _render_dimension_vocabulary() + "。"
+        "每个维度只写一次, ⛔ 不要同时写同义的两个(例如 product 和 dish 只写 product)。"
         "requested_metrics 只列用户原话明确要求的指标；“生意怎么样/经营情况如何”这种"
         "概览问题不要自行填入 revenue、orders 或 sales_volume，resolver 会返回概览默认项。\n"
+        # ⛔ 这一行的可选值由 `metric_registry.render_aggregation_vocabulary()` 渲染,
+        #    **不许在这里手写第二份清单** —— 登记表加一行, 这里当场就能指到它。
+        #    2026-08-09 实测: 手写清单的后果是 3168 个格子里只有 147 个够得着(4%)。
+        "4b. aggregation 是结果要组织成的形态，只能使用："
+        + _render_aggregation_vocabulary() + "。"
+        "看不出用户要哪种形态就输出 null（不要硬猜，代码会按其它槽位推断）。\n"
         "5. 你负责决定是否需要追问。先结合最近20轮对话补齐已经说过的内容，禁止重复追问。"
         "只有缺少会改变结果的必要信息时 clarification_needed 才为 true；"
         "time_range 为空且所选分析依赖时间时应追问时间。多门店账号的营收、销量、毛利、"
@@ -5352,6 +5411,12 @@ def _semantic_spec_from_t3(
         parsed.get("analysis_action"),
         _SEMANTIC_ACTIONS,
     )
+    # ⛔ 取值域直接用登记表的键, 不另建一个 _SEMANTIC_AGGREGATIONS 常量 ——
+    #    那会变成第二份清单, 登记表加一行时两处必然漂移。
+    aggregation = _validated_semantic_scalar(
+        parsed.get("aggregation"),
+        frozenset(_AGGREGATIONS),
+    )
     store_scope = _validated_semantic_scalar(
         parsed.get("store_scope"),
         _SEMANTIC_STORE_SCOPES,
@@ -5542,6 +5607,7 @@ def _semantic_spec_from_t3(
         llm_requested_metrics=requested_metrics,
         llm_dimensions=dimensions,
         llm_analysis_action=analysis_action,
+        llm_aggregation=aggregation,
         llm_store_scope=store_scope,
         # 门店范围是**代码补的默认值**时打标 —— 答案里必须声明范围, 见
         # `restaurant_intent_service._store_scope_disclosure`。
@@ -6870,6 +6936,19 @@ async def log_intent_capture(
     served: bool,
     total_wall_ms: int = 0,
     source: Optional[str] = None,
+    #: 🔴 契约判失败时**缺的是哪些要素**（`ContractResult.missing`）。
+    #:
+    #: 2026-08-10 实测: `optimize` 有 141 条契约未过, 而其中 **140 条的
+    #: `answered_missing` 是空的** —— 那个字段写的是**判定模型**的结论,
+    #: 契约自己算出来的 `missing`(拒绝语里已经在用!)**从来没被记下来**。
+    #: 于是要弄清「这 141 条到底缺什么」只能去翻问句原文反推。
+    #:
+    #: ⛔ 判据: **闸否决了什么, 就要记下来它为什么否** —— 与今天早上诊断的
+    #:    「6 处否决全部静默」是同一个病, 修法也一样便宜。
+    contract_missing: Optional[Sequence[str]] = None,
+    #: 被契约否决掉的那个答案(截断)。⛔ 只记「为什么否」而不记「否了什么」,
+    #: 下次还是只能去线上复现 —— 2026-08-10 就是这么卡住的。
+    rejected_answer: Optional[str] = None,
 ) -> Optional[int]:
     """Fire-and-forget capture of a parse+serve outcome, reusing the existing
     llm_fallback_logger table (no new schema). tier/confidence/contract_pass
@@ -6956,6 +7035,26 @@ async def log_intent_capture(
         # None = 判不了(模型不可用/输出不可解析)。⛔ 不能写成 false ——
         # 「判不了」不该进待办清单, 否则供应商池一干, 清单就被噪音淹掉。
         agg_meta["answered_judgment"] = judged
+        # ⚠️ 与 `answered_judgment` 是**两回事**, 别混:
+        #    answered_judgment = 判定**模型**看着问句和答案说「答上了没」
+        #    contract_missing  = **契约**(确定性规则)算出的「缺哪些要素」
+        #    前者是概率的、可能没跑(额度), 后者是确定的、每个答案都有。
+        #    ⛔ 之前只记了前者, 于是契约否决的理由全丢了。
+        if contract_missing:
+            agg_meta["contract_missing"] = sorted(set(contract_missing))
+        # 🔴 记「否掉了什么」, 不只是「为什么否」。
+        #
+        #    2026-08-10 实测: optimize 有 141 条契约未过, 而日志里的 `answer`
+        #    存的是**拒绝语本身**(140/141) —— 引擎原本产出了什么**已经丢了**。
+        #    于是「为什么 diagnose 90% 过而 optimize 只有 54%」这个问题,
+        #    从日志里根本回答不了, 只能去线上复现。
+        #
+        #    ⚠️ 更隐蔽的是: 拒绝语里含「原因分析或优化动作」这几个字, 于是
+        #    按关键词统计会看到「138/141 含契约认的词」—— 一个**完全是假象**
+        #    的读数。⛔ 判据: 统计一段文本里有没有某个词之前, 先确认这段文本
+        #    是不是你以为的那一段。
+        if rejected_answer:
+            agg_meta["rejected_answer"] = str(rejected_answer)[:600]
         if judged is False and judge_missing:
             agg_meta["answered_missing"] = judge_missing
 
