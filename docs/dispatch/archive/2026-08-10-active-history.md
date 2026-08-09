@@ -15,3 +15,13 @@
 - Expo Web：供应商 9 条可见且搜索后唯一命中；原料 305 条、单位 3 条均可见可选；非提交路径业务写入 0。
 - F006 受控写入：使用已启用的供应商—物料关系创建 `PO-20260810-0001`（`be925c7f-e651-432c-aa58-f421e02246cf`），`orderDate` 与明细回读正确，随后取消，最终状态 `CANCELLED`；非 F006 写入 0。另以不兼容关系验证后端正确返回 409 及修复指引，未产生订单。
 - 遗留基线：Expo Web 仍报告既有 `Unexpected text node` 警告，本任务开工前已出现，未影响选择器或建单链路。
+
+## AUDIT-PR-DIFFCHECK-20260810-001
+
+- 状态：`review`
+- Owner：`/root`
+- Base SHA：`f72683089a9e665162b655c1c036b0565a6470fc`
+- 范围：仅新增根 `.gitattributes`，对 PR #2437 涉及的 4 个既有 CRLF Python 测试文件声明 `cr-at-eol` whitespace 语义；未改测试或生产代码内容。
+- 结论：保留这些 Windows-console 测试文件的既有 CRLF，仍检查 CR 前的真实尾随空格；删除条件是四文件统一迁移为 LF 后移除对应属性。
+- 验证：`git check-attr whitespace` 四文件均为 `trailing-space,cr-at-eol`；`git diff --check 68bc8a0d8e61403f4c1512071cc41605170286e2..HEAD` 与当前 diff 均通过。
+- 边界：只进入 daily integration；未部署、未修改生产数据。scope 随本归档释放。
