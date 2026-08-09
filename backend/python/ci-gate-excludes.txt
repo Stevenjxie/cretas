@@ -11,8 +11,25 @@
 #   其中 6 个已在本 PR 修好 (JWT secret 顺序依赖, 同一指纹扫出来的), 余下 35 个列在下面。
 #
 # 清账进度: 35 → 34 (golden 快照过期, 2026-08-01) → 29 (event loop 5 条, 2026-08-01)
-#           → 28 (gold 契约测试, 2026-08-10)。
-# 当前列表实际条数: 22 (需 PG) + 5 (断言失败) + 1 (缺 pyarrow) = 28。
+#           → 28 (gold 契约测试) → 25 (三条断言失败, 均为测试过期, 2026-08-10)。
+# 当前列表实际条数: 22 (需 PG) + 2 (需真库/真服务) + 1 (缺 pyarrow) = 25。
+#
+# 2026-08-10 第二批清掉 3 条, 全部是**测试过期**, 生产代码一行没改:
+#   · test_llm_materializer: 断言 teacher_model=="qwen3-max"。生产改成记
+#     "router:INSIGHTS" 是刻意的 —— call_llm 只返回文本, 拿不到实际 provider,
+#     与其硬编一个可能不符的模型名, 不如如实记槽名(对齐「禁止返回假数据」)。
+#   · test_query_router: 断言路由到 "dish_sales_top_n", 而那个模板**从未被物化**
+#     (latent registry bug), 2026-04-26 已改路由到真实存在的 top_n_by_dim。
+#     判据: **测试红了先问「它断言的那个东西存在吗」**。
+#   · test_price_strip_kpi_pilot: 两类问题。
+#     (a) 手抄的 Java 白名单少了 restaurant_owner / restaurant_purchaser ——
+#         查 Java 权威后确认 Python 与 Java 一致, **错的是那份手抄**。已改成
+#         从 PermissionServiceImpl.java 解析, 并做过阴性对照(Java 加一个角色
+#         而 Python 不跟 → 立刻变红)。
+#     (b) 用 warehouse_manager / procurement_manager 验「非调价角色看到 null
+#         金额」, 但 Java 矩阵里这两个角色**都没有 analytics**, 连端点都进不来。
+#         换成 viewer(有 analytics 无 price-view), 并新立一条用例钉住那两个角色
+#         的真实行为是 403。
 #
 # 2026-08-10 清掉 tests/agent_runtime/test_real_gold_contracts.py, 三条失败的真因:
 #   · daily_trend / resolve_wastage_top / resolve_stock_shortage 新增了**尾部可选**
@@ -71,9 +88,6 @@ tests/test_top_products_provenance.py
 # ── ③ 断言失败, 需逐个 triage (6 个) ─────────────────────────────────────────
 # 这一组最值得先看 —— 断言失败意味着「测试说的和代码做的不一致」, 可能是过期测试,
 # 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
-smartbi/services/materialized_analytics/tests/test_llm_materializer.py   # 'router:INSIGHTS' != 'qwen3-max'
-smartbi/services/materialized_analytics/tests/test_query_router.py       # 'top_n_by_dim' != 'dish_sales_top_n'
-tests/test_price_strip_kpi_pilot.py                                      # RbacForbiddenException role=warehouse
 tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
 tests/test_store_kpi_dashboard.py                                        # 'skipped' != 'ok'
 

@@ -259,7 +259,14 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     assert args[2] == "RES_TEST_001"
     assert args[3] == "insights"
     assert "top_n_by_dim" in args[4]
-    assert args[7] == "qwen3-max"
+    # teacher_model 记的是**槽名**而不是具体模型, 这是刻意的:
+    # llm_client.call_llm() 只返回文本, 路由在内部解析实际 provider, 调用方拿不到。
+    # 与其硬编一个可能与实际不符的模型名, 不如如实记 "router:<SLOT>" ——
+    # 对齐 CLAUDE.md 原则 1「禁止降级处理: 不返回假数据」。
+    # ⚠️ 本用例原断言 "qwen3-max", 即那个**可能是假的**的硬编名字, 挂在
+    #    ci-gate-excludes.txt 上。真要拿到实际模型, 得先改 call_llm 的返回契约,
+    #    那是另一件事; 在那之前, 这里断言诚实标注而不是断言一个好看的谎。
+    assert args[7] == "router:INSIGHTS"
     assert "核心商圈" in args[8]  # teacher_output carried through
     assert len(args[9]) == 64  # sha256 hex
 

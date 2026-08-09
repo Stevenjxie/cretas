@@ -5,9 +5,20 @@ from smartbi.services.materialized_analytics.query_router import (
 
 
 def test_dish_sales_query():
-    assert match_template("哪些菜品一个月的销量") == "dish_sales_top_n"
-    assert match_template("商品销量最高的是什么") == "dish_sales_top_n"
-    assert match_template("菜品销售 Top") == "dish_sales_top_n"
+    """菜品销量排行 → `top_n_by_dim`。
+
+    ⚠️ 本用例原本断言 `dish_sales_top_n`, 而那个模板**从来没有被物化过**
+    (query_router.py 里记着: "template never materialized — latent registry
+    bug")。路由命中它等于路由到一个不存在的东西, qhj-01「卖得最好的菜 Top 10」
+    就是这么失败的。2026-04-26 修成路由到真实存在的 `top_n_by_dim`, 但这条
+    用例没跟上, 于是它一直**钉着那个 bug**, 并被挂进 ci-gate-excludes.txt。
+
+    判据: **测试红了先问「它断言的那个东西存在吗」** —— 断言一个不存在的模板名,
+    比断言错值更难看出来, 因为字符串本身看着很合理。
+    """
+    assert match_template("哪些菜品一个月的销量") == "top_n_by_dim"
+    assert match_template("商品销量最高的是什么") == "top_n_by_dim"
+    assert match_template("菜品销售 Top") == "top_n_by_dim"
 
 
 def test_dish_slow_query():
