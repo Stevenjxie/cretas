@@ -17,10 +17,23 @@ name: Python Gate
 #   smartbi/tests                             75 文件  —— 刻意排除, 见下
 #
 # ⛔ 排除 `smartbi/tests/`: 那 75 个是 legacy 独立脚本 (test_e2e_quick /
-#    test_full_e2e_with_save 之类), 要活服务才能跑; 其中
-#    `test_e2e_performance_monitor.py` 会关掉 stderr 把**整个 pytest 进程搞崩**
-#    (`ValueError: I/O operation on closed file` / `lost sys.stderr`),
-#    一个文件就能让整轮测量归零。要纳入得先单独 triage, 不该挡住这次上闸。
+#    test_full_e2e_with_save 之类), 要活服务才能跑。
+#
+#    2026-08-10 实测把这段说明修准了 —— 原文说「其中 test_e2e_performance_monitor.py
+#    会关掉 stderr 搞崩整个进程」, **低估了范围**。逐文件量出来的真实构成:
+#       1 个  真 pytest 用例(无顶层副作用)
+#      63 个  有用例, 但**也有顶层副作用**
+#      11 个  纯脚本(一个 test 函数都没有) —— 被 pytest 收集 = 被执行
+#    进程归零有**两个**独立成因, 不是一个:
+#      (a) 3 个文件在导入期改绑 sys.stdout/stderr(不是 1 个) → 掐断 pytest 捕获,
+#          之后 seek(0) 抛 `ValueError: I/O operation on closed file`。
+#          ✅ 已修: 加 `and "pytest" not in sys.modules` 守卫。
+#      (b) 纯脚本在导入期跑到 `exit(1)`(如 test_vl_simple.py 图片不存在时)
+#          → `INTERNALERROR> SystemExit: 1`, 收集阶段就死。**未修**。
+#    要纳入门禁, 得给这 74 个补 `if __name__ == "__main__"` 守卫再逐个 triage
+#    (多数还需活服务 / API key) —— 是独立一件事, 不该挡住这道闸。
+#    判据: **模块导入期不要改全局 IO / 不要 exit** —— 一个导入期副作用挡住了
+#          75 个文件几个月。
 #
 # ⚠️ `smartbi/gold/tests` 本机 35 failed 全是同一句
 #    `RuntimeError: There is no current event loop in thread 'MainThread'` ——
