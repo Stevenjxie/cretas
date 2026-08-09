@@ -10,6 +10,7 @@ import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
 import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.UnorderedInboundReason;
 import com.cretas.aims.entity.inventory.CustomerMaterialArrivalNotice;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.MaterialBatchMapper;
@@ -35,7 +36,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Operations notice creation and warehouse-only inventory execution boundary. */
+/** Operations request creation and warehouse-only inventory execution boundary. */
 @Service
 @RequiredArgsConstructor
 public class CustomerMaterialArrivalNoticeService {
@@ -59,20 +60,33 @@ public class CustomerMaterialArrivalNoticeService {
                                                  CreateCustomerMaterialArrivalNoticeRequest request,
                                                  Long userId) {
         if (request == null) {
-            throw invalid("客户来料预告不能为空", "notice");
+            throw invalid("无订单入库申请不能为空", "notice");
         }
-        Customer customer = customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
+        UnorderedInboundReason reason = request.getReason() == null
+                ? UnorderedInboundReason.CUSTOMER_MATERIAL
+                : request.getReason();
+        String requestedCustomerId = trimToNull(request.getCustomerId());
+        if (reason == UnorderedInboundReason.CUSTOMER_MATERIAL && requestedCustomerId == null) {
+            throw new BusinessException(400, "客户来料必须选择归属客户")
+                    .withCode("UNORDERED_INBOUND_CUSTOMER_REQUIRED")
+                    .withHint("请选择库存最终归属的客户；创建申请不会直接增加库存")
+                    .withHintTarget("customerId");
+        }
+        Customer customer = requestedCustomerId == null
+                ? null
+                : customerRepository.findByIdAndFactoryId(requestedCustomerId, factoryId)
                 .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
-                .orElseThrow(() -> new BusinessException(400, "归属客户不存在、已停用或不属于当前工厂")
-                        .withCode("CUSTOMER_MATERIAL_ARRIVAL_CUSTOMER_INVALID")
+                .orElseThrow(() -> new BusinessException(400, "所选客户不存在、已停用或不属于当前工厂")
+                        .withCode("UNORDERED_INBOUND_CUSTOMER_INVALID")
                         .withHintTarget("customerId"));
 
         CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
         notice.setId(UUID.randomUUID().toString());
         notice.setFactoryId(factoryId);
-        notice.setNoticeNumber("CMA-" + LocalDate.now().toString().replace("-", "") + "-"
+        notice.setReason(reason);
+        notice.setNoticeNumber(noticePrefix(reason) + "-" + LocalDate.now().toString().replace("-", "") + "-"
                 + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase());
-        notice.setCustomerId(customer.getId());
+        notice.setCustomerId(customer == null ? null : customer.getId());
         notice.setExpectedArrivalAt(request.getExpectedArrivalAt());
         notice.setContactName(trimToNull(request.getContactName()));
         notice.setContactPhone(trimToNull(request.getContactPhone()));
@@ -98,12 +112,12 @@ public class CustomerMaterialArrivalNoticeService {
             return notice;
         }
         if (notice.getReceiptCount() != null && notice.getReceiptCount() > 0) {
-            throw new BusinessException(409, "已有实际收货记录的客户来料预告不能取消")
+            throw new BusinessException(409, "已有实际收货记录的无订单入库申请不能取消")
                     .withCode("CUSTOMER_MATERIAL_ARRIVAL_ALREADY_RECEIVED")
                     .withHint("请保留来源单据以维持库存追溯；如不再到货，可由仓储完成预告");
         }
         if (notice.getStatus() == CustomerMaterialArrivalStatus.RECEIVED) {
-            throw new BusinessException(409, "已完成的客户来料预告不能取消")
+            throw new BusinessException(409, "已完成的无订单入库申请不能取消")
                     .withCode("CUSTOMER_MATERIAL_ARRIVAL_ALREADY_CLOSED");
         }
         notice.setStatus(CustomerMaterialArrivalStatus.CANCELLED);
@@ -115,7 +129,7 @@ public class CustomerMaterialArrivalNoticeService {
                                     String noticeId,
                                     CustomerMaterialArrivalReceiptRequest request,
                                     Long userId) {
-        if (request == null) throw invalid("客户来料收货信息不能为空", "receipt");
+        if (request == null) throw invalid("无订单入库收货信息不能为空", "receipt");
         String idempotencyKey = request.getIdempotencyKey();
         MaterialBatch replay = materialBatchRepository
                 .findByFactoryIdAndSourceDocTypeAndSourceEventKey(
@@ -128,7 +142,7 @@ public class CustomerMaterialArrivalNoticeService {
 
         CustomerMaterialArrivalNotice notice = requireForUpdate(factoryId, noticeId);
         if (!OPEN_STATUSES.contains(notice.getStatus())) {
-            throw new BusinessException(409, "该客户来料预告已完成或已取消")
+            throw new BusinessException(409, "该无订单入库申请已完成或已取消")
                     .withCode("CUSTOMER_MATERIAL_ARRIVAL_CLOSED")
                     .withHint("请刷新仓储待入库任务；系统没有增加库存");
         }
@@ -179,9 +193,17 @@ public class CustomerMaterialArrivalNoticeService {
                 .toString().replace("-", "").substring(0, 12).toUpperCase();
 
         MaterialBatch batch = new MaterialBatch();
+        boolean customerOwned = notice.getReason() == null
+                || notice.getReason() == UnorderedInboundReason.CUSTOMER_MATERIAL;
+        if (customerOwned && trimToNull(notice.getCustomerId()) == null) {
+            throw new BusinessException(409, "客户来料申请缺少归属客户，不能入库")
+                    .withCode("UNORDERED_INBOUND_OWNER_MISSING")
+                    .withHint("请取消该申请并重新选择客户；本次未增加库存");
+        }
         batch.setId(UUID.randomUUID().toString());
         batch.setFactoryId(factoryId);
-        batch.setBatchNumber("CMA-" + receiptDate.toString().replace("-", "") + "-" + deterministicSuffix);
+        batch.setBatchNumber((customerOwned ? "CMA" : "UIN") + "-"
+                + receiptDate.toString().replace("-", "") + "-" + deterministicSuffix);
         batch.setMaterialTypeId(material.getId());
         batch.setReceiptDate(receiptDate);
         batch.setProductionDate(request.getProductionDate());
@@ -192,12 +214,14 @@ public class CustomerMaterialArrivalNoticeService {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        batch.setInboundType(InboundType.CUSTOMER_SUPPLIED);
+        batch.setInboundType(customerOwned ? InboundType.CUSTOMER_SUPPLIED : InboundType.OTHER);
         batch.setSourceDocType(SOURCE_TYPE);
         batch.setSourceDocId(noticeId);
         batch.setSourceEventKey(idempotencyKey);
-        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
-        batch.setOwnerCustomerId(notice.getCustomerId());
+        batch.setOwnership(customerOwned
+                ? InventoryOwnership.CUSTOMER_OWNED
+                : InventoryOwnership.COMPANY_OWNED);
+        batch.setOwnerCustomerId(customerOwned ? notice.getCustomerId() : null);
         batch.setSourceSalesOrderId(null);
         batch.setSourceSalesOrderItemId(null);
         batch.setSupplierBatchNumber(trimToNull(request.getExternalBatchNumber()));
@@ -212,7 +236,7 @@ public class CustomerMaterialArrivalNoticeService {
         try {
             saved = materialBatchRepository.saveAndFlush(batch);
         } catch (DataIntegrityViolationException ex) {
-            throw new BusinessException(409, "该幂等键已被另一笔客户来料收货使用")
+            throw new BusinessException(409, "该幂等键已被另一笔无订单入库收货使用")
                     .withCode("CUSTOMER_MATERIAL_ARRIVAL_IDEMPOTENCY_CONFLICT")
                     .withHint("请刷新任务并使用新的幂等键；本次未增加库存");
         }
@@ -228,13 +252,13 @@ public class CustomerMaterialArrivalNoticeService {
 
     private CustomerMaterialArrivalNotice requireForUpdate(String factoryId, String noticeId) {
         return noticeRepository.findByIdAndFactoryIdForUpdate(noticeId, factoryId)
-                .orElseThrow(() -> new BusinessException(404, "客户来料预告不存在或不属于当前工厂")
+                .orElseThrow(() -> new BusinessException(404, "无订单入库申请不存在或不属于当前工厂")
                         .withCode("CUSTOMER_MATERIAL_ARRIVAL_NOT_FOUND"));
     }
 
     private void assertReplayNotice(MaterialBatch batch, String noticeId) {
         if (!Objects.equals(noticeId, batch.getSourceDocId())) {
-            throw new BusinessException(409, "幂等键已用于其他客户来料预告，不能跨预告重放")
+            throw new BusinessException(409, "幂等键已用于其他无订单入库申请，不能跨申请重放")
                     .withCode("CUSTOMER_MATERIAL_ARRIVAL_IDEMPOTENCY_SCOPE_CONFLICT");
         }
     }
@@ -254,6 +278,14 @@ public class CustomerMaterialArrivalNoticeService {
 
     private BusinessException invalid(String message, String target) {
         return new BusinessException(400, message).withHintTarget(target);
+    }
+
+    private String noticePrefix(UnorderedInboundReason reason) {
+        return switch (reason) {
+            case CUSTOMER_MATERIAL -> "CMA";
+            case GIFT -> "GFT";
+            case OTHER -> "OIN";
+        };
     }
 
     private String trimToNull(String value) {

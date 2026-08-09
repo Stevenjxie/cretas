@@ -39,17 +39,17 @@ describe('客供料收货 —— 幂等键长度', () => {
   });
 
   /**
-   * 运营来料预告是第二条客供入库路径。生产真机复现过旧写法
+   * 无订单入库申请是第二条客供入库路径。生产真机复现过旧写法
    * `warehouse-arrival-${taskId}-${Date.now()}` 长 68，首笔收货稳定被后端 400 拒绝。
    * 两条路径必须各自锁住，不能只修销售订单客供料那一条。
    */
-  it('运营来料预告的幂等键也必须稳在 64 字符内且区分每次收货', () => {
+  it('无订单入库申请的幂等键也必须稳在 64 字符内且区分每次收货', () => {
     const block = panel.slice(
       panel.indexOf('async function openArrivalReceive'),
       panel.indexOf('function onArrivalMaterialChange'),
     );
     const m = block.match(/idempotencyKey:\s*(`[^`]+`)/);
-    expect(m, '找不到运营来料预告幂等键的生成表达式').not.toBeNull();
+    expect(m, '找不到无订单入库申请幂等键的生成表达式').not.toBeNull();
     const tpl = m![1];
     const task = { taskId: '5d76e7e5-5271-4f41-96e1-88999ecf122b' };
     // eslint-disable-next-line no-new-func

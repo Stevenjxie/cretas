@@ -16,12 +16,14 @@ import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
+import UnorderedInboundNoticePanel from './UnorderedInboundNoticePanel.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+const canManageUnorderedInbound = computed(() => permissionStore.canWrite('operations'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
 
@@ -497,6 +499,12 @@ async function handleGenerateLabel(row: TableRow) {
         show-icon
         class="source-only-hint"
         title="批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入；本页用于查询、追溯与标签管理。"
+      />
+
+      <UnorderedInboundNoticePanel
+        v-if="factoryId && canManageUnorderedInbound"
+        :factory-id="factoryId"
+        @refreshed="handleReceivingRefresh"
       />
 
       <PendingPurchaseReceivingPanel

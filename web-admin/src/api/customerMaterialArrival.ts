@@ -6,11 +6,14 @@ export type CustomerMaterialArrivalStatus =
   | 'RECEIVED'
   | 'CANCELLED';
 
+export type UnorderedInboundReason = 'CUSTOMER_MATERIAL' | 'GIFT' | 'OTHER';
+
 export interface CustomerMaterialArrivalNotice {
   id: string;
   factoryId: string;
   noticeNumber: string;
-  customerId: string;
+  reason: UnorderedInboundReason;
+  customerId?: string;
   customerName?: string;
   expectedArrivalAt?: string;
   contactName?: string;
@@ -23,7 +26,8 @@ export interface CustomerMaterialArrivalNotice {
 }
 
 export interface CreateCustomerMaterialArrivalNotice {
-  customerId: string;
+  reason: UnorderedInboundReason;
+  customerId?: string;
   expectedArrivalAt?: string;
   contactName?: string;
   contactPhone?: string;

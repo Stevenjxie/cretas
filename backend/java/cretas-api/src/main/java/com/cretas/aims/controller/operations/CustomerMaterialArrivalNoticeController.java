@@ -24,12 +24,12 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** Operations creates coordination documents; warehouse remains the only inventory executor. */
+/** Operations creates non-order inbound requests; warehouse remains the only inventory executor. */
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/operations/customer-material-arrivals")
 @RequiredArgsConstructor
 @RequireModule("operations")
-@Tag(name = "运营客户来料预告", description = "无销售订单时登记客户将送料的协调来源单")
+@Tag(name = "无订单入库申请", description = "运营登记客户来料、赠予或其他无订单到货来源")
 public class CustomerMaterialArrivalNoticeController {
 
     private final CustomerMaterialArrivalNoticeService noticeService;
@@ -37,7 +37,7 @@ public class CustomerMaterialArrivalNoticeController {
 
     @GetMapping
     @RequirePermission({"operations:read", "operations:read_write"})
-    @Operation(summary = "查询客户来料预告")
+    @Operation(summary = "查询无订单入库申请")
     public ApiResponse<List<CustomerMaterialArrivalNotice>> list(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(defaultValue = "false") boolean openOnly) {
@@ -46,22 +46,22 @@ public class CustomerMaterialArrivalNoticeController {
 
     @PostMapping
     @RequirePermission({"operations:write", "operations:read_write"})
-    @Operation(summary = "创建客户来料预告（不创建库存）")
+    @Operation(summary = "创建无订单入库申请（不创建库存）")
     public ApiResponse<CustomerMaterialArrivalNotice> create(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody CreateCustomerMaterialArrivalNoticeRequest request) {
-        return ApiResponse.success("客户来料预告已提交给仓储",
+        return ApiResponse.success("无订单入库申请已提交给仓储",
                 noticeService.create(factoryId, request, extractUserId(authorization)));
     }
 
     @PostMapping("/{noticeId}/cancel")
     @RequirePermission({"operations:write", "operations:read_write"})
-    @Operation(summary = "取消尚未发生收货的客户来料预告")
+    @Operation(summary = "取消尚未发生收货的无订单入库申请")
     public ApiResponse<CustomerMaterialArrivalNotice> cancel(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String noticeId) {
-        return ApiResponse.success("客户来料预告已取消",
+        return ApiResponse.success("无订单入库申请已取消",
                 noticeService.cancel(factoryId, noticeId));
     }
 
