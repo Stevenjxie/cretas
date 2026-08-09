@@ -283,7 +283,11 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     # text floor. 2026-07-30: 原本钉的是 tencent/qwen3.5-flash, 而控制台显示它
     # **已停止且余额 0** —— 也就是说"注册表过期时退守的最小安全集"里的非阿里云地板
     # 指向一个死模型, fail-safe 会 fail 成没有地板。换成实测 5/5 通过的 hy-mt2-pro。
-    ("tencent", "hy-mt2-pro"), ("zhipu", "glm-4.5-air"),
+    # 2026-08-09: hy-mt2-pro 从未进过 _SAFE_MODELS —— 它在这里等于不存在
+    # (_refuse_reason 的 stale 分支之后紧接着就查 _SAFE_MODELS 成员资格)。
+    # 换成当天实测可用的 tencent/minimax-m2.7 (经 _apply_slot_params 返回非空
+    # 内容, 6.7s)。闸: test_minimal_safe_set_is_subset_of_safe_models。
+    ("tencent", "minimax-m2.7"), ("zhipu", "glm-4.5-air"),
     ("zhipu", "glm-4.6v"),                    # VL floor (never expires)
 })
 
