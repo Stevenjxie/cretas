@@ -96,12 +96,13 @@ const businessRoutes: RouteRecordRaw[] = [
       {
         path: 'operations/customer-material-arrivals',
         name: 'CustomerMaterialArrivals',
-        component: () => import('@/views/operations/customer-material-arrivals/index.vue'),
+        redirect: () => ({ path: '/warehouse/materials', query: { view: 'receiving', action: 'unordered-inbound' } }),
         meta: {
           requiresAuth: true,
-          title: '客户来料预告',
+          title: '无订单入库申请',
           icon: 'Connection',
           module: 'operations',
+          hidden: true,
         },
       },
       {

@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.inventory;
 
-import jakarta.validation.constraints.NotBlank;
+import com.cretas.aims.entity.enums.UnorderedInboundReason;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -9,7 +10,9 @@ import java.time.LocalDateTime;
 @Data
 public class CreateCustomerMaterialArrivalNoticeRequest {
 
-    @NotBlank(message = "归属客户不能为空")
+    @NotNull(message = "请选择入库原因")
+    private UnorderedInboundReason reason = UnorderedInboundReason.CUSTOMER_MATERIAL;
+
     @Size(max = 191, message = "客户ID不能超过191个字符")
     private String customerId;
 

@@ -100,7 +100,9 @@ public class WarehouseReceivingController {
                             .sourceType(CustomerMaterialArrivalNoticeService.SOURCE_TYPE)
                             .sourceId(notice.getId())
                             .sourceNumber(notice.getNoticeNumber())
-                            .counterpartyType("CUSTOMER")
+                            .inboundReason(notice.getReason() == null
+                                    ? "CUSTOMER_MATERIAL" : notice.getReason().name())
+                            .counterpartyType(notice.getCustomerId() == null ? "NONE" : "CUSTOMER")
                             .counterpartyId(notice.getCustomerId())
                             .counterpartyName(notice.getCustomerName())
                             .customerId(notice.getCustomerId())
@@ -109,7 +111,7 @@ public class WarehouseReceivingController {
                             .status(notice.getStatus().name())
                             .statusLabel(notice.getStatus() == com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus.PARTIALLY_RECEIVED
                                     ? "已部分收货" : "待收货")
-                            .responsibleName("待仓储核实实际物料")
+                            .responsibleName("待仓储核实实际物料、数量与仓库")
                             .items(List.of())
                             .build())
                     .toList());
@@ -133,14 +135,14 @@ public class WarehouseReceivingController {
 
     @RequireModule("warehouse")
     @PostMapping("/arrival-notices/{noticeId}/receipts")
-    @Operation(summary = "按运营客户来料预告确认实际收货并生成客户所有库存")
+    @Operation(summary = "按无订单入库申请确认实际收货并生成对应所有权库存")
     @RequirePermission({"warehouse:read_write", "inventory:write"})
     public ApiResponse<MaterialBatchDTO> receiveCustomerMaterialArrival(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String noticeId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody CustomerMaterialArrivalReceiptRequest request) {
-        return ApiResponse.success("客户来料入库成功",
+        return ApiResponse.success("无订单入库收货成功",
                 arrivalNoticeService.receive(
                         factoryId, noticeId, request, extractUserId(authorization)));
     }

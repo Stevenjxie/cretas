@@ -63,13 +63,6 @@ const rawMenuConfig: MenuItem[] = [
   // 判可达性要从菜单/路由两侧一起看 —— 只看路由会以为它通了。
   { path: '/dashboard/ai-value', title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' },
   {
-    path: '/operations', title: '运营协同', icon: 'Connection', module: 'operations',
-    hideForFactoryTypes: ['RESTAURANT'],
-    children: [
-      { path: '/operations/customer-material-arrivals', title: '客户来料预告', icon: '', module: 'operations' },
-    ],
-  },
-  {
     path: '/workdesk',
     title: '工作台',
     icon: 'Odometer',
@@ -148,7 +141,7 @@ const rawMenuConfig: MenuItem[] = [
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/warehouse/materials', title: '原料入库与批次', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
+      { path: '/warehouse/materials', title: '原料 / 物料入库与批次', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
