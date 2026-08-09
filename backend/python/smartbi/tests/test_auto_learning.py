@@ -5,8 +5,15 @@ import sys
 import os
 import io
 
-# Fix encoding for Windows console
-if sys.platform == 'win32':
+# Fix encoding for Windows console.
+# ⚠️ 只在**真的以脚本运行**时才改 —— pytest 下 sys.stdout 是它的捕获对象, 在导入期
+#    把 sys.stdout.buffer 重新包一层并改绑, 会掐断 pytest 的捕获机制: 之后它对自己的
+#    tmpfile `seek(0)` 就抛 `ValueError: I/O operation on closed file`, **整个 pytest
+#    进程当场归零**(不是这个用例失败, 是整轮测量没了)。
+#    python-gate.yml 因此把整个 smartbi/tests/(75 个文件)排除在门禁之外 —— 一个导入
+#    期副作用挡住了 75 个文件几个月。
+#    判据: **模块导入期不要改全局 IO/环境**; 要改就放进 `if __name__ == "__main__"`。
+if sys.platform == 'win32' and "pytest" not in sys.modules:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
