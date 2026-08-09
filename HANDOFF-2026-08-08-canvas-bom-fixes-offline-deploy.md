@@ -168,3 +168,31 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 ### 闸
 
 `ProductionPlanRepinAuthorityTest` 8 项 + `productionMoreActions.spec` 6 项新增；三信号各去掉一个 → `Failures: 1`；菜单判据退回只信 `hasActivity` → 新闸红在「菜单判据必须自己也查 rowStatus」；去掉实例判据 → 只有 `rejectsWhenWorkflowInstanceAlreadyCompiled` 红。
+
+### 2026-08-09 续: 「未做完」那条已经做完
+
+部署 `v20260809_090213` → `_091314` → `_092203`(蓝绿现落 **10010**)。本地 main `003e3432d9`。
+
+重钉现在**四样一起搬**, 全部 prod 实测:
+
+| | 前 | 后 |
+|---|---|---|
+| 计划 | 154/2/264 | **158/4/272** |
+| 批次 10721 | 154/2/264 | **158/4/272** |
+| 批次 BOM 版本 | v2 | **v5** |
+| 运行时实例 | 71 (wf=154/2), 1 任务 / 3 端口 | **74 (wf=158/4)**, 1 任务 / **4 端口** |
+| 报工单产出 | 成品C + 成品D | 成品C + 成品D + **验收-副产-肥油 kg** |
+
+实现要点:
+
+- 批次那几列实体上是 `insertable=false/updatable=false`(归 DB 触发器), 而触发器**只挂 BEFORE INSERT** → 只能走原生 UPDATE 逐列照抄触发器的 WORKFLOW 分支。
+- 丢弃顺序 端口 → 任务 → 实例(三条外键全 NO ACTION 不级联)。
+- 重新物化复用**转批次同一个** `spawnTasks`; 前面先 `flush + clear`, 否则持久化上下文里那份批次还是旧权威, 编译器读旧值等于白搬。
+
+### 这一轮踩的三个坑(都是真机才暴露)
+
+1. 🔴 **只搬计划指针 = 骗人**: 界面回「已更新到当前生效配方」, 而批次权威和冻结的 `nodes_json` 纹丝不动 —— 操作工报的还是旧工艺。
+2. 🔴 **孤儿守卫自己 prepare 不了**: 三个引用列类型不一致 —— `production_reports` / `semi_finished_inventory` 是 bigint, 而 `process_checkin_records.process_task_id` 是 **varchar**(实测与 `work_process_tasks.id` 一条都对不上, 是另一个域)。PG 报 `operator does not exist: character varying = bigint`, **整条语句 prepare 不了**。判据=**同一语句里比较多列时逐处显式钉类型**。⚠️ 单元闸打的是 mock 的 EntityManager, **抓不到 SQL 类型错误** —— 只能拿真库跑。
+3. 🔴 **只删不建 = 把批次弄坏**: 读路径不会自动物化, 直接 409 `WORKFLOW_RUNTIME_NOT_MATERIALIZED`。
+
+闸 10 项; 变异: 去掉孤儿守卫 → `refusesToDropWhenTasksAreSoftReferenced` 红; 去掉端口删除 → `dropsPortsThenTasksThenInstance` 红。
