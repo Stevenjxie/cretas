@@ -56,13 +56,12 @@ class VoucherBackfillScopeTest {
     }
 
     @Test
-    @DisplayName("FAILED 可补 — 否则一次瞬时失败就是永久漏账")
-    void failedIsRetryable() throws IOException {
-        String branch = transferBranch();
-        assertTrue(branch.contains("VoucherFlag.FAILED"),
-                "FAILED 必须纳入可补范围: 没有任何其它路径会重试它");
-        assertTrue(branch.contains("VoucherFlag.UNCREATED"),
-                "UNCREATED 仍要补");
+    @DisplayName("调拨这一支走统一的 vflag 判定 — 不许再各写各的")
+    void transferUsesSharedRetryableFlagCheck() throws IOException {
+        // 行为断言在 retryableFlagsCoverDeadEnds (直调生产方法); 这里只守"这一支没有绕过它
+        // 自己硬写一份 vflag 条件" —— 各支各写一份正是当初 FAILED/PENDING 漏掉的原因。
+        assertTrue(transferBranch().contains("isRetryableFlag("),
+                "调拨分支必须复用 isRetryableFlag, 不要内联自己那份 vflag 条件");
     }
 
     @Test
@@ -129,6 +128,22 @@ class VoucherBackfillScopeTest {
     void wastageOnlyApproved() throws IOException {
         assertTrue(branchOf("WASTAGE_RECORD", "PAYROLL_RECORD").contains("Status.APPROVED"),
                 "报损必须只补 APPROVED: 草稿/被驳回的损耗不是损失");
+    }
+
+    @Test
+    @DisplayName("PENDING / FAILED 都可补 — 两个都是没人捡的死胡同")
+    void retryableFlagsCoverDeadEnds() {
+        VoucherServiceImpl svc = svc();
+        assertTrue(svc.isRetryableFlag(com.cretas.aims.entity.enums.VoucherFlag.UNCREATED));
+        // FAILED: 一次瞬时失败 = 永久漏账 (prod 实测 F006 4 张调拨)
+        assertTrue(svc.isRetryableFlag(com.cretas.aims.entity.enums.VoucherFlag.FAILED),
+                "FAILED 必须可补: 没有任何其它路径会重试它");
+        // PENDING: listener 写了「开始生成」就中断 (prod 实测 27 张, 含 1 张真漏账)
+        assertTrue(svc.isRetryableFlag(com.cretas.aims.entity.enums.VoucherFlag.PENDING),
+                "PENDING 必须可补: 同样没人捡, 且 createFromBusiness 幂等所以安全");
+        // 阴性对照: 已生成的不该再被扫进来
+        assertFalse(svc.isRetryableFlag(com.cretas.aims.entity.enums.VoucherFlag.CREATED),
+                "CREATED 不该进补的范围");
     }
 
     @Test

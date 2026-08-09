@@ -622,6 +622,27 @@ public class VoucherServiceImpl implements VoucherService {
      *   <li>WASTAGE_RECORD / PAYROLL_RECORD: <b>没有 listener</b>, 批量补是唯一生成路径</li>
      * </ul>
      */
+    /**
+     * 可以尝试补凭证的 vflag —— {@code UNCREATED} / {@code FAILED} / {@code PENDING}。
+     *
+     * <p><b>为什么 FAILED 和 PENDING 都要收</b> (2026-08-10 prod 审计): 这两个都是<b>死胡同</b>,
+     * 没有任何路径会把它们捡回来 —— listener 只在事件到来时跑一次, 批量补原先只扫 UNCREATED。
+     * <ul>
+     *   <li>{@code FAILED}: 生成时抛异常。一次瞬时失败 = 该单永久没有凭证, 且静默无告警。</li>
+     *   <li>{@code PENDING}: listener 写了"开始生成"之后、还没写"成功/失败"就中断 (进程重启等)。
+     *       实测 27 张 PENDING 里 26 张<b>其实已经有凭证</b>, 只是 flag 没写回 CREATED;
+     *       剩 1 张 (六膳门 PO-20260717-0001, 已完成的采购单) 是真漏账。</li>
+     * </ul>
+     *
+     * <p>收 PENDING 是安全的: {@link #createFromBusiness} 第一步就是幂等 —— 同业务单已有凭证
+     * 直接返回既有的, 不会重复生成。所以对那 26 张是"把 flag 纠正成 CREATED", 对那 1 张才是
+     * 真的补一张。
+     */
+    // package-private: 同包单测直调真方法
+    boolean isRetryableFlag(VoucherFlag flag) {
+        return flag == VoucherFlag.UNCREATED || flag == VoucherFlag.FAILED || flag == VoucherFlag.PENDING;
+    }
+
     private List<String> findUncreatedIds(String factoryId, String businessType) {
         switch (businessType) {
             case "SALES_ORDER":
@@ -630,7 +651,7 @@ public class VoucherServiceImpl implements VoucherService {
                 // 都不该有凭证 (实测误捞 6 张, 含 4 张 CANCELLED)。
                 return salesOrderRepo.findAll().stream()
                         .filter(o -> factoryId.equals(o.getFactoryId())
-                                && o.getVflag() == VoucherFlag.UNCREATED
+                                && isRetryableFlag(o.getVflag())
                                 && isBookableSalesStatus(o.getStatus()))
                         .map(SalesOrder::getId).toList();
             case "PURCHASE_ORDER":
@@ -639,7 +660,7 @@ public class VoucherServiceImpl implements VoucherService {
                 // APPROVED/CANCELLED —— 货都没到, 补出来就是幽灵应付。
                 return purchaseOrderRepo.findAll().stream()
                         .filter(o -> factoryId.equals(o.getFactoryId())
-                                && o.getVflag() == VoucherFlag.UNCREATED
+                                && isRetryableFlag(o.getVflag())
                                 && isBookablePurchaseStatus(o.getStatus()))
                         .map(PurchaseOrder::getId).toList();
             case "RETURN_ORDER":
@@ -648,7 +669,7 @@ public class VoucherServiceImpl implements VoucherService {
                 // 补一张回来等于跟那条 listener 对着干)。
                 return returnOrderRepo.findAll().stream()
                         .filter(o -> factoryId.equals(o.getFactoryId())
-                                && o.getVflag() == VoucherFlag.UNCREATED
+                                && isRetryableFlag(o.getVflag())
                                 && o.getStatus() != com.cretas.aims.entity.enums.ReturnOrderStatus.REJECTED)
                         .map(ReturnOrder::getId).toList();
             case "INTERNAL_TRANSFER":
@@ -674,7 +695,7 @@ public class VoucherServiceImpl implements VoucherService {
                 // 就是被一张零金额调拨 (TRF-20260703-5801) 带崩全批。
                 return internalTransferRepo.findAll().stream()
                         .filter(t -> factoryId.equals(t.getSourceFactoryId())
-                                && (t.getVflag() == VoucherFlag.UNCREATED || t.getVflag() == VoucherFlag.FAILED)
+                                && isRetryableFlag(t.getVflag())
                                 && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED
                                 && t.getTotalAmount() != null && t.getTotalAmount().signum() > 0
                                 && findBySourceBusiness("INTERNAL_TRANSFER", t.getId()).isEmpty())
@@ -685,12 +706,12 @@ public class VoucherServiceImpl implements VoucherService {
                 // 实测 67 张 UNCREATED 里 5 张属于这三种状态。
                 return wastageRecordRepo.findAll().stream()
                         .filter(w -> factoryId.equals(w.getFactoryId())
-                                && w.getVflag() == VoucherFlag.UNCREATED
+                                && isRetryableFlag(w.getVflag())
                                 && w.getStatus() == com.cretas.aims.entity.restaurant.WastageRecord.Status.APPROVED)
                         .map(WastageRecord::getId).toList();
             case "PAYROLL_RECORD":
                 return payrollRecordRepo.findAll().stream()
-                        .filter(p -> factoryId.equals(p.getFactoryId()) && p.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(p -> factoryId.equals(p.getFactoryId()) && isRetryableFlag(p.getVflag()))
                         .map(p -> p.getId().toString()).toList();
             default:
                 return List.of();
