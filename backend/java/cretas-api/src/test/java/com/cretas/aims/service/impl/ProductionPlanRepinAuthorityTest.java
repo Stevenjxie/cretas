@@ -267,6 +267,54 @@ class ProductionPlanRepinAuthorityTest {
         verifyNoInteractions(taskRepo);
     }
 
+    /**
+     * 🔴 原来就没有运行时的批次不要替它造一个。
+     *
+     * <p>正式报工会给计划再挂一个 {@code CLK-B-*} 记账批次, 它从来没有过 workflow 实例。
+     * 重钉遍历计划名下所有批次, 若不加区分地重新物化, 就会给它凭空造出一套运行时 ——
+     * 重钉的职责是「把旧的换成新的」, 不是「给没有的补一个」。
+     *
+     * <p>(prod 现状: 多批次 + 可重钉的组合不存在 —— 第二个批次只在正式报工那一刻产生,
+     * 而正式报工正是封死重钉的信号。这条属防御, 但要防得对。)
+     */
+    @Test
+    @DisplayName("🔴 批次原本就没有运行时 → 不丢也不建(返回 false)")
+    void batchWithoutRuntimeIsLeftAlone() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductionWorkflowInstanceRepository instanceRepo =
+                mock(ProductionWorkflowInstanceRepository.class);
+        when(instanceRepo.findByFactoryIdAndProductionBatchId(FACTORY, 10726L))
+                .thenReturn(Optional.empty());
+        WorkProcessTaskRepository taskRepo = mock(WorkProcessTaskRepository.class);
+        inject(service, "productionWorkflowInstanceRepository", instanceRepo);
+        inject(service, "repinWorkProcessTaskRepository", taskRepo);
+
+        assertThat(service.dropCompiledRuntime(FACTORY, 10726L))
+                .as("没有实例就该返回 false, 调用方据此跳过重新物化")
+                .isFalse();
+        verifyNoInteractions(taskRepo);
+    }
+
+    @Test
+    @DisplayName("批次原本有运行时 → 返回 true(阴性对照)")
+    void batchWithRuntimeReportsTrue() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductionWorkflowInstance instance = mock(ProductionWorkflowInstance.class);
+        when(instance.getId()).thenReturn(75L);
+        ProductionWorkflowInstanceRepository instanceRepo =
+                mock(ProductionWorkflowInstanceRepository.class);
+        when(instanceRepo.findByFactoryIdAndProductionBatchId(FACTORY, 10721L))
+                .thenReturn(Optional.of(instance));
+        inject(service, "productionWorkflowInstanceRepository", instanceRepo);
+        inject(service, "repinWorkProcessTaskRepository", mock(WorkProcessTaskRepository.class));
+        inject(service, "repinWorkflowTaskPortRepository", mock(WorkflowTaskPortRepository.class));
+        inject(service, "entityManager", entityManagerReturning(0L));
+
+        assertThat(service.dropCompiledRuntime(FACTORY, 10721L)).isTrue();
+    }
+
     private EntityManager entityManagerReturning(long softReferences) {
         EntityManager em = mock(EntityManager.class);
         Query query = mock(Query.class);
