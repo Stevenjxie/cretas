@@ -142,7 +142,9 @@ class ProductionPlanServiceSecondaryTest {
             ProductionPlanServiceImpl svc = buildService(wipInventoryService);
             when(wipInventoryService.listAvailableWip(FACTORY_ID))
                     .thenReturn(List.of(buildWip(new BigDecimal("50"))));
-            when(productTypeRepo.findById(PRODUCT_TYPE_ID))
+            // 🔴 桩要打在真正被调的方法上: 生产代码用租户隔离的 findByIdAndFactoryId,
+            //    桩 findById 不生效 → empty → ResourceNotFound(这条长期红着)。
+            when(productTypeRepo.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
                     .thenReturn(Optional.of(buildProductType()));
             when(productionPlanRepo.save(any())).thenAnswer(inv -> {
                 ProductionPlan plan = inv.getArgument(0);

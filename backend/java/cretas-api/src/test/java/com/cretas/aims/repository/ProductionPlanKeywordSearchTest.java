@@ -61,6 +61,9 @@ class ProductionPlanKeywordSearchTest {
         p.setPlanNumber(planNumber);
         p.setProductTypeId(productTypeId);
         p.setPlannedQuantity(new BigDecimal("100"));
+        // planned_unit 后来加了 NOT NULL(单位契约那轮), 这个夹具没跟上 —— 本测只关心关键词检索,
+        // 补个单位不影响任何断言。
+        p.setPlannedUnit("kg");
         p.setStatus(status);
         p.setCreatedBy(UID);
         return repo.saveAndFlush(p);

@@ -71,6 +71,12 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
 
     @Test
     void explicitSkipCreatesTwoSentinelTasksWithoutConsultingWorkflow() {
+        // 🔴 单位契约那轮加了「批次没配单位就 fail closed」, 这个夹具没跟上 —— 缺的是批次,
+        //    不是断言: 哨兵任务的 plannedUnit 就取自批次单位。
+        com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setId(902L);
+        batch.setUnit("kg");
+        when(productionBatchRepository.findById(902L)).thenReturn(Optional.of(batch));
         when(taskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<WorkProcessTaskDTO> result = service.spawnTasks(
@@ -120,8 +126,15 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
                 .thenReturn(Optional.empty());
         when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
                 "F006", "PT-CHICKEN")).thenReturn(List.of(legacy));
+        // 🔴 legacy 分支现在要求工序定义配了投入/产出单位(缺就 422 fail closed)。
+        //    原夹具返回空定义列表, 于是两个单位都取不到 —— 补一个真实定义, 断言不受影响。
         when(workProcessRepository.findByFactoryIdAndIdIn("F006", List.of("CUT")))
-                .thenReturn(List.of());
+                .thenReturn(List.of(com.cretas.aims.entity.WorkProcess.builder()
+                        .id("CUT")
+                        .factoryId("F006")
+                        .unit("kg")
+                        .outputUnit("kg")
+                        .build()));
         when(taskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<WorkProcessTaskDTO> result = service.spawnTasks("F006", 904L, "PT-CHICKEN");
