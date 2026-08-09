@@ -33,6 +33,7 @@ _MODEL_LABELS = {
     "linear_trend": "线性趋势",
     "mean_fallback": "近期均值（数据较少）",
     "no_data": "无数据",
+    "data_break": "数据有断层，不做预测",
 }
 
 _LEVEL_MAP = {
@@ -222,11 +223,27 @@ class RestaurantTargetForecastTool:
             #    预测端新增一种 model_type 而这里没跟上, 测试会红。
             model = _MODEL_LABELS.get(
                 result["model_type"], "近期均值（数据较少）")
-            message = (
-                f"未来 {horizon} 天营收预测（{model}）：\n"
-                f"预计合计 {_money(total)}（区间 {_money(lo)} ~ {_money(hi)}，80% 置信）\n"
-                f"锚定日期 {result.get('anchor_date')}"
-            )
+            # ⛔ 误差必须跟数字一起出现。一个光秃秃的「预计 42.3 万」看起来同样
+            #    确定, 无论它背后是 1.6% 还是 22% 的历史误差 —— 而用户没有别的
+            #    途径能分辨。算不出来就照说「无法评估」, 不填默认值。
+            mape = result.get("backtest_mape")
+            accuracy = (f"该店历史回测平均误差 ±{mape:.0%}"
+                        if isinstance(mape, (int, float))
+                        else "历史样本不足，无法评估这个预测的准确度")
+            lines = [
+                f"未来 {horizon} 天营收预测（{model}）：",
+                f"预计合计 {_money(total)}（区间 {_money(lo)} ~ {_money(hi)}，80% 置信）",
+                accuracy,
+            ]
+            if result.get("data_break_at"):
+                lines.append(
+                    f"⚠️ {result['data_break_at']} 前后数据水位有跳变，"
+                    f"已按回测误差择优选用"
+                    f"{'断层之后' if result.get('window_used') == 'after_break' else '完整'}"
+                    f"窗口"
+                )
+            lines.append(f"锚定日期 {result.get('anchor_date')}")
+            message = "\n".join(lines)
             return {"success": True, "message": message, "data": result}
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("RestaurantTargetForecastTool failed: %s", exc)
