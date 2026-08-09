@@ -22,6 +22,7 @@ from smartbi.scripts.registry_truth_check import (
     _ABSOLUTE_ANCHORS,
     _ANCHORS,
     _CHANNEL_WEIGHTS,
+    _RANGE_ANCHORS,
 )
 
 
@@ -121,6 +122,29 @@ def test_truth_check_compares_channel_by_order_count_not_revenue():
         "渠道分布没有按单量比 —— 按营收比会系统性偏离")
     assert 'metric_key="revenue"' not in seg.split("missing =")[0], (
         "渠道分布用了营收口径")
+
+
+def test_range_anchors_match_the_generator_source():
+    """区间锚必须与 `generator.py::_PLATFORM_FEE_RATE` 逐个相等。
+
+    🔑 其中 `dine_in` 的区间是 `(0.0, 0.0)` —— 堂食**恒等于 0**。
+       它钉的是「这个 0 是真的 0」, 而不是「缺数据被算成了 0」。
+    ⚠️ 区间锚天然比等值锚弱: 落在区间内不等于对, 它只能抓「离谱」。
+    """
+    seed = _seed_module()
+    if seed is None:
+        pytest.skip("读不到生成器源码 —— ⚠️ 这是 skip 不是 pass")
+    import importlib
+
+    gen = importlib.import_module("mock_platform.world.generator")
+    src = {k: tuple(v) for k, v in gen._PLATFORM_FEE_RATE.items()}
+    got = {k: tuple(v) for k, v in _RANGE_ANCHORS["platform_fee_rate"].items()}
+    assert src == got, (
+        f"抽佣率区间副本 {got} ≠ 源码 {src} —— "
+        f"⛔ 别改副本, 先查是 generator.py 改了还是副本被手改了")
+    assert src.get("dine_in") == (0.0, 0.0), (
+        "堂食抽佣率不再恒为 0 —— 那条锚的意义(区分「真的 0」和「缺数据算成 0」)没了, "
+        "要重新想它该锚什么")
 
 
 def test_anchor_does_not_use_the_deprecated_cost_column():

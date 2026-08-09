@@ -88,6 +88,23 @@ _CHANNEL_WEIGHTS = {"dine_in": 0.62, "takeaway": 0.28, "groupon": 0.10}
 #: 又足够抓到真实的权重改动（如 0.62 → 0.55）。
 _DISTRIBUTION_TOLERANCE = 0.02
 
+#: 区间锚 —— 生成器按区间随机抽的参数，只能验落不落在区间里。
+#: 来源：`generator.py::_PLATFORM_FEE_RATE`。
+#:
+#: 🔑 它比等值锚**更能抓错**的地方：`dine_in` 的区间是 `(0.0, 0.0)` ——
+#:    堂食**恒等于 0**。而「把没有的东西算成 0」和「真的是 0」是两件事，
+#:    这条锚钉住的正是后者：抽佣数据接进来了，堂食那一格必须是**真的 0**，
+#:    不是缺列被 COALESCE 成 0（缺列时 requires 会先拦下，根本到不了这里）。
+#: ⚠️ 区间锚**天然比等值锚弱** —— 落在区间内不等于对。它只能抓住「离谱」，
+#:    抓不住「偏一点」。⛔ 别把它当成和单价锚同等强度的证据。
+_RANGE_ANCHORS = {
+    "platform_fee_rate": {
+        "takeaway": (0.18, 0.23),
+        "groupon": (0.04, 0.08),
+        "dine_in": (0.0, 0.0),
+    },
+}
+
 #: 1 分钱。单价与食材成本都是「每份恒定」的量，比值应当精确到分。
 _TOLERANCE = 0.011
 
@@ -110,8 +127,11 @@ async def _ratio(conn, cols, *, factory_id: str, numerator: str, dish: str,
     return float(top) / float(bottom)
 
 
-async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
+async def run(factory_id: str, rng: Tuple[date, date]) -> Tuple[List[str], int]:
     failures: List[str] = []
+    # ⛔ 实际跑了几条要**数出来**, 不许写死 —— 写死的数会在加锚之后继续报旧值,
+    #    而那正是「看起来覆盖了 23 条, 其实早就 32 条」这种误导的来源。
+    checked = 0
     pool = await asyncpg.create_pool(
         host=os.getenv("SMARTBI_DB_HOST", "localhost"),
         user=os.getenv("SMARTBI_DB_USER", "smartbi_user"),
@@ -127,6 +147,7 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
                   f"{'锚·食材成本':>12s} {'算出来':>10s}")
             print("-" * 62)
             for dish, (price, food_cost) in _ANCHORS.items():
+                checked += 2
                 async with pool.acquire() as c2:
                     await c2.execute(
                         "SELECT set_config('app.factory_id', $1, false)", factory_id)
@@ -158,6 +179,7 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
                         c3, factory_id=factory_id, metric_key=metric,
                         dimension_key=dim, aggregation_key="compare",
                         date_range=rng, available_columns=cols)
+                checked += 1
                 got, want = len(r.rows), _ABSOLUTE_ANCHORS[label]
                 ok = got == want
                 if not ok:
@@ -200,6 +222,7 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
             sum_items = sum(float(x["revenue"]) for x in by_dish.rows) if by_dish.rows else None
             g, d, n = _one(gross, "gross_revenue"), _one(disc, "discount_amount"), _one(net, "revenue")
 
+            checked += 3   # 跨粒度 / 净额恒等 / 毛利率一致
             # ① 明细加总 == 折前营收（跨粒度，扇出必红）
             if sum_items is None or g is None:
                 failures.append("跨粒度对账: 取不到数")
@@ -245,6 +268,7 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
             total = sum(float(x["orders"]) for x in r.rows) or 1.0
             print()
             for row in r.rows:
+                checked += 1
                 ch = str(row.get("dim_label"))
                 want = _CHANNEL_WEIGHTS.get(ch)
                 got = float(row["orders"]) / total
@@ -260,9 +284,43 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
             missing = set(_CHANNEL_WEIGHTS) - {str(x.get("dim_label")) for x in r.rows}
             if missing:
                 failures.append(f"渠道占比: 源码有但一条都没查到 {sorted(missing)}")
+
+            # ── 区间锚：按渠道的平台抽佣率 ────────────────────────────────
+            print()
+            for metric, per_channel in _RANGE_ANCHORS.items():
+                async with pool.acquire() as c6:
+                    await c6.execute(
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id)
+                    rr = await execute_cell(
+                        c6, factory_id=factory_id, metric_key=metric,
+                        dimension_key="channel", aggregation_key="compare",
+                        date_range=rng, available_columns=cols)
+                seen = set()
+                for row in rr.rows:
+                    ch = str(row.get("dim_label"))
+                    bounds = per_channel.get(ch)
+                    if bounds is None:
+                        continue
+                    seen.add(ch)
+                    checked += 1
+                    raw = row.get(metric)
+                    if raw is None:
+                        failures.append(f"{metric} {ch}: 算不出来")
+                        print(f"区间·{metric} {ch:9s} 算不出来 ❌")
+                        continue
+                    got = float(raw) / 100.0   # 派生量以百分数返回
+                    lo, hi = bounds
+                    ok = (lo - 1e-9) <= got <= (hi + 1e-9)
+                    if not ok:
+                        failures.append(
+                            f"{metric} {ch}: 算出 {got:.4f}, 源码区间 [{lo}, {hi}]")
+                    print(f"区间·{metric} {ch:9s} 算出 {got:.4f}  "
+                          f"源码 [{lo}, {hi}] {'' if ok else '❌'}")
+                for ch in set(per_channel) - seen:
+                    failures.append(f"{metric}: 源码有渠道 {ch} 但一行都没查到")
     finally:
         await pool.close()
-    return failures
+    return failures, checked
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -276,13 +334,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     end_day = 31 if m in (1, 3, 5, 7, 8, 10, 12) else (30 if m != 2 else 28)
     rng = (date(y, m, 1), date(y, m, end_day))
     print(f"真值对账 · 租户 {args.factory} · 区间 {rng[0]} ~ {rng[1]}\n")
-    failures = asyncio.run(run(args.factory, rng))
+    failures, checked = asyncio.run(run(args.factory, rng))
     if failures:
-        print(f"\nTRUTH_CHECK FAIL  {len(failures)} 条对不上:")
+        print(f"\nTRUTH_CHECK FAIL  {len(failures)}/{checked} 条对不上:")
         for f in failures:
             print(f"  ❌ {f}")
         return 1
-    print(f"\nTRUTH_CHECK OK  {len(_ANCHORS)*2 + len(_ABSOLUTE_ANCHORS)} 条锚全部对上")
+    print(f"\nTRUTH_CHECK OK  {checked} 条锚全部对上")
     return 0
 
 
