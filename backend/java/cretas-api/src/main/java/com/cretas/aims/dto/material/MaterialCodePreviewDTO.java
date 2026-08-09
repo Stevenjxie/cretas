@@ -6,9 +6,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Read-only material code contract used by both the create form and the save boundary.
- * {@code code} remains the legacy 16-digit classification code for backward compatibility;
- * {@code businessCode} is the human-readable immutable code.
+ * Read-only short material-code suggestion used by the create form.
+ * The optional classification ID is metadata and never participates in {@code code}.
  */
 @Data
 @Builder
@@ -17,11 +16,7 @@ import lombok.NoArgsConstructor;
 public class MaterialCodePreviewDTO {
 
     private String code;
-    private String businessCode;
-    private String businessCodePrefix;
-    private String businessCodePrefixSource;
-    private String businessCodePrefixSourceSegment;
-    private String classificationSegmentCode;
+    private Long classificationId;
     private Boolean selectable;
     private String guidance;
 }

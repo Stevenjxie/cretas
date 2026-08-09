@@ -10,9 +10,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 /**
@@ -30,42 +28,16 @@ public class RawMaterialTypeDTO {
     private String id;
     private String factoryId;
 
-    // 不加 @NotBlank: 创建时前端故意不传 code, 由 service 自动生成
-    // (RawMaterialTypeServiceImpl.createMaterialType 在 code 为空时调 generateNextCode +
-    //  查重; 更新路径 code 始终带值且只在变化时 set). @NotBlank 会在 @Valid 阶段
-    // 提前 400 拒绝自动生成请求 → 报 "原材料编码不能为空", 阻断建档. DB NOT NULL +
-    // service 自动生成 + 查重 才是真正的保证.
+    // 创建时可不传，service 会按基本类型和已有料号生成下一个短料号。
+    // DB NOT NULL + 含软删除行的冲突检查是最终保证。
     @JsonProperty("code")
     @JsonAlias("materialCode")  // 支持前端发送 materialCode
     private String code;
 
-    /** Server-generated ASCII business code. API/DB legacy {@link #code} remains unchanged. */
-    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
-    @Pattern(regexp = "^[A-Z0-9]+$", message = "物料业务编码只能包含大写英文字母和数字")
-    @Size(max = 14, message = "物料业务编码长度不能超过14位")
-    private String businessCode;
-
-    /** Explicit compatibility name for the existing 16-digit classification code. */
-    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
-    private String legacyClassificationCode;
-
-    /** User-facing code: business code first, legacy code for historical records. */
+    /** The API exposes one material code only. */
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public String getDisplayCode() {
-        return businessCode == null || businessCode.isBlank()
-                ? getLegacyClassificationCode()
-                : businessCode;
-    }
-
-    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
-    public boolean isHistoricalCodeFallback() {
-        return businessCode == null || businessCode.isBlank();
-    }
-
-    public String getLegacyClassificationCode() {
-        return legacyClassificationCode == null || legacyClassificationCode.isBlank()
-                ? code
-                : legacyClassificationCode;
+        return code;
     }
 
     @NotBlank(message = "原材料名称不能为空")
@@ -149,19 +121,10 @@ public class RawMaterialTypeDTO {
     @Positive(message = "含税单价必须大于0")
     private BigDecimal taxIncludedUnitPrice;
 
-    // ========== SP8: 16位分段编码 ==========
+    // ========== 可选物料分类 ==========
 
-    /**
-     * SP8: 16位编码前三位主编码 (类型段), 如 001/002/003.
-     * 历史数据可为空; 新建时从 code 前三位自动提取或由前端级联选择传入.
-     */
-    private String primaryCode;
-
-    /**
-     * SP8: 前端级联选择的 L3 cumulative segment code (10位), 供16位生成器用.
-     * 不持久化到 DB — 仅用于建档请求中传递级联选择结果.
-     */
-    private String segmentCode;
+    /** 可选的三级分类节点 ID；由系统生成，与简短料号完全独立。 */
+    private Long classificationId;
 
     // ========== 包材规格 (packaging spec) ==========
 

@@ -9,24 +9,15 @@ import java.text.Normalizer;
 import java.util.Locale;
 
 /**
- * SP8: 物料16位分段编码字典.
+ * Optional three-level material taxonomy.
  *
- * <p>三层层级结构:
- * <ul>
- *   <li>level=1 → 类型段 (3位,  e.g. "001"=原料)</li>
- *   <li>level=2 → 部位/品类段 (累积6位, e.g. "001001"=牛腱)</li>
- *   <li>level=3 → 品名段 (累积10位, e.g. "0010010001"=牛腱A级)</li>
- * </ul>
- *
- * <p>{@code segmentCode} 采用累积编码便于 {@code LIKE '001%'} 前缀搜索和16位最终拼装.
- * 16位最终编码 = segmentCode(10位L3) + String.format("%06d", seq).
- *
- * @since SP8 V20260911_02
+ * <p>The generated database {@link #id} is the only node identity. Users maintain names and
+ * parent relationships; there is no user-visible or length-based classification code.</p>
  */
 @Entity
 @Table(name = "material_code_segments", indexes = {
     @Index(name = "idx_mcs_factory_level", columnList = "factory_id, level"),
-    @Index(name = "idx_mcs_parent", columnList = "factory_id, parent_code")
+    @Index(name = "idx_mcs_parent", columnList = "factory_id, parent_id")
 })
 @Data
 @NoArgsConstructor
@@ -43,22 +34,11 @@ public class MaterialCodeSegment extends BaseEntity {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    /**
-     * 层级: 1=类型(3位), 2=部位/品类(6位), 3=品名(10位).
-     * DB: CHECK (level IN (1, 2, 3))
-     */
+    /** 层级: 1=大类, 2=中类, 3=小类. */
     @Column(name = "level", nullable = false)
     private Short level;
 
-    /**
-     * 累积段编码:
-     * L1=3位("001"), L2=6位("001001"), L3=10位("0010010001").
-     * 工厂内唯一 (UNIQUE (factory_id, segment_code)).
-     */
-    @Column(name = "segment_code", nullable = false, length = 10)
-    private String segmentCode;
-
-    /** 展示标签, e.g. "原料" / "牛腱" / "牛腱(A级)". */
+    /** 展示名称, e.g. "原料" / "肉类" / "牛腱". */
     @Column(name = "segment_label", nullable = false, length = 100)
     private String segmentLabel;
 
@@ -66,11 +46,9 @@ public class MaterialCodeSegment extends BaseEntity {
     @Column(name = "normalized_label", nullable = false, length = 100)
     private String normalizedLabel;
 
-    /**
-     * 上级累积编码: L2 → 指向 L1 segmentCode; L3 → 指向 L2 segmentCode; L1 为 null.
-     */
-    @Column(name = "parent_code", length = 10)
-    private String parentCode;
+    /** 上级节点 ID；一级分类为 null。 */
+    @Column(name = "parent_id")
+    private Long parentId;
 
     @Column(name = "sort_order", nullable = false)
     @Builder.Default

@@ -368,7 +368,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'material-segments',
             name: 'WarehouseMaterialSegments',
             component: () => import('@/views/warehouse/material-segments/index.vue'),
-            meta: { requiresAuth: true, title: '物料分段字典', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '物料分类字典', module: 'warehouse' }
           },
           {
             path: 'materials',

@@ -13,7 +13,6 @@ import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,7 +35,7 @@ import static org.mockito.Mockito.*;
  *
  * <p>Covers:
  * <ol>
- *   <li>prefix mapping — 原料→YL, 肉类→RL, 包材→BC, unknown→WL, null→WL</li>
+ *   <li>prefix mapping — 原料→YL, 肉类→RL, 包材→BC; unknown/null fail closed</li>
  *   <li>sequence increment (max numeric suffix +1, zero-pad 3 digits)</li>
  *   <li>sequence from 001 when no existing code with that prefix</li>
  *   <li>suggestFields returns multi-field DTO (incl. level1PerLevel2/level2Unit) when match found</li>
@@ -106,21 +105,25 @@ class RawMaterialTypeCodeGenTest {
         }
 
         @Test
-        @DisplayName("未知类别 → WL")
-        void category_unknown_yieldsWL() {
-            assertEquals("WL", RawMaterialTypeServiceImpl.getMaterialCategoryPrefix("海水鱼"));
+        @DisplayName("未知类别明确报错")
+        void category_unknown_failsClosed() {
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> RawMaterialTypeServiceImpl.getMaterialCategoryPrefix("海水鱼"));
+            assertTrue(error.getMessage().contains("无法建议料号"));
         }
 
         @Test
-        @DisplayName("null → WL")
-        void category_null_yieldsWL() {
-            assertEquals("WL", RawMaterialTypeServiceImpl.getMaterialCategoryPrefix(null));
+        @DisplayName("null 明确报错")
+        void category_null_failsClosed() {
+            assertThrows(BusinessException.class,
+                    () -> RawMaterialTypeServiceImpl.getMaterialCategoryPrefix(null));
         }
 
         @Test
-        @DisplayName("空字符串 → WL")
-        void category_blank_yieldsWL() {
-            assertEquals("WL", RawMaterialTypeServiceImpl.getMaterialCategoryPrefix("  "));
+        @DisplayName("空字符串明确报错")
+        void category_blank_failsClosed() {
+            assertThrows(BusinessException.class,
+                    () -> RawMaterialTypeServiceImpl.getMaterialCategoryPrefix("  "));
         }
     }
 
@@ -283,7 +286,6 @@ class RawMaterialTypeCodeGenTest {
     // =========================================================
 
     @Nested
-    @Disabled("legacy flat-code create path was replaced by mandatory L1-L2-L3 16-digit contract")
     @DisplayName("createMaterialType 无 code → 自动生成 + 读回有 code")
     class CreateWithAutoCode {
 
@@ -293,10 +295,6 @@ class RawMaterialTypeCodeGenTest {
             // Given: no existing codes for prefix YL
             when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "YL"))
                     .thenReturn(Collections.emptyList());
-            // No collision
-            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "YL001"))
-                    .thenReturn(false);
-
             // Capture the entity passed to save
             ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
             RawMaterialType saved = new RawMaterialType();
@@ -336,8 +334,6 @@ class RawMaterialTypeCodeGenTest {
         void createWithBlankCode_autoGeneratesRL001() {
             when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
                     .thenReturn(Collections.emptyList());
-            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "RL001"))
-                    .thenReturn(false);
 
             RawMaterialType saved = new RawMaterialType();
             saved.setId("RMT_2");
@@ -366,9 +362,6 @@ class RawMaterialTypeCodeGenTest {
         @Test
         @DisplayName("DTO.code 手动提供 → 不走自动生成, 直接使用")
         void createWithExplicitCode_usesProvidedCode() {
-            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "BC999"))
-                    .thenReturn(false);
-
             RawMaterialType saved = new RawMaterialType();
             saved.setId("RMT_3");
             saved.setFactoryId(FACTORY_ID);
@@ -387,6 +380,7 @@ class RawMaterialTypeCodeGenTest {
                     .code("BC999")      // manually provided
                     .unit("个")
                     .category("包材")
+                    .taxIncludedUnitPrice(new BigDecimal("1.00"))
                     .build();
 
             RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);

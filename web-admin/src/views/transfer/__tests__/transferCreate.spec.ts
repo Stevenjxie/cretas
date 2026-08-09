@@ -5,10 +5,12 @@ import {
   aggregateFinishedGoodsOptions,
   aggregateMaterialInventoryOptions,
   aggregateTransferDemand,
+  applyTransferCategory,
   applySelectedOption,
+  buildTransferCategoryOptions,
   findDuplicateTransferRow,
   isTransferRowShortage,
-  optionsForItemType,
+  optionsForTransferCategory,
   TRANSFER_TYPE_OPTIONS,
   toTransferItemPayload,
   transferRowIdentity,
@@ -21,6 +23,7 @@ const listSource = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'ut
 function row(itemType: TransferCreateRow['itemType']): TransferCreateRow {
   return {
     itemType,
+    selectionCategory: '',
     selectedItemId: '',
     itemName: '',
     quantity: 5,
@@ -43,6 +46,10 @@ describe('M08 手动调拨选择器契约', () => {
     expect(listSource).toContain('class="unit-chip"');
     expect(listSource).not.toContain('v-model="row.unit"');
     expect(listSource.indexOf('label="数量 / 单位"')).toBeLessThan(listSource.indexOf('label="现有库存"'));
+    expect(listSource).toContain('<el-table-column label="基本类型"');
+    expect(listSource).not.toContain('label="原料/食材"');
+    expect(listSource).toContain("sourceInventoryError.value = '库存基本类型读取失败");
+    expect(listSource).toContain(':disabled="Boolean(transferCategoryUnavailableReason)"');
   });
   it('按所选仓库聚合唯一可用成品 SKU，并保留 canonical box / 中文显示盒', () => {
     const options = aggregateFinishedGoodsOptions([
@@ -114,23 +121,46 @@ describe('M08 手动调拨选择器契约', () => {
     });
   });
 
-  it('原料和包材仍使用 materialTypeId，并按 category 分流且取所选仓库库存', () => {
+  it('调拨基本类型沿用建品保存值，辅材不再被吞进原料且包材仍映射 materialTypeId', () => {
     const materialOptions = aggregateMaterialInventoryOptions([
-      { materialTypeId: 'RAW-A', materialName: '原料 A', materialCategory: 'RAW', quantityUnit: 'kg', currentQuantity: 5, status: 'AVAILABLE' },
-      { materialTypeId: 'PACK-BOX', materialName: '成品盒', materialCategory: 'PACKAGING', quantityUnit: 'box', currentQuantity: 5, status: 'AVAILABLE' },
+      { materialTypeId: 'RAW-A', materialName: '原料 A', materialCategory: '主材', quantityUnit: 'kg', currentQuantity: 5, status: 'AVAILABLE' },
+      { materialTypeId: 'AUX-A', materialName: '辅料 A', materialCategory: '辅材', quantityUnit: 'kg', currentQuantity: 3, status: 'AVAILABLE' },
+      { materialTypeId: 'PACK-BOX', materialName: '成品盒', materialCategory: '包材', quantityUnit: 'box', currentQuantity: 5, status: 'AVAILABLE' },
     ]);
-    const rawOptions = optionsForItemType('RAW_MATERIAL', materialOptions, []);
-    const packagingOptions = optionsForItemType('PACKAGING_MATERIAL', materialOptions, []);
-    expect(rawOptions.map((option) => option.id)).toEqual(['RAW-A']);
-    expect(packagingOptions.map((option) => option.id)).toEqual(['PACK-BOX']);
+    const categories = buildTransferCategoryOptions(materialOptions, []);
+    expect(categories.map((option) => option.label)).toEqual(expect.arrayContaining(['主材', '辅材', '包材']));
+    expect(categories.map((option) => option.label)).not.toContain('原料/食材');
+
+    const auxiliaryRow = row('RAW_MATERIAL');
+    applyTransferCategory(auxiliaryRow, categories.find((option) => option.label === '辅材')!);
+    expect(optionsForTransferCategory(auxiliaryRow, materialOptions, []).map((option) => option.id)).toEqual(['AUX-A']);
+    expect(toTransferItemPayload({ ...auxiliaryRow, quantity: 1, selectedItemId: 'AUX-A', materialTypeId: 'AUX-A' }))
+      .toMatchObject({ itemType: 'RAW_MATERIAL', materialTypeId: 'AUX-A' });
 
     const packagingRow = row('PACKAGING_MATERIAL');
+    applyTransferCategory(packagingRow, categories.find((option) => option.label === '包材')!);
+    const packagingOptions = optionsForTransferCategory(packagingRow, materialOptions, []);
+    expect(packagingOptions.map((option) => option.id)).toEqual(['PACK-BOX']);
     packagingRow.quantity = 1;
     applySelectedOption(packagingRow, packagingOptions[0]);
     expect(toTransferItemPayload(packagingRow)).toMatchObject({
       itemType: 'PACKAGING_MATERIAL', materialTypeId: 'PACK-BOX', unit: 'box', quantity: 1,
     });
     expect(packagingRow.productTypeId).toBeUndefined();
+  });
+
+  it('历史无分类物料不隐藏，成品仅在所选仓库实际有库存时出现', () => {
+    const materials = aggregateMaterialInventoryOptions([
+      { materialTypeId: 'LEGACY-A', materialName: '历史物料', materialCategory: '', quantityUnit: 'kg', currentQuantity: 2, status: 'AVAILABLE' },
+    ]);
+    const withoutProduct = buildTransferCategoryOptions(materials, []);
+    expect(withoutProduct.map((option) => option.label)).toEqual(['未分类原料（历史）']);
+
+    const products = aggregateFinishedGoodsOptions([
+      { productTypeId: 'FG-A', productName: '成品 A', unit: 'box', status: 'AVAILABLE', availableQuantity: 1 },
+    ]);
+    const withProduct = buildTransferCategoryOptions(materials, products);
+    expect(withProduct.map((option) => option.label)).toContain('成品/菜品');
   });
 
   it('原料可按包装数量调拨，但 payload 带规格身份并由后端折合基本量', () => {

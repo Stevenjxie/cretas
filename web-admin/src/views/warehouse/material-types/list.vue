@@ -8,15 +8,14 @@
  * 后端 /raw-material-types 全 CRUD 早齐, 只缺前端页面 — 本页补上.
  *
  * May 7 2026 用户需求 (PR #114/#116/#120 后端落地):
- * 1. 编码自动生成 (创建时不传 code, 后端生成)
- * 2. 类别下拉与列表大类统一读取 16 位物料编码字典的 L1 类族
+ * 1. 按基本类型建议简短料号，创建前允许用户修改
+ * 2. 分段字典只作为可选分类树，不参与料号生成
  * 3. 单位下拉 + 智能默认 (suggest-unit 按相似名称+类别取最近原料的 unit)
  * 4. 去掉单价 (按采购价浮动, 在采购订单里录)
  * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
  *
  * T159-A-form (2026-06-08): 防呆复刻 SKU 表单模式
- *   1. 编码预览 (create mode): GET .../raw-material-types/preview-code?category=&segmentCode=
- *      → 完整 L1-L3 选定后，实时展示与保存同源的业务编码及16位兼容分类编码
+ *   1. 料号建议 (create mode): GET .../raw-material-types/preview-code?category=
  *   2. 全字段智能匹配 cascade: GET .../raw-material-types/suggest?name=&category=
  *      → 填 unit/category/storageType/shelfLifeDays/level1PerLevel2/level2Unit
  *      + *ManuallyEdited flags + cascadeWriting guard (exact SKU pattern)
@@ -70,19 +69,19 @@ const loading = ref(false);
 // 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
 // GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
 // (只有独立的 /raw-material-types/search 子路由支持 keyword) — 输入框敲字对结果毫无影响,
-// 关键字和 L1-L3 前缀统一下推后端分页，避免只取前 2000 条后在客户端假筛选。
+// 关键字和分类节点统一下推后端分页，避免只取前 2000 条后在客户端假筛选。
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
-// 16位编码前缀筛选：L1/L2/L3 分别对应编码前 3/6/10 位。
-const filterSegmentL1 = ref('');
-const filterSegmentL2 = ref('');
-const filterSegmentL3 = ref('');
-const selectedSegmentPrefix = computed(() =>
+// 可选分类筛选：分类节点只用系统生成 ID，不再存在编码前缀。
+const filterSegmentL1 = ref<number | null>(null);
+const filterSegmentL2 = ref<number | null>(null);
+const filterSegmentL3 = ref<number | null>(null);
+const selectedClassificationId = computed(() =>
   filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
 );
 
-// 储存类型读取系统字典；单位由 UnitSelect 统一加载；类别读取下方 16 位编码 L1 类族。
+// 储存类型读取系统字典；单位由 UnitSelect 统一加载；基本类型来自平台枚举及存量值。
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
 const storageTypeOptions = ref<DictItem[]>([]);
 
@@ -123,7 +122,7 @@ async function loadData() {
         params: {
           page: pagination.value.page,
           size: pagination.value.size,
-          codePrefix: selectedSegmentPrefix.value || undefined,
+          classificationId: selectedClassificationId.value || undefined,
           keyword: searchKeyword.value.trim() || undefined,
         },
       },
@@ -142,7 +141,7 @@ async function loadData() {
 const dialogVisible = ref(false);
 const editingId = ref<string | null>(null);
 const form = ref({
-  code: '', // 仅编辑模式显示, 创建时不传 (后端生成)
+  code: '',
   name: '',
   category: '',
   // 副产标记: 与 category 正交 —— 副产仍保留材质分类, 因此能被别的 workflow 当投入投料
@@ -256,46 +255,34 @@ const preTaxUnitPrice = computed(() => {
   return Math.round((price / (1 + rateNum)) * 100) / 100;
 });
 
-// SP8: 16位编码级联下拉 (MaterialCodeSegmentController)
+// 可选分类级联下拉 (MaterialCodeSegmentController)
 interface SegmentNode {
-  id: string;
-  segmentCode: string;
+  id: number;
   segmentLabel: string;
   level: number;
-  parentCode: string | null;
+  parentId: number | null;
   isActive: boolean;
   children?: SegmentNode[];
 }
 
-function formatSegmentOptionLabel(option: { segmentCode: string; segmentLabel?: string; label?: string }): string {
+function formatSegmentOptionLabel(option: { segmentLabel?: string; label?: string }): string {
   const label = String(option.segmentLabel || option.label || '').trim();
-  const code = String(option.segmentCode || '').trim();
-  // 无分段字典的工厂, 类别选项来自平台枚举 + 存量取值, 本来就没有分类码 ——
-  // 再拼一个空括号会渲染成「原料（分类码 ）」, 让人以为这里漏了个值。
-  if (!code) return label || '未命名分类';
-  return `${label || '未命名分类'}（分类码 ${code}）`;
+  return label || '未命名分类';
 }
 
 function materialDisplayCode(row: TableRow): string {
-  return String(row.displayCode || row.businessCode || row.code || '-').trim() || '-';
-}
-
-function materialHasBusinessCode(row: TableRow): boolean {
-  return Boolean(String(row.businessCode || '').trim());
+  return String(row.code || '-').trim() || '-';
 }
 const segmentTree = ref<SegmentNode[]>([]);
-const segmentL1 = ref(''); // L1 大类
-const segmentL2 = ref(''); // L2 中类
-const segmentL3 = ref(''); // L3 小类（原料类型复用）
+const segmentL1 = ref<number | null>(null);
+const segmentL2 = ref<number | null>(null);
+const segmentL3 = ref<number | string | null>(null);
 const segmentLoading = ref(false);
-const segmentCodePreview = ref(''); // SP8 生成的编码预览
-const businessCodePreview = ref('');
-const businessCodePrefixSource = ref('');
 const codeContractHint = ref('');
-const codeContractReady = ref(false);
-const editingBusinessCode = ref('');
 const editingDisplayCode = ref('');
-const sp8PreviewLoading = ref(false);
+const codeSuggestionLoading = ref(false);
+const codeSuggestionError = ref('');
+const codeManuallyEdited = ref(false);
 const QUICK_CREATE_L3 = '__quick_create_l3__';
 const createL3DialogVisible = ref(false);
 const createL3Submitting = ref(false);
@@ -304,11 +291,11 @@ const l3MatchHint = ref('');
 const l3ManuallyEdited = ref(false);
 const unitSuggestionHint = ref('');
 interface TaxonomyCandidate {
-  l1Code: string;
+  l1Id: number;
   l1Label: string;
-  l2Code: string;
+  l2Id: number;
   l2Label: string;
-  l3Code: string;
+  l3Id: number;
   l3Label: string;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   reason: string;
@@ -341,13 +328,7 @@ const segmentL1Options = computed(() =>
   segmentTree.value.filter((n) => n.level === 1 && n.isActive),
 );
 // 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
-/**
- * 该工厂有没有配「16位物料编码字典」。
- *
- * ⛔ 判据一直在后端(MaterialCodeSegmentService#hasSegmentDictionary), 但**前端从来没消费过**
- * —— 于是新建物料对所有租户一律强制选 L1/L2/L3, 把没配字典的工厂直接堵死。
- * 这里改成看已经取回来的 segmentTree, 不新增接口, 也不写任何租户名。
- */
+/** 是否存在可选物料分类树；它不会切换料号生成模式。 */
 const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0);
 
 /**
@@ -370,49 +351,47 @@ function rememberCategories(rows: { category?: string | null }[]) {
 }
 
 /**
- * 类别选项。有字典时沿用 L1 类族(与 16 位码口径一致);
- * 无字典时回落到平台级 MATERIAL_CATEGORY 枚举(主材/辅材/调味料/包材/添加剂)
- * —— 六膳门那 115 个自由码物料用的就是这一套 —— 再并上存量在用的历史取值。
+ * 基本类型始终来自平台枚举、存量值与分类树 L1 的并集。
+ * 是否配置分类树不再改变新建路径。
  */
 const materialFamilyOptions = computed(() => {
-  if (!hasSegmentDictionary.value) {
-    const values = [...MATERIAL_CATEGORY_ENUM_VALUES] as string[];
-    for (const c of seenCategories.value) {
-      if (!values.includes(c)) values.push(c);
-    }
-    // 编辑中的那一条即使还没出现在已加载列表里(例如直接跳转进来), 也必须能显示自己的类别
-    const current = (form.value?.category || '').trim();
-    if (current && !values.includes(current)) values.push(current);
-    return values.map((label) => ({ value: label, label, segmentCode: '' }));
+  const values = [...MATERIAL_CATEGORY_ENUM_VALUES] as string[];
+  for (const c of seenCategories.value) {
+    if (!values.includes(c)) values.push(c);
   }
-  return segmentL1Options.value.map((node) => ({
-    value: node.segmentLabel,
-    label: node.segmentLabel,
-    segmentCode: node.segmentCode,
+  for (const node of segmentL1Options.value) {
+    if (!values.includes(node.segmentLabel)) values.push(node.segmentLabel);
+  }
+  const current = (form.value?.category || '').trim();
+  if (current && !values.includes(current)) values.push(current);
+  return values.map((label) => ({
+    value: label,
+    label,
+    classificationId: segmentL1Options.value.find((node) => node.segmentLabel === label)?.id || null,
   }));
 });
 const filterSegmentL2Options = computed(() => {
   if (!filterSegmentL1.value) return [];
-  const l1Node = segmentTree.value.find((node) => node.segmentCode === filterSegmentL1.value);
+  const l1Node = segmentTree.value.find((node) => node.id === filterSegmentL1.value);
   return l1Node?.children?.filter((node) => node.level === 2 && node.isActive) ?? [];
 });
 const filterSegmentL3Options = computed(() => {
   if (!filterSegmentL2.value) return [];
   for (const l1Node of segmentTree.value) {
-    const l2Node = l1Node.children?.find((node) => node.segmentCode === filterSegmentL2.value);
+    const l2Node = l1Node.children?.find((node) => node.id === filterSegmentL2.value);
     if (l2Node) return l2Node.children?.filter((node) => node.level === 3 && node.isActive) ?? [];
   }
   return [];
 });
 
 watch(filterSegmentL1, () => {
-  filterSegmentL2.value = '';
-  filterSegmentL3.value = '';
+  filterSegmentL2.value = null;
+  filterSegmentL3.value = null;
   pagination.value.page = 1;
   loadData();
 });
 watch(filterSegmentL2, () => {
-  filterSegmentL3.value = '';
+  filterSegmentL3.value = null;
   pagination.value.page = 1;
   loadData();
 });
@@ -437,26 +416,9 @@ function isMaterialFamily(category: string | null | undefined): boolean {
   return materialFamilyOptions.value.some((option) => option.value === category);
 }
 
-function syncMaterialFamilyFromCategory(category: string | null | undefined) {
-  if (editingId.value) return;
-  const family = resolveMaterialFamily(category);
-  if (!family) {
-    if (!String(category || '').trim()) segmentL1.value = '';
-    return;
-  }
-  const option = materialFamilyOptions.value.find((item) => item.value === family);
-  if (option && segmentL1.value !== option.segmentCode) segmentL1.value = option.segmentCode;
-}
-
-// The tree is fetched asynchronously. Re-run the category → L1 synchronization
-// after its options arrive instead of leaving L2 disabled with a stale placeholder.
-watch(materialFamilyOptions, () => {
-  if (dialogVisible.value && !editingId.value) syncMaterialFamilyFromCategory(form.value.category);
-});
-
-function syncMaterialFamilyFromSegment(segmentCode: string) {
-  if (editingId.value || !segmentCode) return;
-  const option = materialFamilyOptions.value.find((item) => item.segmentCode === segmentCode);
+function syncMaterialFamilyFromSegment(classificationId: number | null) {
+  if (editingId.value || !classificationId) return;
+  const option = materialFamilyOptions.value.find((item) => item.classificationId === classificationId);
   if (!option || form.value.category === option.value) return;
   cascadeWriting.value = true;
   try {
@@ -468,30 +430,31 @@ function syncMaterialFamilyFromSegment(segmentCode: string) {
 // L2 options = children of selected L1
 const segmentL2Options = computed(() => {
   if (!segmentL1.value) return [];
-  const l1Node = segmentTree.value.find((n) => n.segmentCode === segmentL1.value);
+  const l1Node = segmentTree.value.find((n) => n.id === segmentL1.value);
   return l1Node?.children?.filter((c) => c.level === 2 && c.isActive) ?? [];
 });
 // L3 options = children of selected L2
 const segmentL3Options = computed(() => {
   if (!segmentL2.value) return [];
   for (const l1 of segmentTree.value) {
-    const l2Node = l1.children?.find((c) => c.segmentCode === segmentL2.value);
+    const l2Node = l1.children?.find((c) => c.id === segmentL2.value);
     if (l2Node) return l2Node.children?.filter((c) => c.level === 3 && c.isActive) ?? [];
   }
   return [];
 });
+const selectedL2Label = computed(() =>
+  segmentL2Options.value.find((node) => node.id === segmentL2.value)?.segmentLabel || '',
+);
 
 // When L1 changes, reset L2/L3
-watch(segmentL1, (segmentCode) => {
-  segmentL2.value = '';
-  segmentL3.value = '';
-  segmentCodePreview.value = '';
+watch(segmentL1, (classificationId) => {
+  segmentL2.value = null;
+  segmentL3.value = null;
   resetCodeContractPreview();
-  syncMaterialFamilyFromSegment(segmentCode);
+  syncMaterialFamilyFromSegment(classificationId);
 });
 watch(segmentL2, () => {
-  segmentL3.value = '';
-  segmentCodePreview.value = '';
+  segmentL3.value = null;
   resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
@@ -499,58 +462,18 @@ watch(segmentL2, () => {
 
 watch(segmentL3, (value) => {
   resetCodeContractPreview();
-  if (dialogVisible.value && !editingId.value && /^\d{10}$/.test(value)) {
-    void generateSP8Code(false);
+  if (dialogVisible.value && !editingId.value && typeof value === 'number' && form.value.category) {
+    void refreshCodeSuggestion(false);
   }
 });
 
-/**
- * 系统编码由**服务端**分配 —— 前端不再自己 max+1。
- *
- * ⛔ 2026-08-06 事故: 原来这里对下拉里**活着的**子节点取 max+1。六膳门把 L2 `001001`
- * 连同 30 个 L3 全删了(软删除), 下拉变空 → 算出 `0001` → 而 `0010010001` 正被那条
- * 软删行占着(编码软删后仍保留, 有外键指向它), INSERT 撞唯一约束
- * `uk_mcs_factory_segment`, 报错还被后端翻成「同一父级下已存在同名分类」——
- * 于是提示让用户改名字, 而**改名字永远修不好编码冲突**。
- *
- * 前端拿不到、也不该拿到软删除的行, 所以这件事只能服务端做。
- */
-const nextL3Code = ref('');
-const nextL3CodeLoading = ref(false);
-const nextL3CodeError = ref('');
-
-async function refreshNextL3Code(): Promise<void> {
-  nextL3Code.value = '';
-  nextL3CodeError.value = '';
-  if (!segmentL2.value || !factoryId.value) return;
-  nextL3CodeLoading.value = true;
-  try {
-    // ⚠️ get(url, config) 的第二个参数是 axios config —— query 必须放在 params 下。
-    // 直接摊平写会让后端一个参数都收不到, 报「缺少必要参数: level」。
-    const response = await get<{ code: string }>(
-      `/${factoryId.value}/material-segments/next-code`,
-      { params: { level: 3, parentCode: segmentL2.value } },
-    );
-    if (response.success && response.data?.code) {
-      nextL3Code.value = response.data.code;
-    } else {
-      nextL3CodeError.value = response.message || '取系统编码失败，请重试';
-    }
-  } catch (error) {
-    nextL3CodeError.value = error instanceof Error ? error.message : '取系统编码失败，请重试';
-  } finally {
-    nextL3CodeLoading.value = false;
-  }
-}
-
-function handleL3Change(value: string): void {
+function handleL3Change(value: number | string | null): void {
   if (value === QUICK_CREATE_L3) {
-    segmentL3.value = '';
+    segmentL3.value = null;
     // L3 is shared taxonomy, not the current purchasable MaterialType.
     // Never copy the material name into a new shared classification.
     createL3Form.value = { label: '' };
     createL3DialogVisible.value = true;
-    void refreshNextL3Code();
     return;
   }
   l3ManuallyEdited.value = true;
@@ -561,11 +484,11 @@ function handleL3Change(value: string): void {
 async function applyTaxonomyCandidate(candidate: TaxonomyCandidate, manual: boolean): Promise<void> {
   cascadeWriting.value = true;
   try {
-    segmentL1.value = candidate.l1Code;
+    segmentL1.value = candidate.l1Id;
     await nextTick();
-    segmentL2.value = candidate.l2Code;
+    segmentL2.value = candidate.l2Id;
     await nextTick();
-    segmentL3.value = candidate.l3Code;
+    segmentL3.value = candidate.l3Id;
     l3ManuallyEdited.value = manual;
     taxonomyCandidates.value = [];
     l3MatchHint.value = `${manual ? '已确认分类' : '已根据名称智能匹配'}：${candidate.l1Label} > ${candidate.l2Label} > ${candidate.l3Label}；${candidate.reason}`;
@@ -576,19 +499,19 @@ async function applyTaxonomyCandidate(candidate: TaxonomyCandidate, manual: bool
 
 function rematchTaxonomy(): void {
   l3ManuallyEdited.value = false;
-  segmentL3.value = '';
+  segmentL3.value = null;
   l3MatchHint.value = '已允许重新匹配，请继续编辑名称或稍候系统重新推荐';
   suggestionRefreshToken.value += 1;
 }
 
 async function handleCreateL3(): Promise<void> {
   if (!canManageClassification.value) {
-    ElMessage.error('没有共享分类维护权限，请联系系统管理员新增 L3 分类');
+    ElMessage.error('没有共享分类维护权限，请联系系统管理员新增三级分类');
     createL3DialogVisible.value = false;
     return;
   }
   const label = createL3Form.value.label.trim();
-  if (!segmentL2.value) { ElMessage.warning('请先选择 L2 中类'); return; }
+  if (!segmentL2.value) { ElMessage.warning('请先选择二级分类'); return; }
   if (!label) { ElMessage.warning('请输入新品类名称'); return; }
   if (!factoryId.value) return;
 
@@ -597,19 +520,10 @@ async function handleCreateL3(): Promise<void> {
     (node) => node.segmentLabel.trim().toLocaleLowerCase() === normalizedLabel,
   );
   if (existing) {
-    segmentL3.value = existing.segmentCode;
+    segmentL3.value = existing.id;
     l3ManuallyEdited.value = true;
     createL3DialogVisible.value = false;
     ElMessage.success(`“${existing.segmentLabel}”已存在，已直接选中`);
-    return;
-  }
-
-  // 提交前重取一次编码: 弹窗可能开了很久, 期间别人建过分类。
-  // 拿不到编码就别提交 —— 提交一个空/陈旧的编码只会换来一句看不懂的 409。
-  await refreshNextL3Code();
-  const segmentCode = nextL3Code.value;
-  if (!segmentCode) {
-    ElMessage.error(nextL3CodeError.value || '系统编码尚未取到，请稍候重试');
     return;
   }
 
@@ -617,22 +531,21 @@ async function handleCreateL3(): Promise<void> {
   try {
     const response = await post<SegmentNode>(`/${factoryId.value}/material-segments`, {
       level: 3,
-      segmentCode,
       segmentLabel: label,
-      parentCode: segmentL2.value,
+      parentId: segmentL2.value,
       sortOrder: segmentL3Options.value.length,
       isActive: true,
     });
     if (!response.success || !response.data) {
-      throw new Error(response.message || '创建 L3 小类失败');
+      throw new Error(response.message || '创建三级分类失败');
     }
     await loadSegmentTree();
-    segmentL3.value = response.data.segmentCode;
+    segmentL3.value = response.data.id;
     l3ManuallyEdited.value = true;
     createL3DialogVisible.value = false;
     ElMessage.success(`已创建新品类「${response.data.segmentLabel}」`);
   } catch (error) {
-    handleCatchError(error, '创建 L3 小类失败');
+    handleCatchError(error, '创建三级分类失败');
   } finally {
     createL3Submitting.value = false;
   }
@@ -651,7 +564,7 @@ watch(
     l3MatchTimer = setTimeout(async () => {
       try {
         const response = await get<{ content: TableRow[] }>(`/${factoryId.value}/raw-material-types`, {
-          params: { page: 1, size: 20, codePrefix: l2, keyword: normalizedName },
+          params: { page: 1, size: 20, classificationId: l2, keyword: normalizedName },
         });
         if (requestVersion !== l3MatchRequestVersion) return;
         const rows = response.success && Array.isArray(response.data?.content) ? response.data.content : [];
@@ -659,10 +572,10 @@ watch(
         // Only an exact same-factory historic identity may be auto-selected.
         // Fuzzy results are exposed by the explainable candidate UI instead.
         const matched = rows.find((row) => String(row.name || '').trim().toLocaleLowerCase() === query);
-        const matchedL3 = String(matched?.code || '').slice(0, 10);
-        const option = segmentL3Options.value.find((node) => node.segmentCode === matchedL3);
+        const matchedL3 = Number(matched?.classificationId || 0);
+        const option = segmentL3Options.value.find((node) => node.id === matchedL3);
         if (option && !l3ManuallyEdited.value) {
-          segmentL3.value = option.segmentCode;
+          segmentL3.value = option.id;
           l3MatchHint.value = `已按历史物料「${String(matched?.name || '')}」匹配 ${option.segmentLabel}`;
         }
       } catch {
@@ -674,11 +587,7 @@ watch(
 
 interface MaterialCodePreview {
   code: string;
-  businessCode: string;
-  businessCodePrefix: string;
-  businessCodePrefixSource: 'CONFIGURED' | 'SYSTEM_STABLE';
-  businessCodePrefixSourceSegment: string;
-  classificationSegmentCode: string;
+  classificationId?: number | null;
   selectable: boolean;
   guidance: string;
 }
@@ -686,57 +595,61 @@ interface MaterialCodePreview {
 let codeContractRequestVersion = 0;
 
 function resetCodeContractPreview(): void {
-  segmentCodePreview.value = '';
-  businessCodePreview.value = '';
-  businessCodePrefixSource.value = '';
   codeContractHint.value = '';
-  codeContractReady.value = false;
+  codeSuggestionError.value = '';
 }
 
-async function generateSP8Code(notifyError = true): Promise<boolean> {
-  if (!segmentL1.value || !segmentL2.value || !segmentL3.value) {
-    if (notifyError) ElMessage.warning('请先选择 L1大类、L2中类、L3小类后再生成编码');
+async function refreshCodeSuggestion(notifyError = true): Promise<boolean> {
+  if (!form.value.category) {
+    codeSuggestionError.value = '请先选择基本类型，系统才能计算下一个可用料号';
+    return false;
+  }
+  const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
+  if (hasPartialClassification && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    codeSuggestionError.value = '分类如需填写，必须完整选择一级、二级、三级；也可以全部留空';
+    if (notifyError) ElMessage.warning(codeSuggestionError.value);
     return false;
   }
   if (!factoryId.value) return false;
   const requestVersion = ++codeContractRequestVersion;
-  const requestedSegment = segmentL3.value;
-  sp8PreviewLoading.value = true;
+  const requestedCategory = form.value.category;
+  codeSuggestionLoading.value = true;
+  codeSuggestionError.value = '';
   try {
     const res = await get<MaterialCodePreview>(
       `/${factoryId.value}/raw-material-types/preview-code`,
       {
-        params: { category: form.value.category, segmentCode: segmentL3.value },
+        params: {
+          category: requestedCategory,
+          classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
+        },
         _silent: !notifyError,
       },
     );
-    if (requestVersion !== codeContractRequestVersion || requestedSegment !== segmentL3.value) {
+    if (requestVersion !== codeContractRequestVersion || requestedCategory !== form.value.category) {
       return false;
     }
-    if (res.success && res.data?.code && res.data.businessCode && res.data.selectable) {
-      segmentCodePreview.value = res.data.code;
-      businessCodePreview.value = res.data.businessCode;
-      businessCodePrefixSource.value = res.data.businessCodePrefixSource;
+    if (res.success && res.data?.code && res.data.selectable) {
       codeContractHint.value = res.data.guidance;
-      codeContractReady.value = true;
+      if (!codeManuallyEdited.value) form.value.code = res.data.code;
       return true;
     } else {
       resetCodeContractPreview();
-      codeContractHint.value = res.message || '当前分类的编码契约不可用';
-      if (notifyError) ElMessage.error(codeContractHint.value);
+      codeSuggestionError.value = res.message || '系统无法计算下一个可用料号';
+      if (notifyError) ElMessage.error(codeSuggestionError.value);
       return false;
     }
   } catch (error) {
-    if (requestVersion !== codeContractRequestVersion || requestedSegment !== segmentL3.value) {
+    if (requestVersion !== codeContractRequestVersion || requestedCategory !== form.value.category) {
       return false;
     }
     resetCodeContractPreview();
-    codeContractHint.value = '编码契约校验暂不可用，请稍后重试';
-    if (notifyError) handleCatchError(error, codeContractHint.value);
+    codeSuggestionError.value = '系统暂时无法计算下一个可用料号，请稍后重试';
+    if (notifyError) handleCatchError(error, codeSuggestionError.value);
     return false;
   } finally {
     if (requestVersion === codeContractRequestVersion) {
-      sp8PreviewLoading.value = false;
+      codeSuggestionLoading.value = false;
     }
   }
 }
@@ -752,6 +665,11 @@ const storageTypeManuallyEdited = ref(false);
 const shelfLifeManuallyEdited = ref(false);
 const packagingManuallyEdited = ref(false);
 
+function handleCodeInput(value: string): void {
+  codeManuallyEdited.value = true;
+  form.value.code = value.toUpperCase();
+}
+
 // Unit manual state is driven by UnitSelect's user-only change event. Watching
 // v-model cannot distinguish form initialization from a real user action.
 function handleUnitUserChange(value: string): void {
@@ -762,7 +680,12 @@ function handleUnitUserChange(value: string): void {
 }
 watch(() => form.value.category, (category) => {
   if (!cascadeWriting.value) categoryManuallyEdited.value = true;
-  syncMaterialFamilyFromCategory(category);
+  if (dialogVisible.value && !editingId.value) {
+    codeManuallyEdited.value = false;
+    form.value.code = '';
+    resetCodeContractPreview();
+    if (category) void refreshCodeSuggestion(false);
+  }
   if (!isPackagingCategory(category)) {
     form.value.associatedCustomerId = null;
     form.value.packQtyPerProduct = null;
@@ -779,6 +702,7 @@ watch(packagingRules, () => {
 }, { deep: true, flush: 'sync' });
 
 function resetManuallyEditedFlags() {
+  codeManuallyEdited.value = false;
   unitManuallyEdited.value = false;
   categoryManuallyEdited.value = false;
   storageTypeManuallyEdited.value = false;
@@ -843,9 +767,9 @@ watch(
           shelfLifeDays?: number | null;
           level1PerLevel2?: number | null;
           level2Unit?: string | null;
-          segmentL1Code?: string | null;
-          segmentL2Code?: string | null;
-          segmentL3Code?: string | null;
+          classificationL1Id?: number | null;
+          classificationL2Id?: number | null;
+          classificationL3Id?: number | null;
           classificationConfidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
           classificationReason?: string | null;
           classificationCandidates?: TaxonomyCandidate[] | null;
@@ -957,13 +881,11 @@ function openCreate() {
   };
   resetPackaging();
   resetManuallyEditedFlags();
-  // SP8: reset cascade
-  segmentL1.value = '';
-  segmentL2.value = '';
-  segmentL3.value = '';
-  segmentCodePreview.value = '';
+  // Reset optional classification.
+  segmentL1.value = null;
+  segmentL2.value = null;
+  segmentL3.value = null;
   resetCodeContractPreview();
-  editingBusinessCode.value = '';
   editingDisplayCode.value = '';
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
@@ -991,16 +913,14 @@ async function openEdit(row: TableRow) {
     associatedCustomerId: (row.associatedCustomerId as string | null) ?? null,
     packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
-  editingBusinessCode.value = String(row.businessCode || '').trim();
   editingDisplayCode.value = materialDisplayCode(row);
   loadCustomers();
   resetPackaging();
   resetManuallyEditedFlags();
-  // SP8: reset cascade (edit mode — code already exists, cascade is create-only)
-  segmentL1.value = '';
-  segmentL2.value = '';
-  segmentL3.value = '';
-  segmentCodePreview.value = '';
+  // Edit mode keeps the existing classification unchanged.
+  segmentL1.value = null;
+  segmentL2.value = null;
+  segmentL3.value = null;
   resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
@@ -1052,12 +972,7 @@ async function openEdit(row: TableRow) {
 }
 
 const submitting = ref(false);
-const editingNeedsSegmentRepair = computed(() =>
-  Boolean(editingId.value) && !/^\d{16}$/.test(String(form.value.code || '')),
-);
-// 无字典的工厂没有分类可选 —— 再强制就是把人堵死(见 hasSegmentDictionary 注释)。
-const showSegmentEditor = computed(() => hasSegmentDictionary.value
-  && (!editingId.value || editingNeedsSegmentRepair.value));
+const showSegmentEditor = computed(() => hasSegmentDictionary.value && !editingId.value);
 async function handleSave() {
   if (!form.value.name) return ElMessage.warning('请填写原料名称');
   if (!form.value.category) return ElMessage.warning('请选择类别');
@@ -1072,15 +987,13 @@ async function handleSave() {
       return ElMessage.warning('采购参考价如填写，必须大于 0；未知价格请留空');
     }
   }
-  if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
-    return ElMessage.error('每个原料类型都必须选择 L1大类、L2中类、L3小类后保存');
+  const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
+  if (hasPartialClassification && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    return ElMessage.error('分类如需填写，必须完整选择一级、二级、三级；不需要分类时请全部留空');
   }
-  if (!editingId.value && hasSegmentDictionary.value && !(await generateSP8Code(true))) {
-    return;
-  }
-  // 无字典: 料号是唯一编码来源, 前端先拦一道(后端 createMaterialType 也会 fail-closed 拦)
-  if (!editingId.value && !hasSegmentDictionary.value && !String(form.value.code || '').trim()) {
-    return ElMessage.warning('请填写料号（本工厂未配置物料分段字典，料号由你自己维护）');
+  if (!editingId.value && !String(form.value.code || '').trim()) {
+    if (!codeSuggestionError.value) await refreshCodeSuggestion(true);
+    if (!String(form.value.code || '').trim()) return;
   }
 
   // 每条包装规则都直接换算到唯一库存基本单位。
@@ -1127,14 +1040,8 @@ async function handleSave() {
   try {
     let materialId: string;
     const materialPayload: Record<string, unknown> = { ...form.value };
-    // 🔴 2026-08-07 真机验证抓到: 这里原本**无条件** `delete materialPayload.code`。
-    // 有字典时那是对的(code 由后端按分段生成, 传上去也会被覆盖); 但无字典时 code 就是
-    // 用户刚填的料号、是唯一编码来源 —— 删掉等于把「料号」输入框和后端消费 dto.getCode()
-    // 的那条分支**从中间掐断**: 两头各自都对, 中间没接上。
-    // 实测 POST body 里一个 code 字段都没有, 后端如实回 400「请填写物料料号」,
-    // 而 el-message 3 秒自动消失, 页面上只表现为「点保存没反应」。
-    // 编辑态仍然删: 料号不允许改。
-    if (editingId.value || hasSegmentDictionary.value) {
+    // 编辑态料号不可修改；新建态必须把建议值或用户修改值原样提交。
+    if (editingId.value) {
       delete materialPayload.code;
     }
     if (!canViewPrice.value) {
@@ -1152,16 +1059,14 @@ async function handleSave() {
     if (editingId.value) {
       const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, {
         ...materialPayload,
-        segmentCode: editingNeedsSegmentRepair.value ? segmentL3.value : undefined,
       });
       if (!res.success) throw new Error(res.message || '更新失败');
       materialId = editingId.value;
       ElMessage.success('更新成功');
     } else {
-      // 创建: 不传 code 让后端自动生成
       const payload = {
         ...materialPayload,
-        segmentCode: segmentL3.value || undefined,
+        classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
       };
       const res = await post<{ id: string }>(`/${factoryId.value}/raw-material-types`, payload);
       if (!res.success) throw new Error(res.message || '创建失败');
@@ -1230,7 +1135,7 @@ async function openSuppliersForMaterial(row: TableRow) {
   suppliersDialogMaterial.value = {
     id: materialId,
     name: materialName,
-    code: String(row.businessCode || row.displayCode || row.code || ''),
+    code: String(row.code || ''),
     unit: String(row.unit || ''),
   };
   suppliersForMaterial.value = [];
@@ -1352,9 +1257,9 @@ function handleSearch() {
 }
 function handleRefresh() {
   searchKeyword.value = '';
-  filterSegmentL1.value = '';
-  filterSegmentL2.value = '';
-  filterSegmentL3.value = '';
+  filterSegmentL1.value = null;
+  filterSegmentL2.value = null;
+  filterSegmentL3.value = null;
   pagination.value.page = 1;
   loadData();
 }
@@ -1395,24 +1300,24 @@ function handleSizeChange(size: number) {
       </template>
 
       <div class="search-bar">
-        <!-- 分类层级筛选：分类名称为主，稳定分类码仅作为次级识别信息。 -->
+        <!-- 分类层级筛选：用户只看分类名称，节点 ID 由系统维护。 -->
         <el-select
           v-model="filterSegmentL1"
-          placeholder="全部 L1 大类"
+          placeholder="全部一级分类"
           clearable
           style="width: 170px"
           @change="handleSearch"
         >
           <el-option
-            v-for="opt in materialFamilyOptions"
-            :key="opt.segmentCode"
+            v-for="opt in segmentL1Options"
+            :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
-            :value="opt.segmentCode"
+            :value="opt.id"
           />
         </el-select>
         <el-select
           v-model="filterSegmentL2"
-          placeholder="全部 L2 中类"
+          placeholder="全部二级分类"
           clearable
           filterable
           :disabled="!filterSegmentL1"
@@ -1421,14 +1326,14 @@ function handleSizeChange(size: number) {
         >
           <el-option
             v-for="opt in filterSegmentL2Options"
-            :key="opt.segmentCode"
+            :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
-            :value="opt.segmentCode"
+            :value="opt.id"
           />
         </el-select>
         <el-select
           v-model="filterSegmentL3"
-          placeholder="全部 L3 小类"
+          placeholder="全部三级分类"
           clearable
           filterable
           :disabled="!filterSegmentL2"
@@ -1437,14 +1342,14 @@ function handleSizeChange(size: number) {
         >
           <el-option
             v-for="opt in filterSegmentL3Options"
-            :key="opt.segmentCode"
+            :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
-            :value="opt.segmentCode"
+            :value="opt.id"
           />
         </el-select>
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索原料名称 / 业务编码 / 历史编码"
+          placeholder="搜索原料名称 / 料号"
           clearable
           style="width: 280px"
           @keyup.enter="handleSearch"
@@ -1454,18 +1359,10 @@ function handleSizeChange(size: number) {
       </div>
 
       <el-table v-loading="loading" :data="tableData" stripe>
-        <el-table-column label="业务编码" min-width="180">
+        <el-table-column label="料号" min-width="180">
           <template #default="{ row }">
             <div class="material-code-cell">
               <span class="material-code-value">{{ materialDisplayCode(row) }}</span>
-              <el-tag v-if="!materialHasBusinessCode(row)" size="small" type="info">历史编码</el-tag>
-              <el-tooltip
-                v-else-if="row.code && String(row.code) !== materialDisplayCode(row)"
-                :content="`历史兼容编码：${row.code}`"
-                placement="top"
-              >
-                <el-tag size="small" type="info" effect="plain">兼容码</el-tag>
-              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -1512,31 +1409,28 @@ function handleSizeChange(size: number) {
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
       <el-form :model="form" label-width="120px">
 
-        <!-- 业务编码为用户主视图；旧16位编码仅保留兼容和分类修复用途。 -->
-        <el-form-item v-if="editingId" label="业务编码">
+        <el-form-item v-if="editingId" label="料号">
           <el-input :model-value="editingDisplayCode" disabled :prefix-icon="Lock" />
-          <div v-if="editingBusinessCode" class="field-hint">
-            业务编码不可修改；历史兼容编码可在列表“兼容码”提示中查看。
-          </div>
-          <div v-else class="field-hint field-hint--legacy">
-            该历史记录尚未分配业务编码，当前回退显示原16位编码。
-          </div>
+          <div class="field-hint">料号创建后不可修改。</div>
         </el-form-item>
-        <!--
-          ⛔ 2026-08-07: 没有分段字典的工厂以前**根本建不了物料** ——
-          新建时恒强制选 L1/L2/L3, 而类别下拉与 L3 都由分段字典派生, 字典空则无从选起;
-          后端 createMaterialType 第一行 requireValidSegmentChain 也是 fail-closed。
-          16 位分类码在产品里已是 legacy(getLegacyClassificationCode), 六膳门实际用的是
-          自己的料号(WL/YL/BC)。所以无字典时改成: 用户自己填料号, 类别走平台枚举。
-        -->
-        <el-form-item v-else-if="!hasSegmentDictionary" label="料号" required>
-          <el-input v-model="form.code" maxlength="32" placeholder="如 WL001 / YL052 / BC005" />
-          <div class="field-hint">
-            本工厂未配置物料分段字典，料号由你自己维护（沿用现有习惯即可）；同一工厂内不可重复。
-          </div>
-        </el-form-item>
-        <el-form-item v-else label="业务编码">
-          <span class="code-preview-hint">选择完整 L1-L3 分类后，系统将在下方生成并优先展示短业务编码。</span>
+        <el-form-item v-else label="料号" required>
+          <el-input
+            :model-value="form.code"
+            maxlength="32"
+            placeholder="选择基本类型后自动建议"
+            :disabled="!form.category || codeSuggestionLoading || Boolean(codeSuggestionError)"
+            @input="handleCodeInput"
+          />
+          <el-button
+            size="small"
+            :disabled="!form.category"
+            :loading="codeSuggestionLoading"
+            @click="refreshCodeSuggestion(true)"
+          >重新计算建议</el-button>
+          <div v-if="!form.category" class="field-hint">请先选择基本类型，系统才能计算下一个可用料号。</div>
+          <div v-else-if="codeSuggestionError" class="field-hint field-hint--error">{{ codeSuggestionError }}</div>
+          <div v-else-if="codeContractHint" class="field-hint field-hint--matched">{{ codeContractHint }}</div>
+          <div v-else class="field-hint">系统建议后可修改；同一工厂内不可重复。</div>
         </el-form-item>
 
         <el-form-item label="原料名称" required>
@@ -1554,12 +1448,12 @@ function handleSizeChange(size: number) {
             />
             <el-option
               v-for="opt in materialFamilyOptions"
-              :key="opt.segmentCode"
+              :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
           </el-select>
-          <div class="field-hint">与 16 位物料编码字典的 L1 类族保持一致</div>
+          <div class="field-hint">基本类型决定料号前缀；下方详细分类为选填。</div>
         </el-form-item>
 
         <!-- 副产是「来历」不是「材质」: 打了标记的物料仍保留其类别(如原料), 因此既能被排除出
@@ -1766,16 +1660,13 @@ function handleSizeChange(size: number) {
           </el-form-item>
         </template>
 
-        <!-- 物料分类 + 双码契约：业务编码主显示，16位编码仅用于历史兼容。 -->
-        <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
-             generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
+        <!-- 分类字典只承担可选归类，不参与料号生成。 -->
         <el-divider v-if="showSegmentEditor">
-          <span class="divider-title">物料分类与业务编码（必填）</span>
+          <span class="divider-title">详细分类（选填）</span>
         </el-divider>
         <template v-if="showSegmentEditor">
-          <!-- 字典已配置: 展示完整级联 -->
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
-            <el-form-item label="L1 大类" required>
+            <el-form-item label="一级分类">
               <el-select
                 v-model="segmentL1"
                 placeholder="请选择物料大类"
@@ -1786,16 +1677,16 @@ function handleSizeChange(size: number) {
               >
                 <el-option
                   v-for="opt in segmentL1Options"
-                  :key="opt.segmentCode"
+                  :key="opt.id"
                   :label="formatSegmentOptionLabel(opt)"
-                  :value="opt.segmentCode"
+                  :value="opt.id"
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L2 中类" required>
+            <el-form-item label="二级分类">
               <el-select
                 v-model="segmentL2"
-                :placeholder="segmentL1 ? '请选择 L2 中类' : '请先选择 L1 大类'"
+                :placeholder="segmentL1 ? '请选择二级分类' : '请先选择一级分类'"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1803,16 +1694,16 @@ function handleSizeChange(size: number) {
               >
                 <el-option
                   v-for="opt in segmentL2Options"
-                  :key="opt.segmentCode"
+                  :key="opt.id"
                   :label="formatSegmentOptionLabel(opt)"
-                  :value="opt.segmentCode"
+                  :value="opt.id"
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L3 小类" required>
+            <el-form-item label="三级分类">
               <el-select
                 v-model="segmentL3"
-                placeholder="请先选择 L2 中类"
+                placeholder="请先选择二级分类"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1822,23 +1713,23 @@ function handleSizeChange(size: number) {
                 <el-option
                   v-if="canManageClassification"
                   :key="QUICK_CREATE_L3"
-                  label="＋ 新建共享 L3 分类"
+                  label="＋ 新建共享三级分类"
                   :value="QUICK_CREATE_L3"
                 />
                 <el-option
                   v-for="opt in segmentL3Options"
-                  :key="opt.segmentCode"
+                  :key="opt.id"
                   :label="formatSegmentOptionLabel(opt)"
-                  :value="opt.segmentCode"
+                  :value="opt.id"
                 />
               </el-select>
-              <div class="field-hint">L3 是多个具体原料共用的稳定分类（如“鱼类原料”）；当前原料名称、规格、单位等仍维护在原料类型中。</div>
-              <div v-if="!canManageClassification" class="field-hint">没有共享分类维护权限；如无合适分类，请联系系统管理员在“物料编码分类”中新增。</div>
+              <div class="field-hint">分类可全部留空；一旦选择则须完整选到三级。分类只用于归类和筛选，不会改变料号。</div>
+              <div v-if="!canManageClassification" class="field-hint">没有共享分类维护权限；如无合适分类，请联系系统管理员在“物料分类字典”中新增。</div>
               <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
               <div v-if="taxonomyCandidates.length" class="taxonomy-candidates" aria-label="分类建议">
                 <el-button
                   v-for="candidate in taxonomyCandidates"
-                  :key="candidate.l3Code"
+                  :key="candidate.l3Id"
                   size="small"
                   plain
                   @click="applyTaxonomyCandidate(candidate, true)"
@@ -1853,51 +1744,7 @@ function handleSizeChange(size: number) {
                 @click="rematchTaxonomy"
               >重新匹配分类</el-button>
             </el-form-item>
-            <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
-              <div class="code-preview-stack">
-                <div class="code-preview-row">
-                  <span class="code-preview-label">业务编码</span>
-                  <el-tag v-if="businessCodePreview" type="success" class="code-preview-tag">
-                    {{ businessCodePreview }}
-                  </el-tag>
-                  <span v-else class="field-hint">正在校验编码契约…</span>
-                </div>
-                <div class="code-preview-row">
-                  <span class="code-preview-label">历史兼容编码（16位）</span>
-                  <el-tag v-if="segmentCodePreview" type="info" class="code-preview-tag">
-                    {{ segmentCodePreview }}
-                  </el-tag>
-                </div>
-                <el-button
-                  size="small"
-                  :loading="sp8PreviewLoading"
-                  @click="generateSP8Code(true)"
-                >
-                  刷新预览
-                </el-button>
-              </div>
-              <div v-if="codeContractHint" class="field-hint" :class="{ 'field-hint--matched': codeContractReady }">
-                {{ codeContractHint }}
-                <template v-if="businessCodePrefixSource === 'SYSTEM_STABLE'">；不会按分类名称猜测或覆盖历史前缀</template>
-              </div>
-            </el-form-item>
           </template>
-          <!-- 字典未配置: 诚实空态 + 跳转配置引导 (fool-proof Rule 5: dead-end 改导航) -->
-          <el-form-item v-else label="">
-            <el-alert
-              title="物料分类编码字典尚未配置，暂不可用"
-              type="info"
-              :closable="false"
-              show-icon
-              style="width: 100%"
-            >
-              <template #default>
-                <div style="font-size:12px;margin-top:4px;color:#606266">
-                   请先配置完整的 L1-L3 物料编码字典；配置完成前不能新建原料类型。
-                </div>
-              </template>
-            </el-alert>
-          </el-form-item>
         </template>
 
       </el-form>
@@ -1909,34 +1756,22 @@ function handleSizeChange(size: number) {
 
     <el-dialog
       v-model="createL3DialogVisible"
-      title="新建共享 L3 分类"
+      title="新建共享三级分类"
       width="460px"
       append-to-body
       :close-on-click-modal="false"
     >
       <el-alert
         title="这里创建的是可被多个原料复用的共享分类，不是当前具体原料"
-        description="例如 L3 可填写“鱼类原料”或“鸡胸肉”；具体规格、供应商形态和包装信息请填写在原料类型中。系统不会复制当前原料名称。"
+        description="例如三级分类可填写“鱼类原料”或“鸡胸肉”；具体规格、供应商形态和包装信息请填写在原料类型中。系统不会复制当前原料名称。"
         type="warning"
         :closable="false"
         show-icon
         style="margin-bottom: 16px"
       />
       <el-form label-width="110px">
-        <el-form-item label="所属 L2 中类">
-          <el-input :model-value="segmentL2" disabled />
-        </el-form-item>
-        <el-form-item label="系统编码">
-          <el-input
-            :model-value="nextL3Code"
-            disabled
-            :placeholder="nextL3CodeLoading ? '正在取编码…' : '未取到编码'"
-          />
-          <!-- 这一句以前写「系统已检查当前 L2 下的编码」, 而它只检查了看得见的那些。 -->
-          <div v-if="!nextL3CodeError" class="field-hint">
-            由服务端分配，已跳过被历史（含已删除）分类占用的编码，无需手工填写。
-          </div>
-          <div v-else class="field-hint field-hint--error">{{ nextL3CodeError }}</div>
+        <el-form-item label="所属二级分类">
+          <el-input :model-value="selectedL2Label" disabled />
         </el-form-item>
         <el-form-item label="小类名称" required>
           <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：鱼类原料 / 鸡胸肉 / 箱类包材" />
@@ -2131,7 +1966,7 @@ function handleSizeChange(size: number) {
   color: #e6a23c;
 }
 
-.field-hint--legacy {
+.field-hint--error {
   color: #e6a23c;
 }
 
