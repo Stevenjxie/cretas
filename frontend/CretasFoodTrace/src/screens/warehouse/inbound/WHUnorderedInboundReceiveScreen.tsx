@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
   Appbar,
   Button,
   Card,
+  Dialog,
   Modal,
   Portal,
   Searchbar,
@@ -23,6 +23,7 @@ import {
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { isAxiosError } from 'axios';
 
 import { MaterialSelectModal, MaterialSelectResult } from '../../../components/MaterialSelectModal';
 import {
@@ -63,6 +64,9 @@ export default function WHUnorderedInboundReceiveScreen() {
   const [warehouseSearch, setWarehouseSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmationVisible, setConfirmationVisible] = useState(false);
+  const [feedback, setFeedback] = useState<{ title: string; message: string } | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -137,15 +141,21 @@ export default function WHUnorderedInboundReceiveScreen() {
       );
       idempotencyKeyRef.current = null;
       const batchNumber = response.data.batchNumber ? `\n批次：${response.data.batchNumber}` : '';
-      Alert.alert(
-        '入库成功',
+      setConfirmationVisible(false);
+      setSuccessMessage(
         completeNotice
           ? `本次入库已记录，预告已结束。${batchNumber}`
           : `本次入库已记录，预告继续保留给下一车或其他负责人。${batchNumber}`,
-        [{ text: '返回待办', onPress: () => navigation.goBack() }],
       );
     } catch (error) {
-      handleError(error, { title: '无订单入库失败' });
+      setConfirmationVisible(false);
+      const backendMessage = isAxiosError(error)
+        ? (error.response?.data as { message?: string } | undefined)?.message
+        : undefined;
+      setFeedback({
+        title: '无订单入库失败',
+        message: backendMessage || (error instanceof Error ? error.message : '提交失败，请重试'),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -178,25 +188,13 @@ export default function WHUnorderedInboundReceiveScreen() {
         'preview',
       );
     } catch (error) {
-      Alert.alert('请补全信息', error instanceof Error ? error.message : '请检查入库信息');
+      setFeedback({
+        title: '请补全信息',
+        message: error instanceof Error ? error.message : '请检查入库信息',
+      });
       return;
     }
-
-    Alert.alert(
-      completeNotice ? '确认入库并结束预告？' : '确认本次部分入库？',
-      [
-        `预告：${task.sourceNumber}`,
-        `客户：${task.customerName || '未指定客户'}`,
-        `原料：${selectedMaterial?.materialName}`,
-        `仓库：${selectedWarehouse?.name}`,
-        `数量：${quantityText.trim()} ${selectedMaterial?.defaultUnit}`,
-        completeNotice ? '结果：货已全部到齐，结束预告' : '结果：还有下一车，保留待办',
-      ].join('\n'),
-      [
-        { text: '返回核对', style: 'cancel' },
-        { text: completeNotice ? '确认并结束' : '确认入库', onPress: () => void submit() },
-      ],
-    );
+    setConfirmationVisible(true);
   }, [
     completeNotice,
     externalBatchNumber,
@@ -428,6 +426,63 @@ export default function WHUnorderedInboundReceiveScreen() {
             )}
           />
         </Modal>
+
+        <Dialog visible={Boolean(feedback)} onDismiss={() => setFeedback(null)}>
+          <Dialog.Title>{feedback?.title}</Dialog.Title>
+          <Dialog.Content>
+            <Text>{feedback?.message}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setFeedback(null)}>我知道了</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog
+          visible={confirmationVisible}
+          dismissable={!submitting}
+          onDismiss={() => !submitting && setConfirmationVisible(false)}
+        >
+          <Dialog.Title>
+            {completeNotice ? '确认入库并结束预告？' : '确认本次部分入库？'}
+          </Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.confirmLine}>预告：{task.sourceNumber}</Text>
+            <Text style={styles.confirmLine}>客户：{task.customerName || '未指定客户'}</Text>
+            <Text style={styles.confirmLine}>原料：{selectedMaterial?.materialName}</Text>
+            <Text style={styles.confirmLine}>仓库：{selectedWarehouse?.name}</Text>
+            <Text style={styles.confirmLine}>数量：{quantityText.trim()} {selectedMaterial?.defaultUnit}</Text>
+            <Text style={styles.confirmResult}>
+              {completeNotice ? '结果：货已全部到齐，结束预告' : '结果：还有下一车，保留待办'}
+            </Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button disabled={submitting} onPress={() => setConfirmationVisible(false)}>返回核对</Button>
+            <Button loading={submitting} disabled={submitting} onPress={() => void submit()}>
+              {completeNotice ? '确认并结束' : '确认入库'}
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog
+          visible={Boolean(successMessage)}
+          dismissable={false}
+          onDismiss={() => undefined}
+        >
+          <Dialog.Title>入库成功</Dialog.Title>
+          <Dialog.Content>
+            <Text>{successMessage}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button
+              onPress={() => {
+                setSuccessMessage(null);
+                navigation.goBack();
+              }}
+            >
+              返回待办
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
       </Portal>
     </SafeAreaView>
   );
@@ -499,4 +554,6 @@ const styles = StyleSheet.create({
   },
   warehouseName: { color: '#1F2937', fontSize: 15, fontWeight: '600' },
   emptyWarehouse: { color: '#6B7280', textAlign: 'center', padding: 32 },
+  confirmLine: { color: '#374151', lineHeight: 24 },
+  confirmResult: { color: '#1565C0', fontWeight: '700', lineHeight: 24, marginTop: 8 },
 });
