@@ -1,14 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import {
   ActivityIndicator,
   Appbar,
   Button,
   Card,
+  Divider,
+  Icon,
   IconButton,
-  Menu,
   Text,
   TextInput,
+  TouchableRipple,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -82,6 +84,7 @@ export default function PurchaseOrderCreateScreen() {
 
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'material' | 'unit'; key: string } | null>(null);
+  const [pickerSearch, setPickerSearch] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -155,6 +158,42 @@ export default function PurchaseOrderCreateScreen() {
 
   const addItem = () => {
     setItems((prev) => [...prev, blankItem()]);
+  };
+
+  const openPicker = (kind: 'material' | 'unit', key: string) => {
+    setPickerSearch('');
+    setOpenMenuFor({ kind, key });
+  };
+
+  const closePicker = () => {
+    setOpenMenuFor(null);
+    setPickerSearch('');
+  };
+
+  const selectMaterial = (item: DraftItem, material: MaterialType) => {
+    // 抄码品锁单位为 abacaDefaultUnit (默认 kg), 防止用户选成箱级
+    const forcedUnit = material.isAbacaPackaging
+      ? (material.abacaDefaultUnit || 'kg')
+      : (item.unit || material.unit);
+    updateItem(item.key, {
+      materialTypeId: material.id,
+      materialName: material.name,
+      materialUnit: material.unit,
+      unit: forcedUnit,
+      materialPackagingSpecId: '',
+    });
+    closePicker();
+    void ensurePackagingLoaded(material.id).then((pkg) => {
+      if (material.isAbacaPackaging) return;
+      const active = (pkg?.packagingSpecs || []).filter((spec) => spec.active !== false);
+      const selected = active.find((spec) => spec.defaultSpec) || (active.length === 1 ? active[0] : undefined);
+      if (selected) {
+        updateItem(item.key, {
+          unit: selected.packageUnit,
+          materialPackagingSpecId: selected.id,
+        });
+      }
+    });
   };
 
   const handleSubmit = async () => {
@@ -232,6 +271,35 @@ export default function PurchaseOrderCreateScreen() {
     return Array.from(set);
   };
 
+  const getUnitOptionLabel = (item: DraftItem, unit: string): string => {
+    const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
+      .find((candidate) => candidate.packageUnit === unit);
+    return spec
+      ? `${spec.name} · 1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`
+      : `${unit}（基本单位）`;
+  };
+
+  const selectUnit = (item: DraftItem, unit: string) => {
+    const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
+      .find((candidate) => candidate.packageUnit === unit);
+    updateItem(item.key, {
+      unit,
+      materialPackagingSpecId: spec?.id || '',
+    });
+    closePicker();
+  };
+
+  const activePickerItem = openMenuFor
+    ? items.find((item) => item.key === openMenuFor.key)
+    : undefined;
+  const normalizedPickerSearch = pickerSearch.trim().toLowerCase();
+  const visiblePickerMaterials = normalizedPickerSearch
+    ? materials.filter((material) =>
+        material.name.toLowerCase().includes(normalizedPickerSearch)
+        || material.code.toLowerCase().includes(normalizedPickerSearch))
+    : materials;
+  const activeUnitOptions = activePickerItem ? getUnitOptionsFor(activePickerItem) : [];
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -287,7 +355,6 @@ export default function PurchaseOrderCreateScreen() {
         </View>
 
         {items.map((item, idx) => {
-          const unitOptions = getUnitOptionsFor(item);
           const subtotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
           return (
             <Card key={item.key} style={styles.itemCard}>
@@ -303,57 +370,16 @@ export default function PurchaseOrderCreateScreen() {
                 </View>
 
                 {/* 原料 */}
-                <Menu
-                  visible={openMenuFor?.kind === 'material' && openMenuFor.key === item.key}
-                  onDismiss={() => setOpenMenuFor(null)}
-                  anchor={
-                    <TextInput
-                      label="原料 *"
-                      value={item.materialName}
-                      mode="outlined"
-                      style={styles.field}
-                      editable={false}
-                      right={<TextInput.Icon icon="menu-down" onPress={() => setOpenMenuFor({ kind: 'material', key: item.key })} />}
-                      onPressIn={() => setOpenMenuFor({ kind: 'material', key: item.key })}
-                    />
-                  }
-                >
-                  {materials.length === 0 ? (
-                    <Menu.Item title="无可选原料" disabled />
-                  ) : (
-                    materials.map((m) => (
-                      <Menu.Item
-                        key={m.id}
-                        title={`${m.name} (${m.code})${m.isAbacaPackaging ? ' 🥩抄码' : ''}`}
-                        onPress={() => {
-                          // 抄码品锁单位为 abacaDefaultUnit (默认 kg), 防止用户选成箱级
-                          const forcedUnit = m.isAbacaPackaging
-                            ? (m.abacaDefaultUnit || 'kg')
-                            : (item.unit || m.unit);
-                          updateItem(item.key, {
-                            materialTypeId: m.id,
-                            materialName: m.name,
-                            materialUnit: m.unit,
-                            unit: forcedUnit,
-                            materialPackagingSpecId: '',
-                          });
-                          setOpenMenuFor(null);
-                          void ensurePackagingLoaded(m.id).then((pkg) => {
-                            if (m.isAbacaPackaging) return;
-                            const active = (pkg?.packagingSpecs || []).filter((spec) => spec.active !== false);
-                            const selected = active.find((spec) => spec.defaultSpec) || (active.length === 1 ? active[0] : undefined);
-                            if (selected) {
-                              updateItem(item.key, {
-                                unit: selected.packageUnit,
-                                materialPackagingSpecId: selected.id,
-                              });
-                            }
-                          });
-                        }}
-                      />
-                    ))
-                  )}
-                </Menu>
+                <TextInput
+                  label="原料 *"
+                  value={item.materialName}
+                  mode="outlined"
+                  style={styles.field}
+                  editable={false}
+                  right={<TextInput.Icon icon="menu-down" onPress={() => openPicker('material', item.key)} />}
+                  onPressIn={() => openPicker('material', item.key)}
+                  testID={`purchase-material-select-${idx}`}
+                />
 
                 {/* W-ABA-1 抄码品 banner — 提示用户入库按实际称重, 箱数无意义 */}
                 {isAbacaItem(item) && (
@@ -378,53 +404,22 @@ export default function PurchaseOrderCreateScreen() {
                     style={[styles.field, styles.flex2]}
                     placeholder={isAbacaItem(item) ? '入库以实际称重为准' : undefined}
                   />
-                  <Menu
-                    visible={openMenuFor?.kind === 'unit' && openMenuFor.key === item.key && !isAbacaItem(item)}
-                    onDismiss={() => setOpenMenuFor(null)}
-                    anchor={
-                      <TextInput
-                        label="单位 *"
-                        value={item.unit}
-                        mode="outlined"
-                        editable={false}
-                        style={[styles.field, styles.flex1]}
-                        right={
-                          isAbacaItem(item)
-                            ? <TextInput.Icon icon="lock" />
-                            : <TextInput.Icon icon="menu-down" onPress={() => setOpenMenuFor({ kind: 'unit', key: item.key })} />
-                        }
-                        onPressIn={isAbacaItem(item)
-                          ? undefined
-                          : () => setOpenMenuFor({ kind: 'unit', key: item.key })}
-                      />
+                  <TextInput
+                    label="单位 *"
+                    value={item.unit}
+                    mode="outlined"
+                    editable={false}
+                    style={[styles.field, styles.flex1]}
+                    right={
+                      isAbacaItem(item)
+                        ? <TextInput.Icon icon="lock" />
+                        : <TextInput.Icon icon="menu-down" onPress={() => openPicker('unit', item.key)} />
                     }
-                  >
-                    {unitOptions.length === 0 ? (
-                      <Menu.Item title="先选原料" disabled />
-                    ) : (
-                      unitOptions.map((u) => (
-                        <Menu.Item
-                          key={u}
-                          title={(() => {
-                            const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
-                              .find((candidate) => candidate.packageUnit === u);
-                            return spec
-                              ? `${spec.name} · 1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`
-                              : `${u}（基本单位）`;
-                          })()}
-                          onPress={() => {
-                            const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
-                              .find((candidate) => candidate.packageUnit === u);
-                            updateItem(item.key, {
-                              unit: u,
-                              materialPackagingSpecId: spec?.id || '',
-                            });
-                            setOpenMenuFor(null);
-                          }}
-                        />
-                      ))
-                    )}
-                  </Menu>
+                    onPressIn={isAbacaItem(item)
+                      ? undefined
+                      : () => openPicker('unit', item.key)}
+                    testID={`purchase-unit-select-${idx}`}
+                  />
                 </View>
                 {item.unit && Number(item.quantity) > 0 && (
                   <Text style={styles.packagingPreview}>
@@ -476,6 +471,127 @@ export default function PurchaseOrderCreateScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      <Modal
+        visible={!!openMenuFor && !!activePickerItem}
+        transparent
+        animationType="fade"
+        onRequestClose={closePicker}
+      >
+        <View style={styles.pickerRoot} testID="purchase-order-picker-modal">
+          <Pressable
+            style={styles.pickerBackdrop}
+            onPress={closePicker}
+            accessibilityLabel="关闭选择列表"
+            testID="purchase-order-picker-backdrop"
+          />
+          <View style={styles.pickerContent} accessibilityViewIsModal>
+            <View style={styles.pickerHeader}>
+              <Text variant="titleMedium" style={styles.pickerTitle}>
+                {openMenuFor?.kind === 'material' ? '选择原料' : '选择单位'}
+              </Text>
+              <IconButton
+                icon="close"
+                size={22}
+                onPress={closePicker}
+                accessibilityLabel="关闭"
+                testID="purchase-order-picker-close"
+              />
+            </View>
+
+            {openMenuFor?.kind === 'material' && (
+              <View style={styles.pickerSearchContainer}>
+                <TextInput
+                  mode="outlined"
+                  value={pickerSearch}
+                  onChangeText={setPickerSearch}
+                  placeholder="搜索原料名称 / 编码"
+                  dense
+                  autoFocus
+                  left={<TextInput.Icon icon="magnify" size={18} />}
+                  testID="purchase-order-picker-search"
+                />
+              </View>
+            )}
+            <Divider />
+
+            <ScrollView
+              style={styles.pickerOptions}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.pickerOptionsContent}
+            >
+              {openMenuFor?.kind === 'material' ? (
+                visiblePickerMaterials.length === 0 ? (
+                  <View style={styles.pickerEmpty}>
+                    <Text style={styles.pickerEmptyTitle}>暂无匹配原料</Text>
+                    <Text style={styles.pickerEmptyHint}>请修改搜索词，或联系管理员在原料管理中创建。</Text>
+                  </View>
+                ) : (
+                  visiblePickerMaterials.map((material) => {
+                    const selected = activePickerItem?.materialTypeId === material.id;
+                    return (
+                      <TouchableRipple
+                        key={material.id}
+                        onPress={() => activePickerItem && selectMaterial(activePickerItem, material)}
+                        style={[styles.pickerOption, selected && styles.pickerOptionSelected]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        testID={`purchase-material-option-${material.id}`}
+                      >
+                        <View style={styles.pickerOptionContent}>
+                          <Icon
+                            source={selected ? 'radiobox-marked' : 'radiobox-blank'}
+                            size={22}
+                            color={selected ? '#1890ff' : '#6b7280'}
+                          />
+                          <View style={styles.pickerOptionTextBlock}>
+                            <Text style={styles.pickerOptionTitle} numberOfLines={1}>
+                              {material.name}{material.isAbacaPackaging ? ' · 抄码品' : ''}
+                            </Text>
+                            <Text style={styles.pickerOptionMeta} numberOfLines={1}>
+                              {material.code} · 基本单位 {material.unit || 'kg'}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableRipple>
+                    );
+                  })
+                )
+              ) : activeUnitOptions.length === 0 ? (
+                <View style={styles.pickerEmpty}>
+                  <Text style={styles.pickerEmptyTitle}>请先选择原料</Text>
+                  <Text style={styles.pickerEmptyHint}>选定原料后，系统会显示可用的基本单位和包装单位。</Text>
+                </View>
+              ) : (
+                activeUnitOptions.map((unit) => {
+                  const selected = activePickerItem?.unit === unit;
+                  return (
+                    <TouchableRipple
+                      key={unit}
+                      onPress={() => activePickerItem && selectUnit(activePickerItem, unit)}
+                      style={[styles.pickerOption, selected && styles.pickerOptionSelected]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      testID={`purchase-unit-option-${unit}`}
+                    >
+                      <View style={styles.pickerOptionContent}>
+                        <Icon
+                          source={selected ? 'radiobox-marked' : 'radiobox-blank'}
+                          size={22}
+                          color={selected ? '#1890ff' : '#6b7280'}
+                        />
+                        <Text style={styles.pickerOptionTitle} numberOfLines={2}>
+                          {activePickerItem ? getUnitOptionLabel(activePickerItem, unit) : unit}
+                        </Text>
+                      </View>
+                    </TouchableRipple>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <View style={styles.footer}>
         <Button
@@ -541,6 +657,97 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
+  },
+
+  pickerRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  pickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  pickerContent: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '78%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+  },
+  pickerHeader: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  pickerTitle: {
+    flex: 1,
+    fontWeight: '600',
+  },
+  pickerSearchContainer: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  pickerOptions: {
+    maxHeight: 480,
+  },
+  pickerOptionsContent: {
+    paddingVertical: 4,
+  },
+  pickerOption: {
+    minHeight: 56,
+    justifyContent: 'center',
+  },
+  pickerOptionSelected: {
+    backgroundColor: '#eaf4ff',
+  },
+  pickerOptionContent: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  pickerOptionTextBlock: {
+    flex: 1,
+  },
+  pickerOptionTitle: {
+    flex: 1,
+    fontSize: 15,
+    color: '#1f2937',
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  pickerOptionMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#6b7280',
+  },
+  pickerEmpty: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 36,
+  },
+  pickerEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  pickerEmptyHint: {
+    marginTop: 8,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 20,
   },
 
   // W-ABA-1 抄码品提示条
