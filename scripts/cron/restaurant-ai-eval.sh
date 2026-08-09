@@ -19,6 +19,13 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   cd "$PYDIR"
   # shellcheck disable=SC1091
   source "$PYDIR/venv-current/bin/activate"
+  # 评测凭证: 2026-08-09 起电池用**租户自己的账号**登录, 不再走免密 demo-login
+  # (8-05 租户收敛把 cretas.demo.rest.* 清空、DEMO_REST 账号全停用, 电池从此
+  #  登录就崩, 连挂 4 天没人处理)。凭证只从 .env.prod 注入, 绝不落进仓库。
+  set -a
+  # shellcheck disable=SC1091
+  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  set +a
   PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.restaurant_ai_eval \
     --base https://admin.cretaceousfuture.com
   rc=$?

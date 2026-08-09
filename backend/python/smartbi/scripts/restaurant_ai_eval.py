@@ -26,7 +26,72 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-FACTORY_ID = "DEMO_REST"
+# ── 租户夹具：会随租户变的东西，只在这里定义一次 ────────────────────────
+#
+# 🔴 这个块存在的理由（2026-08-09 复盘）：8-06 餐饮租户收敛把 DEMO_REST 停用
+#    （9 个账号 is_active=f、`cretas.demo.rest.*` 默认值清空），这道 52 断言的
+#    电池从此**登录就崩**，每天往 alerts 写一行失败，4 天零回归证据；
+#    再往前，7-25 起就没再全绿过。
+#
+#    根因不是「谁忘了改」——是租户身份散在 **70 多处字符串字面量**里，
+#    换租户要改 70 处，于是没人改。判据：**会随租户变的东西只能有一处定义**，
+#    否则「跟着变」这件事的成本高到不会发生。
+#
+# ⛔ 换租户时只改这一块，然后跑 `_preflight_fixture` —— 它会在跑断言之前
+#    先向真实租户核对这些实体存在，把「夹具过期」报成一句人话，
+#    而不是让 52 条断言各挂各的、看起来像 AI 退化。
+FACTORY_ID = "MOCK_REST"
+
+#: 主菜品：菜品链、独立问、话题跳转都用它。要求本租户里**确实有销量**。
+_DISH_MAIN = "米饭"
+#: 第二菜品：用于「中途换实体」链，必须与 _DISH_MAIN 不同。
+_DISH_ALT = "娃娃菜"
+#: _DISH_ALT 的错别字形态（语音转写/形近字），必须**不存在**于菜单。
+_DISH_ALT_TYPO = "蛙蛙菜"
+#: 招牌菜：名字要长、要能被前缀部分匹配（见 _DISH_SIG_PARTIAL）。
+_DISH_SIG = "水煮牛肉"
+#: _DISH_SIG 的真前缀，且在本租户菜单内**唯一**——这条用例测的是
+#: 「用户只打了半个菜名，系统能不能认出来」。前缀不唯一就变成了歧义测试，
+#: 前缀等于全名就什么都没测。
+_DISH_SIG_PARTIAL = "水煮"
+#: 必须不存在的菜名，用于「如实说没找到，不许拿榜单顶包」。
+_DISH_MISSING = "不存在的菜ABC"
+#: 操作模式（下架预览）用的菜，与上面几个分开，避免链间串味。
+_DISH_OPERATE = "红糖糍粑"
+
+#: 具名门店 A/B/C：分别用于「菜品链里点名门店」「门店维度提问」「澄清乱序链」。
+_STORE_A = "模拟·静安嘉里中心店"
+_STORE_B = "模拟·打浦桥日月光店"
+_STORE_C = "模拟·长宁龙之梦店"
+#: 歧义片段：必须**同时匹配 ≥2 家**门店，这条用例测的就是「问得不够具体时反问」。
+#: ⛔ 换租户时最容易悄悄失效的就是它 —— 上一个租户有两家「日月光店」，
+#:    本租户只有一家，照搬过来这条用例会变成「非歧义」而依然显示通过。
+_STORE_AMBIG = "社区店"
+_STORE_AMBIG_1 = "模拟·宝山大场社区店"
+_STORE_AMBIG_2 = "模拟·闵行莘庄社区店"
+#: 本租户门店名的共同前缀，用于「答案里点到了某家店」这类不指定是哪家的断言。
+_STORE_NAME_PREFIX = "模拟·"
+#: 别的租户的门店名——跨租户泄漏的阴性对照，不随本租户变。
+_OTHER_TENANT_STORES = ["兄弟土菜馆", "有滋有味总部"]
+
+
+def _assert_fixture_self_consistent() -> None:
+    """夹具内部自洽 —— 这些错在跑之前就能发现，不必等打网络。"""
+    assert _DISH_SIG_PARTIAL != _DISH_SIG and _DISH_SIG.startswith(_DISH_SIG_PARTIAL), (
+        f"_DISH_SIG_PARTIAL({_DISH_SIG_PARTIAL}) 必须是 _DISH_SIG({_DISH_SIG}) 的**真前缀**"
+        " —— 等于全名等于没测部分匹配"
+    )
+    assert _DISH_ALT_TYPO != _DISH_ALT, "错别字形态不能与正确菜名相同"
+    assert len({_DISH_MAIN, _DISH_ALT, _DISH_SIG, _DISH_OPERATE}) == 4, (
+        "四个菜品夹具必须互不相同，否则链间会串味")
+    assert _STORE_AMBIG in _STORE_AMBIG_1 and _STORE_AMBIG in _STORE_AMBIG_2, (
+        f"_STORE_AMBIG({_STORE_AMBIG}) 必须同时是两家门店名的子串，"
+        "否则「问得不够具体要反问」这条用例测的就不是歧义了")
+    assert _STORE_AMBIG_1 != _STORE_AMBIG_2, "歧义的两家门店不能是同一家"
+    assert len({_STORE_A, _STORE_B, _STORE_C}) == 3, "三家具名门店必须互不相同"
+
+
+_assert_fixture_self_consistent()
 
 # ── Case schema ──────────────────────────────────────────────────────────
 # {q, contains: [...], excludes: [...], chain: str|None}
@@ -100,44 +165,44 @@ else:
 
 CASES: List[Dict[str, Any]] = [
     # ── 菜品链：缺时间 → 缺门店 → 结果 → 指标/对象切换 ──
-    {"q": "米饭的销量是多少", "chain": "dish",
+    {"q": f"{_DISH_MAIN}的销量是多少", "chain": "dish",
      "contains": ["哪个时间范围"],
      "followup_contains": ["本月", "上个月", "最近7天", "最近30天"],
-     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
+     "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "本月", "chain": "dish",
      "contains": ["哪一组门店"],
-     "followup_contains": ["全部门店", "青花椒新世界新丸中心店"],
-     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
+     "followup_contains": ["全部门店", f"{_STORE_A}"],
+     "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "全部门店", "chain": "dish",
-     "contains": ["「米饭」", "销量"]},
-    {"q": "那成本呢", "chain": "dish", "contains": ["「米饭」", "成本"]},
-    {"q": "那招牌藤椒味(单人份)呢", "chain": "dish",
-     "contains": ["「招牌藤椒味(单人份)」"], "excludes": ["「米饭」"]},
+     "contains": [f"「{_DISH_MAIN}」", "销量"]},
+    {"q": "那成本呢", "chain": "dish", "contains": [f"「{_DISH_MAIN}」", "成本"]},
+    {"q": f"那{_DISH_SIG}呢", "chain": "dish",
+     "contains": [f"「{_DISH_SIG}」"], "excludes": [f"「{_DISH_MAIN}」"]},
     {"q": "那毛利呢", "chain": "dish",
-     "contains": ["「招牌藤椒味(单人份)」"], "excludes": ["「米饭」"]},
-    {"q": "是否合理", "chain": "dish", "contains": ["「招牌藤椒味(单人份)」"]},
-    {"q": "怎么优化", "chain": "dish", "contains": ["「招牌藤椒味(单人份)」"]},
+     "contains": [f"「{_DISH_SIG}」"], "excludes": [f"「{_DISH_MAIN}」"]},
+    {"q": "是否合理", "chain": "dish", "contains": [f"「{_DISH_SIG}」"]},
+    {"q": "怎么优化", "chain": "dish", "contains": [f"「{_DISH_SIG}」"]},
     {"q": "换成上个月呢", "chain": "dish",
-     "contains": ["「招牌藤椒味(单人份)」", _ym(-1)]},
+     "contains": [f"「{_DISH_SIG}」", _ym(-1)]},
     # ── 真实前端按钮链：具名门店必须来自当前菜品/时间的实际销售范围 ──
-    {"q": "米饭的销量是多少", "chain": "dish_named_store",
+    {"q": f"{_DISH_MAIN}的销量是多少", "chain": "dish_named_store",
      "contains": ["哪个时间范围"],
      "followup_contains": ["本月", "上个月", "最近7天", "最近30天"]},
     {"q": "本月", "chain": "dish_named_store",
      "contains": ["哪一组门店"],
-     "followup_contains": ["青花椒新世界新丸中心店"],
-     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
-    {"q": "青花椒新世界新丸中心店", "chain": "dish_named_store",
-     "contains": ["青花椒新世界新丸中心店", "「米饭」", "销量"],
+     "followup_contains": [f"{_STORE_A}"],
+     "followup_excludes": _OTHER_TENANT_STORES},
+    {"q": f"{_STORE_A}", "chain": "dish_named_store",
+     "contains": [f"{_STORE_A}", f"「{_DISH_MAIN}」", "销量"],
      "excludes": ["没有找到", "毛利或毛利率"]},
     # ── 菜品独立问 ──
-    {"q": "本月全部门店米饭赚钱吗", "contains": ["结论", "「米饭」", "毛利率"]},
-    {"q": "这周全部门店米饭卖了多少", "contains": ["「米饭」", "销量"]},
-    {"q": "本月全部门店米饭的营收和销量分别是多少",
-     "contains": ["「米饭」", "营收", "销量"]},
-    {"q": "本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱",
+    {"q": f"本月全部门店{_DISH_MAIN}赚钱吗", "contains": ["结论", f"「{_DISH_MAIN}」", "毛利率"]},
+    {"q": f"这周全部门店{_DISH_MAIN}卖了多少", "contains": [f"「{_DISH_MAIN}」", "销量"]},
+    {"q": f"本月全部门店{_DISH_MAIN}的营收和销量分别是多少",
+     "contains": [f"「{_DISH_MAIN}」", "营收", "销量"]},
+    {"q": f"本月全部门店{_DISH_MAIN}和{_DISH_SIG}哪个赚钱",
      "contains": ["毛利"], "excludes": ["没有找到"]},
-    {"q": "本月全部门店不存在的菜ABC的销量",
+    {"q": f"本月全部门店{_DISH_MISSING}的销量",
      "contains": ["没有找到"], "excludes": ["排行"]},
     # ── 排名 / 存在性 ──
     {"q": "本月全部门店哪个菜卖得好", "contains": ["菜品销量排行", "销量"],
@@ -153,14 +218,14 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["门店"], "excludes": ["没有找到名为"]},
     {"q": "本月全部门店毛利率最高的菜是哪个", "contains": ["毛利"]},
     # ── 店×菜 ──
-    {"q": "本月全部门店哪家店的米饭卖得最好",
-     "contains": ["「米饭」", "门店销量排行"]},
-    {"q": "本月全部门店哪家店的招牌藤椒味卖得最好",
-     "contains": ["「招牌藤椒味」", "门店销量排行"]},
-    {"q": "本月鲜行者打浦桥日月光店的米饭卖得怎么样",
-     "contains": ["鲜行者打浦桥日月光店", "「米饭」", "销量"]},
-    {"q": "本月鲜行者打浦桥日月光店的毛利率",
-     "contains": ["鲜行者打浦桥日月光店", "毛利率"]},
+    {"q": f"本月全部门店哪家店的{_DISH_MAIN}卖得最好",
+     "contains": [f"「{_DISH_MAIN}」", "门店销量排行"]},
+    {"q": f"本月全部门店哪家店的{_DISH_SIG_PARTIAL}卖得最好",
+     "contains": [f"「{_DISH_SIG_PARTIAL}」", "门店销量排行"]},
+    {"q": f"本月{_STORE_B}的{_DISH_MAIN}卖得怎么样",
+     "contains": [f"{_STORE_B}", f"「{_DISH_MAIN}」", "销量"]},
+    {"q": f"本月{_STORE_B}的毛利率",
+     "contains": [f"{_STORE_B}", "毛利率"]},
     # ── 营收 / 时间窗 ──
     {"q": "这个月全部门店生意怎么样", "contains": ["本月", "总营收"]},
     {"q": "昨天全部门店卖了多少钱", "contains": ["昨天"]},
@@ -187,12 +252,17 @@ CASES: List[Dict[str, Any]] = [
      "contains": [_month_span(-2)]},
     {"q": "全部门店2025年全年营收多少", "contains": ["2025年"],
      "excludes": ["没有找到名为"]},
-    {"q": "日月光店的营收",
-     "contains": ["指的是哪家", "日月光店"],
-     "followup_contains": ["鲜行者打浦桥日月光店", "青花椒徐汇日月光店"],
-     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
-    {"q": "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量",
-     "contains": ["米饭", "娃娃菜", "招牌藤椒味(单人份)"],
+    # ⛔ 歧义反问：候选必须是**两家都含 _STORE_AMBIG 的门店**。
+    #    换租户时最容易在这里悄悄失效 —— 若片段只匹配到一家，系统会直接作答，
+    #    而这条用例仍可能因为「指的是哪家」恰好没出现而被判失败，
+    #    看起来像 AI 退化，实际是夹具过期。`_assert_fixture_self_consistent`
+    #    与 `_preflight_fixture` 一起把这种情况提前报成人话。
+    {"q": f"{_STORE_AMBIG}的营收",
+     "contains": ["指的是哪家", f"{_STORE_AMBIG}"],
+     "followup_contains": [f"{_STORE_AMBIG_1}", f"{_STORE_AMBIG_2}"],
+     "followup_excludes": _OTHER_TENANT_STORES},
+    {"q": f"本月全部门店{_DISH_MAIN}和{_DISH_ALT}和{_DISH_SIG}的销量",
+     "contains": [f"{_DISH_MAIN}", f"{_DISH_ALT}", f"{_DISH_SIG}"],
      "excludes": ["请指定其中一道"]},
     {"q": "本月全部门店哪些菜没人点", "contains": ["卖得最差"]},
     {"q": "本月全部门店外卖占了几成", "contains": ["外卖", "堂食", "单量占"]},
@@ -214,18 +284,22 @@ CASES: List[Dict[str, Any]] = [
      "excludes": ["操作已完成"]},
     {"q": "本月全部门店客单价最高的店是哪家", "contains": ["平均每单"],
      "excludes": ["没有找到名为"]},
-    {"q": "本月全部门店米饭的销量、毛利率和成本分别是多少",
-     "contains": ["「米饭」"]},
-    {"q": "这个月全部门店生意怎么样，另外米饭卖得好不好",
-     "contains": ["本月", "「米饭」"]},
-    {"q": "全部门店卤炸牛肉串本月销量为什么低",
+    {"q": f"本月全部门店{_DISH_MAIN}的销量、毛利率和成本分别是多少",
+     "contains": [f"「{_DISH_MAIN}」"]},
+    {"q": f"这个月全部门店生意怎么样，另外{_DISH_MAIN}卖得好不好",
+     "contains": ["本月", f"「{_DISH_MAIN}」"]},
+    {"q": f"全部门店{_DISH_OPERATE}本月销量为什么低",
      "contains": ["判断", "“销量低”的前提"],
      "excludes": ["如果你问的是销量为什么上涨或下降"]},
-    {"q": "全部门店卤炸牛肉串本月销量为什么高",
+    {"q": f"全部门店{_DISH_OPERATE}本月销量为什么高",
      "contains": ["判断", "“销量高”的前提"],
      "excludes": ["如果你问的是销量为什么上涨或下降"]},
+    # ⛔ 断言「点到了某一家店」而不是「点到了具体哪一家」：本租户 10 家门店
+    #    营收差距在 2% 以内，「昨天最强的是谁」每天都会换 —— 写死某一家等于
+    #    掷硬币，红了也说明不了任何问题。这条用例真正要守的是
+    #    「两问一答里第二问没被吞掉」。
     {"q": "先告诉我昨天全部门店的营收，再告诉我哪家店业绩最好",
-     "contains": ["昨天", "鲜行者打浦桥日月光店"]},
+     "contains": ["昨天", _STORE_NAME_PREFIX]},
     # ── 能力 / 域外 / 方法论 ──
     {"q": "你们能做什么", "contains": ["门店经营数据"]},
     {"q": "今天天气怎么样", "contains": ["不会编造"],
@@ -246,9 +320,9 @@ CASES: List[Dict[str, Any]] = [
          "请先把缺少的数据补齐",
      ]},
     # ── 操作模式：自然说法进入确认；数据筛选批量操作先列候选再逐项确认 ──
-    {"q": "下架卤炸牛肉串", "mode": "OPERATE", "preview_only": True,
+    {"q": f"下架{_DISH_OPERATE}", "mode": "OPERATE", "preview_only": True,
      "contains": ["确认后将下架菜品"],
-     "result_contains": ["卤炸牛肉串", "已下架"],
+     "result_contains": [f"{_DISH_OPERATE}", "已下架"],
      "excludes": ["还没有把握直接回答", "请切换到【操作】页"]},
     {"q": "把最近7天全部门店销量最低的5道菜下架", "mode": "OPERATE",
      "contains": ["先查看候选菜品", "具体菜名", "只有确认后才会执行"],
@@ -258,30 +332,30 @@ CASES: List[Dict[str, Any]] = [
     # ── 链B 实体切换：换菜品，时间/门店范围继承；再换指标；再换时间 ──
     # 补于 2026-07-28：原电池只有 dish / dish_named_store / store_rank 三条链，
     # 「中途换实体」「换完实体再换时间」这两种最常见的老板追问从没被守住。
-    {"q": "本月全部门店米饭卖得怎么样", "chain": "dish_switch",
-     "contains": ["「米饭」", "销量"]},
-    {"q": "那娃娃菜呢", "chain": "dish_switch",
-     "contains": ["「娃娃菜」", "销量"], "excludes": ["「米饭」"]},
+    {"q": f"本月全部门店{_DISH_MAIN}卖得怎么样", "chain": "dish_switch",
+     "contains": [f"「{_DISH_MAIN}」", "销量"]},
+    {"q": f"那{_DISH_ALT}呢", "chain": "dish_switch",
+     "contains": [f"「{_DISH_ALT}」", "销量"], "excludes": [f"「{_DISH_MAIN}」"]},
     {"q": "那毛利呢", "chain": "dish_switch",
-     "contains": ["「娃娃菜」", "毛利"], "excludes": ["「米饭」"]},
+     "contains": [f"「{_DISH_ALT}」", "毛利"], "excludes": [f"「{_DISH_MAIN}」"]},
     {"q": "换成上个月呢", "chain": "dish_switch",
-     "contains": ["「娃娃菜」", _month_span(-1)], "excludes": ["「米饭」"]},
+     "contains": [f"「{_DISH_ALT}」", _month_span(-1)], "excludes": [f"「{_DISH_MAIN}」"]},
 
     # ── 链F 澄清鲁棒性：反问时间时用户先答了门店，补上时间后要两者都记住 ──
     {"q": "哪个菜卖得好", "chain": "clarify_reorder",
      "contains": ["哪个时间范围"]},
-    {"q": "青花椒紫荆广场店", "chain": "clarify_reorder",
+    {"q": f"{_STORE_C}", "chain": "clarify_reorder",
      "contains": ["哪个时间范围"]},
     {"q": "本月", "chain": "clarify_reorder",
-     "contains": ["青花椒紫荆广场店", "销量排行"]},
+     "contains": [f"{_STORE_C}", "销量排行"]},
 
     # ── 链E 话题跳转：换了话题就**不该**继承上一轮的菜品 ──
-    {"q": "本月全部门店米饭销量", "chain": "topic_jump",
-     "contains": ["「米饭」", "销量"]},
+    {"q": f"本月全部门店{_DISH_MAIN}销量", "chain": "topic_jump",
+     "contains": [f"「{_DISH_MAIN}」", "销量"]},
     {"q": "门店名单给我看看", "chain": "topic_jump",
-     "contains": ["家门店"], "excludes": ["「米饭」", "没有找到"]},
+     "contains": ["家门店"], "excludes": [f"「{_DISH_MAIN}」", "没有找到"]},
     {"q": "今天天气怎么样", "chain": "topic_jump",
-     "contains": ["不会编造"], "excludes": ["「米饭」"]},
+     "contains": ["不会编造"], "excludes": [f"「{_DISH_MAIN}」"]},
 
     # ── 错别字 / 输入噪声：真人打字与语音转写的常见形态 ──
     # 补于 2026-07-28：电池此前一条错别字用例都没有。以下形态均已实测确认
@@ -296,7 +370,7 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["本月"], "excludes": ["我没太看懂", "没有找到"]},
     {"q": "这月挣了多少",                    # 口语“挣”指净利润；数据缺口必须如实说明
      "contains": ["净利润", "缺少费用"]},
-    {"q": "本月全部门店蛙蛙菜的销量",        # 菜名错字：必须明说没找到，不许拿榜单顶包
+    {"q": f"本月全部门店{_DISH_ALT_TYPO}的销量",        # 菜名错字：必须明说没找到，不许拿榜单顶包
      "contains": ["没有找到"], "excludes": ["排行"]},
 ]
 
@@ -384,13 +458,102 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
     }
 
 
+def _preflight_fixture(base: str, auth: Dict[str, str]) -> List[str]:
+    """跑断言之前，先向**真实租户**核对夹具里的实体确实存在。
+
+    🔴 为什么值得单独跑这一步：夹具过期和 AI 退化会产生**一模一样的红**——
+       52 条断言各挂各的，读起来像「模型突然不认识菜名了」。2026-08-06 换租户
+       之后正是这种情形，只不过更早一步崩在登录上，连红都没红出来。
+       这一步把「夹具指向的东西在这个租户里不存在」单独摘出来，报成一句人话。
+
+    ⚠️ 只做**存在性**核对，不做数值核对：数值每天滚动，那是断言层的事。
+    返回问题列表；空列表 = 夹具与租户对得上。
+    """
+    problems: List[str] = []
+    sid = _rand_sid("preflight")
+
+    stores = _run_case(base, auth, sid, {"q": "门店名单给我看看"})["flat"]
+    for label, name in (("_STORE_A", _STORE_A), ("_STORE_B", _STORE_B),
+                        ("_STORE_C", _STORE_C),
+                        ("_STORE_AMBIG_1", _STORE_AMBIG_1),
+                        ("_STORE_AMBIG_2", _STORE_AMBIG_2)):
+        if name not in stores:
+            problems.append(f"{label}=「{name}」在 {FACTORY_ID} 的门店名单里不存在")
+    if stores.count(_STORE_AMBIG) < 2:
+        problems.append(
+            f"_STORE_AMBIG=「{_STORE_AMBIG}」在门店名单里只出现 "
+            f"{stores.count(_STORE_AMBIG)} 次 —— 歧义反问用例需要它匹配至少两家")
+
+    for label, dish, want_found in (
+            ("_DISH_MAIN", _DISH_MAIN, True),
+            ("_DISH_ALT", _DISH_ALT, True),
+            ("_DISH_SIG", _DISH_SIG, True),
+            ("_DISH_OPERATE", _DISH_OPERATE, True),
+            ("_DISH_ALT_TYPO", _DISH_ALT_TYPO, False),
+            ("_DISH_MISSING", _DISH_MISSING, False)):
+        flat = _run_case(base, auth, _rand_sid("preflight"),
+                         {"q": f"本月全部门店{dish}的销量"})["flat"]
+        found = "没有找到" not in flat
+        if found != want_found:
+            problems.append(
+                f"{label}=「{dish}」应当{'存在' if want_found else '**不存在**'}"
+                f"于 {FACTORY_ID} 的菜单，实测{'找得到' if found else '找不到'}")
+    return problems
+
+
 def run_eval(base: str, only: Optional[str] = None) -> int:
-    login = _post_json(f"{base}/api/mobile/auth/demo-login?tenant=rest", {})
-    token = (login.get("data") or {}).get("token") or (login.get("data") or {}).get("accessToken")
+    # ── 登录：用租户自己的账号，不用免密 demo-login ──────────────────────
+    #
+    # 🔴 2026-08-06~08-09 这道电池连挂 4 天，就是因为它打的是
+    #    `/auth/demo-login?tenant=rest`，而 8-05 租户收敛已经把
+    #    `cretas.demo.rest.*` 清空、DEMO_REST 的 9 个账号全部停用。
+    #
+    # ⛔ 不把 demo-login 重新指向 MOCK_REST —— application.properties 里写着
+    #    两条互相咬合的约束：demo 租户会被 `DemoReadOnlyInterceptor` 上只读锁，
+    #    而「⛔ MOCK_REST 绝不能进 cretas.demo.factory-ids，进去它就失去写能力，
+    #    而演示需要『有操作设置的』」。于是只改指向就等于开一个**免密可写的
+    #    超管入口**，加进名单又会废掉演示的写能力。两边都不能选。
+    #    8-05 拍板的正解本来就写在那段注释里：**演示一律用 MOCK_REST 的账号登录**。
+    #
+    # ⚠️ 凭证只从环境变量取，绝不落进仓库（本项目硬规则）。缺了就明确报错停下，
+    #    不回落到任何免密路径 —— 那正是上一次静默失效的形状。
+    import os
+
+    username = os.environ.get("RESTAURANT_EVAL_USERNAME", "").strip()
+    password = os.environ.get("RESTAURANT_EVAL_PASSWORD", "")
+    if not username or not password:
+        print("FATAL: 缺少评测凭证环境变量 RESTAURANT_EVAL_USERNAME / "
+              "RESTAURANT_EVAL_PASSWORD。")
+        print(f"  它们应指向 {FACTORY_ID} 的一个活跃账号；服务器上由 "
+              "scripts/cron/restaurant-ai-eval.sh 从 .env.prod 注入。")
+        return 2
+    login = _post_json(f"{base}/api/mobile/auth/unified-login", {
+        "username": username,
+        "password": password,
+        "deviceInfo": {"deviceId": _rand_sid("eval-device"),
+                       "deviceModel": "regression-eval",
+                       "platform": "android", "osVersion": "1"},
+    })
+    data = login.get("data") or {}
+    token = data.get("token") or (data.get("tokens") or {}).get("token")
     if not token:
-        print("FATAL: demo login failed", login)
+        print(f"FATAL: 登录失败 (user={username}) -> {login}")
+        return 2
+    if data.get("factoryId") and data["factoryId"] != FACTORY_ID:
+        # ⛔ 登录成功但登进了别的租户 = 后面 52 条断言全部在错的数据上跑。
+        #    宁可停下: 这种「跑完了但量错了对象」比崩掉更难发现。
+        print(f"FATAL: 账号 {username} 属于租户 {data['factoryId']}, "
+              f"而电池要测的是 {FACTORY_ID} —— 断言会跑在错的数据上。")
         return 2
     auth = {"Authorization": f"Bearer {token}"}
+
+    fixture_problems = _preflight_fixture(base, auth)
+    if fixture_problems:
+        print(f"FATAL: 租户夹具与 {FACTORY_ID} 对不上 —— 先修夹具再看断言，"
+              "否则 52 条断言会各挂各的、看起来像模型退化:")
+        for problem in fixture_problems:
+            print(f"  · {problem}")
+        return 3
 
     # ── 预分组成"执行单元" ────────────────────────────────────────────
     # 独立用例各成一个单元; 同一 chain 的全部步骤合成一个单元, 因为链是有状态的:
