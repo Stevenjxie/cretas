@@ -47,7 +47,8 @@ class ProductProcessWorkflowConfigToolBomFieldsTest {
         tool = new ProductProcessWorkflowConfigTool(
                 objectMapper,
                 new ProductProcessWorkflowValidator(),
-                mock(ProductProcessWorkflowService.class));
+                mock(ProductProcessWorkflowService.class),
+                false);   // 本类不测落库, 开关传 false
     }
 
     // ───────────────────────── 约束 1：类别闸 ─────────────────────────

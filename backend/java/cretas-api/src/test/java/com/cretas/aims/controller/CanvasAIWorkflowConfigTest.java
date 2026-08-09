@@ -315,7 +315,8 @@ class CanvasAIWorkflowConfigTest {
         // ProductProcessWorkflowConfigToolWriteTest 覆盖。
         ProductProcessWorkflowConfigTool realTool = new ProductProcessWorkflowConfigTool(
                 objectMapper, new ProductProcessWorkflowValidator(),
-                mock(ProductProcessWorkflowService.class));
+                mock(ProductProcessWorkflowService.class),
+                false);   // 本类不测落库, 开关传 false
         ToolRegistry realRegistry = new ToolRegistry();
         Field executors = ToolRegistry.class.getDeclaredField("toolExecutors");
         executors.setAccessible(true);

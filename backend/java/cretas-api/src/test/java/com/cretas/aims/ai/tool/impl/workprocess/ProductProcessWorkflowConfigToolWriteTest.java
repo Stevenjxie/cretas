@@ -41,8 +41,10 @@ class ProductProcessWorkflowConfigToolWriteTest {
 
     @BeforeEach
     void setUp() {
+        // 本类测的是【开关打开后】的落库行为, 所以传 true。
+        // 「开关关着」那一档由 writeDisabledByDefaultNeverTouchesTheDatabase 单独覆盖。
         tool = new ProductProcessWorkflowConfigTool(
-                objectMapper, new ProductProcessWorkflowValidator(), workflowService);
+                objectMapper, new ProductProcessWorkflowValidator(), workflowService, true);
     }
 
     @Test
@@ -239,6 +241,29 @@ class ProductProcessWorkflowConfigToolWriteTest {
         Map<String, Object> data = asMap(envelope.get("data"));
         assertEquals(Boolean.FALSE, data.get("applied"));
         assertEquals("PUBLISHED", data.get("status"));
+    }
+
+    @Test
+    @DisplayName("🔴 承重: 开关【默认关】时一次库都不碰 —— 这是上线时的实际形态")
+    void writeDisabledByDefaultNeverTouchesTheDatabase() throws Exception {
+        // ⛔ 只测「开着」那一档等于没测默认行为 —— prod 上线时开关是关的,
+        // 那一档才是真正会跑的代码。
+        ToolExecutor disabled = new ProductProcessWorkflowConfigTool(
+                objectMapper, new ProductProcessWorkflowValidator(), workflowService, false);
+
+        String arguments = objectMapper.writeValueAsString(Map.of(
+                "definition", definitionWithOwner("PT-001", 3L),
+                "patches", List.of(Map.of("op", "SET_NODE_FIELD",
+                        "nodeId", "raw", "path", "name", "value", "改过的原料名"))));
+
+        Map<String, Object> envelope = objectMapper.readValue(
+                disabled.execute(ToolCall.of("off", disabled.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+
+        assertEquals(Boolean.FALSE, envelope.get("success"));
+        assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
+        verify(workflowService, never()).saveDraft(any(), any(), any());
     }
 
     @Test

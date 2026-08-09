@@ -8,6 +8,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -66,16 +67,37 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "materialKind", "unit", "ordinal");
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
+    /**
+     * 落库能力的总开关，<b>默认关</b>。
+     *
+     * <p>Steve 2026-08-09 拍板：先合进 main，但在补上「productTypeId 的可信来源」之前
+     * 保持关闭。原因是<b>决定覆写哪张画布的 productTypeId 目前完全由 AI 决定</b> ——
+     * {@code factoryId} 已经钉在 context 上（AI 改不了），但 context 里<b>没有</b>
+     * productTypeId 可用（只有 factoryId/tenantId/userId/userRole/permissions），
+     * 所以无法比对。模型在多产品对话里把它填成同厂另一个产品时，
+     * {@code requireWorkflowOwner} 会放行（确实是本厂产品），结果是给那个产品
+     * <b>新建</b>一张内容是别人的草稿 —— 不报错、无症状，可能很久没人发现。
+     *
+     * <p>⛔ 打开它之前必须先做的事：让网关/控制器把「用户当前打开的是哪个产品」
+     * 带进 context，并在这里比对。⛔ 不要因为「测试都绿」就打开 ——
+     * 这个洞在单元测试里看不见，它需要的是 context 里那个字段存在。
+     */
+    public static final String WRITE_ENABLED_PROPERTY =
+            "cretas.ai.canvas-workflow-write.enabled";
+
     private final ProductProcessWorkflowValidator workflowValidator;
     private final ProductProcessWorkflowService workflowService;
+    private final boolean writeEnabled;
 
     public ProductProcessWorkflowConfigTool(
             ObjectMapper objectMapper,
             ProductProcessWorkflowValidator workflowValidator,
-            ProductProcessWorkflowService workflowService) {
+            ProductProcessWorkflowService workflowService,
+            @Value("${" + WRITE_ENABLED_PROPERTY + ":false}") boolean writeEnabled) {
         this.objectMapper = objectMapper;
         this.workflowValidator = workflowValidator;
         this.workflowService = workflowService;
+        this.writeEnabled = writeEnabled;
     }
 
     @Override
@@ -214,6 +236,13 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     public String execute(ToolCall toolCall, Map<String, Object> context) {
         try {
             ValidatedPatch validated = buildValidatedCandidate(parseArguments(toolCall));
+
+            if (!writeEnabled) {
+                // ⛔ 开关关着时回到「只出预览」的老行为, 并把原因说清楚 ——
+                // 不说原因的话, agent 会以为是补丁写错了, 反复重试同一件永远做不成的事。
+                return buildSemanticError("WORKFLOW_AI_PREVIEW_ONLY",
+                        "画布落库能力当前未开启，本次只生成预览；请人工在产品配置页保存");
+            }
 
             if (touchesCostBearingFields(validated.patches())) {
                 // ⛔ 整批拒绝, 不是「把克数那几条挑掉、其余照写」——
