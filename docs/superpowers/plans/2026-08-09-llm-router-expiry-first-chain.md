@@ -1099,9 +1099,18 @@ async def _run() -> Dict[Tuple[str, str], Tuple[str, str]]:
             async with sem:
                 verdicts = [await _probe(client, pair[0], pair[1], s)
                             for s in _slots_for(pair)]
-            # 任一槽拿到非空内容即算可用; 全不可用时取第一个判定作为原因。
+            # 任一槽拿到非空内容即算可用。
+            # ⛔ 全不可用时**不能取第一个判定**当原因 —— 槽的遍历顺序会决定
+            #    打印出哪条, 于是 CHAT 槽一次网络抖动报的 error 会盖掉
+            #    REASONING 槽报的真实 quota 耗尽。把各槽的不同判定全列出来:
+            #    「同一模型在不同槽行为不同」本身就是值得看见的信号。
             ok = next((v for v in verdicts if v[0] == "ok"), None)
-            results[pair] = ok or verdicts[0]
+            if ok:
+                results[pair] = ok
+            else:
+                labels = sorted({v[0] for v in verdicts})
+                details = sorted({v[1] for v in verdicts})
+                results[pair] = ("+".join(labels), "; ".join(details))
 
         await asyncio.gather(*(one(p) for p in r._SAFE_MODELS))
     return results
@@ -1128,7 +1137,11 @@ def main() -> int:
     print("  无余量说明「用完即停」没覆盖它, 那个 200 可能是真在计费。本脚本")
     print("  不主动枚举未登记模型, 避免把可能计费的条目做成一键加入的清单。")
 
-    return 1 if (dead or soon) else 0
+    # ⛔ 只有「注册表说活、实测不可用」才 exit 1(=告警)。
+    #    「7 天内到期」照常打印但 exit 0 —— 它会连发 7 天, 且 08-13 那批一到期
+    #    就是 14 个条目同时发。天天响的告警最后没人看, 这次出事(飞轮日报静默
+    #    坏 5 天 / 电池红了 4 天没人处理)就是这个形状。告警要留给"现在就得动手"的事。
+    return 1 if dead else 0
 
 
 if __name__ == "__main__":
