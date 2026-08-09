@@ -105,6 +105,32 @@ _RANGE_ANCHORS = {
     },
 }
 
+#: 派生量锚 —— 从生成器的**随机分布**算出期望值，锚在全店汇总上。
+#:
+#: 🔴 存在的理由：实测最常被问的格子是 `销量×全店`（2298 次），而它**一直没有锚** ——
+#:    它和菜品维度用同一个表达式，「各菜品加总 == 全店」对它是**近似恒真**，
+#:    量不出问题。这两条把它锚在**订单数**上，走的是另一条路。
+#:
+#: 期望值的推导（`generator.py::_generate_orders_inner`）：
+#:    单均出品数 = E[line_count] × E[qty]
+#:               = E[randint(2,6)] × E[randint(1,3)] = 4 × 2 = 8.00
+#:    单均人数   = P(dine_in)·E[randint(1,6)] + P(其它)·1
+#:               = 0.62 × 3.5 + 0.38 × 1 = 2.55
+#:
+#: ⚠️ 容差必须同时容下两件事，⛔ 不能按纯抽样噪音去卡：
+#:      ① 抽样噪音（6.2 万单时约 0.013）
+#:      ② **渠道权重的实现偏差** —— 实际抽到的 dine_in 是 0.6229 不是 0.62，
+#:         用名义权重算期望会差 0.007。2026-08-10 实测单均人数 2.5646：
+#:         按名义权重差 0.0146(2.3σ)，按实际权重只差 0.0076。
+#:    所以 0.10 / 0.08 是「远大于噪音、又能抓住真实改动」的档位
+#:    （line_count 若改成 randint(2,8)，期望会跳到 10.00）。
+_DERIVED_ANCHORS = {
+    # 指标 key: (期望值, 容差, 推导说明)
+    "dishes_per_order": (8.00, 0.10, "E[randint(2,6)] × E[randint(1,3)]"),
+}
+#: 单均人数没有对应的登记指标（客流÷订单数不是登记的派生量），单独算。
+_GUESTS_PER_ORDER = (2.55, 0.08, "P(dine_in)·E[randint(1,6)] + P(其它)·1")
+
 #: 1 分钱。单价与食材成本都是「每份恒定」的量，比值应当精确到分。
 _TOLERANCE = 0.011
 
@@ -284,6 +310,41 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> Tuple[List[str], int]:
             missing = set(_CHANNEL_WEIGHTS) - {str(x.get("dim_label")) for x in r.rows}
             if missing:
                 failures.append(f"渠道占比: 源码有但一条都没查到 {sorted(missing)}")
+
+            # ── 派生量锚：锚住那个「最常被问却一直没锚」的全店销量 ──────────
+            print()
+            async with pool.acquire() as c7:
+                await c7.execute(
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id)
+
+                async def _all(metric: str):
+                    rv = await execute_cell(
+                        c7, factory_id=factory_id, metric_key=metric,
+                        dimension_key="all", aggregation_key="summary",
+                        date_range=rng, available_columns=cols)
+                    return float(rv.rows[0][metric]) if (rv.ok and rv.rows) else None
+
+                for metric, (want, tol, how) in _DERIVED_ANCHORS.items():
+                    checked += 1
+                    got = await _all(metric)
+                    ok = got is not None and abs(got - want) <= tol
+                    if not ok:
+                        failures.append(
+                            f"{metric}: 源码期望 {want} (±{tol}), 算出来 {got}")
+                    print(f"派生·{metric:18s} 算出 {got if got is not None else float('nan'):8.4f}  "
+                          f"源码期望 {want:.2f}±{tol}  [{how}] {'' if ok else '❌'}")
+
+                # 单均人数：没有对应的登记派生量，用客流 ÷ 订单数
+                checked += 1
+                want, tol, how = _GUESTS_PER_ORDER
+                g_all, o_all = await _all("guests"), await _all("orders")
+                got = (g_all / o_all) if (g_all is not None and o_all) else None
+                ok = got is not None and abs(got - want) <= tol
+                if not ok:
+                    failures.append(
+                        f"单均人数: 源码期望 {want} (±{tol}), 算出来 {got}")
+                print(f"派生·{'单均人数(客流÷单数)':18s} 算出 {got if got is not None else float('nan'):8.4f}  "
+                      f"源码期望 {want:.2f}±{tol}  [{how}] {'' if ok else '❌'}")
 
             # ── 区间锚：按渠道的平台抽佣率 ────────────────────────────────
             print()

@@ -182,3 +182,66 @@ def test_every_registered_dish_metric_has_an_anchor():
     # ⛔ 不 assert 空 —— 那会逼人为了让测试过而乱加锚。只是把清单摆出来。
     print(f"\n菜品维度上尚无真值锚的指标: {unanchored}")
     assert anchored <= product_metrics, "锚引用了菜品维度上不存在的指标"
+
+
+def test_derived_anchors_match_the_generator_distributions():
+    """派生量锚的期望值必须与 `generator.py` 里的**随机分布**对得上。
+
+    🔴 它锚住的是 `销量×全店` —— 实测**最常被问**的格子(2298 次), 而它
+       一直没有锚: 它和菜品维度用同一个表达式,「各菜品加总 == 全店」对它
+       是近似恒真, 量不出问题。这两条走的是另一条路(锚在订单数上)。
+
+    ⛔ 这里**重算期望值**而不是抄一个数 —— 抄了之后 generator 改了分布,
+       锚还停在旧值上, 而那时对账会红在一个「其实是对的」的数上。
+    """
+    from smartbi.scripts.registry_truth_check import (
+        _DERIVED_ANCHORS, _GUESTS_PER_ORDER)
+
+    seed = _seed_module()
+    if seed is None:
+        pytest.skip("读不到生成器源码 —— ⚠️ 这是 skip 不是 pass")
+    import importlib
+    import inspect
+    import re
+
+    gen = importlib.import_module("mock_platform.world.generator")
+    src = inspect.getsource(gen)
+
+    def _randint_mean(pattern: str) -> float:
+        m = re.search(pattern, src)
+        assert m, f"在 generator.py 里找不到 {pattern!r} —— 生成逻辑改了, 请重推期望值"
+        lo, hi = int(m.group(1)), int(m.group(2))
+        return (lo + hi) / 2.0
+
+    line_mean = _randint_mean(r"line_count = rng\.randint\((\d+), (\d+)\)")
+    qty_mean = _randint_mean(r"\bqty = rng\.randint\((\d+), (\d+)\)")
+    guest_mean = _randint_mean(r"guest_count = rng\.randint\((\d+), (\d+)\)")
+
+    want_dpo = line_mean * qty_mean
+    got_dpo = _DERIVED_ANCHORS["dishes_per_order"][0]
+    assert abs(got_dpo - want_dpo) < 1e-9, (
+        f"单均出品数的锚 {got_dpo} ≠ 源码分布重算的 {want_dpo} "
+        f"(E[randint]={line_mean} × {qty_mean}) —— ⛔ 别改锚, 先看 generator 改了什么")
+
+    dine_in_w = dict(zip(gen._CHANNELS, gen._CHANNEL_WEIGHTS))["dine_in"]
+    want_gpo = dine_in_w * guest_mean + (1 - dine_in_w) * 1.0
+    got_gpo = _GUESTS_PER_ORDER[0]
+    assert abs(got_gpo - want_gpo) < 1e-9, (
+        f"单均人数的锚 {got_gpo} ≠ 源码重算的 {want_gpo}")
+
+
+def test_derived_anchor_tolerance_is_wider_than_sampling_noise():
+    """⚠️ 容差必须同时容下抽样噪音**和渠道权重的实现偏差**。
+
+    2026-08-10 实测: 单均人数按**名义**权重(0.62)算期望差 0.0146(约 2.3σ),
+    按**实际**抽到的权重(0.6229)只差 0.0076。容差卡在纯抽样噪音上会周期性假红。
+    """
+    from smartbi.scripts.registry_truth_check import (
+        _DERIVED_ANCHORS, _GUESTS_PER_ORDER)
+
+    # 6.2 万单时, 单均出品数的标准误约 0.013、单均人数约 0.006。
+    assert _DERIVED_ANCHORS["dishes_per_order"][1] >= 0.05, "容差太紧, 会被抽样噪音假红"
+    assert _GUESTS_PER_ORDER[1] >= 0.04, "容差太紧, 会被抽样噪音假红"
+    # ⛔ 也不能太松 —— line_count 若改成 randint(2,8), 期望会跳到 10.00,
+    #    容差必须小到抓得住这种改动。
+    assert _DERIVED_ANCHORS["dishes_per_order"][1] < 1.0, "容差太松, 抓不到真实改动"
