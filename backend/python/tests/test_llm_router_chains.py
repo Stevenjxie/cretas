@@ -29,14 +29,24 @@ def test_chains_match_human_reviewed_golden():
     """人审冻结的链快照 vs 代码算出的链。
 
     链顺序变了必须有人看一眼 diff 并主动更新这个文件 —— 这是本次唯一能
-    抓住「排序规则被改坏」的闸。重新生成:
-        python -c "import sys;sys.path.insert(0,'.');\\
+    抓住「排序规则被改坏」的闸。重新生成 (工作目录必须是 backend/python/,
+    否则 tests.test_llm_router_chains / common.llm_router 都 import 不到):
+        cd backend/python && python -c "import sys;sys.path.insert(0,'.');\\
         from tests.test_llm_router_chains import _render_chains;\\
         open('tests/golden/llm_router_chains.txt','w',encoding='utf-8',newline='\\n')\\
         .write(_render_chains())"
     ⚠️ 必须 newline='\\n' —— Windows 上默认写入会把整个文件转成 CRLF。
+
+    ⛔ 这条本身管不住上面那句警告: `Path.read_text()` 做 universal-newline
+    转换, 会把 CRLF 静默读成 LF, 所以"忘了 newline='\\n' 重新生成"这个具体
+    错误在这道闸里**一次都不会红**, 只会在 git diff 里冒出一堆噪音行。下面
+    单独断言字节层没有 \\r, 让这条警告自己长出牙齿。
     """
     assert _GOLDEN.exists(), f"golden 文件不存在: {_GOLDEN}"
+    assert "\r" not in _GOLDEN.read_bytes().decode("utf-8"), (
+        f"{_GOLDEN} 含 CRLF —— 重新生成时忘了 newline='\\n', "
+        "见本函数 docstring 的重新生成命令"
+    )
     expected = _GOLDEN.read_text(encoding="utf-8")
     assert _render_chains() == expected
 

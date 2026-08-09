@@ -332,7 +332,7 @@ diff <(sed -e "s|$SANDBOX||g" "$RV_BODY") "$RV_RAW" >/dev/null \
     || die "RUNTIME_VERIFY 沙箱化改动超出了路径前缀"
 
 mkdir -p "$SANDBOX/proc/4242" "$SANDBOX/www/wwwroot/cretas/code/scripts/cron"
-for cron in restaurant-ai-eval.sh refresh-demo-rest.sh; do
+for cron in restaurant-ai-eval.sh refresh-demo-rest.sh probe-llm-registry.sh; do
     printf '%s\n' 'source /www/wwwroot/cretas/code/backend/python/venv-current/bin/activate' \
         >"$SANDBOX/www/wwwroot/cretas/code/scripts/cron/$cron"
 done

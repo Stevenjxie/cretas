@@ -160,7 +160,7 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "qwen3.5-ocr"): _d(2026, 9, 14),
     ("aliyun_c", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),
-    ("aliyun_c", "qwen3.7-max"): _d(2026, 8, 20),
+    # ("aliyun_c", "qwen3.7-max") 移除 08-10: 见下方 08-10 探针剔除段落。
     ("aliyun_c", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
 
     # ── aliyun_c 08-13 到期 (优先榨干; _build_chain 会把它们排在最前) ──
@@ -170,9 +170,9 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.5-plus-2026-02-15"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-max-2025-09-23"): _d(2026, 8, 13),
+    # ("aliyun_c", "qwen3-max-2025-09-23") 移除 08-10: 见下方段落。
     ("aliyun_c", "qwen3-vl-flash-2026-01-22"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-32b-instruct"): _d(2026, 8, 13),
+    # ("aliyun_c", "qwen3-vl-32b-instruct") 移除 08-10: 见下方段落。
     ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): _d(2026, 8, 13),
@@ -189,6 +189,21 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("zhipu", "glm-4.5-air"): None,
 }
 
+# ── 2026-08-10 探针复审剔除 ──────────────────────────────────────────────
+# 首次对新注册表跑生产探针(2026-08-10, 生产凭证), 发现三条 08-09 当天还
+# 实测 OK 的条目 24 小时内变成 403 quota:
+#   aliyun_c/qwen3-max-2025-09-23    08-09 OK 1.6s → 08-10 403 quota
+#   aliyun_c/qwen3-vl-32b-instruct   08-09 OK 1.0s → 08-10 403 quota
+#   aliyun_c/qwen3.7-max             08-09 OK 1.2s → 08-10 403 quota
+# 移除只需探针证据(准入才需要控制台余量 ∩ 探针双证 —— 移除永远不会制造计费
+# 风险, 只会让路由更保守), 三条已从 _SAFE_MODELS、每个引用它们的 _SLOT_POOLS、
+# tests/test_llm_router_registry.py 的冻结表、golden 快照同步剔除。
+#
+# 连带后果(未回避, 刻意接受): SLOT.VL 只剩 aliyun_c/qwen3-vl-flash-2026-01-22
+# 一条, 而它自己也在 08-13 到期 —— 届时 VL 变空链, call_chain 抛
+# All providers exhausted for vl。这正是 §9.1 owner 拍板过的轨迹(明确报错
+# 优于把图片请求静默丢给文本模型瞎猜), 不补新 VL 候选。
+
 # Thinking-only models (cannot disable thinking → always reason → slow). Confined to
 # REASONING slot; NEVER placed in fast slots (CHAT/MAPPER/CHART). Param layer also
 # skips enable_thinking=false for these (no-op / unsupported).
@@ -203,9 +218,16 @@ _THINKING_ONLY: frozenset = frozenset({
 })
 
 # Minimal hard-coded known-safe fallback set if the registry goes stale (>21d).
-# aliyun_c longest-runway ON models + the never-expiring non-DashScope floor
-# (tencent/zhipu 用完即停) so NO slot — including VL — goes fully dark under staleness.
-# Fail SAFE, not open.
+# 2026-08-09 重建后是**以 aliyun_a 为主**的最长跑道集合(4 条 aliyun_a + 1 条
+# aliyun_b + 2 条 aliyun_c)+ 两条非 DashScope 文本地板(tencent/zhipu 用完即停)。
+# 上一版本注释说"aliyun_c 最长跑道"已经不真实 —— 08-09 重审后 aliyun_a 的
+# qwen3.7-flash 系列(10/23 到期)比多数 aliyun_c 条目跑道更长, 集合按「跑道最长
+# + 当天探针通过」逐条选, 不再是单一账号。
+#
+# ⛔ 集合里刻意**不含任何 VL 模型** —— VL 在 staleness 下会**完全变黑**, 这是
+# 已知且记录在 plan 里的取舍(业务 7 天仅 1 次真实 VL 调用, 明确报错优于文本模型
+# 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
+# "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
     # 2026-08-09 重建: 旧集合 13 个条目里 8 个已实测死亡 —— fail-safe 退守的
     # 目标本身是死的。只收「跑道最长 + 当天探针通过」的条目。
@@ -792,12 +814,12 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
     ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
-    ("aliyun_c", "qwen3-max-2025-09-23"),          # 08-13  1.6s
+    # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
     ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
     ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
     ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
     ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
-    ("aliyun_c", "qwen3.7-max"),                   # 08-20  1.2s
+    # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
     ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
     ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 08-24  3.2s
     ("aliyun_b", "qwen3.7-max-2026-05-17"),        # 08-24  3.9s
@@ -825,9 +847,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
         ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
         ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
-        ("aliyun_c", "qwen3-max-2025-09-23"),          # 08-13  1.6s
+        # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
-        ("aliyun_c", "qwen3.7-max"),                   # 08-20  1.2s
+        # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_a", "qwen3.7-flash"),                 # 10-23  0.5s
         ("aliyun_a", "qwen3.7-flash-2026-07-15"),      # 10-23  0.6s
         ("aliyun_b", "deepseek-v4-flash-0731"),        # 10-31  1.3s
@@ -842,9 +864,9 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "deepseek-v3.2-exp"),
         ("aliyun_c", "glm-4.6"),
         ("aliyun_c", "deepseek-v3.2"),
-        ("aliyun_c", "qwen3-max-2025-09-23"),
+        # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_c", "qwen3.7-max-2026-05-20"),
-        ("aliyun_c", "qwen3.7-max"),
+        # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_a", "qwen3.7-flash"),
         ("aliyun_a", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "deepseek-v4-flash-0731"),
@@ -854,6 +876,16 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_b", "qwen3.8-max"),
     ],
     # MAPPER — 短 JSON 字段映射。池比 CHAT 更窄: Max 级对短分类既慢又浪费。
+    #
+    # ⚠️ 2026-08-09 前的旧链**故意不追加** _TEXT_TAIL, 注释原文: 「不追加通用
+    # _TEXT_TAIL: Max/DeepSeek/Kimi 对短 JSON 分类既慢又浪费, 生产已证明会放大
+    # 超时」。这条判据本身没有过时, 但本次重写让 MAPPER 落入 `_build_chain` 的
+    # 通用规则(每个非 VL 槽都追加 _TEXT_TAIL), 于是 MAPPER 现在**也**以
+    # tencent/minimax-m2.7(6.7s, `_SLOW_MODELS` 成员)收尾。这是**刻意推翻**旧
+    # 判据, 不是遗漏: 08-13 那批到期后 MAPPER 池若无地板会变成空链(违反
+    # test_every_text_slot_has_a_floor), 而"最后一跳偶尔 6.7s"被认为好于
+    # "MAPPER 彻底答不出来"。⛔ 不要仅凭旧注释的"生产已证明会放大超时"就把
+    # _TEXT_TAIL 从 MAPPER 摘掉 —— 那会让 MAPPER 在地板过期的那天重新变空链。
     SLOT.MAPPER: [
         ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
         ("aliyun_c", "deepseek-v3.2-exp"),
@@ -892,14 +924,15 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_a", "qwen3.8-max"),
         ("aliyun_b", "qwen3.8-max"),
     ],
-    # VL — 仅视觉。⚠️ 2026-08-13 后这两个双双过期, 链会变空, call_chain 抛
-    #      All providers exhausted for vl。这是**期望行为**(spec §9.1,
-    #      owner 2026-08-09 拍板): 业务用不到 VL(prod 7 天仅 1 次真实调用),
-    #      且原 VL 地板 zhipu/glm-4.6v 已因余额不足死亡。明确报错优于把图片
-    #      请求静默降级给文本模型瞎猜 —— CLAUDE.md 核心原则 1。
+    # VL — 仅视觉。⚠️ qwen3-vl-32b-instruct 已于 08-10 探针剔除(见 _SAFE_MODELS
+    #      段落), 只剩 qwen3-vl-flash-2026-01-22 一条, 而它自己也在 2026-08-13
+    #      到期 —— 届时链会变空, call_chain 抛 All providers exhausted for vl。
+    #      这是**期望行为**(spec §9.1, owner 2026-08-09 拍板): 业务用不到 VL
+    #      (prod 7 天仅 1 次真实调用), 且原 VL 地板 zhipu/glm-4.6v 已因余额不足
+    #      死亡。明确报错优于把图片请求静默降级给文本模型瞎猜 —— CLAUDE.md
+    #      核心原则 1。不为它补新 VL 候选。
     SLOT.VL: [
         ("aliyun_c", "qwen3-vl-flash-2026-01-22"),     # 08-13  0.7s
-        ("aliyun_c", "qwen3-vl-32b-instruct"),         # 08-13  1.0s
     ],
 }
 
@@ -1250,7 +1283,10 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     that response explicitly says the account's configured inference allowance was
     reached and the model service was paused. Re-probing a paused model every minute
     only burns latency, so that one exact provider code belongs in the persistent
-    quota-skip path while ordinary 429 responses do not.
+    quota-skip path while ordinary 429 responses do not. Zhipu (added 2026-08-09)
+    signals the same free-grant exhaustion with 429 + a Chinese "余额不足" body or
+    ``"code":"1113"``, with no ``SetLimitExceeded`` substring — matched separately
+    below since the string signature is provider-specific, not the 429 status alone.
     """
     lowered_body = body_text.lower()
     if status_code == 429 and "setlimitexceeded" in lowered_body:
@@ -1380,8 +1416,10 @@ async def call_chain(
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
-    # No runtime re-sort: SLOT_MODELS order is authoritative (quality tier + expiry).
-    # _refuse_reason drops expired/unsafe entries so heads auto-switch as grants lapse.
+    # SLOT_MODELS order is computed once at import time by _build_chain (expiry-first
+    # stable sort over _SLOT_POOLS + _TEXT_TAIL, see _build_chain's docstring) — this
+    # function does NOT re-sort it. _refuse_reason drops expired/unsafe entries so
+    # heads auto-switch as grants lapse, without anyone hand-reordering the list.
     client = get_llm_http_client()
     errors: List[str] = []
     deadline = (
@@ -1590,7 +1628,8 @@ async def call_chain_stream(
     slot_chain = SLOT_MODELS.get(slot, [])
     if chain is not None:
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
-    # No runtime re-sort: SLOT_MODELS order authoritative (see call_chain).
+    # SLOT_MODELS order is computed once at import time by _build_chain (expiry-first
+    # stable sort); this function does not re-sort it either — see call_chain above.
     client = get_llm_http_client()
     errors: List[str] = []
     payload = {**payload, "stream": True}

@@ -126,6 +126,182 @@ def test_main_returns_one_when_dead(monkeypatch):
     assert result == 1, f"expected exit code 1 (has dead), got {result}"
 
 
+def test_expired_entries_do_not_flip_exit_code(monkeypatch):
+    """到期已过的条目探针失败是**预期内**的(同一时刻 `_refuse_reason` 已经把
+    它硬拒出链外了), 不能计入退出码 —— 否则 2026-08-13 那批 14 条一次性到期
+    后, main() 会从那天起**每天**返回 1, 直到有人手工把它们从 _SAFE_MODELS
+    删掉, 正是 spec §5.5 明确要防的告警疲劳(与飞轮日报静默坏 5 天是同一种
+    "天天炸=没人看"死法)。"""
+    from datetime import date
+    from common import llm_router
+    from scripts import probe_llm_registry
+
+    async def mock_run():
+        return {("expired_acct", "expired_model"): ("quota", "403")}
+
+    mock_today = date(2026, 8, 20)
+    mock_registry = {("expired_acct", "expired_model"): date(2026, 8, 13)}  # 7 天前已过期
+
+    monkeypatch.setattr("scripts.probe_llm_registry._run", mock_run)
+    monkeypatch.setattr("common.llm_router._today", lambda: mock_today)
+    monkeypatch.setattr(llm_router, "_SAFE_MODELS", mock_registry)
+
+    result = probe_llm_registry.main()
+    assert result == 0, f"expected exit 0 (only expired-by-design failure), got {result}"
+
+
+def test_expired_entries_are_reported_separately_not_as_dead(monkeypatch, capsys):
+    """已过期的失败条目要落进「已过期, 待清理」, 不能出现在「注册表说活、实测
+    不可用」那节 —— 否则运维读到 dead 非空会当成真实漂移去排查, 排查了个寂寞。"""
+    from datetime import date
+    from common import llm_router
+    from scripts import probe_llm_registry
+
+    async def mock_run():
+        return {("expired_acct", "expired_model"): ("quota", "403")}
+
+    mock_today = date(2026, 8, 20)
+    mock_registry = {("expired_acct", "expired_model"): date(2026, 8, 13)}
+
+    monkeypatch.setattr("scripts.probe_llm_registry._run", mock_run)
+    monkeypatch.setattr("common.llm_router._today", lambda: mock_today)
+    monkeypatch.setattr(llm_router, "_SAFE_MODELS", mock_registry)
+
+    probe_llm_registry.main()
+    captured = capsys.readouterr()
+    assert "已过期, 待清理" in captured.out
+    dead_section, _, rest = captured.out.partition("已过期, 待清理")
+    assert "expired_acct/expired_model" not in dead_section
+    assert "expired_acct/expired_model" in rest
+
+
+def test_already_expired_entry_does_not_appear_under_expiring_soon(monkeypatch, capsys):
+    """原判据 `(expiry - today).days <= 7` 对负数同样为真, 已经过期的条目会在
+    「7 天内到期」下永久出现, 跟「已过期, 待清理」表达的是同一件事却混进了
+    "即将"的语气。修复后 soon 必须严格未来(0 < delta <= 7)。"""
+    from datetime import date
+    from common import llm_router
+    from scripts import probe_llm_registry
+
+    async def mock_run():
+        return {}
+
+    mock_today = date(2026, 8, 20)
+    mock_registry = {("stale_acct", "stale_model"): date(2026, 8, 13)}  # 7 天前已过期
+
+    monkeypatch.setattr("scripts.probe_llm_registry._run", mock_run)
+    monkeypatch.setattr("common.llm_router._today", lambda: mock_today)
+    monkeypatch.setattr(llm_router, "_SAFE_MODELS", mock_registry)
+
+    result = probe_llm_registry.main()
+    captured = capsys.readouterr()
+    assert result == 0
+    _, _, soon_section = captured.out.partition("7 天内到期")
+    assert "stale_acct/stale_model" not in soon_section
+
+
+def test_prompt_for_uses_json_prompt_only_for_json_slots():
+    """CHART/MAPPER 的 profile 带 json=True: 生产会给
+    response_format={"type":"json_object"}, 但那个分支只有在 prompt 里出现
+    "json" 字样时才会打开(`_payload_mentions_json`, DashScope 硬性要求)。
+    探针的 prompt 必须按槽区分, 否则 CHART/MAPPER 探的从来不是生产真正发的
+    请求形状。"""
+    from common import llm_router
+    from scripts.probe_llm_registry import _prompt_for
+
+    assert "json" in _prompt_for(llm_router.SLOT.CHART).lower()
+    assert "json" in _prompt_for(llm_router.SLOT.MAPPER).lower()
+    assert "json" not in _prompt_for(llm_router.SLOT.CHAT).lower()
+    assert "json" not in _prompt_for(llm_router.SLOT.REVIEW).lower()
+
+
+def test_json_prompt_actually_triggers_response_format_json_object():
+    """端到端确认, 不只验证 prompt 含关键词: 把 `_prompt_for` 的输出真的喂给
+    `_apply_slot_params`, 必须产出 response_format=json_object —— 万一
+    `_payload_mentions_json` 的匹配逻辑跟这里的措辞对不上, 光验 prompt 仍然
+    是假绿。"""
+    from common import llm_router
+    from scripts.probe_llm_registry import _prompt_for
+
+    payload = llm_router._apply_slot_params(
+        llm_router.SLOT.CHART, "aliyun_c", "some-model",
+        {
+            "model": "some-model",
+            "messages": [{"role": "user", "content": _prompt_for(llm_router.SLOT.CHART)}],
+            "max_tokens": 200,
+        },
+    )
+    assert payload.get("response_format") == {"type": "json_object"}
+
+
+def test_slots_for_text_tail_member_covers_every_slot_that_appends_it():
+    """_TEXT_TAIL 成员(如 tencent/minimax-m2.7)是**每一个非 VL 槽**共用的地板
+    (_build_chain 逐槽追加), 但它们不出现在任何 _SLOT_POOLS 里 —— 旧版
+    `_slots_for` 只看 _SLOT_POOLS, 于是这类条目只会被探成 REVIEW 一档, 探不到
+    它在 CHART/MAPPER 下才会触发的 json_object + `_TOKENHUB_MIN_MAX_TOKENS`
+    地板交互(_apply_slot_params 里 json 分支先弹出 max_tokens 又强制补回
+    1600, 只在这两个槽发生)。"""
+    from common import llm_router
+    from scripts.probe_llm_registry import _slots_for
+
+    pair = ("tencent", "minimax-m2.7")
+    assert pair in llm_router._TEXT_TAIL  # 前提: 它确实是地板成员
+    slots = set(_slots_for(pair))
+    expected = {s for s in llm_router.SLOT if s not in llm_router._NO_TEXT_TAIL_SLOTS}
+    assert slots == expected
+    assert llm_router.SLOT.VL not in slots
+
+
+def test_slots_for_pool_only_member_is_unaffected():
+    """非地板成员(只在某个池里出现)行为不变 —— 不能因为这次改动被顺带塞进
+    所有槽。"""
+    from common import llm_router
+    from scripts.probe_llm_registry import _slots_for
+
+    pair = ("aliyun_c", "MiniMax-M2.5")  # 仅在 REASONING 池里(关思考会 400)
+    assert pair not in llm_router._TEXT_TAIL
+    assert _slots_for(pair) == [llm_router.SLOT.REASONING]
+
+
+def test_probe_normalizes_before_applying_slot_params(monkeypatch):
+    """`_probe` 必须按生产的顺序调用两层: normalize → apply_slot_params(见
+    llm_router.call_chain 的 req_payload 构造)。用调用顺序断言而不是只断言
+    "都调用过" —— 顺序接反了在今天(normalize 是纯 passthrough)不会产生任何
+    可观察的 payload 差异, 只有顺序断言能抓住"接反了"这件事本身。"""
+    import asyncio
+
+    from common import llm_router
+    from scripts import probe_llm_registry
+
+    call_order = []
+    real_normalize = llm_router._normalize_payload_for_provider
+    real_apply = llm_router._apply_slot_params
+
+    def spy_normalize(payload, account):
+        call_order.append("normalize")
+        return real_normalize(payload, account)
+
+    def spy_apply(slot, account, model, payload):
+        call_order.append("apply")
+        return real_apply(slot, account, model, payload)
+
+    monkeypatch.setattr(probe_llm_registry.r, "_normalize_payload_for_provider", spy_normalize)
+    monkeypatch.setattr(probe_llm_registry.r, "_apply_slot_params", spy_apply)
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"ok"}}]}'
+
+    class _FakeClient:
+        async def post(self, *args, **kwargs):
+            return _FakeResponse()
+
+    asyncio.run(probe_llm_registry._probe(
+        _FakeClient(), "aliyun_c", "some-model", llm_router.SLOT.CHAT,
+    ))
+    assert call_order == ["normalize", "apply"]
+
+
 @pytest.fixture(autouse=True)
 def _assert_safe_models_untouched():
     """每个测试前后验证 _SAFE_MODELS 未被修改。

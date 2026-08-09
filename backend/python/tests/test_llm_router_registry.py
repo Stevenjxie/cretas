@@ -28,6 +28,12 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空 content)
 # 的交集。单边证据不收: 控制台有余量但探针 403 的不收(aliyun_c/deepseek-v4-flash-0731);
 # 探针 200 但控制台未列的更不收 —— 那说明「用完即停」没覆盖它, 可能真在计费(glm-5.2)。
+#
+# 2026-08-10: 生产探针首次对本注册表整体实跑, 发现 3 条 08-09 当天还 OK 的条目
+# 24 小时内变成 403 quota, 已按「移除只需探针证据」剔除 —— 见 llm_router.py
+# `_SAFE_MODELS` 后面的 "2026-08-10 探针复审剔除" 段落:
+#   aliyun_c/qwen3-max-2025-09-23, aliyun_c/qwen3-vl-32b-instruct,
+#   aliyun_c/qwen3.7-max (与 qwen3.7-max-2026-05-17/-preview/-2026-05-20 不同模型)。
 _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_a", "qwen3.8-max"): datetime.date(2026, 11, 1),
     ("aliyun_a", "deepseek-v4-flash-0731"): datetime.date(2026, 10, 31),
@@ -50,7 +56,6 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_c", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
     ("aliyun_c", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
-    ("aliyun_c", "qwen3.7-max"): datetime.date(2026, 8, 20),
     ("aliyun_c", "qwen3.7-max-2026-05-20"): datetime.date(2026, 8, 20),
     ("aliyun_c", "qwen3-next-80b-a3b-instruct"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-v3.2-exp"): datetime.date(2026, 8, 13),
@@ -58,9 +63,7 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_c", "deepseek-v3.2"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.5-plus-2026-02-15"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3-max-2025-09-23"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3-vl-flash-2026-01-22"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-32b-instruct"): datetime.date(2026, 8, 13),
     ("aliyun_c", "kimi-k2-thinking"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): datetime.date(2026, 8, 13),

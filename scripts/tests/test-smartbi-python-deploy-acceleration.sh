@@ -42,7 +42,8 @@ for runtime_file in \
     "$ROOT/scripts/systemd/cretas-gold-etl-refresh.service.d/python-runtime.conf" \
     "$ROOT/scripts/systemd/cretas-corpus-refresh.service.d/python-runtime.conf" \
     "$ROOT/scripts/cron/restaurant-ai-eval.sh" \
-    "$ROOT/scripts/cron/refresh-demo-rest.sh"; do
+    "$ROOT/scripts/cron/refresh-demo-rest.sh" \
+    "$ROOT/scripts/cron/probe-llm-registry.sh"; do
     grep -Fq 'venv-current' "$runtime_file" \
         || fail "runtime consumer is not pinned to venv-current: $runtime_file"
 done
