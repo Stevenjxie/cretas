@@ -27,7 +27,7 @@ describe('统一仓储待收货入口', () => {
 
   it('同一页面同时展示置顶待收货任务与正常库存批次', () => {
     expect(materials).toContain('<PendingPurchaseReceivingPanel');
-    expect(materials).toContain('原料 / 物料入库与批次');
+    expect(materials).toContain('入库任务与批次');
     expect(materials).toContain(':data="tableData"');
     expect(panel).toContain('待收货 / 待入库任务');
     expect(panel).toContain('pending-receive-row');
@@ -81,7 +81,7 @@ describe('统一仓储待收货入口', () => {
 
   it('旧采购入库路由兼容重定向且菜单不再暴露割裂入口', () => {
     expect(router).toContain("redirect: (to) => ({ path: '/warehouse/materials'");
-    expect(menu).toContain("title: '原料 / 物料入库与批次'");
+    expect(menu).toContain("title: '入库任务与批次'");
     expect(menu).not.toContain("{ path: '/procurement/receives', title: '采购入库'");
   });
 

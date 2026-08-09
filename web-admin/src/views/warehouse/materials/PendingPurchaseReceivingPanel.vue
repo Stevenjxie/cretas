@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Document, Refresh } from '@element-plus/icons-vue';
@@ -32,9 +32,27 @@ import {
   defaultPurchaseReceiveWarehouseId,
   purchaseReceiveWarehouseOptions,
 } from '@/views/procurement/receives/purchaseReceiveWarehouse';
+import {
+  filterReceivingTasks,
+  receivingLifecycleCounts,
+  receivingLifecycleLabel,
+  type ReceivingLifecycleCounts,
+  type ReceivingTaskFilter,
+} from './warehouseInboundLifecycle';
 
-const props = defineProps<{ factoryId: string; canWrite: boolean }>();
-const emit = defineEmits<{ refreshed: [] }>();
+const props = withDefaults(defineProps<{
+  factoryId: string;
+  canWrite: boolean;
+  statusFilter?: ReceivingTaskFilter;
+  showHeading?: boolean;
+}>(), {
+  statusFilter: 'ALL',
+  showHeading: true,
+});
+const emit = defineEmits<{
+  refreshed: [];
+  countsChanged: [counts: ReceivingLifecycleCounts];
+}>();
 const route = useRoute();
 
 interface ReceiveItemForm {
@@ -78,6 +96,10 @@ interface PurchaseReceiptDetail {
 
 const loading = ref(false);
 const tasks = ref<WarehouseReceivingTask[]>([]);
+const filteredTasks = computed(() => filterReceivingTasks(tasks.value, props.statusFilter));
+const taskCounts = computed(() => receivingLifecycleCounts(tasks.value));
+
+watch(taskCounts, (counts) => emit('countsChanged', counts), { immediate: true });
 const dialogVisible = ref(false);
 const openingTaskId = ref('');
 const submitting = ref(false);
@@ -310,6 +332,11 @@ async function loadTasks() {
   }
 }
 
+function notifyTaskDataChanged(): void {
+  emit('refreshed');
+  window.dispatchEvent(new CustomEvent('cretas:task-badges-refresh'));
+}
+
 async function loadMaterialOptions() {
   const response = await get(`/${props.factoryId}/raw-material-types/active`, { _silent: true } as never);
   materialOptions.value = Array.isArray(response.data)
@@ -516,7 +543,7 @@ async function confirmReceipt() {
     ElMessage.success(automaticallyCompleted
       ? '收货入库完成，计划已收齐，入库任务已自动完成'
       : '本次收货入库完成，库存批次已生成');
-    emit('refreshed');
+    notifyTaskDataChanged();
   } finally {
     confirming.value = false;
   }
@@ -555,7 +582,7 @@ async function submitShortClose() {
     selectedCloseTask.value = null;
     await loadTasks();
     ElMessage.success(response.message || '入库任务已结束');
-    emit('refreshed');
+    notifyTaskDataChanged();
   } finally {
     closingTask.value = false;
   }
@@ -642,7 +669,7 @@ async function confirmCustomerReceipt() {
     ElMessage.success('客户来料收货完成，客户所有库存批次已生成');
     customerDialogVisible.value = false;
     await loadTasks();
-    emit('refreshed');
+    notifyTaskDataChanged();
   } finally {
     customerConfirming.value = false;
   }
@@ -716,7 +743,7 @@ async function confirmArrivalReceipt() {
       : '本次到货已入库，申请保留等待下一次到货');
     arrivalDialogVisible.value = false;
     await loadTasks();
-    emit('refreshed');
+    notifyTaskDataChanged();
   } finally {
     arrivalConfirming.value = false;
   }
@@ -786,7 +813,7 @@ defineExpose({ loadTasks });
 
 <template>
   <section class="receiving-task-panel" aria-label="仓储待收货任务">
-    <div class="task-heading">
+    <div v-if="showHeading" class="task-heading">
       <div>
         <h3>待收货 / 待入库任务</h3>
         <p>审批完成的采购订单、销售订单客供料和无订单入库申请会进入这里；打开和刷新只查询数据，不会创建收货单或库存。</p>
@@ -804,16 +831,16 @@ defineExpose({ loadTasks });
     />
 
     <el-table
-      :data="tasks"
+      :data="filteredTasks"
       v-loading="loading"
       :row-class-name="taskRowClass"
-      empty-text="暂无待收货任务"
+      empty-text="当前分类暂无入库任务"
       border
       row-key="taskId"
     >
       <el-table-column label="状态" width="115" fixed="left">
         <template #default="{ row }">
-          <el-tag type="danger" effect="dark">{{ row.receiptConflict ? '收货草稿冲突' : row.statusLabel }}</el-tag>
+          <el-tag type="danger" effect="dark">{{ row.receiptConflict ? '收货草稿冲突' : receivingLifecycleLabel(row) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="来源" width="105"><template #default="{ row }">{{ sourceLabel(row) }}</template></el-table-column>

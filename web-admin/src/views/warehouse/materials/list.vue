@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
@@ -16,8 +16,10 @@ import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
+import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseInboundLifecycle';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -29,6 +31,39 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchKeyword = ref('');
+
+type InboundWorkspaceTab = ReceivingTaskFilter | 'BATCHES';
+const activeInboundTab = ref<InboundWorkspaceTab>('ALL');
+const receivingCounts = ref<ReceivingLifecycleCounts>({
+  ALL: 0,
+  WAITING_RECEIVE: 0,
+  RECEIVING: 0,
+  PARTIAL: 0,
+});
+const receivingFilter = computed<ReceivingTaskFilter>(() =>
+  activeInboundTab.value === 'BATCHES' ? 'ALL' : activeInboundTab.value);
+const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
+  ? `${pagination.value.total} 个批次`
+  : `${receivingCounts.value[receivingFilter.value]} 项任务`);
+const receivingOverview = computed(() => [
+  { key: 'WAITING_RECEIVE' as const, label: '待收货', count: receivingCounts.value.WAITING_RECEIVE, tone: 'pending' },
+  { key: 'RECEIVING' as const, label: '收货中', count: receivingCounts.value.RECEIVING, tone: 'processing' },
+  { key: 'PARTIAL' as const, label: '部分入库', count: receivingCounts.value.PARTIAL, tone: 'partial' },
+]);
+
+function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
+  receivingCounts.value = counts;
+}
+
+watch(
+  () => route.query.view,
+  (view) => {
+    const normalized = String(view || '').toUpperCase();
+    if (normalized === 'BATCHES' || normalized === 'INVENTORY') activeInboundTab.value = 'BATCHES';
+    else if (normalized === 'RECEIVING' || normalized === 'TASKS') activeInboundTab.value = 'ALL';
+  },
+  { immediate: true },
+);
 
 // ==================== 按物料汇总 / 按批次明细 切换 ====================
 // F006 六膳门客户原话痛点: 同一原料入库多次 → 一堆散批次看着重复。
@@ -469,8 +504,8 @@ async function handleGenerateLabel(row: TableRow) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">原料 / 物料入库与批次</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">入库任务与批次</span>
+            <span class="data-count">当前 {{ currentRecordCount }}</span>
           </div>
           <div class="header-right">
             <el-input
@@ -496,17 +531,43 @@ async function handleGenerateLabel(row: TableRow) {
         :closable="false"
         show-icon
         class="source-only-hint"
-        title="批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入；本页用于查询、追溯与标签管理。"
+        title="先按任务状态处理实物收货；确认入库后，批次会自动进入“已入库批次”。本页不会因打开或刷新而创建库存；批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入。"
       />
 
+      <div class="receiving-workflow-overview" aria-label="入库任务概览">
+        <button
+          v-for="item in receivingOverview"
+          :key="item.key"
+          type="button"
+          class="workflow-step"
+          :class="[item.tone, { active: activeInboundTab === item.key }]"
+          @click="activeInboundTab = item.key"
+        >
+          <span class="workflow-circle">{{ item.count }}</span>
+          <span>{{ item.label }}</span>
+        </button>
+      </div>
+
+      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
+        <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
+        <el-tab-pane :label="`待收货 ${receivingCounts.WAITING_RECEIVE}`" name="WAITING_RECEIVE" />
+        <el-tab-pane :label="`收货中 ${receivingCounts.RECEIVING}`" name="RECEIVING" />
+        <el-tab-pane :label="`部分入库 ${receivingCounts.PARTIAL}`" name="PARTIAL" />
+        <el-tab-pane :label="`已入库批次 ${pagination.total}`" name="BATCHES" />
+      </el-tabs>
+
       <PendingPurchaseReceivingPanel
-        v-if="factoryId"
+        v-if="factoryId && activeInboundTab !== 'BATCHES'"
         :factory-id="factoryId"
         :can-write="canWrite"
+        :status-filter="receivingFilter"
+        :show-heading="false"
+        @counts-changed="handleReceivingCounts"
         @refreshed="handleReceivingRefresh"
       />
 
-      <div class="search-bar">
+      <template v-else>
+      <div class="search-bar batch-toolbar">
         <el-radio-group v-model="viewMode" @change="handleViewModeChange">
           <el-radio-button label="detail">按批次明细</el-radio-button>
           <el-radio-button label="summary">按物料汇总</el-radio-button>
@@ -666,6 +727,7 @@ async function handleGenerateLabel(row: TableRow) {
           @size-change="handleSizeChange"
         />
       </div>
+      </template>
     </el-card>
 
     <!-- View Dialog -->
@@ -870,6 +932,48 @@ async function handleGenerateLabel(row: TableRow) {
   flex-wrap: wrap;
   align-items: center;
 }
+
+.receiving-workflow-overview {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 18px 8px 14px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.workflow-step {
+  min-width: 88px;
+  border: 0;
+  background: transparent;
+  color: #596a7f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.workflow-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: #29384a;
+  border: 1px solid transparent;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.workflow-step.pending .workflow-circle { background: #fff1c7; border-color: #f2d383; }
+.workflow-step.processing .workflow-circle { background: #dff1ff; border-color: #a9d8f6; }
+.workflow-step.partial .workflow-circle { background: #dff3e8; border-color: #acd9bd; }
+.workflow-step:hover .workflow-circle,
+.workflow-step.active .workflow-circle { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(31, 66, 103, 0.12); }
+.workflow-step.active { color: #1b65a8; font-weight: 700; }
+.inbound-status-tabs { margin-top: 8px; }
+.batch-toolbar { margin-top: 4px; }
 
 .summary-hint {
   display: flex;

@@ -380,7 +380,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'materials',
             name: 'WarehouseMaterials',
             component: () => import('@/views/warehouse/materials/list.vue'),
-            meta: { requiresAuth: true, title: '原材料批次', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '入库任务与批次', module: 'warehouse' }
           },
           // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
           {
