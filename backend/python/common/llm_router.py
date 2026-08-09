@@ -1363,7 +1363,7 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     # 短熔断只会每 60s 空转重试一次。
     # 两个特征命中任意一个即可(OR, 不是 AND) —— 真实响应可能只带其中一个,
     # 要求同时命中会让它重新掉回 60s 空转循环, 正是本改动要消除的东西。
-    # 普通 429 突발限流两个都不命中, 故不受影响, 见
+    # 普通 429 突发限流两个都不命中, 故不受影响, 见
     # test_plain_429_rate_limit_is_still_transient。
     if status_code == 429 and ("余额不足" in body_text or '"code":"1113"' in body_text):
         return True
