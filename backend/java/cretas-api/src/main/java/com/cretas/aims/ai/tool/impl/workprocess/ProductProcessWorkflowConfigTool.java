@@ -5,15 +5,19 @@ import com.cretas.aims.ai.tool.AbstractTool;
 import com.cretas.aims.constant.SeasoningProcessCategory;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -64,13 +68,38 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "materialKind", "unit", "ordinal");
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
+    /**
+     * 落库能力的总开关，<b>默认仍然关</b>。
+     *
+     * <p>⚠️ 2026-08-09：当初关着的理由（productTypeId 完全由 AI 决定，可能写到同厂
+     * 别的产品上）<b>已经在代码里堵上了</b> —— 见 {@link #belongsToStoredProduct}：
+     * 判据取自库里存着的那张图的节点 id，不需要往 context 里塞 productTypeId。
+     *
+     * <p>那为什么还默认关？因为<b>「洞堵上了」和「这条路验过了」是两回事</b>。
+     * 这一支全部是单元级验证，<b>没有一次是真人在真工厂走完</b>
+     * 「agent 出补丁 → 落草稿 → 人在页面看到 → 人发布」。
+     * 开关默认关，让部署本身不改变任何现有行为；要用它就显式打开，
+     * 那一刻就有人在盯着它。
+     *
+     * <p>打开的方式：{@code CRETAS_AI_CANVAS_WORKFLOW_WRITE_ENABLED=true}。
+     * ⛔ 打开前先在 test 环境用真实产品走一遍上面那条链 —— 单元全绿不等于这条链通。
+     */
+    public static final String WRITE_ENABLED_PROPERTY =
+            "cretas.ai.canvas-workflow-write.enabled";
+
     private final ProductProcessWorkflowValidator workflowValidator;
+    private final ProductProcessWorkflowService workflowService;
+    private final boolean writeEnabled;
 
     public ProductProcessWorkflowConfigTool(
             ObjectMapper objectMapper,
-            ProductProcessWorkflowValidator workflowValidator) {
+            ProductProcessWorkflowValidator workflowValidator,
+            ProductProcessWorkflowService workflowService,
+            @Value("${" + WRITE_ENABLED_PROPERTY + ":false}") boolean writeEnabled) {
         this.objectMapper = objectMapper;
         this.workflowValidator = workflowValidator;
+        this.workflowService = workflowService;
+        this.writeEnabled = writeEnabled;
     }
 
     @Override
@@ -113,39 +142,338 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     @Override
     public String preview(ToolCall toolCall, Map<String, Object> context) {
         try {
-            Map<String, Object> arguments = parseArguments(toolCall);
-            if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
-                return buildSemanticError(
-                        "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
-            }
-            List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
-            ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
-                    definition, ProductProcessWorkflowDTO.class);
-            applyCandidateBatch(candidate, patches);
-            workflowValidator.validateForDraft(candidate);
+            ValidatedPatch validated = buildValidatedCandidate(parseArguments(toolCall));
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "PREVIEW");
             data.put("applied", false);
-            data.put("patches", patches);
+            // ⚠️ 必须原样回显 patches(列表), 不能换成节点数 ——
+            // ProductProcessWorkflowConfigToolTest:95 断言它是列表且 size==3。
+            data.put("patches", validated.patches());
             return buildSuccessResult(data);
+        } catch (MissingDefinitionException missing) {
+            return buildSemanticError(
+                    "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
         } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+            // ⛔ 保留 rejectionMessage(error) —— origin/main:132 用它给出具体拒绝原因,
+            // 换成固定串会让 agent 失去「为什么被拒」的信息, 那是能力倒退。
             return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
         }
+    }
+
+    /**
+     * 解析入参 → 打补丁 → 跑草稿校验，返回可落库的候选。
+     *
+     * <p>⛔ preview 与 execute <b>必须</b>都走这里。各写一份会让「预览说能过、落库却过不了」
+     * 成为可能 —— 那是本仓反复栽过的「同一概念两把尺子」。
+     */
+    private ValidatedPatch buildValidatedCandidate(Map<String, Object> arguments) {
+        if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
+            throw new MissingDefinitionException();
+        }
+        List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
+        ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
+                definition, ProductProcessWorkflowDTO.class);
+        applyCandidateBatch(candidate, patches);
+        workflowValidator.validateForDraft(candidate);
+        return new ValidatedPatch(candidate, patches);
+    }
+
+    /**
+     * 校验通过的候选 + 原始补丁清单。
+     *
+     * <p>两样都要带回去：{@code preview} 要原样回显 patches（既有断言检查它是列表），
+     * {@code execute} 要拿 candidate 去落库。合成一个返回值是为了让两条路
+     * <b>物理上</b>不可能各走各的校验。
+     */
+    private record ValidatedPatch(
+            ProductProcessWorkflowDTO candidate, List<Map<String, Object>> patches) {
+    }
+
+    /** definition 缺失与补丁被拒是两种不同的错，errorCode 也不同，所以要能分开捕获。 */
+    private static final class MissingDefinitionException extends RuntimeException {
+        private MissingDefinitionException() {
+            super(null, null, false, false);
+        }
+    }
+
+    /**
+     * 会影响<b>扣料与成本</b>的补丁：{@code execute} 一律不落库，只能出预览。
+     *
+     * <p>这条分界不是我定的 —— {@code ProductProcessWorkflowConfigToolBomFieldsTest}
+     * 的「约束 4」注释原文：<i>「改克数比改拓扑风险高（直接影响扣料与成本），
+     * 所以这个工具结构上只能出预览。不是"前端记得弹审核框"，而是 execute 根本不写任何东西。」</i>
+     *
+     * <p>2026-08-09 Steve 拍板把这条约束<b>收窄到它真正针对的东西</b>：
+     * 拓扑（加删节点/连线/改工序名）可以落草稿，克数与注射量仍然只能预览。
+     * ⛔ 收窄不等于放宽 —— 注释担心的那件事一个字节都没让步。
+     *
+     * <p>⛔ 判据按补丁的 {@code op} 与 {@code path} <b>根</b>判，不按字符串包含判：
+     * 按包含判会被工序名里恰好出现 "injection" 这类内容误伤，也会被换个写法绕过。
+     */
+    private static final Set<String> COST_BEARING_OPERATIONS = Set.of(
+            "UPSERT_MATERIAL_BINDING", "REMOVE_MATERIAL_BINDING");
+    private static final Set<String> COST_BEARING_FIELD_ROOTS = Set.of(
+            "materialBindings", "injectionAmount");
+
+    /** 这批补丁里有没有会动到扣料/成本的。⛔ 只要有一条, 整批都不落库。 */
+    private boolean touchesCostBearingFields(List<Map<String, Object>> patches) {
+        for (Map<String, Object> patch : patches) {
+            String operation = String.valueOf(patch.get("op"));
+            if (COST_BEARING_OPERATIONS.contains(operation)) {
+                return true;
+            }
+            if ("SET_NODE_FIELD".equals(operation)) {
+                String path = String.valueOf(patch.get("path"));
+                String root = path.contains(".") ? path.substring(0, path.indexOf('.')) : path;
+                if (COST_BEARING_FIELD_ROOTS.contains(root)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Override
     public String execute(ToolCall toolCall, Map<String, Object> context) {
         try {
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("success", false);
-            error.put("errorCode", "WORKFLOW_AI_PREVIEW_ONLY");
-            error.put("error", "Workflow AI can only generate a local preview patch");
-            return objectMapper.writeValueAsString(error);
-        } catch (Exception serializationError) {
-            return "{\"success\":false,\"errorCode\":\"WORKFLOW_AI_PREVIEW_ONLY\","
-                    + "\"error\":\"Workflow AI preview only\"}";
+            ValidatedPatch validated = buildValidatedCandidate(parseArguments(toolCall));
+
+            if (!writeEnabled) {
+                // ⛔ 开关关着时回到「只出预览」的老行为, 并把原因说清楚 ——
+                // 不说原因的话, agent 会以为是补丁写错了, 反复重试同一件永远做不成的事。
+                return buildDeclined("WORKFLOW_AI_PREVIEW_ONLY",
+                        "画布落库能力当前未开启，本次只生成预览；请人工在产品配置页保存");
+            }
+
+            if (touchesCostBearingFields(validated.patches())) {
+                // ⛔ 整批拒绝, 不是「把克数那几条挑掉、其余照写」——
+                // 部分应用会让 agent 以为整批生效了, 而实际画布处于它没预期的中间态。
+                return buildDeclined("WORKFLOW_AI_PREVIEW_ONLY",
+                        "涉及调料克数/注射量的补丁只能预览，请人工在产品配置页确认后再保存");
+            }
+
+            ProductProcessWorkflowDTO candidate = validated.candidate();
+
+            // ⛔ factoryId 只从 context 取。AI 能控制 definition 里的任何字段,
+            // 让它决定写哪个租户 = 把租户隔离交给模型自觉。
+            String factoryId = requireFactoryId(context);
+            String productTypeId = candidate.getProductTypeId();
+            if (productTypeId == null || productTypeId.isBlank()) {
+                // ⛔ 不猜: 没有归属就不知道这张画布属于哪个成品, 猜错等于写到别的产品上。
+                return buildSemanticError(
+                        "WORKFLOW_OWNER_REQUIRED", "Workflow definition must carry productTypeId");
+            }
+
+            // 一次读库, 喂两道闸 —— 都基于同一条原则: 判据是【库里存着的真值】。
+            Optional<ProductProcessWorkflowDTO> stored =
+                    workflowService.getEditorDefinition(factoryId, productTypeId);
+
+            // 🔴 闸一: 这张图是不是【这个产品的】。
+            if (!belongsToStoredProduct(stored, candidate)) {
+                return buildDeclined("WORKFLOW_OWNER_MISMATCH",
+                        "提交的画布与该产品当前的工艺图对不上，可能选错了产品；已拒绝写入");
+            }
+
+            // 🔴 闸二: 成本字段比对【库里的真实状态】, 不是比对补丁的自述。
+            if (!costBearingFieldsUnchanged(stored, candidate)) {
+                return buildDeclined("WORKFLOW_AI_PREVIEW_ONLY",
+                        "该改动会变更调料克数/注射量，只能预览；请人工在产品配置页确认后再保存");
+            }
+
+            // ⛔ 只调 saveDraft。它按构造只写 DRAFT, 且自带租户归属校验 + 乐观锁。
+            // 落库的四道闸全在它里面, 这里【一行都不重写】—— 重写等于把那些保证作废。
+            ProductProcessWorkflowDTO saved =
+                    workflowService.saveDraft(factoryId, productTypeId, candidate);
+
+            // ⚠️ status 必须读 saved 的真实值, ⛔ 不许硬编码 "DRAFT"。
+            // saveDraft 有一条【不建草稿】的早退路径: 无草稿 + 有已发布 + 图相同时
+            // 直接 return 已发布那行, 一个字节都没写(ProductProcessWorkflowServiceImpl:93-99)。
+            // 硬编码会把「库里一行没动」报成「已写入草稿」, 用户去画布找草稿会找不到 ——
+            // 那是把「没写成」伪装成「写成了」, 本仓明令禁止。
+            boolean actuallyWroteDraft =
+                    "DRAFT".equals(saved.getStatus() == null ? null : saved.getStatus().toString());
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("status", saved.getStatus() == null ? "UNKNOWN" : saved.getStatus().toString());
+            data.put("applied", actuallyWroteDraft);
+            // 回传新 lockVersion: 不回传的话 agent 只能改一次, 第二次必然 409。
+            data.put("lockVersion", saved.getLockVersion());
+            data.put("hint", actuallyWroteDraft
+                    ? "已写入草稿。发布需要人在产品配置页确认。"
+                    : "这批改动与当前生效版本一致，没有产生新草稿。");
+            return buildSuccessResult(data);
+        } catch (MissingDefinitionException missing) {
+            return buildSemanticError(
+                    "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required");
+        } catch (BusinessException business) {
+            // 409 冲突 / 400 归属不符都走这里。⛔ 不吞、不重试 —— 冲突意味着有人在同一张
+            // 画布上工作, 悄悄重试会覆盖掉他。
+            // ⚠️ 用 getErrorCode()(String) 不是 getCode() —— 后者返回 Integer 的 HTTP 码(409),
+            // 传给 buildSemanticError(String, String) 会编译不过。
+            String errorCode = business.getErrorCode() == null
+                    ? "WORKFLOW_WRITE_REJECTED" : business.getErrorCode();
+            return buildSemanticError(errorCode, business.getMessage());
+        } catch (PatchRejectedException | IllegalArgumentException error) {
+            return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
+        } catch (Exception unexpected) {
+            return buildSemanticError("WORKFLOW_PATCH_FAILED", "Workflow patch batch failed");
         }
+    }
+
+    /**
+     * 要写下去的这张图，它的<b>成本相关字段</b>与库里现存的是否逐字相同。
+     *
+     * <h2>为什么光看补丁不够（整支审查抓出的 Critical）</h2>
+     *
+     * <p>{@link #touchesCostBearingFields} 分类的是<b>补丁清单</b>，而 {@code saveDraft}
+     * 写下去的是 <b>AI 自己重发的那整张 definition 打完补丁之后的图</b>。两者不是同一个东西 ——
+     * definition 与库里现存草稿之间的任何差异，从来没被任何闸看过。
+     *
+     * <p>它<b>必然</b>会被走到，不是理论风险：
+     * <ol>
+     *   <li>想改工序名只能用 {@code UPSERT_NODE} —— PROCESS 节点的 {@code SET_NODE_FIELD}
+     *       不允许 {@code name}</li>
+     *   <li>{@code UPSERT_NODE} 的清洗器 {@code PROCESS_DATA_KEYS} <b>不含</b>
+     *       {@code materialBindings} —— agent 想让补丁通过，<b>必须</b>把调料字段拿掉</li>
+     *   <li>{@code applyNodePatch} 的 UPSERT 分支是<b>整节点替换</b>，不继承任何字段</li>
+     *   <li>分流闸只看 op/path，{@code UPSERT_NODE} 不在名单里 → 放行</li>
+     * </ol>
+     * 合起来：「把卤制改个名」会静默清空那道工序的全部调料克数，还回 {@code applied:true}。
+     *
+     * <p>📌 判据：<b>闸要判的是「真正要写下去的东西」，不是「补丁的自述」。</b>
+     *
+     * <p>⚠️ 读不到库里现存定义时（新产品第一张草稿）返回 {@code true} —— 没有可比对的基线，
+     * 此时任何 materialBindings 都是新配的，而新配克数同样受第一道闸管辖
+     * （补丁里带克数字段一定含 {@code UPSERT_MATERIAL_BINDING} 或 {@code materialBindings} 路径）。
+     * ⛔ 这里不能改成返回 false，否则新产品永远建不了第一张草稿。
+     */
+    private boolean costBearingFieldsUnchanged(
+            Optional<ProductProcessWorkflowDTO> stored, ProductProcessWorkflowDTO candidate) {
+        if (stored.isEmpty()) {
+            return true;
+        }
+        return costBearingFingerprint(stored.get()).equals(costBearingFingerprint(candidate));
+    }
+
+    /**
+     * 提交的这张图，确实是<b>这个产品</b>的图吗。
+     *
+     * <h2>它挡的是什么</h2>
+     *
+     * <p>决定「覆写哪张画布」的 {@code productTypeId} 来自 AI 可控的 definition，
+     * 而 context 里<b>没有</b> productTypeId 可比对（只有 factoryId / userId / role / permissions）。
+     * 模型在多产品对话里把它填成同厂另一个产品时，{@code requireWorkflowOwner} 会放行
+     * （那确实是本厂产品），结果是给<b>那个</b>产品新建一张内容是<b>别人</b>的草稿。
+     *
+     * <p>⚠️ 这个洞只在<b>新建草稿</b>那一支：目标产品已有草稿时，
+     * {@code saveDraft} 的 {@code assertCurrentVersion} 会因 lockVersion 对不上而 409。
+     * 没有草稿时那条校验根本不执行。
+     *
+     * <h2>判据：图的身份来自节点 id，不是来自 AI 说它是谁</h2>
+     *
+     * <p>节点 id 是建图时生成的、跟着这张图走。用户在产品 A 的画布上提问，
+     * 提交的 definition 带的就是 A 的节点 id；而库里 B 的图带的是 B 的 id ——
+     * <b>两边一个都对不上</b>。所以「与库里存着的图至少共享一个节点 id」
+     * 就足以区分「在改这个产品」和「把别人的图搬过来」。
+     *
+     * <p>⛔ 不需要动网关往 context 里塞 productTypeId —— 那要改所有工具共用的传参链路。
+     * 这里用的是同一条原则：<b>判据取自库里存着的真值</b>。
+     *
+     * <p>⚠️ 库里没有图时返回 {@code true}：新产品的第一张草稿没有可比对的基线。
+     * ⛔ 不能改成 false，否则新产品永远建不了草稿。
+     * 这一支的风险由「AI 得先猜中一个恰好还没有任何工艺图的产品」兜着，
+     * 比原来的「任何同厂产品都能写」窄得多。
+     */
+    private boolean belongsToStoredProduct(
+            Optional<ProductProcessWorkflowDTO> stored, ProductProcessWorkflowDTO candidate) {
+        if (stored.isEmpty()) {
+            return true;
+        }
+        Set<String> storedIds = nodeIds(stored.get());
+        if (storedIds.isEmpty()) {
+            return true;
+        }
+        Set<String> candidateIds = nodeIds(candidate);
+        return candidateIds.stream().anyMatch(storedIds::contains);
+    }
+
+    private Set<String> nodeIds(ProductProcessWorkflowDTO definition) {
+        if (definition == null || definition.getNodes() == null) {
+            return Set.of();
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (node != null && node.getId() != null) {
+                ids.add(node.getId());
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 一张图里全部成本相关字段的指纹：{@code nodeId -> {materialBindings, injectionAmount}}。
+     *
+     * <p>⛔ 只收这两样，不收整个 data —— 收整个 data 会让任何合法改动（改名、挪位置）都被判成
+     * 「动了成本」，那道闸就会因为天天误报而被人绕过或删掉。
+     */
+    private Map<String, Object> costBearingFingerprint(ProductProcessWorkflowDTO definition) {
+        Map<String, Object> fingerprint = new LinkedHashMap<>();
+        if (definition == null || definition.getNodes() == null) {
+            return fingerprint;
+        }
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (node == null || node.getId() == null || node.getData() == null) {
+                continue;
+            }
+            Map<String, Object> costBearing = new LinkedHashMap<>();
+            for (String key : COST_BEARING_FIELD_ROOTS) {
+                Object value = node.getData().get(key);
+                if (value != null) {
+                    costBearing.put(key, value);
+                }
+            }
+            if (!costBearing.isEmpty()) {
+                fingerprint.put(node.getId(), costBearing);
+            }
+        }
+        return fingerprint;
+    }
+
+    /**
+     * 明确拒绝：结构上<b>确定没有写入</b>。
+     *
+     * <p>带 {@code status: "DECLINED"} 是给网关看的 —— 没有它，网关会把这次拒绝
+     * 归到 {@code OUTCOME_UNKNOWN}（台账记 IN_DOUBT、payload 清空），
+     * 于是「涉及调料克数只能预览」这句话传不到用户那里，用户看到的是
+     * 「执行结果需要人工对账」。
+     *
+     * <p>⛔ 别改成 {@code NEED_MORE_INFO} 去蹭网关已有的那条干净失败路 ——
+     * 那是用不准确的状态码骗中间层。
+     */
+    private String buildDeclined(String errorCode, String message) {
+        try {
+            Map<String, Object> declined = new LinkedHashMap<>();
+            declined.put("success", false);
+            declined.put("status", "DECLINED");
+            declined.put("errorCode", errorCode);
+            declined.put("error", message);
+            declined.put("message", message);
+            return objectMapper.writeValueAsString(declined);
+        } catch (Exception serializationFailure) {
+            return "{\"success\":false,\"status\":\"DECLINED\",\"errorCode\":\""
+                    + errorCode + "\"}";
+        }
+    }
+
+    /** ⛔ context 里没有 factoryId 就直接拒 —— 不许回退到入参里的任何值。 */
+    private String requireFactoryId(Map<String, Object> context) {
+        Object raw = context == null ? null : context.get("factoryId");
+        String factoryId = raw == null ? null : raw.toString().trim();
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId missing from execution context");
+        }
+        return factoryId;
     }
 
     private List<Map<String, Object>> sanitizePatches(Object rawPatches) {

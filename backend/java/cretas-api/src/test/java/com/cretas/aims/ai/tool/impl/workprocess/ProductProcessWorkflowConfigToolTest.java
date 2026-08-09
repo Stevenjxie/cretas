@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +17,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class ProductProcessWorkflowConfigToolTest {
 
@@ -24,8 +26,13 @@ class ProductProcessWorkflowConfigToolTest {
 
     @BeforeEach
     void setUp() {
+        // 本类只测 preview 与校验, 落库路径由 ProductProcessWorkflowConfigToolWriteTest 覆盖。
+        // ⛔ 这里给 mock 不是为了让测试变绿, 是因为这些用例本来就不该碰库。
         tool = new ProductProcessWorkflowConfigTool(
-                objectMapper, new ProductProcessWorkflowValidator());
+                objectMapper,
+                new ProductProcessWorkflowValidator(),
+                mock(ProductProcessWorkflowService.class),
+                false);   // 本类不测落库, 开关传 false
     }
 
     @Test
@@ -142,17 +149,51 @@ class ProductProcessWorkflowConfigToolTest {
     }
 
     @Test
-    void executeIsAlwaysRejectedWithSemanticErrorCode() throws Exception {
+    void executeIsRejectedForCostBearingPatches() throws Exception {
+        // ⚠️ 2026-08-09 加强: 原来传空 patches 列表, 任何拒绝理由都能让它绿。
+        // 现在传一条真的注射量补丁 —— 那是「会动扣料与成本」的一类, execute 必须拒。
         ToolCall call = ToolCall.of(
                 "execute-1",
                 tool.getToolName(),
-                objectMapper.writeValueAsString(Map.of("patches", List.of())));
+                objectMapper.writeValueAsString(Map.of(
+                        "definition", definition(),
+                        // ⚠️ 用 materialBindings 而不是 injectionAmount: 后者有类别闸
+                        // (只允许注射类工序), 本文件的 definition() 没有类别 ->
+                        // 会红在「补丁被拒」而不是「execute 不许改克数」, 那测的是另一件事。
+                        // materialBindings 不含 subsequentPotRatio 时不过类别闸, 正好到达分流闸。
+                        "patches", List.of(setField("process:1", "materialBindings",
+                                List.of(Map.of("materialTypeId", "RMT-1", "dosagePerKgG", 12.5d)))))));
 
         Map<String, Object> envelope = objectMapper.readValue(
                 tool.execute(call, Map.of("factoryId", "F006")), new TypeReference<>() {});
 
         assertFalse((Boolean) envelope.get("success"));
         assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
+    }
+
+    @Test
+    void previewAndWriteShareOneValidationPath() throws Exception {
+        // 承重: 两条路必须对【同一批补丁】给出【同一个结论】。
+        // 不同的话, 会出现「预览说能过、落库却校验不过」—— 那是两把尺子。
+        List<Map<String, Object>> badPatches = List.of(
+                setField("process:1", "conversionRule.mode", "NOT_A_REAL_MODE"));
+
+        Map<String, Object> previewEnvelope = preview(badPatches);
+        Map<String, Object> executeEnvelope = execute(badPatches);
+
+        assertEquals(previewEnvelope.get("success"), executeEnvelope.get("success"));
+        assertEquals(previewEnvelope.get("errorCode"), executeEnvelope.get("errorCode"));
+    }
+
+    private Map<String, Object> execute(List<Map<String, Object>> patches) throws Exception {
+        String arguments = objectMapper.writeValueAsString(Map.of(
+                "definition", definition(),
+                "patches", patches));
+        return objectMapper.readValue(
+                tool.execute(
+                        ToolCall.of("execute", tool.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
     }
 
     private Map<String, Object> preview(List<Map<String, Object>> patches) throws Exception {

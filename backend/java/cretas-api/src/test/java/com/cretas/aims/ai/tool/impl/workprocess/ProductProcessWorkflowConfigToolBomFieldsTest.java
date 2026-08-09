@@ -3,12 +3,14 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.constant.SeasoningProcessCategory;
+import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 /**
  * 画布 AI 扩能到 BOM 字段（2026-08-07 阶段 4）的服务端校验。
@@ -39,8 +42,13 @@ class ProductProcessWorkflowConfigToolBomFieldsTest {
 
     @BeforeEach
     void setUp() {
+        // 本类只测 preview 与校验, 落库路径由 ProductProcessWorkflowConfigToolWriteTest 覆盖。
+        // ⛔ 这里给 mock 不是为了让测试变绿, 是因为这些用例本来就不该碰库。
         tool = new ProductProcessWorkflowConfigTool(
-                objectMapper, new ProductProcessWorkflowValidator());
+                objectMapper,
+                new ProductProcessWorkflowValidator(),
+                mock(ProductProcessWorkflowService.class),
+                false);   // 本类不测落库, 开关传 false
     }
 
     // ───────────────────────── 约束 1：类别闸 ─────────────────────────
@@ -206,11 +214,40 @@ class ProductProcessWorkflowConfigToolBomFieldsTest {
     // ────────────── 约束 4：审核弹窗不得跳过 ──────────────
 
     @Test
-    void executeNeverApplies() throws Exception {
-        // 改克数比改拓扑风险高（直接影响扣料与成本），所以这个工具**结构上**只能出预览。
+    void executeNeverAppliesCostBearingPatches() throws Exception {
+        // 改克数比改拓扑风险高（直接影响扣料与成本），所以【克数补丁】结构上只能出预览。
         // 不是"前端记得弹审核框"，而是 execute 根本不写任何东西。
+        //
+        // ⚠️ 2026-08-09 这条断言被【加强】了: 它原来传的是空 payload "{}",
+        // 那压根没测到 BOM 补丁 —— 换成任何拒绝理由(比如"缺 definition")都能让它绿。
+        // 现在传一条【真的调料克数补丁】, 才真正测到上面那句注释说的事。
+        // Steve 同日拍板: 拓扑补丁可落草稿, 克数仍拒 —— 分界收窄了, 但这条一个字节没让步。
         Map<String, Object> envelope = objectMapper.readValue(
-                tool.execute(ToolCall.of("apply", tool.getToolName(), "{}"), Map.of("factoryId", "F006")),
+                tool.execute(
+                        ToolCall.of("apply", tool.getToolName(), objectMapper.writeValueAsString(
+                                Map.of("definition", definitionWithCategory(SeasoningProcessCategory.COOKING),
+                                        "patches", List.of(
+                                                upsertBinding("process:1", binding("RMT-1", 12.5d, 60d)))))),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+
+        assertFalse((Boolean) envelope.get("success"));
+        assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
+    }
+
+    @Test
+    void executeNeverAppliesMaterialBindingRemoval() throws Exception {
+        // 删一行调料同样动扣料 —— 增删两个方向都要拒, 不能只拒新增。
+        Map<String, Object> envelope = objectMapper.readValue(
+                tool.execute(
+                        ToolCall.of("remove", tool.getToolName(), objectMapper.writeValueAsString(
+                                Map.of("definition",
+                                        definitionWithExistingBinding(SeasoningProcessCategory.COOKING),
+                                        "patches", List.of(Map.of(
+                                                "op", "REMOVE_MATERIAL_BINDING",
+                                                "nodeId", "process:1",
+                                                "materialTypeId", "RMT-1"))))),
+                        Map.of("factoryId", "F006")),
                 new TypeReference<>() {});
 
         assertFalse((Boolean) envelope.get("success"));
@@ -310,6 +347,30 @@ class ProductProcessWorkflowConfigToolBomFieldsTest {
         patch.put("path", path);
         patch.put("value", value);
         return patch;
+    }
+
+    /**
+     * 带一行【已存在】调料绑定的定义。
+     *
+     * <p>REMOVE_MATERIAL_BINDING 在目标行不存在时会抛 PatchRejectedException
+     * （见 applyMaterialBindingPatch 的 removeIf 分支）——用不带绑定的定义去测「删除被拒」，
+     * 红的会是「补丁被清洗器拒了」而不是「execute 不许改克数」，那测的是另一件事。
+     */
+    private Map<String, Object> definitionWithExistingBinding(String processCategory) {
+        Map<String, Object> definition =
+                new LinkedHashMap<>(definitionWithCategory(processCategory));
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        for (Object raw : (List<?>) definition.get("nodes")) {
+            Map<String, Object> node = new LinkedHashMap<>((Map<String, Object>) raw);
+            if ("process:1".equals(node.get("id"))) {
+                Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) node.get("data"));
+                data.put("materialBindings", List.of(binding("RMT-1", 12.5d, null)));
+                node.put("data", data);
+            }
+            nodes.add(node);
+        }
+        definition.put("nodes", nodes);
+        return definition;
     }
 
     private Map<String, Object> definitionWithCategory(String processCategory) {
