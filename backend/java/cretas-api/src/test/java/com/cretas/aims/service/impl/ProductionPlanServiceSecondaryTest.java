@@ -140,6 +140,9 @@ class ProductionPlanServiceSecondaryTest {
         @DisplayName("正常流程 — PENDING 计划创建, planSourceType=SECONDARY, secondarySourceWipId=wipId")
         void happyPath_createsPendingPlanWithSecondaryFields() throws Exception {
             ProductionPlanServiceImpl svc = buildService(wipInventoryService);
+            // 老路(LEGACY)删掉后没有画布工艺就建不了计划; 本用例测的是二次计划字段, 不是工艺。
+            com.cretas.aims.service.production.WorkflowAuthorityTestFixture.install(
+                    svc, FACTORY_ID, PRODUCT_TYPE_ID);
             when(wipInventoryService.listAvailableWip(FACTORY_ID))
                     .thenReturn(List.of(buildWip(new BigDecimal("50"))));
             // 🔴 桩要打在真正被调的方法上: 生产代码用租户隔离的 findByIdAndFactoryId,

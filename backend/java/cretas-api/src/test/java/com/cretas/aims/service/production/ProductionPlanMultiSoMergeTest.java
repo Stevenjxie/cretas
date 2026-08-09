@@ -106,28 +106,9 @@ class ProductionPlanMultiSoMergeTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
-        // __LEGACY_REMOVED_WORKFLOW_STUB__ (2026-08-09, Steve 拍板删 LEGACY 老路)
-        // 老路删掉后, 没有画布工艺的产品建不了计划(409 WORKFLOW_REQUIRED)。
-        // 本类测的是财审闸/多 SO 合并/安全库存来源, 不是工艺解析 —— 给一份最小可用的
-        // 工艺契约当入场券, 断言本身不受影响。
-        var workflowResolution = org.mockito.Mockito.mock(
-                com.cretas.aims.service.workflow.ProductWorkflowResolutionService.class);
-        var planContract = new com.cretas.aims.service.workflow.WorkflowPlanOutputContract(
-                7001L, 1, 8001L, "stub-revision-hash", java.util.Map.of(), "kg");
-        org.mockito.Mockito.lenient().when(workflowResolution.resolveActivePlanOutputContract(
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any()))
-                .thenReturn(java.util.Optional.of(planContract));
-        org.mockito.Mockito.lenient().when(workflowResolution.resolvePinnedPlanOutputContract(
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any()))
-                .thenReturn(planContract);
-        org.springframework.test.util.ReflectionTestUtils.setField(
-                service, "workflowResolutionService", workflowResolution);
+        // 老路(LEGACY)删掉后, 没有画布工艺就建不了计划。
+        // 本类测的不是工艺 —— 用共用装配拿一张入场券即可。
+        WorkflowAuthorityTestFixture.install(service, FACTORY_ID, PRODUCT_TYPE_ID);
 
         when(productTypeRepository.existsByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID)).thenReturn(true);
         ProductType productType = new ProductType();
