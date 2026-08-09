@@ -33,7 +33,10 @@ import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../comp
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
-import { canCreateProductionPlan } from '../../utils/productionPlanPermissions';
+import {
+  canCompleteProductionPlan,
+  canCreateProductionPlan,
+} from '../../utils/productionPlanPermissions';
 
 // 创建ProductionPlanManagement专用logger
 const productionPlanLogger = logger.createContextLogger('ProductionPlanManagement');
@@ -83,6 +86,7 @@ export default function ProductionPlanManagementScreen() {
 
   // 可以创建生产计划的角色
   const canCreatePlan = canCreateProductionPlan(roleCode, isReadOnly);
+  const canCompletePlan = canCompleteProductionPlan(roleCode, isReadOnly);
 
   // 调试日志
   productionPlanLogger.debug('权限检查', {
@@ -90,6 +94,7 @@ export default function ProductionPlanManagementScreen() {
     roleCode,
     isReadOnly,
     canCreatePlan,
+    canCompletePlan,
     factoryUserRole: user?.factoryUser?.role,
   });
 
@@ -148,7 +153,9 @@ export default function ProductionPlanManagementScreen() {
 
   useEffect(() => {
     loadPlans();
-    loadOptions();
+    if (canCreatePlan) {
+      loadOptions();
+    }
   }, []);
 
   useEffect(() => {
@@ -559,31 +566,6 @@ export default function ProductionPlanManagementScreen() {
     }
   };
 
-  const handleStartProduction = async (planId: string) => {
-    Alert.alert(
-      '确认开始生产',
-      '确定要开始生产吗?开始后将无法修改计划信息。',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '开始',
-          onPress: async () => {
-            try {
-              const response = await productionPlanApiClient.startProduction(planId);
-              if (response.success) {
-                Alert.alert('成功', '生产已开始');
-                loadPlans();
-              }
-            } catch (error) {
-              productionPlanLogger.error('开始生产失败', error, { planId });
-              Alert.alert('错误', getErrorMsg(error) || '操作失败');
-            }
-          },
-        },
-      ]
-    );
-  };
-
   // 打开完成生产对话框
   const openCompleteDialog = (plan: ProductionPlan) => {
     setCompletingPlan(plan);
@@ -700,6 +682,15 @@ export default function ProductionPlanManagementScreen() {
       )}
 
       <ScrollView style={styles.content}>
+        <Card style={styles.mobileBoundaryCard}>
+          <Card.Content>
+            <Text style={styles.mobileBoundaryTitle}>移动端查看生产进度</Text>
+            <Text style={styles.mobileBoundaryText}>
+              创建或调整生产计划、结单请使用 PC；现场操作员在各自任务中录入工序报工。
+            </Text>
+          </Card.Content>
+        </Card>
+
         {/* Filter */}
         <Card style={styles.filterCard}>
           <Card.Content>
@@ -958,7 +949,7 @@ export default function ProductionPlanManagementScreen() {
                 )}
 
                 {/* Actions */}
-                {!isReadOnly && plan.status?.toLowerCase() === 'pending' && (
+                {canCompletePlan && plan.status?.toLowerCase() === 'pending' && (
                   <Button
                     mode="contained"
                     icon="check"
@@ -969,7 +960,7 @@ export default function ProductionPlanManagementScreen() {
                   </Button>
                 )}
 
-                {!isReadOnly && plan.status?.toLowerCase() === 'in_progress' && (
+                {canCompletePlan && plan.status?.toLowerCase() === 'in_progress' && (
                   <View style={styles.actionRow}>
                     <Button
                       mode="contained"
@@ -1382,7 +1373,7 @@ export default function ProductionPlanManagementScreen() {
       {/* 完成生产对话框 */}
       <Portal>
         <Modal
-          visible={showCompleteDialog}
+          visible={canCompletePlan && showCompleteDialog}
           onDismiss={() => {
             setShowCompleteDialog(false);
             setCompletingPlan(null);
@@ -1507,6 +1498,20 @@ const styles = StyleSheet.create({
   filterCard: {
     margin: 16,
     marginBottom: 8,
+  },
+  mobileBoundaryCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#E3F2FD',
+  },
+  mobileBoundaryTitle: {
+    color: '#0D47A1',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  mobileBoundaryText: {
+    color: '#174A7A',
+    lineHeight: 20,
   },
   statsCard: {
     margin: 16,

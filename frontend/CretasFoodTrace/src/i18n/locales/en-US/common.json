@@ -561,7 +561,18 @@
     "download_timeout_message": "Download timed out. Retry on a stable connection.",
     "check_failed_title": "Update check failed",
     "failed_message": "Update check failed: {{error}}",
-    "disabled_message": "Manual update checks are not available in this build."
+    "disabled_message": "Manual update checks are not available in this build.",
+    "required_checking_title": "Checking app version",
+    "required_checking_message": "Please wait while we confirm this version is safe to use.",
+    "required_badge": "Update required",
+    "required_title": "This version is no longer supported",
+    "required_message": "Install a supported version before continuing so business data and workflows remain correct.",
+    "current_version": "Current version",
+    "minimum_version": "Minimum supported",
+    "required_retry": "Recheck after installing",
+    "required_help": "If download or installation fails, check your network and install permissions, then contact your administrator if needed.",
+    "required_missing_url": "The server has not provided an install link. Contact your administrator, then recheck.",
+    "required_open_failed": "The install link could not be opened. Check your network and try again, or contact your administrator."
   }
 }
 

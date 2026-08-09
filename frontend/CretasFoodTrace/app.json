@@ -2,12 +2,12 @@
   "expo": {
     "name": "白垩纪AI Agent",
     "slug": "CretasFoodTrace",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "runtimeVersion": "1.0.3",
+    "runtimeVersion": "1.0.4",
     "updates": {
       "enabled": true,
       "url": "https://ota.cretaceousfuture.com/api/ota/manifest",
@@ -30,7 +30,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.cretaceousfuture",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "允许白垩纪AI Agent使用麦克风进行语音输入和语音识别"
       }
@@ -42,7 +42,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cretas.foodtrace",
-      "versionCode": 14,
+      "versionCode": 15,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",

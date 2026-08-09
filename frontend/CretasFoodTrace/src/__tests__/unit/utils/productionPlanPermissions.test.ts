@@ -1,13 +1,21 @@
-import { canCreateProductionPlan } from '../../../utils/productionPlanPermissions';
+import {
+  canCompleteProductionPlan,
+  canCreateProductionPlan,
+} from '../../../utils/productionPlanPermissions';
 
-describe('production plan creator roles', () => {
-  it.each(['factory_super_admin', 'department_admin', 'production_manager'])(
-    'allows %s to create a plan',
-    (role) => expect(canCreateProductionPlan(role, false)).toBe(true),
+describe('production plan mobile permissions', () => {
+  it.each(['factory_super_admin', 'department_admin', 'production_manager', 'dispatcher'])(
+    'keeps %s on the PC creation path',
+    (role) => expect(canCreateProductionPlan(role, false)).toBe(false),
   );
 
-  it('keeps platform read-only and unrelated roles blocked', () => {
-    expect(canCreateProductionPlan('production_manager', true)).toBe(false);
-    expect(canCreateProductionPlan('viewer', false)).toBe(false);
+  it.each(['factory_super_admin', 'production_manager', 'workshop_supervisor', 'operator'])(
+    'keeps %s on the PC settlement path',
+    (role) => expect(canCompleteProductionPlan(role, false)).toBe(false),
+  );
+
+  it('also blocks platform read-only users', () => {
+    expect(canCreateProductionPlan('platform_admin', true)).toBe(false);
+    expect(canCompleteProductionPlan('platform_admin', true)).toBe(false);
   });
 });
