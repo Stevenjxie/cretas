@@ -52,6 +52,7 @@ _PLAN_LABELS = {
     "RESTAURANT_OPS_STORE_DIRECTORY": "门店名单",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "经营诊断与提升方案",
     "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖",
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": "时段表现",
     "RESTAURANT_OPS_RECIPE_COST": "菜品成本",
     "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗",
     "RESTAURANT_OPS_GROSS_MARGIN": "菜品毛利",
@@ -69,6 +70,9 @@ _RESOLVER_DIMENSIONS = {
         {"store", "dish", "ingredient", "channel", "customer", "time"}
     ),
     "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
+    # 时段本身是 time 维度; 结果里也带门店无关的全店汇总, 故只声明 time。
+    # ⛔ 声明的是**这个 resolver 真能出的粒度**, 不是「希望它能出」的。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
@@ -197,6 +201,38 @@ def _execution_mismatch(
     if not set(spec.dimensions).issubset(supported_dimensions):
         return "查询维度超出计划 resolver 的能力范围"
     return None
+
+
+def _drop_unanswerable_mislabeled_dimensions(spec, plan, query):
+    """见调用点的注释。返回可能被去掉误标维度的 spec（无改动时原样返回）。"""
+    from dataclasses import replace as _replace
+    from smartbi.gold.restaurant.restaurant_intent import _query_names_an_ingredient
+
+    supported = set().union(
+        *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
+    ) if plan else set()
+
+    #: 粒度 -> 「这个粒度上有没有点名实体」的判定。只登记**能判**的粒度;
+    #: 判不了的粒度一律不动 —— 猜错的代价是答非所问。
+    namers = {"ingredient": _query_names_an_ingredient}
+
+    dropped = []
+    kept = []
+    for dim in spec.dimensions:
+        namer = namers.get(dim)
+        if namer is not None and dim not in supported and not namer(query or ""):
+            dropped.append(dim)
+        else:
+            kept.append(dim)
+    if not dropped:
+        return spec
+
+    logger.info(
+        "[restaurant-intent] 去掉误标且无 resolver 支持的维度: dropped=%s "
+        "supported=%s plan=%s query=%r",
+        dropped, sorted(supported), tuple(plan), (query or "")[:60],
+    )
+    return _replace(spec, dimensions=tuple(kept))
 
 
 def _execution_receipt(
@@ -958,6 +994,28 @@ async def tiered_answer(
         # 带 dish_mention 直答 (匿名「哪家店的X」排名 / 具名店+菜单店直答)。
         split_dish = store_dish_split_dish(query) or store_dish_split_dish(resolver_query)
         store_dish = split_dish or (dish_mention if store_mention else None)
+        # ── 去掉**误标且无人能答**的维度 ────────────────────────────────
+        #
+        # 🔴 2026-08-07 prod 实测:「最近30天**食材成本**占营收多少」被 T3 标成
+        #    dimensions=('ingredient',), 而它问的是**全店比率**(食材成本/营收),
+        #    没有任何按食材的拆分。计划里的 resolver 都不支持 ingredient 粒度,
+        #    于是被下面的 _execution_mismatch 拦成「查询维度超出计划 resolver 的
+        #    能力范围」, 用户拿到一句反问。
+        #
+        # 判据与「『**加权**毛利率』的『加权』被当成菜名」同源:
+        # **维度由「问的是哪个粒度」决定, 不是由句子里出现了哪个名词决定。**
+        #
+        # ⛔ 两个条件必须同时成立才去掉:
+        #    1) 那个粒度上**一个实体都没点名**(点名了就是真按那个粒度问的);
+        #    2) 计划里**没有任何 resolver 支持**该粒度 —— 支持的话本来就能答,
+        #       动它就会把「损耗最高的食材是哪个」这类真·食材粒度问题弄坏。
+        #    只满足 1) 不够: 实测 `extract_dish_candidate` 对「鲈鱼的损耗多少」
+        #    也返回 None(它是按菜品-指标句式调的), 只凭它会**无条件**剥掉维度。
+        #
+        # 最坏情况只是把「必然被拦下」变成「按更粗的粒度回答」, 而答案契约仍会
+        # 校验; 绝不会把一个本来能按细粒度答的问题降级。
+        spec = _drop_unanswerable_mislabeled_dimensions(spec, plan, query)
+
         mismatch = _execution_mismatch(
             spec,
             plan,

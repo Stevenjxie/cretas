@@ -83,7 +83,8 @@ describe('material type family source contract', () => {
 
   it('presents classification names before their internal numeric category codes', () => {
     expect(source).toContain('function formatSegmentOptionLabel');
-    expect(source).toContain('（分类码 ${option.segmentCode}）');
+    // 2026-08-07: 改从局部变量 code 取 —— 无字典工厂的选项没有分类码, 空括号会误导
+    expect(source).toContain('（分类码 ${code}）');
     expect(source).toContain(':label="formatSegmentOptionLabel(opt)"');
     expect(source).not.toContain(':label="`${opt.segmentCode} — ${opt.segmentLabel}`"');
   });
@@ -185,5 +186,24 @@ describe('material type family source contract', () => {
     expect(source).toContain('rememberCategories(tableData.value)');
     // 正在编辑的那条即使不在已加载列表里, 也要能显示自己的类别
     expect(source).toContain("const current = (form.value?.category || '').trim()");
+  });
+
+  /**
+   * 🔴 2026-08-07 真机验证抓到的缺陷: 「料号」输入框有了、后端消费 dto.getCode() 的分支
+   * 也有了, 但提交前 `delete materialPayload.code` 是**无条件**的 —— 两头各自都对,
+   * 中间被掐断。实测 POST body 里一个 code 字段都没有, 后端如实回 400「请填写物料料号」,
+   * 而 el-message 3 秒自动消失, 页面上只表现为「点保存没反应」。
+   *
+   * 这条断言锁的是「无字典新建时 code 必须进 payload」, 不是某种写法。
+   */
+  it('无字典新建时不能把用户填的料号从 payload 里删掉', () => {
+    expect(source).toContain('if (editingId.value || hasSegmentDictionary.value) {');
+    expect(source).toContain('delete materialPayload.code;');
+    // 删除必须在那个 if 里面 —— 用缩进锁住层级, 无条件版本是 4 空格缩进
+    expect(source).toContain('      delete materialPayload.code;');
+  });
+
+  it('没有分类码时类别选项不拼空括号', () => {
+    expect(source).toContain("if (!code) return label || '未命名分类';");
   });
 });

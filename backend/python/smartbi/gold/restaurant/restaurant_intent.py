@@ -355,6 +355,7 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
     "RESTAURANT_OPS_STORE_DIRECTORY": "查询当前账号有几家门店、有哪些门店、门店名单",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "基于内部多方面经营数据诊断原因并给出提高营收、利润、客流或整体经营的行动方案；不能退化成只报一个指标",
     "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖的占比、结构和渠道表现",
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": "各时段(午市/下午茶/晚市/夜宵)的历史营收、单量、客单价对比 —— 「哪个时段生意最好」。注意这是**历史表现**, 不是明天的预测排班",
     "RESTAURANT_OPS_WASTAGE_TOP": "损耗/浪费/报损排行，按食材或类型统计损耗量和金额",
     "RESTAURANT_OPS_STOCK_SHORTAGE": "库存盘点差异（盘亏/盘盈）排行",
     "RESTAURANT_OPS_RECIPE_COST": "菜品食材成本排行（不含毛利/售价）",
@@ -764,6 +765,40 @@ def _is_broad_business_overview(text: str) -> bool:
         any(token in text for token in ("生意", "经营情况", "经营表现", "业绩", "整体情况"))
         and any(token in text for token in ("怎么样", "如何", "好不好", "情况"))
         and not _detect_requested_metrics(text)
+    )
+
+
+#: 「食材」这一类**泛指词**本身不是某个食材 —— 它们只是在给指标做限定
+#: (食材成本 / 原料成本), 出现它们不代表用户要按食材拆分。
+_INGREDIENT_GENERIC_TOKENS = (
+    "食材成本", "原料成本", "原材料成本", "食材费用",
+    "食材", "原料", "原材料", "配料", "物料",
+)
+
+
+def _query_names_an_ingredient(text: str) -> bool:
+    """问句里有没有**点名某个具体食材**（而不只是出现「食材」这个泛指词）。
+
+    ⛔ 判据是「点没点名」, 不是「出没出现食材相关的词」。
+    「食材成本占营收多少」出现了「食材」但一个食材都没点名 —— 它问的是全店比率;
+    「鲈鱼的损耗多少」点了名 —— 那才是食材粒度。
+
+    ⚠️ 必须在**原句**上抽, 再看抽到的是不是泛指词 —— 第一版是先把泛指词从句子里
+    剔掉再抽, 结果「罗氏虾的**食材成本**是多少」被剔成「罗氏虾的是多少」,
+    句子结构破了, 抽取器抽不出来, 于是**点了名也被判成没点名**。测试当场抓到。
+    (与 daypart 那道守卫同一个做法: 抽到的名字若本身是泛指词就不算点名。)
+
+    dim_ingredient 的真伪由下游 resolver 校验, 这里只判「用户有没有指名道姓」。
+    """
+    if not text:
+        return False
+    candidates = extract_dish_candidates(text) or []
+    single = extract_dish_candidate(text)
+    if single:
+        candidates = [single, *candidates]
+    return any(
+        c and c not in _INGREDIENT_GENERIC_TOKENS
+        for c in candidates
     )
 
 
@@ -1739,6 +1774,7 @@ _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
     "RESTAURANT_OPS_STORE_DIRECTORY": ("store_count",),
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": (),
     "RESTAURANT_OPS_CHANNEL_MIX": ("channel_mix",),
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": ("revenue",),
     "RESTAURANT_OPS_WASTAGE_TOP": ("wastage_qty", "wastage_cost"),
     # 金额在前: 「盘点亏了多少」问的是钱, 而且金额是唯一能跨食材相加的维度
     # (数量把 kg 和 L 直接相加, 实测 DEMO_REST 是 41.45kg + 45.00L = "86.45")。
@@ -5202,12 +5238,18 @@ def _semantic_spec_from_t3(
         store_scope_defaulted = False
 
     if daypart_contract_repair:
-        # Daypart business questions are served by the grounded staffing /
-        # order-volume resolver.  This is a post-LLM capability compilation,
-        # not a keyword-first route: the model already saw the whole sentence,
-        # while the explicit “晚市/午市/夜宵 + 生意” slot prevents a fallback
-        # provider from drifting to a monthly all-store sales summary.
-        code = "RESTAURANT_OPS_STAFFING_ADVICE"
+        # 时段经营问句由**历史时段表现** resolver 承接。这是 post-LLM 的能力编译,
+        # 不是 keyword-first 路由: 模型已经看过整句, 而显式的「时段 + 生意」槽位
+        # 防止兜底 provider 漂到「全店月度营收汇总」。
+        #
+        # 🔴 2026-08-07 这里原本指向 RESTAURANT_OPS_STAFFING_ADVICE, 而那个
+        # resolver **正确地拒绝**历史问题(「不能把它偷换成明天的预测排班」——
+        # 预测排班只做未来)。于是「哪个时段生意最好」被改写到一个必然拒答的终点,
+        # 用户拿到的仍是反问。
+        # 🔑 判据: **改写目标必须是真能答这个问题的 resolver**, 不是「看起来最像
+        # 的那个」。终点补上(RESTAURANT_OPS_DAYPART_PERFORMANCE)之后, 改写目标
+        # 必须跟着换 —— 否则新 resolver 上线了也走不到。
+        code = "RESTAURANT_OPS_DAYPART_PERFORMANCE"
         confidence = max(confidence, 0.99)
         requested_metrics = ()
         dimensions = ("time",)
