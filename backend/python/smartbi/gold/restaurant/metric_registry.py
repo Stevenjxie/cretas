@@ -387,36 +387,53 @@ class Aggregation:
     #: 取回行之后的处理形态。⛔ 都是**纯行处理**，不改 SQL ——
     #: 改 SQL 会让每种形态各自有一套取数口径，那正是要避免的事。
     post: str = ""           # "" | "share" | "extremes" | "above_avg" | "concentration"
+    #: 🔴 **给规划器看的一句话**：什么样的问题该选这个形态。
+    #:
+    #: ⛔ 存在的唯一理由是「prompt 从登记表渲染」。2026-08-09 实测：执行侧登记了
+    #:    3168 个格子，而规划器穷举所有输出只能到达 147 个（4%）—— 因为它的可选
+    #:    值是一张**手写在 prompt 里**的封闭清单。把说明写在这里，prompt 由它渲染，
+    #:    登记表加一行规划器当场就能指到，永远不用再改 prompt。
+    #: ⛔ 不许在 prompt 里另写一份 —— 那就是第四张手写表，同一个病换个位置。
+    #:    `test_prompt_renders_every_registered_aggregation` 会因此变红。
+    asks: str = ""
 
 
 #: 🔑 9 种**形状**，不是 9 个参数变体。判据：每一种都答一类现实里真会问的问题，
 #:    且换成另一种形状答不了。「前 5」和「前 10」不是两种形状（是同一形状换 limit），
 #:    所以⛔ 没有 top10 这一条 —— 那是防膨胀闸要拦的东西。
 AGGREGATIONS: Dict[str, Aggregation] = {
-    # 「本月营收多少」
-    "summary": Aggregation("summary", "汇总"),
-    # 「哪家店最高」
-    "rank": Aggregation("rank", "排名", order="desc", limit=5, needs_dimension=True),
-    # 「哪道菜卖得最差」—— ⛔ 不是 rank 加个参数就完事：方向反了，
-    #    「最差」的业务含义（要处理的问题）和「最好」（要复制的经验）是两回事。
-    "bottom": Aggregation("bottom", "倒数", order="asc", limit=5, needs_dimension=True),
-    # 「各渠道分别多少」—— 全部列出，不截断
-    "compare": Aggregation("compare", "对比", order="desc", needs_dimension=True),
-    # 「这个月每天怎么走的」—— 按维度自身顺序，⛔ 不按值排
-    "trend": Aggregation("trend", "趋势", order="asc", order_by="dim",
-                         needs_dimension=True),
-    # 「外卖占多少」—— 附占比列
-    "share": Aggregation("share", "占比", order="desc", needs_dimension=True,
-                         post="share"),
-    # 「最好和最差的分别是哪个」—— 只留两端
-    "extremes": Aggregation("extremes", "两端", order="desc", needs_dimension=True,
-                            post="extremes"),
-    # 「哪些店高于平均」—— 阈值是**算出来的**，不是拍的
-    "above_avg": Aggregation("above_avg", "高于平均", order="desc",
-                             needs_dimension=True, post="above_avg"),
-    # 「几道菜贡献了八成营收」—— 帕累托，累计到 80% 为止
-    "concentration": Aggregation("concentration", "集中度", order="desc",
-                                 needs_dimension=True, post="concentration"),
+    "summary": Aggregation(
+        "summary", "汇总",
+        asks="要一个总数或各项分别是多少，没有比较或排序的意思"),
+    "rank": Aggregation(
+        "rank", "排名", order="desc", limit=5, needs_dimension=True,
+        asks="问最高/最好/最多/前几名"),
+    # ⛔ 不是 rank 加个参数就完事：方向反了，「最差」的业务含义（要处理的问题）
+    #    和「最好」（要复制的经验）是两回事。
+    "bottom": Aggregation(
+        "bottom", "倒数", order="asc", limit=5, needs_dimension=True,
+        asks="问最低/最差/最少/卖得不好的"),
+    "compare": Aggregation(
+        "compare", "对比", order="desc", needs_dimension=True,
+        asks="问各项之间对比如何，要看全部不要截断"),
+    "trend": Aggregation(
+        "trend", "趋势", order="asc", order_by="dim", needs_dimension=True,
+        asks="问走势/变化/怎么走的，要按时间先后看"),
+    "share": Aggregation(
+        "share", "占比", order="desc", needs_dimension=True, post="share",
+        asks="问占比/占多少/比重/构成"),
+    "extremes": Aggregation(
+        "extremes", "两端", order="desc", needs_dimension=True, post="extremes",
+        asks="一句话里同时要最高和最低"),
+    # 阈值是**算出来的**，不是拍的
+    "above_avg": Aggregation(
+        "above_avg", "高于平均", order="desc", needs_dimension=True, post="above_avg",
+        asks="问哪些高于平均/超过平均水平"),
+    # 帕累托，累计到 80% 为止
+    "concentration": Aggregation(
+        "concentration", "集中度", order="desc", needs_dimension=True,
+        post="concentration",
+        asks="问集中度/几个贡献了大部分/二八分布"),
 }
 
 
@@ -481,9 +498,29 @@ def assert_registry_self_consistent() -> None:
         #    取到的是数据库返回的**任意**顺序 —— 跑得通, 每次结果还不一样。
         if a.post:
             assert a.order, f"聚合 {a.key} 要做行处理却没声明排序 —— 结果不确定"
+        # ⛔ 承重: 没写 `asks` 的聚合, prompt 渲染出来规划器**看不懂什么时候用它**,
+        #    于是它永远不会被选中 —— 一个登记了却指不到的格子。
+        #    这正是 2026-08-09 查出的「3168 个格子只有 147 个够得着」的成因。
+        assert a.asks, (
+            f"聚合 {a.key} 没写 `asks`(什么样的问题该选它) —— "
+            f"规划器 prompt 由它渲染, 空着等于登记了一个永远选不中的形态")
 
 
 assert_registry_self_consistent()
+
+
+def render_aggregation_vocabulary() -> str:
+    """给规划器 prompt 用的聚合可选值 —— **唯一来源是本登记表**。
+
+    🔴 这个函数是「根治」的全部要点：规划器的可选值不该手写在 prompt 里。
+       2026-08-09 实测，手写的后果是执行侧 3168 个格子里只有 147 个（4%）
+       够得着 —— 造好了、验过了、用不上，而且**任何现有的闸都不会因此变红**。
+
+    ⛔ 在 prompt 里另写一份聚合清单 = 第四张手写表，同一个病换个位置。
+       `test_prompt_renders_every_registered_aggregation` 会因此变红。
+    """
+    parts = [f"{a.key}({a.label}, {a.asks})" for a in AGGREGATIONS.values()]
+    return "、".join(parts)
 
 
 def registry_size() -> Dict[str, int]:

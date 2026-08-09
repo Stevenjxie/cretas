@@ -912,6 +912,19 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"),
         ("zhipu", "glm-4.5-air"),
+        # 🔴 2026-08-09: 上面 6 个**全部运行时额度耗尽**(5 个 quota_skip + zhipu 超时),
+        #    于是 T3 规划整层 fail-closed, 每个餐饮问句都退化成非 LLM 启发式 ——
+        #    症状是「答上了但槽位不全」, 不报错, 从分数上看不出来。
+        #    ⛔ 放在**链尾**不是链头: 上面那些有额度时行为逐字不变, 只有全耗尽时
+        #       才走到这里。它们比 flash 贵/慢一点, 但「贵一点」远好过「不规划」。
+        #    ⛔ 只从 _SAFE_MODELS 内挑, 一条白名单都没新增(计费闸需 Steve 确认)。
+        #    实测(真实 T3 prompt / 3 问句 / 答对 intent 且 conf>=0.6):
+        #      glm-4.7 3/3 3.0s   qwen3.7-max 3/3 3.0s
+        #      qwen3-max-2025-09-23 3/3 3.8s   glm-5 3/3 4.4s
+        ("aliyun_c", "glm-4.7"),
+        ("aliyun_c", "qwen3.7-max"),
+        ("aliyun_c", "qwen3-max-2025-09-23"),
+        ("aliyun_c", "glm-5"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([

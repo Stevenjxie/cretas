@@ -24,6 +24,8 @@ class _Spec:
     #: 真实取值只有 best | worst | None —— **排名由它决定，不由 analysis_action**
     ranking_direction: object = None
     ranking_limit: int = 5
+    #: 批 1 新增。取值域 = 登记表的 AGGREGATIONS; None = 规划器没表态
+    aggregation: object = None
     date_range: Tuple[datetime.date, datetime.date] = (
         datetime.date(2026, 8, 1), datetime.date(2026, 8, 9))
     window_label: str = "本月"
@@ -243,3 +245,72 @@ def test_bottom_is_worded_as_last_not_as_top():
     bot = render(_cell("bottom", rows, dim="product"), "本月")
     assert top != bot, "排行与倒数措辞相同"
     assert "倒数" in bot
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 批 1 · 聚合槽 —— 「prompt 的可选值只能从登记表渲染」
+# ═══════════════════════════════════════════════════════════════════════════
+def test_prompt_renders_every_registered_aggregation():
+    """🔴 承重(整个「根治」方案就靠这一条): 规划器 prompt 里的聚合可选值
+    **必须**覆盖登记表里的每一个, ⛔ 不许手写第二份清单。
+
+    2026-08-09 实测: 可选值手写在 prompt 里的后果是 —— 执行侧登记了 3168 个
+    格子, 规划器穷举所有输出只能到达 147 个(4%)。登记表的 96% 是死的,
+    而**任何现有的闸都不会因此变红**(单测绿、prod 全量实跑通过、电池 80/85)。
+
+    登记表加一行而 prompt 没跟上 → 这条红。这是防止病灶换个位置复发的唯一机制。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS
+    from smartbi.gold.restaurant.restaurant_intent import _build_t3_prompt
+
+    prompt = _build_t3_prompt("本月营收多少", None, None, ("模拟·静安嘉里中心店",), None)
+    for key, agg in AGGREGATIONS.items():
+        assert key in prompt, (
+            f"聚合「{key}」登记了但没进 prompt —— 规划器指不到它, "
+            f"这个格子是死的")
+        assert agg.asks in prompt, (
+            f"聚合「{key}」的用法说明没进 prompt —— 规划器不知道什么时候选它")
+
+
+def test_planner_stated_aggregation_wins_over_inference():
+    """规划器直接说了形态就用它 —— 占比/集中度/两端/高于平均**推不出来**，
+    只能由它指定。⛔ 别给这四种编推断规则, 那是猜。"""
+    for agg in ("share", "concentration", "extremes", "above_avg"):
+        spec = _Spec(requested_metrics=("revenue",), dimensions=("store",),
+                     aggregation=agg)
+        assert spec_to_cell(spec) == ("revenue", "store", agg), (
+            f"规划器说了要 {agg}, 却被推断规则盖掉了")
+
+
+def test_stated_aggregation_still_falls_back_when_dimension_missing():
+    """说了要排行却没给分组对象 —— 退回汇总, ⛔ 不拒绝也不硬排。"""
+    spec = _Spec(requested_metrics=("revenue",), aggregation="share")
+    assert spec_to_cell(spec) == ("revenue", "all", "summary")
+
+
+def test_unregistered_aggregation_is_ignored_not_crashed():
+    """模型编了个不存在的形态 —— 忽略它走旧规则, ⛔ 不炸也不当真。"""
+    spec = _Spec(requested_metrics=("revenue",), dimensions=("store",),
+                 ranking_direction="best", aggregation="模型编的形态")
+    assert spec_to_cell(spec) == ("revenue", "store", "rank")
+
+
+def test_aggregation_slot_is_purely_additive():
+    """🔴 承重: 规划器**不填**这个槽时, 行为与加槽之前逐字相同。
+
+    这是这一批敢上 prod 的全部依据 —— 老模型/缓存的旧计划都不带这个槽。
+    """
+    cases = [
+        (_Spec(requested_metrics=("revenue",), dimensions=("store",),
+               ranking_direction="best"), ("revenue", "store", "rank")),
+        (_Spec(requested_metrics=("revenue",), dimensions=("store",),
+               ranking_direction="worst"), ("revenue", "store", "bottom")),
+        (_Spec(requested_metrics=("revenue",), dimensions=("channel",),
+               analysis_action="compare"), ("revenue", "channel", "compare")),
+        (_Spec(requested_metrics=("revenue",), dimensions=("time",)),
+         ("revenue", "date", "trend")),
+        (_Spec(requested_metrics=("revenue",)), ("revenue", "all", "summary")),
+    ]
+    for spec, expected in cases:
+        assert getattr(spec, "aggregation", None) is None
+        assert spec_to_cell(spec) == expected, f"未填槽时行为变了: {spec}"

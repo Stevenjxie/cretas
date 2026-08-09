@@ -90,6 +90,19 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
             dim_key = mapped
             break
 
+    # 🔑 规划器**直接说了**要哪种形态时，用它的。
+    #    这是「打通 96% 死格子」的那一步：占比 / 集中度 / 两端 / 高于平均
+    #    这四种形态，靠 analysis_action + ranking_direction **推不出来**，
+    #    只能由规划器直接指定。⛔ 别在这里给它们编推断规则 —— 那是猜。
+    stated = (getattr(spec, "aggregation", None) or "").lower()
+    if stated in AGGREGATIONS:
+        agg_key = stated
+        if AGGREGATIONS[agg_key].needs_dimension and dim_key == "all":
+            agg_key = "summary"
+        return metric_key, dim_key, agg_key
+
+    # 规划器没表态 → 退回旧规则推断。⚠️ 这一段与加 `aggregation` 槽之前**逐字同义**，
+    #    所以这个槽是纯增量：模型不填它，现有行为一点不变。
     # 排名方向是**独立的槽**，不在 analysis_action 里。
     direction = (getattr(spec, "ranking_direction", None) or "").lower()
     action = (getattr(spec, "analysis_action", "") or "").lower()
