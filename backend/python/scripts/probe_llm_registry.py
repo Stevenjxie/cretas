@@ -70,6 +70,22 @@ async def _probe(client: httpx.AsyncClient, account: str, model: str,
     return classify_probe_result(resp.status_code, body, content), f"{resp.status_code}"
 
 
+def _aggregate_verdicts(verdicts: List[Tuple[str, str]]) -> Tuple[str, str]:
+    """归并同一 (account, model) 在多个槽下的判定。
+
+    任一槽拿到非空内容即算可用。全不可用时**不取第一个判定**——槽的遍历顺序
+    不该决定打印出来的原因: 同一模型在不同槽下表现不同(比如快槽偶发网络
+    超时报 error, 而推理槽是真的 403 额度耗尽)本身就是该被看见的信号,
+    取第一条会让顺序早的那个偶然值盖掉真正的病因(2026-08-09 复审判据)。
+    """
+    ok = next((v for v in verdicts if v[0] == "ok"), None)
+    if ok:
+        return ok
+    labels = sorted({v[0] for v in verdicts})
+    details = sorted({v[1] for v in verdicts})
+    return "+".join(labels), "; ".join(details)
+
+
 async def _run() -> Dict[Tuple[str, str], Tuple[str, str]]:
     sem = asyncio.Semaphore(8)
     results: Dict[Tuple[str, str], Tuple[str, str]] = {}
@@ -79,9 +95,7 @@ async def _run() -> Dict[Tuple[str, str], Tuple[str, str]]:
             async with sem:
                 verdicts = [await _probe(client, pair[0], pair[1], s)
                             for s in _slots_for(pair)]
-            # 任一槽拿到非空内容即算可用; 全不可用时取第一个判定作为原因。
-            ok = next((v for v in verdicts if v[0] == "ok"), None)
-            results[pair] = ok or verdicts[0]
+            results[pair] = _aggregate_verdicts(verdicts)
 
         await asyncio.gather(*(one(p) for p in r._SAFE_MODELS))
     return results
@@ -108,7 +122,12 @@ def main() -> int:
     print("  无余量说明「用完即停」没覆盖它, 那个 200 可能是真在计费。本脚本")
     print("  不主动枚举未登记模型, 避免把可能计费的条目做成一键加入的清单。")
 
-    return 1 if (dead or soon) else 0
+    # 只有「dead」(注册表说活、实测不可用)才翻转退出码。「soon」(7 天内到期)
+    # 连续多天都非空——08-13 那批到期时一次性 14 条——若也计入退出码, cron
+    # 告警会连续多天必炸, 炸到没人再读(正是这整件事的病根: 飞轮日报静默坏
+    # 5 天、回归电池连红 4 天没人处理都是"天天炸=没人看"的同一种死法)。
+    # soon 仍然打印, 只是不需要今天就动手, 不该占用"需要立刻处理"的信号位。
+    return 1 if dead else 0
 
 
 if __name__ == "__main__":
