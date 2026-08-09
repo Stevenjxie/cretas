@@ -109,6 +109,12 @@ import {
 import { finishedGoodPlanOptions } from './productionPlanProductOptions';
 import { productionPlanType, productionPlanTypeLabel } from './productionPlanType';
 import {
+  productionPlanCustomerLabel,
+  resolveProductionPlanCustomerSelection,
+  selectableProductionPlanCustomers,
+  type ProductionPlanOutputOwnership,
+} from './productionPlanCustomerSelection';
+import {
   hasProductionMoreCommand,
   planEditBlockedReason,
   planEditMenuLabel,
@@ -699,7 +705,9 @@ const planForm = ref({
   notes: '',
   estimatedWorkers: undefined as number | undefined,
   assignedSupervisorId: '' as string | undefined,
+  customerId: '',
   sourceCustomerName: '',
+  outputOwnership: 'COMPANY_OWNED' as ProductionPlanOutputOwnership,
   processName: '',
   batchDate: '',
   // 新建入口只保留存货生产与销售订单；默认进入日常存货生产。
@@ -809,6 +817,7 @@ async function loadSelectableSalesOrders() {
 function handleSourceTypeChange(val: string) {
   sourceOrderIdError.value = false;
   if (val === 'CUSTOMER_ORDER') {
+    handlePlanCustomerChange('');
     if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   } else {
     planForm.value.sourceOrderId = '';
@@ -1019,6 +1028,15 @@ async function loadCustomers() {
   } catch { /* optional, ignore */ }
 }
 
+const selectablePlanCustomers = computed(() => selectableProductionPlanCustomers(customers.value));
+
+function handlePlanCustomerChange(customerId: string | null | undefined) {
+  const selection = resolveProductionPlanCustomerSelection(customerId, customers.value);
+  planForm.value.customerId = selection.customerId;
+  planForm.value.sourceCustomerName = selection.sourceCustomerName;
+  planForm.value.outputOwnership = selection.outputOwnership;
+}
+
 async function loadBomProcesses(productTypeId: string) {
   hasActiveWorkflow.value = false;
   if (!factoryId.value || !productTypeId) {
@@ -1075,14 +1093,10 @@ function handleProductChange(productTypeId: string) {
   if (!productTypeId) return;
   const product = productTypes.value.find((p: TableRow) => p.id === productTypeId);
   if (product) {
-    // Auto-fill customer name from product's relatedCustomer or customerId
-    if (product.relatedCustomer) {
-      planForm.value.sourceCustomerName = String(product.relatedCustomer);
-    } else if (product.customerId) {
-      const customer = customers.value.find((c: TableRow) => c.id === product.customerId);
-      if (customer) {
-        planForm.value.sourceCustomerName = String(customer.name || customer.companyName || '');
-      }
+    // A product may carry a stable customer id. Only that id may auto-select a customer;
+    // a free-form relatedCustomer name is not sufficient ownership evidence.
+    if (!planForm.value.customerId && product.customerId) {
+      handlePlanCustomerChange(String(product.customerId));
     }
   }
   // Load BOM processes for the selected product
@@ -1303,7 +1317,9 @@ function handleCreate() {
     notes: '',
     estimatedWorkers: undefined,
     assignedSupervisorId: '',
+    customerId: '',
     sourceCustomerName: '',
+    outputOwnership: 'COMPANY_OWNED',
     processName: '',
     batchDate: today,
     sourceType: 'SAFETY_STOCK',
@@ -3633,6 +3649,7 @@ function isPlanFormDirty(): boolean {
     f.productTypeId ||
     (f.plannedQuantity && f.plannedQuantity !== 0) ||
     f.notes ||
+    f.customerId ||
     f.sourceCustomerName ||
     f.processName ||
     f.sourceOrderId ||
@@ -3674,7 +3691,9 @@ function handleAiFill(params: TableRow) {
     notes: String(params.notes || ''),
     estimatedWorkers: undefined,
     assignedSupervisorId: '',
-    sourceCustomerName: String(params.sourceCustomerName || ''),
+    customerId: '',
+    sourceCustomerName: '',
+    outputOwnership: 'COMPANY_OWNED' as ProductionPlanOutputOwnership,
     processName: String(params.processName || ''),
     batchDate: String(params.batchDate || today),
     sourceType: 'SAFETY_STOCK' as 'CUSTOMER_ORDER' | 'SAFETY_STOCK',
@@ -4821,8 +4840,28 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             />
           </template>
         </el-form-item>
-        <el-form-item label="客户名称">
-          <el-input v-model="planForm.sourceCustomerName" placeholder="选择产品后自动填充，也可手动输入" />
+        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK'" label="归属客户(选填)">
+          <div style="width: 100%;">
+            <el-select
+              v-model="planForm.customerId"
+              clearable
+              filterable
+              placeholder="留空为公司库存；选择后为客户专属库存"
+              style="width: 100%"
+              @change="handlePlanCustomerChange"
+              @clear="handlePlanCustomerChange('')"
+            >
+              <el-option
+                v-for="customer in selectablePlanCustomers"
+                :key="String(customer.id)"
+                :label="productionPlanCustomerLabel(customer)"
+                :value="String(customer.id)"
+              />
+            </el-select>
+            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+              留空：成品归公司库存；选择客户：按客供料生产，原料和成品均绑定该客户。
+            </div>
+          </div>
         </el-form-item>
         <!-- Wave2 六扇门: 免工序报工开关 (Rule 1 防呆: 产品无工序时 disabled 锁定) -->
         <el-form-item label="报工模式">
