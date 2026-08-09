@@ -977,6 +977,12 @@ def _plan_requested_intents(
         "RESTAURANT_OPS_PLAYBOOK",
         "RESTAURANT_OPS_STORE_DIRECTORY",
         "RESTAURANT_OPS_CHANNEL_MIX",
+        # Discount summary is a complete descriptive capability: it owns the
+        # revenue denominator, discount amount/rate and discount-type
+        # composition as one grounded answer.  A provider may redundantly emit
+        # requested_metrics=["revenue"] for that ratio; do not rewrite the
+        # selected discount capability into the neighbouring sales summary.
+        "RESTAURANT_OPS_DISCOUNT_SUMMARY",
         # Forecast staffing is already the complete optimisation capability
         # for reservation + trend + skill/hour constraints.  A planner may
         # legitimately label “怎么排班” as analysis_action=optimize; that must

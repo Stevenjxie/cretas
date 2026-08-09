@@ -4416,6 +4416,30 @@ def test_user_written_metric_still_repairs_a_contradicting_llm_label():
     assert spec.planner_authority == "llm_contract_repair"
 
 
+def test_discount_summary_keeps_its_complete_capability_when_llm_repeats_revenue():
+    """Production GLM output selected discount correctly but repeated revenue.
+
+    Revenue is the denominator of the discount-rate capability, not authority
+    to replace it with the adjacent sales-summary resolver.
+    """
+    spec = _build_spec(
+        "RESTAURANT_OPS_DISCOUNT_SUMMARY",
+        "最近30天折扣力度多大",
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("revenue",),
+        llm_dimensions=("channel",),
+        llm_analysis_action="lookup",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+        require_explicit_time=True,
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_DISCOUNT_SUMMARY"
+    assert spec.planned_intents == ("RESTAURANT_OPS_DISCOUNT_SUMMARY",)
+    assert spec.clarification_needed is False
+
+
 # ── 盘点类指标 (2026-08-01) ────────────────────────────────────────────────
 # 「盘点亏了多少」此前编译不出**任何**指标: `_REQUEST_METRIC_RULES` 里没有盘点词条。
 # #2103 给 contract-repair 装上「覆盖 planner 已选 resolver 必须由用户措辞支撑」的闸

@@ -306,6 +306,31 @@ def test_tokenhub_reasoning_slot_does_not_disable_thinking():
     assert "enable_thinking" not in p
 
 
+@pytest.mark.parametrize("model", ["glm-4.5-air", "glm-4.6v"])
+def test_zhipu_glm45_plus_gets_the_documented_thinking_object(model):
+    p = llm_router._apply_slot_params(
+        SLOT.REVIEW, "zhipu", model, {"messages": []},
+    )
+    assert p["thinking"] == {"type": "disabled"}
+    assert "enable_thinking" not in p
+
+
+def test_zhipu_reasoning_slot_keeps_thinking_available():
+    p = llm_router._apply_slot_params(
+        SLOT.REASONING, "zhipu", "glm-4.5-air", {"messages": []},
+    )
+    assert "thinking" not in p
+    assert "enable_thinking" not in p
+
+
+def test_zhipu_thinking_translation_is_provider_scoped():
+    p = llm_router._apply_slot_params(
+        SLOT.REVIEW, "aliyun_c", "glm-4.5-air", {"messages": []},
+    )
+    assert "thinking" not in p
+    assert p["enable_thinking"] is False
+
+
 def test_chart_json_object_only_when_prompt_mentions_json():
     with_json = llm_router._apply_slot_params(
         SLOT.CHART, "aliyun_c", "qwen3.5-flash",
