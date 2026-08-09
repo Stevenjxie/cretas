@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh } from '@element-plus/icons-vue';
+import { ArrowLeft, Plus, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
@@ -36,6 +36,7 @@ import {
 } from './transferCreate';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
@@ -43,6 +44,7 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
+const isCreateWorkspace = computed(() => route.name === 'TransferCreate');
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -88,7 +90,6 @@ const typeMap: Record<string, string> = {
 // Treat as optional + accept string|number to tolerate BigDecimal-as-string JSON encoding.
 interface FactoryNetworkEntry { factoryId: string; factoryName: string }
 
-const createVisible = ref(false);
 const submitting = ref(false);
 const submittingTransferId = ref('');
 const formRef = ref();
@@ -103,6 +104,7 @@ const form = ref({
   remark: '',
   items: [] as TransferCreateRow[],
 });
+const createProgressStep = computed(() => submitting.value ? 2 : (form.value.items.length > 0 ? 1 : 0));
 function validateWarehouseTransferSource(_rule: unknown, value: string, callback: (error?: Error) => void) {
   if (!value) {
     callback(new Error('请选择调出仓库'));
@@ -143,7 +145,17 @@ interface WarehouseOption { id: string | number; name: string; code?: string; ty
 const sourceWarehouseOptions = ref<WarehouseOption[]>([]);
 const targetWarehouseOptions = ref<WarehouseOption[]>([]);
 
-onMounted(() => loadData());
+async function syncRouteWorkspace() {
+  if (isCreateWorkspace.value) {
+    initializeCreateForm();
+    await Promise.all([loadFactoryNetwork(), loadSourceWarehouses()]);
+    return;
+  }
+  await loadData();
+}
+
+onMounted(syncRouteWorkspace);
+watch(() => route.name, syncRouteWorkspace);
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -306,7 +318,7 @@ async function handleTransferTypeChange(value: TransferType) {
   await loadTargetWarehouses();
 }
 
-function openCreateDialog() {
+function initializeCreateForm() {
   form.value = {
     transferType: 'BRANCH_TO_HQ',
     targetFactoryId: '',
@@ -321,9 +333,14 @@ function openCreateDialog() {
   finishedGoodsOptions.value = [];
   sourceInventoryLoaded.value = false;
   sourceInventoryError.value = '';
-  loadFactoryNetwork();
-  loadSourceWarehouses();
-  createVisible.value = true;
+}
+
+function openCreateWorkspace() {
+  router.push({ name: 'TransferCreate' });
+}
+
+function cancelCreate() {
+  router.push({ name: 'TransferList' });
 }
 
 function addItem() {
@@ -453,8 +470,12 @@ async function submitCreate() {
     const res = await post(`/${factoryId.value}/transfers`, payload);
     if (res.success && res.data) {
       ElMessage.success('调拨单已创建 (DRAFT)，可在详情页继续走 申请→审批→发货→签收 流程');
-      createVisible.value = false;
-      loadData();
+      const created = res.data as { id?: string | number };
+      if (created.id !== undefined && created.id !== null) {
+        await router.replace({ name: 'TransferDetail', params: { id: String(created.id) } });
+      } else {
+        await router.replace({ name: 'TransferList' });
+      }
     }
   } catch (e) {
     if (e === 'cancel') return;
@@ -502,13 +523,14 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
 <template>
   <div class="page-wrapper">
     <ConceptDisambiguationAlert
+      v-if="!isCreateWorkspace"
       here-name="调拨单"
       here="把物料从一个工厂/仓库搬到另一个工厂/仓库（实际搬动物料、转移所有权）"
       other-name="仓储管理 → 盘点管理"
       other="清点仓库实际库存与系统数对比，发现差异（盘盈/盘亏，不搬动物料）"
       other-path="/warehouse/inventory"
     />
-    <el-card class="page-card" shadow="never">
+    <el-card v-if="!isCreateWorkspace" class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
           <div class="header-left">
@@ -520,7 +542,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <el-button
               v-if="canWrite"
               type="primary" :icon="Plus"
-              @click="openCreateDialog"
+              @click="openCreateWorkspace"
             >手动新建调拨单</el-button>
           </div>
         </div>
@@ -593,21 +615,38 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
       </div>
     </el-card>
 
-    <!-- PR #289 §B9 — Manual create dialog -->
-    <el-dialog
-      v-model="createVisible"
-      title="手动新建调拨单"
-      width="960px"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <el-alert
-        type="info" show-icon :closable="false"
-        style="margin-bottom:12px"
-        title="使用场景"
-        description="无生产计划时手动创建（领用 / 研发 / 互调 / 分部退总仓 等）。创建后为草稿，提交后进入统一 OA 审批，再由仓储执行后续调拨。"
-      />
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="110px">
+    <section v-if="isCreateWorkspace" class="create-workspace" aria-labelledby="transfer-create-title">
+      <header class="workspace-header">
+        <div class="workspace-heading">
+          <el-button :icon="ArrowLeft" text class="back-button" @click="cancelCreate">返回调拨单列表</el-button>
+          <div class="title-line">
+            <div>
+              <h1 id="transfer-create-title">手动新建调拨单</h1>
+              <p>创建仓储调拨草稿，后续在详情页提交 OA 审批并执行调拨。</p>
+            </div>
+            <el-tag type="info" effect="plain" round>新建草稿</el-tag>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace-progress" aria-label="新建调拨单步骤">
+        <el-steps :active="createProgressStep" finish-status="success" align-center simple>
+          <el-step title="调拨信息" />
+          <el-step title="调拨物料" />
+          <el-step title="创建草稿" />
+        </el-steps>
+      </div>
+
+      <div class="workspace-grid">
+        <main class="workspace-main">
+          <el-card class="form-card" shadow="never">
+            <el-alert
+              type="info" show-icon :closable="false"
+              class="scenario-alert"
+              title="适合领用、研发样品、仓库互调或分部退总仓"
+              description="创建后为草稿，不会立即移动库存；提交统一 OA 审批后，再由仓储执行后续调拨。"
+            />
+            <el-form ref="formRef" :model="form" :rules="formRules" label-width="110px">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="调拨类型" prop="transferType">
@@ -728,6 +767,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         />
         <UpstreamMissingHint v-else-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
         <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
+        <div class="material-table-scroll" role="region" aria-label="调拨物料明细" tabindex="0">
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
           <el-table-column label="基本类型" width="160">
             <template #default="{ row }">
@@ -836,18 +876,46 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
               <el-button type="danger" link size="small" @click="removeItem($index)">删除</el-button>
             </template>
           </el-table-column>
-        </el-table>
-      </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitCreate">创建</el-button>
-      </template>
-    </el-dialog>
+              </el-table>
+            </div>
+          </el-form>
+        </el-card>
+      </main>
+
+      <aside class="workspace-aside" aria-label="创建提示">
+        <el-card class="guide-card" shadow="never">
+          <h2>创建后怎么走</h2>
+          <ol class="process-list">
+            <li><span>1</span><div><strong>创建草稿</strong><p>只保存申请内容，不移动库存。</p></div></li>
+            <li><span>2</span><div><strong>提交 OA 审批</strong><p>在调拨详情页提交并查看审批进度。</p></div></li>
+            <li><span>3</span><div><strong>仓储执行</strong><p>审批通过后按调拨类型发运、签收或确认入库。</p></div></li>
+          </ol>
+        </el-card>
+        <el-card class="guide-card rules-card" shadow="never">
+          <h2>提交前系统会检查</h2>
+          <ul>
+            <li>调出仓库与调入仓库有效且不冲突</li>
+            <li>物料来自所选仓库的真实可用库存</li>
+            <li>包装折算后的数量不超过库存</li>
+            <li>同一种物料不能拆成重复行</li>
+          </ul>
+        </el-card>
+      </aside>
+      </div>
+
+      <footer class="workspace-actions">
+        <span class="action-hint">创建后进入详情页，继续提交审批。</span>
+        <div>
+          <el-button :disabled="submitting" @click="cancelCreate">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="submitCreate">创建调拨草稿</el-button>
+        </div>
+      </footer>
+    </section>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
+.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; overflow: auto; }
 .page-card { flex: 1; display: flex; flex-direction: column;
   :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
   :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
@@ -869,5 +937,107 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
 .tf-await-confirm {
   margin-top: 3px; font-size: 12px; line-height: 1.3;
   color: var(--el-color-warning); font-weight: 600; white-space: nowrap;
+}
+
+.create-workspace {
+  height: calc(100dvh - var(--header-height, 64px) - 84px);
+  min-height: 480px;
+  background: var(--el-bg-color-page);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-header {
+  padding: 18px 24px 14px;
+  background: var(--el-bg-color-overlay);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.workspace-heading { max-width: 1500px; width: 100%; margin: 0 auto; }
+.back-button { margin: 0 0 8px -12px; color: var(--el-text-color-regular); }
+.title-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.title-line h1 { margin: 0; font-size: 22px; line-height: 1.4; color: var(--el-text-color-primary); }
+.title-line p { margin: 5px 0 0; font-size: 13px; color: var(--el-text-color-secondary); }
+.workspace-progress { max-width: 1500px; width: calc(100% - 48px); margin: 16px auto 0; }
+.workspace-progress :deep(.el-steps--simple) { padding: 12px 20px; border: 1px solid var(--el-border-color-light); border-radius: 10px; background: var(--el-bg-color-overlay); }
+.workspace-grid {
+  max-width: 1500px;
+  width: calc(100% - 48px);
+  margin: 16px auto 0;
+  padding-bottom: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.workspace-main { min-width: 0; }
+.form-card { border-radius: 10px; }
+.form-card :deep(.el-card__body) { padding: 20px; }
+.scenario-alert { margin-bottom: 18px; }
+.material-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border-radius: 6px;
+}
+.material-table-scroll:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.material-table-scroll :deep(.el-table) { min-width: 1260px; }
+.workspace-aside { display: grid; gap: 12px; position: sticky; top: 12px; }
+.guide-card { border-radius: 10px; }
+.guide-card :deep(.el-card__body) { padding: 18px; }
+.guide-card h2 { margin: 0 0 14px; font-size: 15px; color: var(--el-text-color-primary); }
+.process-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.process-list li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+.process-list li > span {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 700;
+}
+.process-list strong { font-size: 13px; color: var(--el-text-color-primary); }
+.process-list p { margin: 3px 0 0; font-size: 12px; line-height: 1.55; color: var(--el-text-color-secondary); }
+.rules-card ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--el-text-color-regular); font-size: 12px; line-height: 1.55; }
+.workspace-actions {
+  position: relative;
+  z-index: 6;
+  flex: 0 0 auto;
+  min-height: 64px;
+  padding: 12px 84px 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--el-border-color-light);
+  background: color-mix(in srgb, var(--el-bg-color-overlay) 94%, transparent);
+  box-shadow: 0 -6px 18px rgba(27, 101, 168, 0.08);
+  backdrop-filter: blur(8px);
+}
+.action-hint { color: var(--el-text-color-secondary); font-size: 12px; }
+
+@media (max-width: 1180px) {
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  .workspace-aside { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 768px) {
+  .workspace-header { padding: 14px 16px 12px; }
+  .title-line { align-items: center; }
+  .title-line h1 { font-size: 19px; }
+  .title-line p { font-size: 12px; }
+  .workspace-progress,
+  .workspace-grid { width: calc(100% - 24px); margin-top: 12px; }
+  .workspace-progress :deep(.el-steps--simple) { padding: 10px 12px; }
+  .workspace-progress :deep(.el-step__title) { font-size: 12px; }
+  .form-card :deep(.el-card__body) { padding: 14px; }
+  .create-workspace :deep(.el-col-12) { max-width: 100%; flex: 0 0 100%; }
+  .create-workspace :deep(.el-form-item) { display: block; }
+  .create-workspace :deep(.el-form-item__label) { width: 100% !important; justify-content: flex-start; margin-bottom: 5px; }
+  .create-workspace :deep(.el-form-item__content) { margin-left: 0 !important; }
+  .workspace-aside { grid-template-columns: 1fr; }
+  .workspace-actions { padding: 10px 76px 10px 12px; flex-wrap: wrap; }
+  .workspace-actions > div { display: flex; flex: 1 1 auto; justify-content: flex-end; }
+  .workspace-actions .el-button { min-height: 40px; }
+  .action-hint { display: none; }
 }
 </style>
