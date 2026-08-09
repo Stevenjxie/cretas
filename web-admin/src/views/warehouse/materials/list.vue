@@ -531,7 +531,7 @@ async function handleGenerateLabel(row: TableRow) {
         :closable="false"
         show-icon
         class="source-only-hint"
-        title="先按任务状态处理实物收货；确认入库后，批次会自动进入“已入库批次”。本页不会因打开或刷新而创建库存。"
+        title="先按任务状态处理实物收货；确认入库后，批次会自动进入“已入库批次”。本页不会因打开或刷新而创建库存；批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入。"
       />
 
       <div class="receiving-workflow-overview" aria-label="入库任务概览">
