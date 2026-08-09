@@ -587,10 +587,21 @@ public class VoucherServiceImpl implements VoucherService {
                 // 只按 vflag 扫的话, "批量补凭证" 会给这些【库存一分没动】的单子补出凭证,
                 // 正是刚修掉的那种幽灵凭证, 从另一个入口原样长回来。
                 // 只有 CONFIRMED (库存真正搬完) 才允许补。
+                //
+                // 🔴 FAILED 也要收 (2026-08-09 prod 审计): 生成失败后 vflag 置 FAILED, 而
+                // 【没有任何路径会重试 FAILED】—— listener 只在事件到来时跑一次, 批量补凭证
+                // 又只扫 UNCREATED。于是一次瞬时失败 = 该单永久没有凭证, 且静默无告警。
+                // prod 实测 F006 有 4 张已确认、有金额、vflag=FAILED、至今无凭证的调拨
+                // (最早 2026-07-30), 其中两张是"创建后 40~70ms 就确认"、老逻辑的异步生成
+                // 与确认事务撞车所致。把 FAILED 纳入可补范围, 让这类漏账可恢复。
+                //
+                // 已有凭证的一律排除 —— FAILED 不保证"一定没生成", 重复生成会撞唯一约束、
+                // 再把 vflag 打回 FAILED, 制造"越补越失败"的假象。
                 return internalTransferRepo.findAll().stream()
                         .filter(t -> factoryId.equals(t.getSourceFactoryId())
-                                && t.getVflag() == VoucherFlag.UNCREATED
-                                && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED)
+                                && (t.getVflag() == VoucherFlag.UNCREATED || t.getVflag() == VoucherFlag.FAILED)
+                                && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED
+                                && findBySourceBusiness("INTERNAL_TRANSFER", t.getId()).isEmpty())
                         .map(InternalTransfer::getId).toList();
             case "WASTAGE_RECORD":
                 return wastageRecordRepo.findAll().stream()
