@@ -63,6 +63,7 @@ BEAT_MARGIN = 0.10      # 算法 MAPE 必须比最好的朴素基线低 10%(相�
 # 目标测算线上那条路的实现, 和候选算法一起摆进同一张表比 —— 免得只能"按同一
 # 模型类推断"。它参与评比(是算法的一种), 但单独打标, 因为它已经在给用户看数了。
 PRODUCTION_ROW = "target_forecast(线上目标测算)"
+CANDIDATE_ROW = "target_forecast(改动候选)"
 
 ALGORITHMS = (
     "moving_average",
@@ -230,24 +231,48 @@ def make_algo_forecaster(svc: ForecastService, algorithm: str) -> Forecaster:
     return _f
 
 
-def production_target_forecaster(train: Series, horizon: int) -> Optional[List[float]]:
+def _make_target_forecaster(compute) -> Forecaster:
+    def _f(train: Series, horizon: int) -> Optional[List[float]]:
+        res = compute(
+            list(train), anchor=train[-1][0],
+            horizon_days=horizon, window_days=90)
+        pts = res.get("points") or []
+        if not pts:
+            return None
+        return [float(p["forecast_amount"]) for p in pts]
+    return _f
+
+
+def load_production_target_compute():
     """**目标测算线上正在用的那个实现**, 原样接进来测。
 
     `GET /restaurant-targets/forecast?horizon_days=30` → `forecast_revenue`
-    → `compute_rolling_forecast` (90 日窗 + IQR 去异常 + 一元线性回归, 无周内项)。
+    → `compute_rolling_forecast` (90 日窗 + IQR 去异常 + 一元线性回归)。
     """
     from smartbi.services.target_forecast import compute_rolling_forecast
-    res = compute_rolling_forecast(
-        list(train), anchor=train[-1][0], horizon_days=horizon, window_days=90)
-    pts = res.get("points") or []
-    if not pts:
-        return None
-    return [float(p["forecast_amount"]) for p in pts]
+    return compute_rolling_forecast
+
+
+def load_candidate_target_compute(path: str):
+    """从**任意路径**加载一份改过的 target_forecast, 和线上版摆进同一张表比。
+
+    ⛔ 存在的理由: 服务器上 `smartbi/services/target_forecast.py` 是**运行中的
+       prod 代码**, 不能为了跑一次回测就覆盖它。改动放 /tmp, 由这里按文件路径
+       载入 —— prod 一个字节都不动。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_candidate_target_forecast", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"载不进来: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.compute_rolling_forecast
 
 
 # ══ 主流程 ══════════════════════════════════════════════════════════════════
 
-async def run(factory_id: str, start: dt.date, end: dt.date, horizon: int) -> int:
+async def run(factory_id: str, start: dt.date, end: dt.date, horizon: int,
+              candidate_path: Optional[str] = None) -> int:
     pool = await asyncpg.create_pool(
         host=os.getenv("SMARTBI_DB_HOST", "localhost"),
         user=os.getenv("SMARTBI_DB_USER", "smartbi_user"),
@@ -307,8 +332,16 @@ async def run(factory_id: str, start: dt.date, end: dt.date, horizon: int) -> in
         m, n = rolling_backtest(series, make_algo_forecaster(svc, algo), horizon)
         rows.append((algo, m, n))
 
-    m, n = rolling_backtest(series, production_target_forecaster, horizon)
+    m, n = rolling_backtest(
+        series, _make_target_forecaster(load_production_target_compute()), horizon)
     rows.append((PRODUCTION_ROW, m, n))
+
+    if candidate_path:
+        m, n = rolling_backtest(
+            series,
+            _make_target_forecaster(load_candidate_target_compute(candidate_path)),
+            horizon)
+        rows.append((CANDIDATE_ROW, m, n))
 
     print()
     print(f"{'方法':28s} {'MAPE':>8s} {'起点数':>7s}   判定")
@@ -353,12 +386,16 @@ def main() -> int:
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
     p.add_argument("--horizon", type=int, default=7)
+    p.add_argument(
+        "--candidate", default=None, metavar="PATH",
+        help="额外测一份改过的 target_forecast.py(按文件路径载入, 不碰部署目录)")
     a = p.parse_args()
     return asyncio.run(run(
         a.factory_id,
         dt.date.fromisoformat(a.start),
         dt.date.fromisoformat(a.end),
         a.horizon,
+        a.candidate,
     ))
 
 

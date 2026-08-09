@@ -363,7 +363,8 @@ def test_forecast_fewer_than_14_mean_fallback():
 def test_forecast_flat_series_slope_zero():
     series = _series([2000] * 30)
     res = compute_rolling_forecast(series, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    # 2026-08-10 起带周内项。完全平的序列 → 七个因子都是 1.0, 预测值不变。
+    assert res["model_type"] == "linear_trend_dow"
     # flat → projection stays ~2000, zero-width CI (std 0)
     assert all(abs(p["forecast_amount"] - 2000.0) < 0.01 for p in res["points"])
     assert all(p["lower_bound"] == p["forecast_amount"] for p in res["points"])
@@ -373,12 +374,79 @@ def test_forecast_upward_trend_projects_higher():
     # strictly increasing: 100, 200, ..., 3000 over 30 days
     series = _series([100 * (i + 1) for i in range(30)])
     res = compute_rolling_forecast(series, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    assert res["model_type"] == "linear_trend_dow"
     first = res["points"][0]["forecast_amount"]
     last = res["points"][-1]["forecast_amount"]
     # projection continues upward beyond last observed (3000)
     assert first > 3000
     assert last > first
+
+
+def test_target_forecast_model_labels_cover_every_model_type():
+    """预测端能吐出的每一种 model_type, 渲染端都要有说法。
+
+    ⛔ 这个断言**不许**去读 `_MODEL_LABELS` 的 key 再和自己比 —— 那是恒真式。
+       右边从 `target_forecast.py` 的**源码**里数出实际会被返回的字面量。
+
+    背景: 2026-08-10 给预测加周内项, model_type 从 linear_trend 变成
+    linear_trend_dow。渲染端当时是个三元式, 会**静默落到 else**, 把变强的模型
+    对用户说成「近期均值（数据较少）」—— 模型对了, 话说反了。
+    """
+    import re
+    from pathlib import Path
+
+    from smartbi.gold.restaurant.restaurant_target_tool import _MODEL_LABELS
+    from smartbi.services import target_forecast
+
+    src = Path(target_forecast.__file__).read_text(encoding="utf-8")
+    emitted = set(re.findall(r'model_type"?\s*[:=]\s*"([a-z_]+)"', src))
+    assert emitted, "一个 model_type 都没数出来 —— 正则跟源码写法脱节了, 先修正则"
+
+    missing = emitted - set(_MODEL_LABELS)
+    assert not missing, (
+        f"预测端会返回 {sorted(missing)}, 但 _MODEL_LABELS 里没有 —— "
+        f"用户会看到 fallback 文案「近期均值（数据较少）」")
+
+
+def test_forecast_dow_factors_engage_on_weekly_seasonality():
+    """有周内规律 → 启用周内项, 且预测能分出周末和工作日。"""
+    from datetime import timedelta
+
+    # 周六/周日 2 倍, 连续 8 周
+    vals = []
+    for i in range(56):
+        dow = (date(2026, 1, 1) + timedelta(days=i)).weekday()
+        vals.append(2000.0 if dow >= 5 else 1000.0)
+    res = compute_rolling_forecast(
+        _series(vals), anchor=date(2026, 2, 25), horizon_days=7)
+    assert res["model_type"] == "linear_trend_dow"
+
+    by_dow = {
+        date.fromisoformat(p["date"]).weekday(): p["forecast_amount"]
+        for p in res["points"]
+    }
+    weekend = [by_dow[w] for w in (5, 6)]
+    weekday = [by_dow[w] for w in range(5)]
+    assert min(weekend) > max(weekday) * 1.5, (
+        f"周末应显著高于工作日, 实际 周末={weekend} 工作日={weekday}")
+
+
+def test_forecast_dow_skipped_when_a_weekday_is_underrepresented():
+    """某个星期几观测不足 → 退回一元线性趋势, 不拿噪声当因子。"""
+    from datetime import timedelta
+
+    # 21 天连续(每个星期几各 3 次) → 够; 去掉全部周三 → 周三 0 次
+    vals, days = [], []
+    for i in range(21):
+        d = date(2026, 1, 5) + timedelta(days=i)   # 2026-01-05 是周一
+        if d.weekday() == 2:
+            continue
+        days.append(d)
+        vals.append(1000.0 + i)
+    series = list(zip(days, vals))
+    res = compute_rolling_forecast(series, anchor=days[-1], horizon_days=7)
+    assert res["model_type"] == "linear_trend", (
+        f"缺一个星期几就不该启用周内项, 实际 {res['model_type']}")
 
 
 def test_forecast_outlier_removed():
