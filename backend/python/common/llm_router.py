@@ -1006,6 +1006,30 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         #      (「那成本呢」「是否合理」要继承上一轮的菜名), 而这恰好是链头模型的能力差异,
         #      不是本仓代码的回归。deepseek-v3 额度恢复后电池会自己回到 80。
         #    ⛔ 判据: 电池掉到 76 时先看链头是谁, 别去改用例或加豁免。
+        # 🔑 2026-08-09 第四轮: 前三轮都在**已经在链里**的模型之间换来换去, 全部失败。
+        #    真正没做的是**去白名单里找没进过链的**: `_SAFE_MODELS` 有 86 个组合,
+        #    REVIEW 链只用了 25 个。拿真实 T3 prompt 给链外候选逐个打分, 当场找到
+        #    七个 3/3 且在 12s 预算内的强文本模型 —— 它们一整天都有额度, 只是没人接。
+        #    ⛔ 判据: 「模型池耗尽」要分清是**白名单耗尽**还是**链耗尽**。
+        #       `llm_pool_health` 报的 usable=3/25 是**链内**的数, 不是可用总量;
+        #       我拿它当「没得选了」的证据, 而链外还有 61 个组合没数过。
+        #    ⛔ 只在 _SAFE_MODELS 内挑, 一条白名单都没新增(计费闸, AI 不能自批)。
+        #    实测(真实 T3 prompt / 3 问句 / 判据=答对 intent 且 conf>=0.6 且 <=12s):
+        #      qwen3.7-max            3/3  conf 0.95       3.0s  ← 链头
+        #      glm-4.7                3/3  conf 0.90-0.98  3.0s
+        #      qwen3-max-2025-09-23   3/3  conf 0.95       3.8s
+        #      glm-5                  3/3  conf 0.98-0.99  4.4s
+        #      qwen3.7-max-preview(b) 3/3  conf 0.95       4.4s
+        #      minimax-m2.7(tencent)  3/3  conf 0.95-0.99 13.4s  ✗ 超预算, 故意不放
+        #    ⚠️ 上面那段旧注释说 "05-17/preview Max 强制 enable_thinking=true 与
+        #       REVIEW 契约冲突" —— 本轮用 `_apply_slot_params(SLOT.REVIEW,...)`
+        #       实测这几个全部 200 且 3-4s。**注释是当时的观测, 不是当前的事实**。
+        ("aliyun_c", "qwen3.7-max"),            # 3/3  conf 0.95       3.0s
+        ("aliyun_c", "glm-4.7"),                # 3/3  conf 0.90-0.98  3.0s
+        ("aliyun_c", "qwen3-max-2025-09-23"),   # 3/3  conf 0.95       3.8s
+        ("aliyun_c", "glm-5"),                  # 3/3  conf 0.98-0.99  4.4s
+        ("aliyun_b", "qwen3.7-max-preview"),    # 3/3  conf 0.95       4.4s
+        ("aliyun_a", "qwen3.7-max-preview"),    # 3/3  conf 0.95       6.4s
         ("aliyun_c", "kimi-k2.6"),              # 3/3  conf 0.90-0.95  2s (复测)
         ("aliyun_c", "deepseek-v3"),            # 3/3  conf 0.90-0.95  3-4s  纯文本
         ("aliyun_c", "qwen3-vl-plus"),          # 3/3  conf 0.90-0.98  3-4s
