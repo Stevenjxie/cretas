@@ -26,7 +26,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,9 +39,9 @@ import static org.mockito.Mockito.when;
 class RawMaterialTypeMasterDataGuardTest {
 
     private static final String FACTORY = "F006";
-    private static final String L1 = "001";
-    private static final String L2 = "001001";
-    private static final String L3 = "0010010001";
+    private static final Long L1 = 1L;
+    private static final Long L2 = 2L;
+    private static final Long L3 = 3L;
 
     @Mock RawMaterialTypeRepository repository;
     @Mock MaterialBatchRepository batchRepository;
@@ -59,11 +58,6 @@ class RawMaterialTypeMasterDataGuardTest {
     void setUp() {
         service = new RawMaterialTypeServiceImpl(repository, batchRepository, conversionRepository,
                 packagingRepository, segmentRepository, excelUtil, workflowUnitReviewService);
-        // 2026-08-07: createMaterialType 现在按「该工厂有没有配分段字典」分流。
-        // 本类用例断言的是**有字典**时的旧行为(生成16位码), 故显式翻成有字典。
-        org.mockito.Mockito.lenient()
-                .when(segmentRepository.countByFactoryIdAndLevel(any(), any()))
-                .thenReturn(3L);
         ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         org.mockito.Mockito.lenient().when(unitContractService.normalize(any(), any()))
                 .thenAnswer(invocation -> {
@@ -76,10 +70,12 @@ class RawMaterialTypeMasterDataGuardTest {
         org.mockito.Mockito.lenient().when(unitContractService.supportsUsage(
                 any(), any(), org.mockito.ArgumentMatchers.eq(UnitUsageScope.INVENTORY_QUANTITY)))
                 .thenReturn(true);
+        org.mockito.Mockito.lenient().when(unitContractService.storageUnit(any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
     }
 
     @Test
-    void nonPackagingCreateDefaultsUnitAndTaxAndDropsReferencePrice() {
+    void nonPackagingCreateDefaultsUnitAndTaxAndKeepsReferencePrice() {
         stubCreate("原料");
         RawMaterialTypeDTO dto = baseCreateDto("  牛肉  ");
         dto.setUnit("  ");
@@ -91,10 +87,10 @@ class RawMaterialTypeMasterDataGuardTest {
         assertThat(result.getName()).isEqualTo("牛肉");
         assertThat(result.getUnit()).isEqualTo("kg");
         assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
-        assertThat(result.getTaxIncludedUnitPrice()).isNull();
+        assertThat(result.getTaxIncludedUnitPrice()).isEqualByComparingTo("113.00");
         ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
         verify(repository).save(captor.capture());
-        assertThat(captor.getValue().getUnitPrice()).isNull();
+        assertThat(captor.getValue().getUnitPrice()).isEqualByComparingTo("100.0000");
         assertThat(captor.getValue().getStorageType()).isEqualTo("frozen");
     }
 
@@ -102,6 +98,7 @@ class RawMaterialTypeMasterDataGuardTest {
     void packagingCreateSupportsChineseCategoryAndKeepsPriceButClearsStorage() {
         stubCreate("包材");
         RawMaterialTypeDTO dto = baseCreateDto("吸塑盒");
+        dto.setCategory("包材");
         dto.setUnit("个");
         dto.setStorageType("dry");
         dto.setTaxIncludedUnitPrice(new BigDecimal("113.00"));
@@ -154,7 +151,8 @@ class RawMaterialTypeMasterDataGuardTest {
         when(repository.existsByFactoryIdAndNormalizedNameExcludingId(FACTORY, "牛肉", "M-1"))
                 .thenReturn(true);
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
-        dto.setSegmentCode(L3);
+        dto.setCategory("原料");
+        dto.setClassificationId(L3);
         dto.setName(" 牛肉 ");
 
         assertThatThrownBy(() -> service.updateMaterialType(FACTORY, "M-1", dto))
@@ -164,7 +162,7 @@ class RawMaterialTypeMasterDataGuardTest {
     }
 
     @Test
-    void packagingToNonPackagingClearsHierarchyAndReferencePrice() {
+    void packagingToNonPackagingClearsHierarchyAndKeepsReferencePrice() {
         stubSegmentChain("原料");
         RawMaterialType existing = existing("PACKAGING");
         existing.setTaxRate(TaxRate.TAX_13);
@@ -173,19 +171,21 @@ class RawMaterialTypeMasterDataGuardTest {
         when(repository.findById("M-1")).thenReturn(Optional.of(existing));
         when(repository.save(any(RawMaterialType.class))).thenAnswer(invocation -> invocation.getArgument(0));
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
-        dto.setSegmentCode(L3);
+        dto.setCategory("原料");
+        dto.setClassificationId(L3);
 
         RawMaterialTypeDTO result = service.updateMaterialType(FACTORY, "M-1", dto);
 
         assertThat(result.getCategory()).isEqualTo("原料");
-        assertThat(result.getTaxIncludedUnitPrice()).isNull();
+        assertThat(result.getTaxIncludedUnitPrice()).isEqualByComparingTo("113.00");
         verify(packagingRepository).deleteByMaterialTypeId("M-1");
     }
 
     private RawMaterialTypeDTO baseCreateDto(String name) {
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
         dto.setName(name);
-        dto.setSegmentCode(L3);
+        dto.setCategory("原料");
+        dto.setClassificationId(L3);
         return dto;
     }
 
@@ -193,7 +193,8 @@ class RawMaterialTypeMasterDataGuardTest {
         RawMaterialType material = new RawMaterialType();
         material.setId("M-1");
         material.setFactoryId(FACTORY);
-        material.setCode(L3 + "000001");
+        material.setCode("YL001");
+        material.setClassificationSegmentId(L3);
         material.setName("旧名称");
         material.setCategory(category);
         material.setUnit("kg");
@@ -204,30 +205,29 @@ class RawMaterialTypeMasterDataGuardTest {
 
     private void stubCreate(String l1Label) {
         stubSegmentChain(l1Label);
-        when(segmentRepository.lockByFactoryIdAndSegmentCode(FACTORY, L3))
-                .thenReturn(Optional.of(segment((short) 3, L3, L2, "明细")));
-        when(repository.findCodesByFactoryIdAndSegmentPrefix(FACTORY, L3)).thenReturn(List.of());
-        when(repository.existsByFactoryIdAndCode(FACTORY, L3 + "000001")).thenReturn(false);
+        String prefix = "包材".equals(l1Label) ? "BC" : "YL";
+        when(repository.findCodesByFactoryIdAndCodePrefix(FACTORY, prefix)).thenReturn(java.util.List.of());
         when(repository.save(any(RawMaterialType.class))).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     private void stubSegmentChain(String l1Label) {
-        when(segmentRepository.findByFactoryIdAndSegmentCode(FACTORY, L3))
+        when(segmentRepository.findByIdAndFactoryId(L3, FACTORY))
                 .thenReturn(Optional.of(segment((short) 3, L3, L2, "明细")));
-        when(segmentRepository.findByFactoryIdAndSegmentCode(FACTORY, L2))
+        when(segmentRepository.findByIdAndFactoryId(L2, FACTORY))
                 .thenReturn(Optional.of(segment((short) 2, L2, L1, "二级")));
-        when(segmentRepository.findByFactoryIdAndSegmentCode(FACTORY, L1))
+        when(segmentRepository.findByIdAndFactoryId(L1, FACTORY))
                 .thenReturn(Optional.of(segment((short) 1, L1, null, l1Label)));
     }
 
-    private MaterialCodeSegment segment(short level, String code, String parent, String label) {
-        return MaterialCodeSegment.builder()
+    private MaterialCodeSegment segment(short level, Long id, Long parent, String label) {
+        MaterialCodeSegment segment = MaterialCodeSegment.builder()
                 .factoryId(FACTORY)
                 .level(level)
-                .segmentCode(code)
-                .parentCode(parent)
+                .parentId(parent)
                 .segmentLabel(label)
                 .isActive(true)
                 .build();
+        segment.setId(id);
+        return segment;
     }
 }

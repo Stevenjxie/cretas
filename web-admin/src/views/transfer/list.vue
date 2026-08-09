@@ -20,16 +20,17 @@ import { displayUnit } from '@/utils/unitPricing';
 import {
   aggregateFinishedGoodsOptions,
   aggregateMaterialInventoryOptions,
+  applyTransferCategory,
   applySelectedOption,
   findDuplicateTransferRow,
-  optionsForItemType,
+  buildTransferCategoryOptions,
+  optionsForTransferCategory,
   resetSelectedOption,
   TRANSFER_TYPE_OPTIONS,
   toTransferItemPayload,
   type FinishedGoodsInventoryBatch,
   type MaterialInventoryBatch,
   type TransferCreateRow,
-  type TransferItemType,
   type TransferSelectableItem,
   type TransferType,
 } from './transferCreate';
@@ -134,6 +135,7 @@ const sourceMaterialOptions = ref<TransferSelectableItem[]>([]);
 const finishedGoodsOptions = ref<TransferSelectableItem[]>([]);
 const sourceInventoryLoading = ref(false);
 const sourceInventoryLoaded = ref(false);
+const sourceInventoryError = ref('');
 const factoryNetworkOptions = ref<FactoryNetworkEntry[]>([]);
 const factoryNetworkLoading = ref(false);
 // F-FP-4: 仓库下拉 (参考 stocktakes/index.vue 写法)
@@ -168,6 +170,7 @@ interface InventoryByWarehouseResponse {
 async function loadSourceInventoryOptions() {
   sourceMaterialOptions.value = [];
   finishedGoodsOptions.value = [];
+  sourceInventoryError.value = '';
   sourceInventoryLoaded.value = Boolean(form.value.sourceWarehouseId);
   if (!factoryId.value || !form.value.sourceWarehouseId) return;
   sourceInventoryLoading.value = true;
@@ -181,23 +184,52 @@ async function loadSourceInventoryOptions() {
     const inventory = res?.data;
     sourceMaterialOptions.value = aggregateMaterialInventoryOptions(inventory?.materials || []);
     finishedGoodsOptions.value = aggregateFinishedGoodsOptions(inventory?.products || []);
-  } catch { /* interceptor */ }
+  } catch {
+    sourceInventoryError.value = '库存基本类型读取失败，请刷新后重试或联系仓库管理员。';
+  }
   finally { sourceInventoryLoading.value = false; }
 }
 
 async function handleSourceWarehouseChange() {
-  form.value.items.forEach(resetSelectedOption);
+  form.value.items.forEach((row) => {
+    row.selectionCategory = '';
+    row.materialCategoryFilter = undefined;
+    row.itemType = 'RAW_MATERIAL';
+    resetSelectedOption(row);
+  });
   await loadSourceInventoryOptions();
 }
 
-async function handleItemTypeChange(row: TransferCreateRow, itemType: TransferItemType) {
-  row.itemType = itemType;
-  resetSelectedOption(row);
+const availableTransferCategories = computed(() => buildTransferCategoryOptions(
+  sourceMaterialOptions.value,
+  finishedGoodsOptions.value,
+));
+
+const transferCategoryUnavailableReason = computed(() => {
+  if (!form.value.sourceWarehouseId) return '请先选择调出仓库';
+  if (sourceInventoryLoading.value) return '正在读取库存基本类型';
+  if (sourceInventoryError.value) return sourceInventoryError.value;
+  if (sourceInventoryLoaded.value && availableTransferCategories.value.length === 0) {
+    return '所选仓库暂无可调拨库存';
+  }
+  return '';
+});
+
+async function handleTransferCategoryChange(row: TransferCreateRow, categoryValue: string) {
+  const option = availableTransferCategories.value.find((candidate) => candidate.value === categoryValue);
+  if (!option) {
+    row.selectionCategory = '';
+    row.materialCategoryFilter = undefined;
+    row.itemType = 'RAW_MATERIAL';
+    resetSelectedOption(row);
+    return;
+  }
+  applyTransferCategory(row, option);
   if (form.value.sourceWarehouseId && !sourceInventoryLoaded.value) await loadSourceInventoryOptions();
 }
 
 function selectableOptions(row: TransferCreateRow): TransferSelectableItem[] {
-  return optionsForItemType(row.itemType, sourceMaterialOptions.value, finishedGoodsOptions.value);
+  return optionsForTransferCategory(row, sourceMaterialOptions.value, finishedGoodsOptions.value);
 }
 
 /**
@@ -288,6 +320,7 @@ function openCreateDialog() {
   sourceMaterialOptions.value = [];
   finishedGoodsOptions.value = [];
   sourceInventoryLoaded.value = false;
+  sourceInventoryError.value = '';
   loadFactoryNetwork();
   loadSourceWarehouses();
   createVisible.value = true;
@@ -296,6 +329,8 @@ function openCreateDialog() {
 function addItem() {
   form.value.items.push({
     itemType: 'RAW_MATERIAL',
+    selectionCategory: '',
+    materialCategoryFilter: undefined,
     selectedItemId: '',
     materialTypeId: undefined,
     productTypeId: undefined,
@@ -382,8 +417,11 @@ async function submitCreate() {
     return;
   }
   for (const it of form.value.items) {
+    if (!it.selectionCategory) {
+      ElMessage.warning('请为每行选择与建品一致的基本类型'); return;
+    }
     if (!it.selectedItemId || (it.itemType === 'FINISHED_GOODS' ? !it.productTypeId : !it.materialTypeId)) {
-      ElMessage.warning('请为每行选择与类型匹配的物料或成品'); return;
+      ElMessage.warning('请为每行选择与基本类型匹配的物料或成品'); return;
     }
     if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
     if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
@@ -680,20 +718,34 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-form-item>
 
         <el-divider content-position="left">调拨物料</el-divider>
-        <UpstreamMissingHint v-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
+        <el-alert
+          v-if="sourceInventoryError"
+          :title="sourceInventoryError"
+          type="error"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 8px"
+        />
+        <UpstreamMissingHint v-else-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
         <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
-          <el-table-column label="类型" width="140">
+          <el-table-column label="基本类型" width="160">
             <template #default="{ row }">
               <el-select
-                v-model="row.itemType"
+                v-model="row.selectionCategory"
                 size="small"
                 style="width:100%"
-                @change="(value: TransferItemType) => handleItemTypeChange(row, value)"
+                :loading="sourceInventoryLoading"
+                :disabled="Boolean(transferCategoryUnavailableReason)"
+                :placeholder="transferCategoryUnavailableReason || '选择基本类型'"
+                @change="(value: string) => handleTransferCategoryChange(row, value)"
               >
-                <el-option label="原料/食材" value="RAW_MATERIAL" />
-                <el-option label="成品/菜品" value="FINISHED_GOODS" />
-                <el-option label="包材" value="PACKAGING_MATERIAL" />
+                <el-option
+                  v-for="option in availableTransferCategories"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
               </el-select>
             </template>
           </el-table-column>

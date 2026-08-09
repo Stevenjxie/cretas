@@ -38,7 +38,7 @@ public interface RawMaterialTypeService {
       */
     PageResponse<RawMaterialTypeDTO> getMaterialTypes(String factoryId, PageRequest pageRequest);
 
-    PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, String codePrefix,
+    PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, Long classificationId,
                                                          String keyword, PageRequest pageRequest);
 
     /**
@@ -122,23 +122,9 @@ public interface RawMaterialTypeService {
      */
     String previewMaterialCode(String factoryId, String category);
 
-    /**
-     * 16位编码预览: 当工厂已配置分段字典且 segmentCode 为10位时走16位路径.
-     * 否则 fallback 到 SP4 扁平方案 (category 路径).
-     *
-     * @param factoryId   工厂ID
-     * @param category    物料类别 (fallback 路径用)
-     * @param segmentCode L3 cumulative segment code (10位纯数字), 可为 null
-     * @return 16位编码 (如 "0010010001000007") 或 SP4 扁平编码 (如 "RL001")
-     */
-    String previewMaterialCode(String factoryId, String category, String segmentCode);
-
-    /**
-     * Preview both the immutable business code and the legacy classification code through the
-     * same business-code resolver used by create.
-     */
+    /** Preview the next short code and optionally validate an independent taxonomy selection. */
     MaterialCodePreviewDTO previewMaterialCodeContract(
-            String factoryId, String category, String segmentCode);
+            String factoryId, String category, Long classificationId);
 
     /**
      * T159-B-codegen: 多字段智能建议 (扩展自 suggestUnit).
@@ -150,7 +136,7 @@ public interface RawMaterialTypeService {
     MaterialSuggestDTO suggestFields(String factoryId, String name, String category);
 
     /**
-     * SP8: 按编码前缀搜索物料 (级联选择用).
+     * 按简短料号前缀搜索物料.
      * 最多返回 50 条; 工厂隔离.
      *
      * @param factoryId  工厂ID

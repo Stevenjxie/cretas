@@ -1,4 +1,5 @@
 import { canonicalUnitCode } from '@/utils/unitPricing';
+import { bigCategoryOf } from '@/utils/materialCategory';
 
 export type TransferItemType = 'RAW_MATERIAL' | 'FINISHED_GOODS' | 'PACKAGING_MATERIAL';
 export type TransferType = 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ' | 'WAREHOUSE_TO_WAREHOUSE';
@@ -12,6 +13,8 @@ export const TRANSFER_TYPE_OPTIONS: ReadonlyArray<{ value: TransferType; label: 
 
 export interface TransferCreateRow {
   itemType: TransferItemType;
+  selectionCategory: string;
+  materialCategoryFilter?: string | null;
   selectedItemId: string;
   materialTypeId?: string;
   productTypeId?: string;
@@ -43,6 +46,16 @@ export interface TransferSelectableItem {
   unitPrice?: number;
   category?: string;
 }
+
+export interface TransferCategoryOption {
+  value: string;
+  label: string;
+  itemType: TransferItemType;
+  materialCategory?: string | null;
+}
+
+export const FINISHED_GOODS_CATEGORY = 'FINISHED_GOODS';
+export const UNCLASSIFIED_MATERIAL_CATEGORY = 'MATERIAL:__UNCLASSIFIED__';
 
 export interface FinishedGoodsInventoryBatch {
   productTypeId?: string | null;
@@ -147,19 +160,72 @@ export function aggregateMaterialInventoryOptions(
   return Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 }
 
-export function optionsForItemType(
-  itemType: TransferItemType,
+/**
+ * 调拨页展示的基本类型来自所选仓库真实在库物料的 category。
+ * 后端 TransferItemType 只负责区分 materialTypeId / productTypeId，不能再冒充用户分类。
+ */
+export function buildTransferCategoryOptions(
+  materialOptions: TransferSelectableItem[],
+  finishedGoodsOptions: TransferSelectableItem[],
+): TransferCategoryOption[] {
+  const categories = new Set<string>();
+  let hasUnclassifiedMaterial = false;
+  for (const option of materialOptions) {
+    const category = String(option.category || '').trim();
+    if (category) categories.add(category);
+    else hasUnclassifiedMaterial = true;
+  }
+
+  const result = Array.from(categories)
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    .map((category): TransferCategoryOption => ({
+      value: `MATERIAL:${encodeURIComponent(category)}`,
+      label: category,
+      itemType: bigCategoryOf(category) === '包材' ? 'PACKAGING_MATERIAL' : 'RAW_MATERIAL',
+      materialCategory: category,
+    }));
+
+  if (hasUnclassifiedMaterial) {
+    result.push({
+      value: UNCLASSIFIED_MATERIAL_CATEGORY,
+      label: '未分类原料（历史）',
+      itemType: 'RAW_MATERIAL',
+      materialCategory: null,
+    });
+  }
+  if (finishedGoodsOptions.length > 0) {
+    result.push({
+      value: FINISHED_GOODS_CATEGORY,
+      label: '成品/菜品',
+      itemType: 'FINISHED_GOODS',
+    });
+  }
+  return result;
+}
+
+export function applyTransferCategory(
+  row: TransferCreateRow,
+  option: TransferCategoryOption,
+): void {
+  row.selectionCategory = option.value;
+  row.itemType = option.itemType;
+  row.materialCategoryFilter = option.materialCategory;
+  resetSelectedOption(row);
+}
+
+export function optionsForTransferCategory(
+  row: TransferCreateRow,
   materialOptions: TransferSelectableItem[],
   finishedGoodsOptions: TransferSelectableItem[],
 ): TransferSelectableItem[] {
-  if (itemType === 'FINISHED_GOODS') return finishedGoodsOptions;
-  return materialOptions.filter((option) => {
-    const category = String(option.category || '').toUpperCase();
-    if (!category) return true; // 历史主数据无 category 时保留兼容。
-    return itemType === 'PACKAGING_MATERIAL'
-      ? category === 'PACKAGING' || category === '包材'
-      : category !== 'PACKAGING' && category !== '包材';
-  });
+  if (row.itemType === 'FINISHED_GOODS') return finishedGoodsOptions;
+  if (row.materialCategoryFilter === null) {
+    return materialOptions.filter((option) => !String(option.category || '').trim());
+  }
+  if (row.materialCategoryFilter === undefined) return [];
+  return materialOptions.filter(
+    (option) => String(option.category || '').trim() === row.materialCategoryFilter,
+  );
 }
 
 export function applySelectedOption(row: TransferCreateRow, option: TransferSelectableItem): void {

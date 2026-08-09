@@ -152,7 +152,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/inventory', title: '库存批次查询', icon: '', module: 'warehouse' },
       { path: '/warehouse/stocktakes', title: '盘点与期初库存', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-types', title: '原料类型字典', icon: '', module: 'warehouse', groupLabel: '仓储配置' },
-      { path: '/warehouse/material-segments', title: '物料分段字典', icon: '', module: 'warehouse' },
+      { path: '/warehouse/material-segments', title: '物料分类字典', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse', groupLabel: '仓储分析' },
     ]
   },

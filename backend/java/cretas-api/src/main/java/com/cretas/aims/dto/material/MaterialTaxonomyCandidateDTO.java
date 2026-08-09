@@ -7,11 +7,11 @@ import lombok.Data;
 @Data
 @Builder
 public class MaterialTaxonomyCandidateDTO {
-    private String l1Code;
+    private Long l1Id;
     private String l1Label;
-    private String l2Code;
+    private Long l2Id;
     private String l2Label;
-    private String l3Code;
+    private Long l3Id;
     private String l3Label;
     private String confidence;
     private String reason;

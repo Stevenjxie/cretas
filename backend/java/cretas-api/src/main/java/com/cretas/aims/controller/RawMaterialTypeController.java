@@ -6,16 +6,12 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
-import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillReportDTO;
-import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillRequest;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.supplier.SupplierDTO;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.SupplierService;
-import com.cretas.aims.service.material.MaterialBusinessCodeBackfillService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
@@ -47,7 +43,6 @@ import com.cretas.aims.util.ErrorSanitizer;
 public class RawMaterialTypeController {
 
     private final RawMaterialTypeService materialTypeService;
-    private final MaterialBusinessCodeBackfillService businessCodeBackfillService;
     private final MobileService mobileService;
     private final SupplierService supplierService;
 
@@ -137,7 +132,7 @@ public class RawMaterialTypeController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "1") @Parameter(description = "页码（1-based）", example = "1") Integer page,
             @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
-            @RequestParam(required = false) @Parameter(description = "L1/L2/L3累计编码前缀") String codePrefix,
+            @RequestParam(required = false) @Parameter(description = "分类节点 ID") Long classificationId,
             @RequestParam(required = false) @Parameter(description = "名称、编码或类别关键字") String keyword,
             @RequestParam(required = false) @Parameter(description = "P11: 物料大类筛选 (原料/辅料/包材); 不传=全部", example = "包材") String materialKind) {
         log.info("获取原材料类型列表: factoryId={}, page={}, size={}, materialKind={}", factoryId, page, size, materialKind);
@@ -145,8 +140,8 @@ public class RawMaterialTypeController {
         pageRequest.setPage(page);
         pageRequest.setSize(size);
         PageResponse<RawMaterialTypeDTO> result;
-        if ((codePrefix != null && !codePrefix.isBlank()) || (keyword != null && !keyword.isBlank())) {
-            result = materialTypeService.filterMaterialTypes(factoryId, codePrefix, keyword, pageRequest);
+        if (classificationId != null || (keyword != null && !keyword.isBlank())) {
+            result = materialTypeService.filterMaterialTypes(factoryId, classificationId, keyword, pageRequest);
         } else if (materialKind != null && !materialKind.isBlank()) {
             // P11: 按大类筛选 — 复用 getMaterialTypesByCategory (pageRequest 版本)
             result = materialTypeService.getMaterialTypesByKind(factoryId, materialKind, pageRequest);
@@ -318,52 +313,18 @@ public class RawMaterialTypeController {
 
     // ==================== T159-B-codegen: 编码预览 + 多字段建议 ====================
 
-    /**
-     * T159-B-codegen + SP8: 预览将为该 category 自动生成的原料编码 (只读, 不写库).
-     *
-     * <p>当 segmentCode 为10位数字且工厂已配置分段字典时, 走16位路径:
-     *   返回 "{segmentCode}{6位序号}" (16位完整编码).
-     * 否则 fallback 到 SP4 扁平方案:
-     *   前缀 (原料→YL/肉类→RL/包材→BC/其他→WL) + 3位序号.
-     *
-     * @param category    原料类别 (SP4 fallback 用, 16位路径亦可为 null)
-     * @param segmentCode L3 cumulative segment code (10位纯数字, 可选)
-     * @return { "success": true, "data": { "code": "0010010001000007" } }
-     */
+    /** 只读预览下一个简短业务料号；可选分类只用于验证，不参与料号生成。 */
     @GetMapping("/preview-code")
     @Operation(summary = "预览原料编码契约",
-            description = "根据当前工厂中启用的 L3 分类，只读预览与创建边界同源的业务编码和16位兼容分类编码，不预占号码、不写库。")
+            description = "按基本类型只读预览下一个简短业务料号；可选三级分类不预占号码、不写库。")
     public ApiResponse<MaterialCodePreviewDTO> previewMaterialCode(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
-            @RequestParam(required = false, defaultValue = "") @Parameter(description = "原料类别 (SP4 fallback 用)", example = "原料") String category,
-            @RequestParam @Parameter(description = "L3 cumulative segment code (10位)", example = "0010010001") String segmentCode) {
-        log.info("预览原料编码: factoryId={}, category={}, segmentCode={}", factoryId, category, segmentCode);
+            @RequestParam @Parameter(description = "基本类型", example = "原料") String category,
+            @RequestParam(required = false) @Parameter(description = "可选三级分类节点 ID") Long classificationId) {
+        log.info("预览原料编码: factoryId={}, category={}, classificationId={}", factoryId, category, classificationId);
         MaterialCodePreviewDTO preview = materialTypeService.previewMaterialCodeContract(
-                factoryId, category, segmentCode);
+                factoryId, category, classificationId);
         return ApiResponse.success("编码预览成功", preview);
-    }
-
-    @RequirePermission({"system:read_write"})
-    @RequireRole({"factory_super_admin", "permission_admin"})
-    @GetMapping("/business-code-backfill/preview")
-    @Operation(summary = "预览历史物料业务编码映射",
-            description = "按当前工厂启用的L3分类和新建物料同源规则生成只读报告；不预占号码、不修改旧16位编码或任何业务数据。")
-    public ApiResponse<MaterialBusinessCodeBackfillReportDTO> previewBusinessCodeBackfill(
-            @PathVariable String factoryId) {
-        return ApiResponse.success("历史物料业务编码映射预览成功",
-                businessCodeBackfillService.preview(factoryId));
-    }
-
-    @RequirePermission({"system:read_write"})
-    @RequireRole({"factory_super_admin", "permission_admin"})
-    @PostMapping("/business-code-backfill")
-    @Operation(summary = "回填历史物料业务编码",
-            description = "仅为当前工厂中businessCode为空且能映射启用L3的历史物料分配新码；既有码、旧16位码和历史关联永不覆盖。")
-    public ApiResponse<MaterialBusinessCodeBackfillReportDTO> backfillBusinessCodes(
-            @PathVariable String factoryId,
-            @Valid @RequestBody MaterialBusinessCodeBackfillRequest request) {
-        return ApiResponse.success("历史物料业务编码回填完成",
-                businessCodeBackfillService.backfill(factoryId, request.getIdempotencyKey()));
     }
 
     /**
@@ -385,12 +346,12 @@ public class RawMaterialTypeController {
         return ApiResponse.success(result);
     }
 
-    // ========== SP8: 按编码前缀搜索 ==========
+    // ========== 按简短料号前缀搜索 ==========
 
     @RequirePermission({"production:read_write"})
     @GetMapping("/search-by-code")
-    @Operation(summary = "SP8: 按编码前缀搜索物料 (级联选择用)",
-            description = "按 code 前缀搜索原材料类型; 最多返回 50 条; 用于16位编码级联下拉验证/搜索.")
+    @Operation(summary = "按料号前缀搜索物料",
+            description = "按简短料号前缀搜索原材料类型，最多返回 50 条。")
     public ApiResponse<List<RawMaterialTypeDTO>> searchByCode(
             @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId,
             @RequestParam @Parameter(description = "编码前缀", example = "001001") String q) {
