@@ -499,9 +499,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (batch.getId() == null) {
                 continue;
             }
-            dropCompiledRuntime(factoryId, batch.getId());
+            // ⛔ 原来就没有运行时的批次(e.g. 正式报工时生成的 CLK-B-* 记账批次)**不要**替它造一个 ——
+            //    重钉的职责是「把旧的换成新的」, 不是「给没有的凭空补一个」。
+            boolean hadRuntime = dropCompiledRuntime(factoryId, batch.getId());
             copyPlanAuthorityToBatch(factoryId, plan.getId(), batch.getId());
-            rematerializeRuntime(factoryId, plan, batch);
+            if (hadRuntime) {
+                rematerializeRuntime(factoryId, plan, batch);
+            }
         }
     }
 
@@ -573,14 +577,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * {@code operator does not exist: character varying = bigint} —— 整条语句 prepare 不了。
      * 所以每一处比较都显式钉类型, 不靠推断。
      */
-    void dropCompiledRuntime(String factoryId, Long batchId) {   // 包内可见: 供闸测直接调
+    boolean dropCompiledRuntime(String factoryId, Long batchId) {   // 包内可见: 供闸测直接调
         if (productionWorkflowInstanceRepository == null) {
-            return;
+            return false;
         }
         var instance = productionWorkflowInstanceRepository
                 .findByFactoryIdAndProductionBatchId(factoryId, batchId).orElse(null);
         if (instance == null) {
-            return;
+            return false;
         }
         requireNoSoftReferencesToTasks(instance.getId());
         if (repinWorkflowTaskPortRepository != null) {
@@ -596,6 +600,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         entityManager.flush();
         log.info("重钉配方: 已丢弃陈旧运行时实例 factoryId={}, batchId={}, instanceId={}",
                 factoryId, batchId, instance.getId());
+        return true;
     }
 
     private void requireNoSoftReferencesToTasks(Long instanceId) {
