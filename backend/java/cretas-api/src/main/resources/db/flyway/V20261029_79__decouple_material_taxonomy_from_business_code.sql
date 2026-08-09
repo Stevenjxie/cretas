@@ -1,6 +1,73 @@
 -- Retire the 16-digit material-code model while preserving classification names as an
 -- optional hierarchy. Classification nodes are re-keyed to generated BIGINT IDs; the old
 -- 3/6/10-digit segment codes and parent prefixes are physically removed.
+
+-- V20261028_92 preserved historical taxonomy collisions by temporarily clearing their
+-- normalized identity. That state cannot be carried into the simplified taxonomy because
+-- it would make duplicate active categories indistinguishable to the uniqueness constraint.
+-- Detect collisions directly from the business labels before restoring the identity helper.
+-- This ordering ensures the migration reports the actual occupants instead of letting the
+-- pre-existing partial unique index surface an opaque constraint violation first.
+DO $$
+DECLARE
+    conflict_details TEXT;
+BEGIN
+    SELECT STRING_AGG(
+               FORMAT(
+                   'factory=%s level=%s parent=%s normalized=%s occupants=%s',
+                   conflict.factory_id,
+                   conflict.level,
+                   conflict.parent_identity,
+                   conflict.normalized_identity,
+                   conflict.occupants
+               ),
+               '; ' ORDER BY conflict.factory_id, conflict.level,
+                            conflict.parent_identity, conflict.normalized_identity
+           )
+    INTO conflict_details
+    FROM (
+        SELECT factory_id,
+               level,
+               COALESCE(parent_code, '<ROOT>') AS parent_identity,
+               LOWER(REGEXP_REPLACE(TRIM(segment_label), '[[:space:]]+', '', 'g'))
+                   AS normalized_identity,
+               STRING_AGG(id::TEXT || ':' || segment_label, ', ' ORDER BY id) AS occupants
+        FROM material_code_segments
+        WHERE deleted_at IS NULL
+        GROUP BY factory_id,
+                 level,
+                 COALESCE(parent_code, '<ROOT>'),
+                 LOWER(REGEXP_REPLACE(TRIM(segment_label), '[[:space:]]+', '', 'g'))
+        HAVING COUNT(*) > 1
+        ORDER BY factory_id, level, parent_identity, normalized_identity
+        LIMIT 20
+    ) conflict;
+
+    IF conflict_details IS NOT NULL THEN
+        RAISE EXCEPTION
+            'Cannot simplify material taxonomy: duplicate active category identity exists: %',
+            conflict_details;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM material_code_segments
+        WHERE deleted_at IS NULL
+          AND (
+              segment_label IS NULL
+              OR LOWER(REGEXP_REPLACE(TRIM(segment_label), '[[:space:]]+', '', 'g')) = ''
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot simplify material taxonomy: active category has no normalized identity';
+    END IF;
+END $$;
+
+UPDATE material_code_segments
+SET normalized_label = LOWER(REGEXP_REPLACE(TRIM(segment_label), '[[:space:]]+', '', 'g'))
+WHERE normalized_label IS DISTINCT FROM
+      LOWER(REGEXP_REPLACE(TRIM(segment_label), '[[:space:]]+', '', 'g'));
+
 ALTER TABLE raw_material_types
     ADD COLUMN IF NOT EXISTS classification_segment_code VARCHAR(10);
 

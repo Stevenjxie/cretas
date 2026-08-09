@@ -17,6 +17,13 @@ class MaterialShortCodeRetirementMigrationContractTest {
     void migrationExtractsTaxonomyThenRetiresEveryDualAndSixteenDigitCodePath() throws IOException {
         String sql = Files.readString(MIGRATION);
 
+        assertThat(sql).contains("SET normalized_label = LOWER(REGEXP_REPLACE(TRIM(segment_label)");
+        assertThat(sql).contains("HAVING COUNT(*) > 1");
+        assertThat(sql).contains("STRING_AGG(id::TEXT || ':' || segment_label");
+        assertThat(sql).contains("Cannot simplify material taxonomy: duplicate active category identity exists");
+        assertThat(sql).contains("Cannot simplify material taxonomy: active category has no normalized identity");
+        assertThat(sql.indexOf("SET normalized_label = LOWER"))
+                .isLessThan(sql.indexOf("DROP COLUMN IF EXISTS parent_code"));
         assertThat(sql).contains("classification_segment_code = SUBSTRING(code FROM 1 FOR 10)");
         assertThat(sql.indexOf("classification_segment_code = SUBSTRING"))
                 .isLessThan(sql.indexOf("UPDATE raw_material_types material"));
