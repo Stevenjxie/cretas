@@ -4210,25 +4210,6 @@ interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
  * MVP: 线性链 + 每步首产出 (多产出/分流 后续迭代)。工序匹配不到就现场创建 (复用 #13 逻辑);
  * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
  */
-/**
- * 两组调料行是否等价（顺序无关，按物料名比对用量与锅序比例）。
- *
- * ⛔ 用来判断「AI 提议的改动」与「库里存着的」是不是同一回事 —— 相同就不必打扰用户。
- * 判等到 `dosagePerKgG` 与 `subsequentPotRatio` 为止：这两个是会影响扣料与成本的，
- * 其余字段（展示名等）不同不构成「改了克数」。
- */
-function sameSeasoningRows(
-  left: Array<Record<string, unknown>>,
-  right: Array<Record<string, unknown>>,
-): boolean {
-  if (left.length !== right.length) return false;
-  const key = (row: Record<string, unknown>) =>
-    `${String(row.materialName ?? row.materialTypeId ?? '')}|${String(row.dosagePerKgG ?? '')}|${String(row.subsequentPotRatio ?? '')}`;
-  const leftKeys = left.map(key).sort();
-  const rightKeys = right.map(key).sort();
-  return leftKeys.every((value, index) => value === rightKeys[index]);
-}
-
 async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdentity): Promise<void> {
   const steps = Array.isArray(spec.steps)
     ? spec.steps.filter((s) => s && (s.process || '').trim())
@@ -4282,46 +4263,6 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
     } catch { return; }
   }
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
-
-  // 2b) ⛔ 在 mutate 清空画布【之前】, 把已配好的成本字段抓一份快照。
-  //
-  // 🔴 判据: **写下去的应该是画布上存着的真值, 不是模型的复述。**
-  //
-  // 这条路是: 库里的真值 -> 喂给 LLM -> LLM 复述成 spec -> 编译器照 spec 建图 -> 替换画布。
-  // 调料克数在中间经过了模型转述。模型把 12.5 说成 12、或者因为用户只问「加一道杀菌」
-  // 而没重述另外 21 道工序的调料 —— 这些都【不是无效行】, seasoningRejections 抓不到,
-  // 用户看到一张「看起来对」的画布就保存了。
-  //
-  // 同一个形状在后端补丁路已经修过(ProductProcessWorkflowConfigTool 的
-  // costBearingFieldsUnchanged): 闸判的必须是真正要写下去的东西, 不是补丁/规格的自述。
-  //
-  // ⚠️ 按 workProcessId 匹配, 不按工序名 —— 名字会被 AI 改(「卤制」->「卤制(改名)」),
-  //    按名字匹配会在改名时静默丢失继承。同一 workProcessId 出现多次时【不继承】,
-  //    因为分不清哪份该给哪个, 猜错等于把 A 工序的克数搬到 B 工序上。
-  const storedCostBearing = new Map<string, { materialBindings?: unknown; injectionAmount?: unknown }>();
-  const workProcessIdSeen = new Map<string, number>();
-  flowNodes.value.forEach((node) => {
-    const data = toPlainWorkflowValue(node.data) as Record<string, unknown> | null;
-    const wpId = data && typeof data.workProcessId === 'string' ? data.workProcessId : '';
-    if (!wpId) return;
-    workProcessIdSeen.set(wpId, (workProcessIdSeen.get(wpId) || 0) + 1);
-    const kept: { materialBindings?: unknown; injectionAmount?: unknown } = {};
-    if (Array.isArray(data.materialBindings) && data.materialBindings.length > 0) {
-      kept.materialBindings = data.materialBindings;
-    }
-    if (data.injectionAmount !== undefined && data.injectionAmount !== null) {
-      kept.injectionAmount = data.injectionAmount;
-    }
-    if (Object.keys(kept).length > 0) storedCostBearing.set(wpId, kept);
-  });
-  // 出现两次以上的工序: 丢掉快照并告知, ⛔ 不猜。
-  const ambiguousWorkProcessIds = new Set<string>();
-  workProcessIdSeen.forEach((count, wpId) => {
-    if (count > 1 && storedCostBearing.has(wpId)) {
-      storedCostBearing.delete(wpId);
-      ambiguousWorkProcessIds.add(wpId);
-    }
-  });
 
   // 3) 确定性建图 (sync in mutate, 复用 createProcessBranch): 入口原料 → 逐步 工序+产出
   let autoBoundCount = 0;   // #5 自动绑定成功的产出 SKU 数
@@ -4502,47 +4443,10 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
           };
         })
         .filter((row): row is NonNullable<typeof row> => row !== null);
-      // ── 成本字段的归属: 库里存着的是基线, 模型的复述只能【提议】 ──────────
-      // ⛔ 不是「模型说了就写」。理由见上面 2b) 的注释。
-      const storedForStep = storedCostBearing.get(resolved[i].id);
-      const storedBindings = Array.isArray(storedForStep?.materialBindings)
-        ? (storedForStep.materialBindings as Array<Record<string, unknown>>)
-        : null;
-
-      if (storedBindings) {
-        // 这道工序在画布上已经配过调料 -> 【原样保留】, 不采信模型的复述。
-        (processData as Record<string, unknown>).materialBindings = storedBindings;
-        // 模型如果提了不一样的, 说出来但不自动应用 —— 改克数要用户自己去改, 与后端同纪律。
-        if (acceptedSeasonings.length > 0
-            && !sameSeasoningRows(storedBindings, acceptedSeasonings)) {
-          seasoningRejections.push(
-            `工序「${processData.processName}」已有调料配置，已按原样保留；`
-            + `AI 提议的调料改动未自动应用，请到该工序上手动核对`,
-          );
-        }
-      } else if (ambiguousWorkProcessIds.has(resolved[i].id)) {
-        // 同一工序在原画布上出现多次 -> 分不清哪份该给谁, ⛔ 不猜, 但也不能静默。
-        seasoningRejections.push(
-          `工序「${processData.processName}」在原画布上出现多次，已配的调料无法自动对应，`
-          + `请重新核对该工序的调料`,
-        );
-        if (acceptedSeasonings.length > 0) {
-          (processData as Record<string, unknown>).materialBindings = acceptedSeasonings;
-        }
-      } else if (acceptedSeasonings.length > 0) {
-        // 新工序(画布上没配过) -> 没有可保留的真值, 采用模型给的。
+      if (acceptedSeasonings.length > 0) {
         (processData as Record<string, unknown>).materialBindings = acceptedSeasonings;
       }
-
-      const storedInjection = storedForStep?.injectionAmount;
-      if (storedInjection !== undefined && storedInjection !== null) {
-        (processData as Record<string, unknown>).injectionAmount = storedInjection;
-        if (step.injectionAmount !== undefined && step.injectionAmount !== storedInjection) {
-          seasoningRejections.push(
-            `工序「${processData.processName}」已有注射量，已按原样保留；AI 提议的改动未自动应用`,
-          );
-        }
-      } else if (step.injectionAmount !== undefined) {
+      if (step.injectionAmount !== undefined) {
         if (!isValidInjectionAmount(step.injectionAmount)) {
           seasoningRejections.push(`工序「${processData.processName}」的注射量必须大于 0`);
         } else if (!allowsInjection(stepCategory)) {
