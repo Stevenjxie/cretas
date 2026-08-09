@@ -214,8 +214,11 @@ Expected: `test_zhipu_balance_exhausted_429_is_quota_not_transient` FAIL(`assert
         return True
     # Zhipu: 余额耗尽用 429 + 中文报文 + code 1113, 不含 SetLimitExceeded。
     # 2026-08-09 实测 glm-4.6v。结构上等同额度耗尽($0 且不会自愈), 分到
-    # 短熔断只会每 60s 空转重试一次。普通 429 突发限流不受影响 ——
-    # 必须同时命中这两个特征之一, 见 test_plain_429_rate_limit_is_still_transient。
+    # 短熔断只会每 60s 空转重试一次。
+    # 两个特征命中任意一个即可(OR, 不是 AND) —— 真实响应可能只带其中一个,
+    # 要求同时命中会让它重新掉回 60s 空转循环, 正是本改动要消除的东西。
+    # 普通 429 突发限流两个都不命中, 故不受影响, 见
+    # test_plain_429_rate_limit_is_still_transient。
     if status_code == 429 and ("余额不足" in body_text or '"code":"1113"' in body_text):
         return True
 ```
