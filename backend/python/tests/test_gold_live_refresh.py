@@ -131,13 +131,14 @@ async def test_首轮_便宜档限当天_贵档跑整月():
         pool, "MOCK_REST", cadence=cadence, today=today, now=1000.0)
 
     targets = [t for t, _ in pool.calls]
-    assert targets == ["agg_daily", "agg_channel", "agg_product"]
+    assert targets == ["agg_daily", "agg_channel", "agg_product", "agg_discount"]
     # 便宜档的日期区间必须是 (今天, 今天) —— 放宽就等于每轮全表重算。
     assert pool.calls[0][1] == ("MOCK_REST", today, today)
     assert pool.calls[1][1] == ("MOCK_REST", today, today)
     # 贵档传的是月首 (grain 是月, 一次重算整月)。
     assert pool.calls[2][1] == ("MOCK_REST", datetime.date(2026, 7, 1))
-    assert out["agg_daily"] == 3 and out["agg_channel"] == 3 and out["agg_product"] == 3
+    assert out["agg_daily"] == 3 and out["agg_channel"] == 3
+    assert out["agg_product"] == 3 and out["agg_discount"] == 3
 
 
 @pytest.mark.asyncio
@@ -159,7 +160,9 @@ async def test_未到周期时只跑便宜档():
     pool.calls.clear()
     await refresh_gold_incremental(pool, "MOCK_REST", cadence=cadence,
                                    today=today, now=1600.0)
-    assert [t for t, _ in pool.calls] == ["agg_daily", "agg_channel", "agg_product"]
+    assert [t for t, _ in pool.calls] == [
+        "agg_daily", "agg_channel", "agg_product", "agg_discount",
+    ]
 
 
 @pytest.mark.asyncio
@@ -192,5 +195,5 @@ async def test_租户上下文_执行时已设_返回后还原():
     before = get_factory_id()
     await refresh_gold_incremental(pool, "MOCK_REST", cadence=SlowCadence(600),
                                    today=datetime.date(2026, 7, 29), now=1000.0)
-    assert pool.factory_at_execute == ["MOCK_REST"] * 3
+    assert pool.factory_at_execute == ["MOCK_REST"] * 4
     assert get_factory_id() == before
