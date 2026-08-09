@@ -44,6 +44,8 @@ export interface FgBatch {
   expireDate?: string;
   storageLocation?: string;
   unitPrice?: number | null;
+  ownership?: 'COMPANY_OWNED' | 'CUSTOMER_OWNED';
+  ownerCustomerId?: string | null;
   status?: string;
   remark?: string;
 }
