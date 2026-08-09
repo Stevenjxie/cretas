@@ -266,3 +266,16 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 
 - **多批次**: F006 有 3 个计划挂 2 个批次, 但第二个都是 `CLK-B-*` —— **报工时生成的, 在重钉之后**。重钉那一刻它们都只有 1 个批次, 所以 `repinPlanBatches` 的循环体**仍然只跑过一次**。要真验得先给一个未开工计划转出两个 workflow 批次。
 - **LEGACY 模式**: F006 `workflow_selection_mode <> WORKFLOW` 的计划 **0 条** —— 这条路在本厂数据上根本没法验。
+
+#### 多批次: 查清是「走不到」, 顺手把走到时的行为改对了(12:14)
+
+- **prod 上多批次 + 可重钉的组合不存在**, 且是结构性的: 第二个批次是 `CLK-B-*`, 只在**正式报工**那一刻产生, 而正式报工正是封死重钉的三信号。
+- ⚠️ 先前统计里那个「2 批次 + 0 开工行」是 `production_plan_id IS NULL` 的批次, **不是计划** —— 差点据此说「有样本可验」。
+- 🔴 但查的过程暴露了一个我没想到的分支: 真走到那儿, `rematerializeRuntime` 会对一个**从来没有过实例的 CLK-B 记账批次**调 `spawnTasks`, 凭空造出运行时。已收紧: `dropCompiledRuntime` 返回「原来有没有」, 只有 true 才重建。闸 12 项, 变异(没实例也报 true)→ `batchWithoutRuntimeIsLeftAlone` 红。
+- **LEGACY 模式**: F006 `workflow_selection_mode <> WORKFLOW` 的计划 0 条, 本厂数据验不了。
+
+#### 部署通道已回归正轨
+
+`v20260809_121448` 是**不带 `SKIP_GIT_CHECK`** 部的 —— 脚本自己的 exact-main 闸过了, 等于又证一次 `HEAD == origin/main`。本地 main `e10b4f7552` 已推。
+
+这一次也顺带把 PR#2389 / #2391 的 Java 改动带上了 prod(它们本来一直没人部署)。
