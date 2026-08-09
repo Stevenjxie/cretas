@@ -17,6 +17,8 @@ export interface MenuItem {
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
+  /** 真实待办计数 key。接口失败时隐藏，不允许用 0 伪装成功。 */
+  badgeKey?: import('@/store/modules/taskBadges').TaskBadgeKey;
 }
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
@@ -141,8 +143,8 @@ const rawMenuConfig: MenuItem[] = [
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/warehouse/unordered-inbound-applications', title: '无订单入库申请', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
-      { path: '/warehouse/materials', title: '原料 / 物料入库与批次', icon: '', module: 'warehouse' },
+      { path: '/warehouse/unordered-inbound-applications', title: '无订单入库申请', icon: '', module: 'warehouse', groupLabel: '仓储作业', badgeKey: 'unorderedInbound' },
+      { path: '/warehouse/materials', title: '入库任务与批次', icon: '', module: 'warehouse', badgeKey: 'warehouseReceiving' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
@@ -187,7 +189,7 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/sales', title: '销售管理', icon: 'Goods', module: 'sales',
     children: [
-      { path: '/sales/orders', title: '销售订单', icon: '', module: 'sales', groupLabel: '销售业务' },
+      { path: '/sales/orders', title: '销售订单', icon: '', module: 'sales', groupLabel: '销售业务', badgeKey: 'salesOrders' },
       // 2026-06-17: 「成品库存」从销售菜单移除 (Steve: 不需要留在销售)。
       // 成品/库存归仓储管理口径; 路由 /sales/finished-goods 保留 (深链可达), 仅撤销售侧入口。
       // Apr 24 UX: /sales/shipments 等 manufacturing-only 概念对餐饮隐藏 (无批次/发货)。

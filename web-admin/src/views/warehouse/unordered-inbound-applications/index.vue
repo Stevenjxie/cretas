@@ -101,6 +101,7 @@ async function load() {
   try {
     const response = await listCustomerMaterialArrivals(factoryId.value, false);
     rows.value = response.success && Array.isArray(response.data) ? response.data : [];
+    window.dispatchEvent(new CustomEvent('cretas:task-badges-refresh'));
   } finally {
     loading.value = false;
   }
