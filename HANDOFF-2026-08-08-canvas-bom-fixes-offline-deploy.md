@@ -202,3 +202,19 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 - 停用期间攒的 **155 个 commit** 已推上 `origin/main`(`1df388cac2..549fd37f22`)。推之前 origin/main 已被别的 session 推进 3 个(PR#2389 SOP canary), 先 merge 再推, **没有 force、没有改历史**。
 - ⚠️ **prod 的 Java 跑的是 `003e3432d9`**(我这一轮验过的构建), 不等于当前 `origin/main` —— 差的是 PR#2389 带的 sales/web-admin 改动, 属另一 session, 由他们自己发。我没顺手替他们部。
 - 从现在起恢复正规通道: 碰 backend/web-admin 代码走 PR, docs/`.claude/` 走 fastlane, **仍然是推上 origin/main 之后才部署**。
+
+### 2026-08-09 10:30 真机 E2E(prod web-admin, Playwright headed)
+
+`depth: deep` —— 走的是用户真正走的路, 不是 API。
+
+| 步骤 | 证据 |
+|---|---|
+| 列表渲染 | 7 行, 每行的「更多」菜单都在 DOM 里 |
+| **已开工 5 行** | 「更新到当前配方（已投料/已报工，保持原配方快照…）」`is-disabled`, 原因同时写在 `title` 上 —— 灰显讲原因, 不是整条消失 |
+| **未开工 2 行** | 「更新到当前配方」可点 |
+| 点击 | 确认框:「把「PLAN-1786184738975-B0301E17」更新到当前生效的工艺版本与配方？仅未开工的计划可以更新…」|
+| 确认后 | 运行时实例 **74 → 75**, `compiled_at=2026-08-09 10:30:26`(正是点击那一刻), `wf=158/4`, 4 端口 |
+| 报工页回读 | 「多产出 (本道同时产 3 个产品)：拓扑成品C（盒） + 拓扑成品D（盒） + **验收-副产-肥油（kg）**」|
+| console | 0 error |
+
+**同源排查**: 全库只有 `production_plans` / `production_batches` 两张表存这份权威(各 4 列), 第三份是编译进 `production_workflow_instances.nodes_json` 的快照 —— 三处现已全部同搬, **没有第四份**。
