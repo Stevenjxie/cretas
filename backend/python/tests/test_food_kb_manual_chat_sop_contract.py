@@ -22,6 +22,7 @@ from food_kb.api.manual_chat import (
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+    _RESTAURANT_DISCOUNT_GUIDE_ANSWER,
     _RESTAURANT_DATA_AVAILABILITY_ANSWER,
     _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
@@ -53,6 +54,7 @@ from food_kb.api.manual_chat import (
     _needs_multi_output_warehouse_receipt_guard,
     _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
+    _needs_restaurant_discount_guide_guard,
     _needs_restaurant_data_availability_guard,
     _needs_restaurant_department_stocktake_guard,
     _needs_restaurant_flywheel_governance_guard,
@@ -432,6 +434,27 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
     )
     assert "折扣力度问法仍未闭环" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
     assert "仍缺历史时段表现 resolver" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+
+
+def test_restaurant_discount_questions_never_fabricate_current_business_data():
+    equivalent_questions = (
+        "最近30天折扣力度多大？",
+        "过去30天优惠折扣情况怎么样？",
+        "近一个月折扣率、折扣金额和优惠构成分别是多少？",
+    )
+    assert all(
+        _needs_restaurant_discount_guide_guard(q) for q in equivalent_questions
+    )
+    assert not _needs_restaurant_discount_guide_guard("折扣权限在哪里配置？")
+    assert "不能读取、计算或分析当前门店的折扣数据" in (
+        _RESTAURANT_DISCOUNT_GUIDE_ANSWER
+    )
+    assert "不会编造折扣金额、占比或健康判断" in (
+        _RESTAURANT_DISCOUNT_GUIDE_ANSWER
+    )
+    assert "折扣金额 ÷ 同期间营收" in _RESTAURANT_DISCOUNT_GUIDE_ANSWER
+    assert "行业示例、模拟占比或 0" in _RESTAURANT_DISCOUNT_GUIDE_ANSWER
+    assert "不得声称折扣导致营收变化" in _RESTAURANT_DISCOUNT_GUIDE_ANSWER
 
 
 def test_restaurant_metric_and_entity_questions_use_current_axes():
