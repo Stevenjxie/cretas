@@ -16,7 +16,7 @@
  * 防呆 Rule 2: 卡片标题显示 供应商名 + 订单号 + 期望交货日 (上下文)
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -34,7 +34,7 @@ import {
   Text,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { isAxiosError } from 'axios';
@@ -46,6 +46,11 @@ import {
 } from '../../../services/api/purchaseApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
+import {
+  CustomerMaterialArrivalTask,
+  warehouseReceivingApiClient,
+} from '../../../services/api/warehouseReceivingApiClient';
+import { UNORDERED_INBOUND_REASON_LABEL } from './unorderedInboundReceiving';
 
 /** 加载失败态 (区别于"真的没有待收货采购单"的正常空态) */
 interface LoadFailure {
@@ -126,6 +131,7 @@ export default function WHPurchaseReceiveListScreen() {
   const factoryId = user?.factoryId;
 
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [arrivalTasks, setArrivalTasks] = useState<CustomerMaterialArrivalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
@@ -133,6 +139,7 @@ export default function WHPurchaseReceiveListScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   // 区分"请求失败"(权限/网络/服务器) vs "请求成功但确实没有待收货单" — 前者绝不能静默当空态显示.
   const [loadError, setLoadError] = useState<LoadFailure | null>(null);
+  const [arrivalLoadError, setArrivalLoadError] = useState<LoadFailure | null>(null);
 
   const PAGE_SIZE = 20;
 
@@ -223,20 +230,41 @@ export default function WHPurchaseReceiveListScreen() {
     [factoryId],
   );
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      await fetchOrders(1, false);
-      setLoading(false);
-    })();
-  }, [fetchOrders]);
+  const fetchArrivalTasks = useCallback(async () => {
+    try {
+      const response = await warehouseReceivingApiClient.listCustomerMaterialArrivalTasks(
+        undefined,
+        factoryId,
+      );
+      setArrivalTasks(response.data || []);
+      setArrivalLoadError(null);
+    } catch (error) {
+      setArrivalTasks([]);
+      setArrivalLoadError(describeListFailure(error));
+    }
+  }, [factoryId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        setLoading(true);
+        setPage(1);
+        await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
+        if (active) setLoading(false);
+      })();
+      return () => {
+        active = false;
+      };
+    }, [fetchArrivalTasks, fetchOrders]),
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setPage(1);
-    await fetchOrders(1, false);
+    await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
     setRefreshing(false);
-  }, [fetchOrders]);
+  }, [fetchArrivalTasks, fetchOrders]);
 
   const onLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
@@ -260,6 +288,28 @@ export default function WHPurchaseReceiveListScreen() {
     [navigation],
   );
 
+  const handleSelectArrival = useCallback(
+    (task: CustomerMaterialArrivalTask) => {
+      navigation.navigate('WHUnorderedInboundReceive', {
+        noticeId: task.sourceId,
+        noticeNumber: task.sourceNumber,
+      });
+    },
+    [navigation],
+  );
+
+  type ReceivingListItem =
+    | { kind: 'arrival'; task: CustomerMaterialArrivalTask }
+    | { kind: 'purchase'; order: PurchaseOrder };
+
+  const receivingItems = useMemo<ReceivingListItem[]>(
+    () => [
+      ...arrivalTasks.map((task) => ({ kind: 'arrival' as const, task })),
+      ...orders.map((order) => ({ kind: 'purchase' as const, order })),
+    ],
+    [arrivalTasks, orders],
+  );
+
   // ============================================================
   // 计算订单待收量摘要 (防呆 Rule 1)
   // ============================================================
@@ -279,7 +329,64 @@ export default function WHPurchaseReceiveListScreen() {
   // 渲染单张卡片
   // ============================================================
   const renderItem = useCallback(
-    ({ item: order }: { item: PurchaseOrder }) => {
+    ({ item }: { item: ReceivingListItem }) => {
+      if (item.kind === 'arrival') {
+        const task = item.task;
+        return (
+          <TouchableOpacity
+            activeOpacity={0.75}
+            onPress={() => handleSelectArrival(task)}
+            accessibilityLabel={`处理无订单入库预告 ${task.sourceNumber}`}
+          >
+            <Card style={[styles.card, styles.arrivalCard]}>
+              <Card.Content>
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.orderNumber}>{task.sourceNumber}</Text>
+                  <Chip compact style={styles.arrivalChip} textStyle={styles.arrivalChipText}>
+                    无订单入库
+                  </Chip>
+                </View>
+                <View style={styles.metaRow}>
+                  <MaterialCommunityIcons name="account-box-outline" size={14} color="#718096" />
+                  <Text style={styles.metaText}>{task.customerName || '未指定客户'}</Text>
+                </View>
+                <View style={styles.metaRow}>
+                  <MaterialCommunityIcons name="package-down" size={14} color="#718096" />
+                  <Text style={styles.metaText}>
+                    {UNORDERED_INBOUND_REASON_LABEL[task.inboundReason] || task.inboundReason}
+                    {' · '}{task.statusLabel}
+                  </Text>
+                </View>
+                {task.expectedArrivalAt && (
+                  <View style={styles.metaRow}>
+                    <MaterialCommunityIcons name="calendar-clock" size={14} color="#718096" />
+                    <Text style={styles.metaText}>预计到货：{task.expectedArrivalAt.replace('T', ' ')}</Text>
+                  </View>
+                )}
+                {task.activeReceiptCount > 0 && (
+                  <Text style={styles.handoffText}>
+                    已有 {task.activeReceiptCount} 次入库，可由仓管或管理员继续处理
+                  </Text>
+                )}
+                <View style={styles.actionRow}>
+                  <Button
+                    mode="contained"
+                    compact
+                    icon="package-down"
+                    onPress={() => handleSelectArrival(task)}
+                    style={styles.receiveButton}
+                    labelStyle={styles.receiveButtonLabel}
+                  >
+                    核实并入库
+                  </Button>
+                </View>
+              </Card.Content>
+            </Card>
+          </TouchableOpacity>
+        );
+      }
+
+      const order = item.order;
       const statusConf = STATUS_LABEL[order.status] ?? {
         text: order.status,
         color: '#616161',
@@ -380,7 +487,7 @@ export default function WHPurchaseReceiveListScreen() {
         </TouchableOpacity>
       );
     },
-    [handleSelect, pendingQtySummary],
+    [handleSelect, handleSelectArrival, pendingQtySummary],
   );
 
   // ============================================================
@@ -406,9 +513,9 @@ export default function WHPurchaseReceiveListScreen() {
             size={56}
             color="#bdbdbd"
           />
-          <Text style={styles.emptyTitle}>暂无待收货采购单</Text>
+          <Text style={styles.emptyTitle}>暂无待收货任务</Text>
           <Text style={styles.emptyHint}>
-            需状态为"审批通过"、"财审通过"或"部分收货"的采购单才会在此显示
+            已审批采购单和运营创建的无订单入库预告会在此显示
           </Text>
           <Button
             mode="outlined"
@@ -429,17 +536,18 @@ export default function WHPurchaseReceiveListScreen() {
   // Rule 5 + 4位一体)
   // ============================================================
   const LoadErrorView = useCallback(() => {
-    if (!loadError) return null;
+    const visibleError = loadError || arrivalLoadError;
+    if (!visibleError) return null;
     return (
       <View style={styles.errorContainer}>
         <MaterialCommunityIcons
-          name={loadError.isPermission ? 'lock-alert-outline' : 'alert-circle-outline'}
+          name={visibleError.isPermission ? 'lock-alert-outline' : 'alert-circle-outline'}
           size={56}
           color="#c62828"
         />
-        <Text style={styles.errorTitle}>{loadError.title}</Text>
-        <Text style={styles.errorMessage}>{loadError.message}</Text>
-        {loadError.hint && <Text style={styles.errorHint}>{loadError.hint}</Text>}
+        <Text style={styles.errorTitle}>{visibleError.title}</Text>
+        <Text style={styles.errorMessage}>{visibleError.message}</Text>
+        {visibleError.hint && <Text style={styles.errorHint}>{visibleError.hint}</Text>}
         <Button
           mode="contained"
           icon="refresh"
@@ -450,7 +558,18 @@ export default function WHPurchaseReceiveListScreen() {
         </Button>
       </View>
     );
-  }, [loadError, onRefresh]);
+  }, [arrivalLoadError, loadError, onRefresh]);
+
+  const PartialFailureNotice = useCallback(() => {
+    if (!loadError && !arrivalLoadError) return null;
+    const hiddenSource = loadError ? '采购待办' : '无订单入库待办';
+    return (
+      <View style={styles.partialWarning}>
+        <MaterialCommunityIcons name="alert-outline" size={18} color="#B45309" />
+        <Text style={styles.partialWarningText}>{hiddenSource}加载失败，当前仅显示另一类任务。下拉可重试。</Text>
+      </View>
+    );
+  }, [arrivalLoadError, loadError]);
 
   // ============================================================
   // Render
@@ -459,23 +578,23 @@ export default function WHPurchaseReceiveListScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
-        <Appbar.Content title="选采购单收货" subtitle="选择一张采购单开始入库录入" />
-        {orders.length > 0 && (
-          <Badge style={styles.badge}>{orders.length}</Badge>
+        <Appbar.Content title="待收货任务" subtitle="采购与无订单入库统一处理" />
+        {receivingItems.length > 0 && (
+          <Badge style={styles.badge}>{receivingItems.length}</Badge>
         )}
       </Appbar.Header>
 
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" />
-          <Text style={styles.loadingText}>加载待收货采购单中...</Text>
+          <Text style={styles.loadingText}>加载待收货任务中...</Text>
         </View>
-      ) : loadError ? (
+      ) : receivingItems.length === 0 && loadError && arrivalLoadError ? (
         <LoadErrorView />
       ) : (
         <FlatList
-          data={orders}
-          keyExtractor={(item) => item.id}
+          data={receivingItems}
+          keyExtractor={(item) => item.kind === 'arrival' ? `arrival-${item.task.taskId}` : `purchase-${item.order.id}`}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
           refreshControl={
@@ -483,6 +602,7 @@ export default function WHPurchaseReceiveListScreen() {
           }
           onEndReached={onLoadMore}
           onEndReachedThreshold={0.3}
+          ListHeaderComponent={PartialFailureNotice}
           ListFooterComponent={ListFooter}
           ListEmptyComponent={ListEmpty}
         />
@@ -504,6 +624,10 @@ const styles = StyleSheet.create({
   listContent: { padding: 12, paddingBottom: 32 },
 
   card: { marginBottom: 12, borderRadius: 10 },
+  arrivalCard: { borderLeftWidth: 4, borderLeftColor: '#1890FF' },
+  arrivalChip: { height: 24, borderRadius: 12, backgroundColor: '#E3F2FD' },
+  arrivalChipText: { fontSize: 12, lineHeight: 14, color: '#1565C0' },
+  handoffText: { color: '#1565C0', fontSize: 12, lineHeight: 18, marginVertical: 8 },
 
   cardHeaderRow: {
     flexDirection: 'row',
@@ -589,6 +713,18 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 8,
   },
+  partialWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+  },
+  partialWarningText: { color: '#92400E', fontSize: 12, flex: 1, lineHeight: 18 },
 
   badge: { marginRight: 12, backgroundColor: '#1976d2' },
 });

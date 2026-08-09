@@ -15,6 +15,7 @@ import WHInspectScreen from "../../screens/warehouse/inbound/WHInspectScreen";
 import WHPutawayScreen from "../../screens/warehouse/inbound/WHPutawayScreen";
 import WHReceiptCreateScreen from "../../screens/warehouse/inbound/WHReceiptCreateScreen";
 import WHPurchaseReceiveListScreen from "../../screens/warehouse/inbound/WHPurchaseReceiveListScreen";
+import WHUnorderedInboundReceiveScreen from "../../screens/warehouse/inbound/WHUnorderedInboundReceiveScreen";
 import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperationScreen";
 import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
@@ -79,7 +80,13 @@ export function WHInboundStackNavigator() {
       <Stack.Screen
         name="WHPurchaseReceiveList"
         component={WHPurchaseReceiveListScreen}
-        options={{ title: "选采购单收货" }}
+        options={{ title: "待收货任务" }}
+      />
+
+      <Stack.Screen
+        name="WHUnorderedInboundReceive"
+        component={WHUnorderedInboundReceiveScreen}
+        options={{ title: "无订单入库" }}
       />
 
       <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
