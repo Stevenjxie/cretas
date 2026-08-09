@@ -195,6 +195,105 @@ export function resetSelectedOption(row: TransferCreateRow): void {
   row._currentStock = null;
 }
 
+/**
+ * 一行的物料身份 —— 原料/包材按 materialTypeId, 成品按 productTypeId。未选物料返回 null。
+ */
+export function transferRowIdentity(row: TransferCreateRow): string | null {
+  const finishedGoods = row.itemType === 'FINISHED_GOODS';
+  const id = String((finishedGoods ? row.productTypeId : row.materialTypeId) || row.selectedItemId || '').trim();
+  if (!id) return null;
+  return `${finishedGoods ? 'P' : 'M'}:${id}`;
+}
+
+export interface DuplicateTransferRowGroup {
+  identity: string;
+  name: string;
+  rows: TransferCreateRow[];
+  /** 合计基本量 = Σ(行数量 × 包装换算数), 与 _currentStock 同口径可直接比较。 */
+  totalBaseQuantity: number;
+  baseUnit: string;
+}
+
+/**
+ * 找出同一物料被写成多行的那一组 (没有则 null)。
+ *
+ * <p>2026-08-09 六膳门 prod 事故 TRF-20260809-1790: 「金蒜牛排调味料 滚揉用」写了两行各
+ * 1000kg, 而主仓该原料只有 1000kg。建单逐行 `quantity > _currentStock` 校验、后端逐行
+ * `ensureCreateQuantityAvailable`、详情页逐行 `isStockShortage` —— 三处都按行比, 每行
+ * 1000 ≤ 1000 全部合法, 没有一处把两行加起来看。审批通过后点「确认调拨入库」才由
+ * `deductSourceInventory` 抛 "缺少 1000", 而那时明细已不可编辑, 只能取消重建。
+ */
+export function findDuplicateTransferRow(rows: TransferCreateRow[]): DuplicateTransferRowGroup | null {
+  const groups = new Map<string, TransferCreateRow[]>();
+  for (const row of rows) {
+    const identity = transferRowIdentity(row);
+    if (!identity) continue; // 未选物料的空行交给"请为每行选择物料"提示, 这里不抢答
+    const bucket = groups.get(identity);
+    if (bucket) bucket.push(row);
+    else groups.set(identity, [row]);
+  }
+  for (const [identity, bucket] of groups) {
+    if (bucket.length < 2) continue;
+    const first = bucket[0];
+    return {
+      identity,
+      name: first.itemName || identity.slice(2),
+      rows: bucket,
+      totalBaseQuantity: bucket.reduce(
+        (sum, row) => sum + Number(row.quantity || 0) * Number(row._packageFactor || 1), 0),
+      baseUnit: first._inventoryUnit || first.unit || '',
+    };
+  }
+  return null;
+}
+
+/** 详情页 (后端返回) 的明细行形状 —— 与建单表单行不同, 但物料身份的定义必须是同一条。 */
+export interface TransferDetailItemRow {
+  itemType?: string | null;
+  materialTypeId?: string | null;
+  productTypeId?: string | null;
+  quantity?: number | string | null;
+  currentStock?: number | string | null;
+}
+
+export function transferDetailRowIdentity(row: TransferDetailItemRow): string | null {
+  const finishedGoods = row.itemType === 'FINISHED_GOODS';
+  const id = String((finishedGoods ? row.productTypeId : row.materialTypeId) ?? '').trim();
+  return id ? `${finishedGoods ? 'P' : 'M'}:${id}` : null;
+}
+
+/**
+ * 本单对每个物料的<b>合计</b>需求量 (基本单位)。
+ *
+ * <p>详情页的 `currentStock` 是<b>按物料</b>查的实时可用量 —— 同一物料的两行会各自拿到同一个
+ * 数字。逐行比 "1000 ≤ 1000" 两行都判"够", 但它们扣的是同一批库存。必须先按物料加总。
+ */
+export function aggregateTransferDemand(rows: TransferDetailItemRow[]): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const identity = transferDetailRowIdentity(row);
+    if (!identity) continue;
+    const qty = Number(row.quantity);
+    if (!Number.isFinite(qty)) continue;
+    totals.set(identity, (totals.get(identity) ?? 0) + qty);
+  }
+  return totals;
+}
+
+/** 该行是否缺货 —— 比的是"该物料在本单的合计需求", 不是本行数量。 */
+export function isTransferRowShortage(
+  row: TransferDetailItemRow,
+  demand: Map<string, number>,
+): boolean {
+  if (row.currentStock === null || row.currentStock === undefined) return false;
+  if (row.quantity === null || row.quantity === undefined) return false;
+  const stock = Number(row.currentStock);
+  const quantity = Number(row.quantity);
+  if (!Number.isFinite(stock) || !Number.isFinite(quantity)) return false;
+  // 无重复行时合计恒等于本行数量, 与旧的逐行行为一致。
+  return stock < (demand.get(transferDetailRowIdentity(row) ?? '') ?? quantity);
+}
+
 export function toTransferItemPayload(row: TransferCreateRow) {
   const identity = row.itemType === 'FINISHED_GOODS'
     ? { productTypeId: row.productTypeId || row.selectedItemId }

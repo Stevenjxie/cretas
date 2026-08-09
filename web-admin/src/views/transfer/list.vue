@@ -21,6 +21,7 @@ import {
   aggregateFinishedGoodsOptions,
   aggregateMaterialInventoryOptions,
   applySelectedOption,
+  findDuplicateTransferRow,
   optionsForItemType,
   resetSelectedOption,
   TRANSFER_TYPE_OPTIONS,
@@ -199,6 +200,17 @@ function selectableOptions(row: TransferCreateRow): TransferSelectableItem[] {
   return optionsForItemType(row.itemType, sourceMaterialOptions.value, finishedGoodsOptions.value);
 }
 
+/**
+ * 已在本单其它行选过的物料, 在下拉里置灰 —— fool-proof Rule 1 (边界前置, 不事后报错)。
+ * 2026-08-09 六膳门 TRF-20260809-1790: 同一原料被选了两次, 每行 1000 都 ≤ 现有库存 1000,
+ * 逐行校验全过, 直到审批后确认入库才炸。
+ */
+function isPickedInAnotherRow(row: TransferCreateRow, optionId: string): boolean {
+  return form.value.items.some(other => other !== row
+    && other.itemType === row.itemType
+    && other.selectedItemId === optionId);
+}
+
 // PR #309 C2 — load visible factory network for 调入方 dropdown
 async function loadFactoryNetwork() {
   if (!factoryId.value) return;
@@ -355,6 +367,18 @@ async function submitCreate() {
   if (!valid) return;
   if (form.value.items.length === 0) {
     ElMessage.warning('请至少添加一行调拨物料');
+    return;
+  }
+  // 同一物料重复行 (TRF-20260809-1790): 逐行库存校验对它完全沉默 —— 两行各自 ≤ 库存,
+  // 合计却是库存的两倍。必须在逐行校验之前拦, 否则下面的循环会逐行报"够", 一路放行。
+  const duplicate = findDuplicateTransferRow(form.value.items);
+  if (duplicate) {
+    ElMessage({
+      message: `「${duplicate.name}」在本单里重复出现 ${duplicate.rows.length} 行`
+        + `（合计 ${formatStock(duplicate.totalBaseQuantity)} ${displayUnit(duplicate.baseUnit)}）,`
+        + ` 同一物料请合并成一行 —— 多行会各自去扣同一批库存, 看着每行都够, 审批通过后确认入库才会失败`,
+      type: 'error', duration: 0, showClose: true,
+    });
     return;
   }
   for (const it of form.value.items) {
@@ -685,8 +709,9 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
               >
                 <el-option
                   v-for="m in selectableOptions(row)" :key="m.id"
-                  :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''} · 可用 ${formatStock(m.currentStock)} ${displayUnit(m.unit)}`"
+                  :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''} · 可用 ${formatStock(m.currentStock)} ${displayUnit(m.unit)}${isPickedInAnotherRow(row, m.id) ? ' · 已在本单其它行' : ''}`"
                   :value="m.id"
+                  :disabled="isPickedInAnotherRow(row, m.id)"
                 />
               </el-select>
             </template>
