@@ -443,6 +443,134 @@ def test_clean_outliers_still_catches_a_genuinely_anomalous_day():
     assert sat_kept == 7, f"其余 7 个周六应保留(尖峰不该连累同侪), 实际 {sat_kept}"
 
 
+def test_break_detected_and_only_current_regime_used():
+    """跨体制的窗口 → 截到最后一个断层之后, 并如实报出断层日期。
+
+    形状取自 prod 实测: RES_3101_009 的 90 日窗内有 3.0× 与 5.9× 两处突变(灌数据
+    留下的), 而改动前的代码照算不误, 给出一个像模像样的数。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _trim_to_current_regime
+
+    # 前 40 天在 10000, 后 40 天在 30000 (3× 台阶)
+    series = [
+        (date(2026, 1, 1) + timedelta(days=i), 10000.0 if i < 40 else 30000.0)
+        for i in range(80)
+    ]
+    trimmed, break_at = _trim_to_current_regime(series)
+    assert break_at == date(2026, 2, 10), f"断层日期不对: {break_at}"
+    assert len(trimmed) == 40
+    assert all(v == 30000.0 for _, v in trimmed), "截后应只剩当前体制"
+
+    res = compute_rolling_forecast(series, anchor=series[-1][0], horizon_days=7)
+    assert res["data_break_at"] == "2026-02-10"
+    assert res["points_after_break"] == 40
+    # 预测值应贴着 30000 那一段, 而不是被断层前的 10000 拉低
+    assert all(p["forecast_amount"] > 25000 for p in res["points"]), (
+        f"预测被断层前的数据拉低了: {[p['forecast_amount'] for p in res['points']][:3]}")
+
+
+def test_steady_growth_is_not_a_break():
+    """⛔ 平稳高增长不是断层 —— 否则真实门店只要长得快就被告知「数据有断层」。
+
+    这是 2026-08-10 实装时当场踩到的假阳性: 只看「相邻 7 日窗比值 >= 2×」, 一条
+    30 天从 100 涨到 3000 的干净趋势每一对窗都超标, 被砍成碎片。断层的本质是
+    **突变**不是陡峭, 所以还要求它在所有相邻窗比值里显著离群。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _trim_to_current_regime
+
+    series = [
+        (date(2026, 1, 1) + timedelta(days=i), 100.0 * (i + 1)) for i in range(60)
+    ]
+    trimmed, break_at = _trim_to_current_regime(series)
+    assert break_at is None, f"平稳增长被误判成断层于 {break_at}"
+    assert len(trimmed) == 60
+
+
+def test_forecast_reports_its_own_backtest_error():
+    """每个预测都要带上**它自己**的历史回测误差, 算不出就是 None(不填默认值)。
+
+    ⛔ 一个光秃秃的「预计 42.3 万」看起来同样确定, 无论背后是 1.6% 还是 22% 的
+       历史误差 —— 而用户没有别的途径能分辨。prod 实测: MOCK_REST 1.6% /
+       DEMO_REST 4.1% / RES_3101_009 22.1%, 差了一个数量级。
+    """
+    from datetime import timedelta
+
+    # 干净的周内规律 + 轻微趋势 → 误差应该很小
+    series = [
+        (date(2026, 1, 5) + timedelta(days=i),
+         (2000.0 if (date(2026, 1, 5) + timedelta(days=i)).weekday() >= 5 else 1000.0)
+         + i * 5)
+        for i in range(60)
+    ]
+    res = compute_rolling_forecast(series, anchor=series[-1][0], horizon_days=7)
+    mape = res["backtest_mape"]
+    assert mape is not None, "样本够却没算出误差"
+    assert 0.0 <= mape < 0.15, f"这条序列很规律, 误差不该有 {mape:.1%}"
+
+    # ⛔ 算不出就是 None, 不许退化成 0.0 之类「看起来很准」的默认值。这有**两条**
+    #    独立路径, 都要验 —— 只验一条时, 把另一条改成 return 0.0 的变异不会变红
+    #    (2026-08-10 实测漏过一次)。
+    # 路径 a: 样本长度不足 训练窗 + horizon
+    short = series[:18]
+    res2 = compute_rolling_forecast(short, anchor=short[-1][0], horizon_days=30)
+    assert res2["backtest_mape"] is None
+
+    # 路径 b: 长度够, 但每个起点都算不出误差(实际值全为 0, 相对误差无定义)
+    zeros = [(date(2026, 1, 5) + timedelta(days=i), 0.0) for i in range(60)]
+    res3 = compute_rolling_forecast(zeros, anchor=zeros[-1][0], horizon_days=7)
+    assert res3["backtest_mape"] is None
+
+
+def test_backtest_measures_the_same_model_that_answers():
+    """回测走的拟合必须与出数走的是同一个 —— 否则报的误差描述的是另一个模型。
+
+    ⛔ 这条不去比对源码文本(那太脆), 而是**行为等价**: 拿全序列拟合出的下一天
+       点估计, 必须逐字等于 _fit_and_project 在同一序列上给出的那个数。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _clean_outliers, _fit_and_project
+
+    series = [
+        (date(2026, 1, 5) + timedelta(days=i),
+         (2000.0 if (date(2026, 1, 5) + timedelta(days=i)).weekday() >= 5 else 1000.0)
+         + i * 5)
+        for i in range(60)
+    ]
+    anchor = series[-1][0]
+    nxt = anchor + timedelta(days=1)
+
+    answered = compute_rolling_forecast(series, anchor=anchor, horizon_days=1)
+    backtested = _fit_and_project(series, [nxt])
+    assert backtested is not None
+    assert abs(answered["points"][0]["forecast_amount"] - backtested[0]) < 0.01, (
+        f"出数 {answered['points'][0]['forecast_amount']} vs "
+        f"回测 {backtested[0]} —— 两条路走的不是同一个模型")
+    assert len(_clean_outliers(series)) == 60
+
+
+def test_break_threshold_matches_the_gate():
+    """生产的断层阈值必须和回测闸的一致 —— 两边硬编, 由这条逐字比对。
+
+    ⛔ 不许改成「一边 import 另一边」: 生产不该依赖 scripts/, 而让脚本 import
+       生产会让这个断言变成恒真式(自己等于自己)。要的就是两份独立字面量 + 一条
+       会红的比对。
+    """
+    import re
+    from pathlib import Path
+
+    from smartbi.services import target_forecast as tf
+
+    gate = (
+        Path(tf.__file__).parent.parent / "scripts" / "forecast_backtest.py"
+    ).read_text(encoding="utf-8")
+    m = re.search(r"^BREAK_RATIO\s*=\s*([\d.]+)", gate, re.M)
+    assert m, "回测闸里找不到 BREAK_RATIO —— 常量改名了, 先修这条断言"
+    assert float(m.group(1)) == tf._BREAK_RATIO, (
+        f"闸 {m.group(1)} vs 生产 {tf._BREAK_RATIO} —— 两边漂移了")
+
+
 def test_target_forecast_model_labels_cover_every_model_type():
     """预测端能吐出的每一种 model_type, 渲染端都要有说法。
 
