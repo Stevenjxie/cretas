@@ -914,7 +914,9 @@ Expected: 4 组用例全部 PASS
 依次做以下四个变异,每次跑 `python -m pytest tests/test_llm_router_chains.py -v`,确认**指定的那条**用例 FAIL,然后改回:
 
 1. 把 `_SAFE_MODELS[("aliyun_a","qwen3.8-max")]` 改成 `datetime.date(2026,8,1)` → `test_chains_match_human_reviewed_golden` 必红(它会跳到链头)
-2. 把 `_TEXT_TAIL` 里的 `("zhipu","glm-4.5-air")` 注释掉 → `test_every_text_slot_has_a_floor` 必红
+2. 把 `_TEXT_TAIL` **两条都**注释掉(`("tencent","minimax-m2.7")` 与 `("zhipu","glm-4.5-air")`)→ `test_every_text_slot_has_a_floor` 必红
+
+   ⚠️ **只注释掉 `zhipu/glm-4.5-air` 一条是无效变异** —— Task 4 重写后 `_TEXT_TAIL` 有**两个**地板条目,删一个另一个还在,地板闸照常绿(只有 golden 快照会红)。这是本轮实测发现的:**「红了」不等于「我要验的那道闸红了」,而无效变异会让人误以为闸验过了**。变异必须打掉被守属性的**全部**支撑,不是其中一个。
 3. 往 `_SLOT_POOLS[SLOT.CHAT]` 追加 `("aliyun_c","deepseek-r1")` → `test_interactive_pools_exclude_slow_models[SLOT.CHAT]` 必红
 4. 往 `_SLOT_POOLS[SLOT.REVIEW]` 追加 `("aliyun_c","MiniMax-M2.5")` → `test_param_profile_constraints_are_respected` 必红
 
