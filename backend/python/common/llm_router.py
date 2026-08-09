@@ -1080,6 +1080,17 @@ _TOKENHUB_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
 # all 8 reachable Ark models — none rejected the field.
 _ARK_DISABLE_THINKING: Dict[str, Any] = {"type": "disabled"}
 
+# Zhipu's OpenAI-compatible endpoint uses the same object shape for GLM-4.5+
+# (not DashScope's ``enable_thinking`` boolean).  Without this translation the
+# model defaults to dynamic thinking and can spend the caller's entire output
+# budget in ``reasoning_content``, leaving an empty ``content`` even on HTTP
+# 200.  Keep the allowlist explicit so an older/future incompatible Zhipu SKU
+# cannot inherit the parameter merely because it shares the provider account.
+_ZHIPU_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
+    "glm-4.5-air",
+    "glm-4.6v",
+})
+
 
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1108,6 +1119,15 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
     # must keep it.
     if account == "ark" and prof.get("enable_thinking") is False:
         p["thinking"] = dict(_ARK_DISABLE_THINKING)
+    # Zhipu GLM-4.5+ also requires the provider-specific object.  This belongs
+    # after the Aliyun branch: never leak DashScope's ``enable_thinking`` into
+    # Zhipu's OpenAI-compatible request.
+    if (
+        account == "zhipu"
+        and model in _ZHIPU_THINKING_OBJECT_MODELS
+        and prof.get("enable_thinking") is False
+    ):
+        p["thinking"] = {"type": "disabled"}
     # TokenHub is provider-compatible but not parameter-uniform. Follow its official
     # per-model guides instead of assuming DashScope or Ark semantics.
     if account == "tencent" and prof.get("enable_thinking") is False:
