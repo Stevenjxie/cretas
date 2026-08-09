@@ -113,38 +113,125 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     @Override
     public String preview(ToolCall toolCall, Map<String, Object> context) {
         try {
-            Map<String, Object> arguments = parseArguments(toolCall);
-            if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
-                return buildSemanticError(
-                        "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
-            }
-            List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
-            ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
-                    definition, ProductProcessWorkflowDTO.class);
-            applyCandidateBatch(candidate, patches);
-            workflowValidator.validateForDraft(candidate);
+            ValidatedPatch validated = buildValidatedCandidate(parseArguments(toolCall));
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "PREVIEW");
             data.put("applied", false);
-            data.put("patches", patches);
+            // ⚠️ 必须原样回显 patches(列表), 不能换成节点数 ——
+            // ProductProcessWorkflowConfigToolTest:95 断言它是列表且 size==3。
+            data.put("patches", validated.patches());
             return buildSuccessResult(data);
+        } catch (MissingDefinitionException missing) {
+            return buildSemanticError(
+                    "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
         } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+            // ⛔ 保留 rejectionMessage(error) —— origin/main:132 用它给出具体拒绝原因,
+            // 换成固定串会让 agent 失去「为什么被拒」的信息, 那是能力倒退。
             return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
         }
+    }
+
+    /**
+     * 解析入参 → 打补丁 → 跑草稿校验，返回可落库的候选。
+     *
+     * <p>⛔ preview 与 execute <b>必须</b>都走这里。各写一份会让「预览说能过、落库却过不了」
+     * 成为可能 —— 那是本仓反复栽过的「同一概念两把尺子」。
+     */
+    private ValidatedPatch buildValidatedCandidate(Map<String, Object> arguments) {
+        if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
+            throw new MissingDefinitionException();
+        }
+        List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
+        ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
+                definition, ProductProcessWorkflowDTO.class);
+        applyCandidateBatch(candidate, patches);
+        workflowValidator.validateForDraft(candidate);
+        return new ValidatedPatch(candidate, patches);
+    }
+
+    /**
+     * 校验通过的候选 + 原始补丁清单。
+     *
+     * <p>两样都要带回去：{@code preview} 要原样回显 patches（既有断言检查它是列表），
+     * {@code execute} 要拿 candidate 去落库。合成一个返回值是为了让两条路
+     * <b>物理上</b>不可能各走各的校验。
+     */
+    private record ValidatedPatch(
+            ProductProcessWorkflowDTO candidate, List<Map<String, Object>> patches) {
+    }
+
+    /** definition 缺失与补丁被拒是两种不同的错，errorCode 也不同，所以要能分开捕获。 */
+    private static final class MissingDefinitionException extends RuntimeException {
+        private MissingDefinitionException() {
+            super(null, null, false, false);
+        }
+    }
+
+    /**
+     * 会影响<b>扣料与成本</b>的补丁：{@code execute} 一律不落库，只能出预览。
+     *
+     * <p>这条分界不是我定的 —— {@code ProductProcessWorkflowConfigToolBomFieldsTest}
+     * 的「约束 4」注释原文：<i>「改克数比改拓扑风险高（直接影响扣料与成本），
+     * 所以这个工具结构上只能出预览。不是"前端记得弹审核框"，而是 execute 根本不写任何东西。」</i>
+     *
+     * <p>2026-08-09 Steve 拍板把这条约束<b>收窄到它真正针对的东西</b>：
+     * 拓扑（加删节点/连线/改工序名）可以落草稿，克数与注射量仍然只能预览。
+     * ⛔ 收窄不等于放宽 —— 注释担心的那件事一个字节都没让步。
+     *
+     * <p>⛔ 判据按补丁的 {@code op} 与 {@code path} <b>根</b>判，不按字符串包含判：
+     * 按包含判会被工序名里恰好出现 "injection" 这类内容误伤，也会被换个写法绕过。
+     */
+    private static final Set<String> COST_BEARING_OPERATIONS = Set.of(
+            "UPSERT_MATERIAL_BINDING", "REMOVE_MATERIAL_BINDING");
+    private static final Set<String> COST_BEARING_FIELD_ROOTS = Set.of(
+            "materialBindings", "injectionAmount");
+
+    /** 这批补丁里有没有会动到扣料/成本的。⛔ 只要有一条, 整批都不落库。 */
+    private boolean touchesCostBearingFields(List<Map<String, Object>> patches) {
+        for (Map<String, Object> patch : patches) {
+            String operation = String.valueOf(patch.get("op"));
+            if (COST_BEARING_OPERATIONS.contains(operation)) {
+                return true;
+            }
+            if ("SET_NODE_FIELD".equals(operation)) {
+                String path = String.valueOf(patch.get("path"));
+                String root = path.contains(".") ? path.substring(0, path.indexOf('.')) : path;
+                if (COST_BEARING_FIELD_ROOTS.contains(root)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Override
     public String execute(ToolCall toolCall, Map<String, Object> context) {
         try {
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("success", false);
-            error.put("errorCode", "WORKFLOW_AI_PREVIEW_ONLY");
-            error.put("error", "Workflow AI can only generate a local preview patch");
-            return objectMapper.writeValueAsString(error);
-        } catch (Exception serializationError) {
-            return "{\"success\":false,\"errorCode\":\"WORKFLOW_AI_PREVIEW_ONLY\","
-                    + "\"error\":\"Workflow AI preview only\"}";
+            ValidatedPatch validated = buildValidatedCandidate(parseArguments(toolCall));
+
+            if (touchesCostBearingFields(validated.patches())) {
+                // ⛔ 整批拒绝, 不是「把克数那几条挑掉、其余照写」——
+                // 部分应用会让 agent 以为整批生效了, 而实际画布处于它没预期的中间态。
+                Map<String, Object> refusal = new LinkedHashMap<>();
+                refusal.put("success", false);
+                refusal.put("errorCode", "WORKFLOW_AI_PREVIEW_ONLY");
+                refusal.put("error",
+                        "涉及调料克数/注射量的补丁只能预览，请人工在产品配置页确认后再保存");
+                return objectMapper.writeValueAsString(refusal);
+            }
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("status", "VALIDATED");
+            data.put("applied", false);
+            return buildSuccessResult(data);
+        } catch (MissingDefinitionException missing) {
+            return buildSemanticError(
+                    "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required");
+        } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+            return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
+        } catch (Exception unexpected) {
+            return buildSemanticError("WORKFLOW_PATCH_FAILED", "Workflow patch batch failed");
         }
     }
 
