@@ -136,6 +136,54 @@ class ProductProcessWorkflowConfigToolWriteTest {
     }
 
     @Test
+    @DisplayName("🔴 承重: 改工序名的 UPSERT_NODE 【不许】顺手抹掉那道工序的调料克数")
+    void upsertNodeMustNotSilentlyDropExistingMaterialBindings() throws Exception {
+        // 🔴 这条是整支审查抓出的 Critical。链条:
+        //   1. 想改工序名【只能】用 UPSERT_NODE —— PROCESS 节点的 SET_NODE_FIELD 不允许 name
+        //   2. UPSERT_NODE 的清洗器 PROCESS_DATA_KEYS 【不含】materialBindings
+        //      -> agent 想让补丁通过, 必须把调料字段拿掉
+        //   3. applyNodePatch 的 UPSERT 是【整节点替换】(set(indexOf(existing), next)), 不继承字段
+        //   4. 分流闸只看补丁的 op/path, UPSERT_NODE 不在它名单里 -> 放行
+        // 合起来: 「把卤制改个名」会静默清空那道工序的全部调料克数, 且返回 applied:true。
+        // 方向正是那条「约束 4」注释最担心的「直接影响扣料与成本」。
+        ProductProcessWorkflowDTO stored = objectMapper.convertValue(
+                definitionWithBinding("PT-001", 3L), ProductProcessWorkflowDTO.class);
+        when(workflowService.getEditorDefinition("F006", "PT-001"))
+                .thenReturn(java.util.Optional.of(stored));
+
+        // agent 重发的 definition 与补丁里都【没有】materialBindings —— 它就是这么被迫写的
+        String arguments = objectMapper.writeValueAsString(Map.of(
+                "definition", definitionWithOwner("PT-001", 3L),
+                "patches", List.of(Map.of("op", "UPSERT_NODE", "node", Map.of(
+                        "id", "process:1", "kind", "PROCESS",
+                        "position", Map.of("x", 256, "y", 32),
+                        "data", Map.of(
+                                "workProcessId", "WP-1",
+                                "processName", "卤制(改名)",
+                                "inputUnit", "kg",
+                                "outputUnit", "kg",
+                                "reportingRequired", true,
+                                "conversionRule", Map.of("mode", "ACTUAL_WEIGHT"),
+                                "ports", List.of(
+                                        Map.of("id", "input:1", "direction", "INPUT",
+                                                "materialNodeId", "raw", "materialKind", "RAW_MATERIAL",
+                                                "unit", "kg", "ordinal", 0),
+                                        Map.of("id", "output:1", "direction", "OUTPUT",
+                                                "materialNodeId", "semi", "materialKind", "SEMI_FINISHED",
+                                                "unit", "kg", "ordinal", 0))))))));
+
+        Map<String, Object> envelope = objectMapper.readValue(
+                tool.execute(ToolCall.of("rename", tool.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+
+        // ⛔ 必须拒。放行等于让「改名」变成「删调料」。
+        assertEquals(Boolean.FALSE, envelope.get("success"));
+        assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
+        verify(workflowService, never()).saveDraft(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("productTypeId 缺失 -> 明确报错, ⛔ 不猜一个")
     void missingProductTypeIdIsRejectedRatherThanGuessed() throws Exception {
         Map<String, Object> envelope = execute(
@@ -179,6 +227,27 @@ class ProductProcessWorkflowConfigToolWriteTest {
     @SuppressWarnings("unchecked")
     private Map<String, Object> asMap(Object raw) {
         return (Map<String, Object>) raw;
+    }
+
+    /** 带一行【已存在】调料绑定的定义 —— 代表库里的真实状态。 */
+    private Map<String, Object> definitionWithBinding(String productTypeId, Long lockVersion) {
+        Map<String, Object> definition =
+                new LinkedHashMap<>(definitionWithOwner(productTypeId, lockVersion));
+        List<Map<String, Object>> nodes = new java.util.ArrayList<>();
+        for (Object raw : (List<?>) definition.get("nodes")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> node = new LinkedHashMap<>((Map<String, Object>) raw);
+            if ("process:1".equals(node.get("id"))) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) node.get("data"));
+                data.put("materialBindings", List.of(
+                        Map.of("materialTypeId", "RMT-1", "dosagePerKgG", 12.5d)));
+                node.put("data", data);
+            }
+            nodes.add(node);
+        }
+        definition.put("nodes", nodes);
+        return definition;
     }
 
     private Map<String, Object> definitionWithOwner(String productTypeId, Long lockVersion) {

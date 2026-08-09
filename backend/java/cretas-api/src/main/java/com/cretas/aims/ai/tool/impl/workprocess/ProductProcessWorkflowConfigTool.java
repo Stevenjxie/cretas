@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -237,6 +238,13 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                         "WORKFLOW_OWNER_REQUIRED", "Workflow definition must carry productTypeId");
             }
 
+            // 🔴 分流闸的第二道: 比对【库里的真实状态】, 不是比对补丁的自述。
+            // 只看补丁会漏掉一整类改动 —— 详见 assertCostBearingFieldsUnchanged 的注释。
+            if (!costBearingFieldsUnchanged(factoryId, productTypeId, candidate)) {
+                return buildSemanticError("WORKFLOW_AI_PREVIEW_ONLY",
+                        "该改动会变更调料克数/注射量，只能预览；请人工在产品配置页确认后再保存");
+            }
+
             // ⛔ 只调 saveDraft。它按构造只写 DRAFT, 且自带租户归属校验 + 乐观锁。
             // 落库的四道闸全在它里面, 这里【一行都不重写】—— 重写等于把那些保证作废。
             ProductProcessWorkflowDTO saved =
@@ -265,6 +273,72 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         } catch (Exception unexpected) {
             return buildSemanticError("WORKFLOW_PATCH_FAILED", "Workflow patch batch failed");
         }
+    }
+
+    /**
+     * 要写下去的这张图，它的<b>成本相关字段</b>与库里现存的是否逐字相同。
+     *
+     * <h2>为什么光看补丁不够（整支审查抓出的 Critical）</h2>
+     *
+     * <p>{@link #touchesCostBearingFields} 分类的是<b>补丁清单</b>，而 {@code saveDraft}
+     * 写下去的是 <b>AI 自己重发的那整张 definition 打完补丁之后的图</b>。两者不是同一个东西 ——
+     * definition 与库里现存草稿之间的任何差异，从来没被任何闸看过。
+     *
+     * <p>它<b>必然</b>会被走到，不是理论风险：
+     * <ol>
+     *   <li>想改工序名只能用 {@code UPSERT_NODE} —— PROCESS 节点的 {@code SET_NODE_FIELD}
+     *       不允许 {@code name}</li>
+     *   <li>{@code UPSERT_NODE} 的清洗器 {@code PROCESS_DATA_KEYS} <b>不含</b>
+     *       {@code materialBindings} —— agent 想让补丁通过，<b>必须</b>把调料字段拿掉</li>
+     *   <li>{@code applyNodePatch} 的 UPSERT 分支是<b>整节点替换</b>，不继承任何字段</li>
+     *   <li>分流闸只看 op/path，{@code UPSERT_NODE} 不在名单里 → 放行</li>
+     * </ol>
+     * 合起来：「把卤制改个名」会静默清空那道工序的全部调料克数，还回 {@code applied:true}。
+     *
+     * <p>📌 判据：<b>闸要判的是「真正要写下去的东西」，不是「补丁的自述」。</b>
+     *
+     * <p>⚠️ 读不到库里现存定义时（新产品第一张草稿）返回 {@code true} —— 没有可比对的基线，
+     * 此时任何 materialBindings 都是新配的，而新配克数同样受第一道闸管辖
+     * （补丁里带克数字段一定含 {@code UPSERT_MATERIAL_BINDING} 或 {@code materialBindings} 路径）。
+     * ⛔ 这里不能改成返回 false，否则新产品永远建不了第一张草稿。
+     */
+    private boolean costBearingFieldsUnchanged(
+            String factoryId, String productTypeId, ProductProcessWorkflowDTO candidate) {
+        Optional<ProductProcessWorkflowDTO> stored =
+                workflowService.getEditorDefinition(factoryId, productTypeId);
+        if (stored.isEmpty()) {
+            return true;
+        }
+        return costBearingFingerprint(stored.get()).equals(costBearingFingerprint(candidate));
+    }
+
+    /**
+     * 一张图里全部成本相关字段的指纹：{@code nodeId -> {materialBindings, injectionAmount}}。
+     *
+     * <p>⛔ 只收这两样，不收整个 data —— 收整个 data 会让任何合法改动（改名、挪位置）都被判成
+     * 「动了成本」，那道闸就会因为天天误报而被人绕过或删掉。
+     */
+    private Map<String, Object> costBearingFingerprint(ProductProcessWorkflowDTO definition) {
+        Map<String, Object> fingerprint = new LinkedHashMap<>();
+        if (definition == null || definition.getNodes() == null) {
+            return fingerprint;
+        }
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (node == null || node.getId() == null || node.getData() == null) {
+                continue;
+            }
+            Map<String, Object> costBearing = new LinkedHashMap<>();
+            for (String key : COST_BEARING_FIELD_ROOTS) {
+                Object value = node.getData().get(key);
+                if (value != null) {
+                    costBearing.put(key, value);
+                }
+            }
+            if (!costBearing.isEmpty()) {
+                fingerprint.put(node.getId(), costBearing);
+            }
+        }
+        return fingerprint;
     }
 
     /** ⛔ context 里没有 factoryId 就直接拒 —— 不许回退到入参里的任何值。 */
