@@ -68,13 +68,42 @@ _ANCHORS: Dict[str, Tuple[float, float]] = {
     "凉拌木耳": (18.00, 3.3500),
 }
 
-#: 绝对量锚 —— 补比值锚的盲区。
+def _days_in_range(rng: Tuple[date, date]) -> int:
+    """日期维度的期望分组数 = 区间天数。⚠️ 它**随查询区间变**，不是常量。"""
+    return (rng[1] - rng[0]).days + 1
+
+
+#: 分组数锚 —— 「这个维度应该分出几组」。补比值锚的盲区。
 #:
 #: 🔴 为什么必需：比值锚对「分子分母**同倍**缩放」是瞎的 —— 日期过滤写错、
 #:    租户过滤写错、采集丢了 30% 的行，这些让两边一起变，单价照样等于 128。
-#:    绝对量是唯一能抓到它们的。
-#: 来源：`seed.py` 的 `_STORES`(10) / `_INGREDIENTS`(25) / `_DISHES`(10)。
-_ABSOLUTE_ANCHORS = {"菜品数": len(_ANCHORS), "门店数": 10, "食材数": 25}
+#:    分组数是唯一能抓到它们的；顺带也验「维度分组本身对不对」——
+#:    而那件事此前 **16 个维度里只有 4 个有锚**。
+#:
+#: 结构：`标签: (指标, 维度, 期望值 或 f(区间)->期望值, 来源)`。
+#: ⛔ 期望值和 (指标,维度) 都在这张表里 —— 加一个维度是**一行**。
+#:    第一版把 (指标,维度) 写死在循环里，加一个要改两处，那就是补丁的开头。
+#:
+#: ⚠️ 这里**只收源码能直接推出来的**。2026-08-10 逐个量过之后砍掉了四类：
+#:    · `table` / `wastage_reason` —— 整列 NULL，只有一个「未填写」组。
+#:      锚在 1 上等于锚「这列还是空的」，客户真填了会**红在一个正确的变化上**。
+#:    · `hour` / `city` / `brand` —— 值来自生成器的营业时段和采集层默认值，
+#:      **不在 seed.py / generator.py 的常量里**。要锚就得再引一个来源。
+#:    · `meal_period` —— 采集侧按小时映射出 4 个可能值(午市/下午茶/晚市/夜宵)，
+#:      而数据里只有 2 个，因为生成器只在两段营业。**两个来源的交集**，
+#:      生成器一改营业时段就会红在一个正确的变化上。
+#:    · `staff` —— = 门店数 × 餐段数，而餐段本身就脆，于是它也脆。
+#:    ⛔ 判据：锚必须钉在**一个**源码事实上。要靠两个东西的交集才成立的，
+#:       就是脆锚 —— 它红的时候你分不清是系统错了还是生成器变了。
+_GROUP_COUNT_ANCHORS: Dict[str, Tuple[str, str, object, str]] = {
+    "菜品数": ("sales_qty", "product", len(_ANCHORS), "seed._DISHES 长度"),
+    "门店数": ("revenue", "store", 10, "seed._STORES 长度"),
+    "食材数": ("wastage_cost", "ingredient", 25, "seed._INGREDIENTS 长度"),
+    "菜品类别数": ("sales_qty", "category", 7, "seed._DISHES 的 category 去重"),
+    "损耗类型数": ("wastage_cost", "wastage_type", 3, "generator._WASTAGE_TYPE_CODE"),
+    "星期数": ("revenue", "weekday", 7, "一周固定 7 天(要求区间 ≥7 天)"),
+    "日期数": ("revenue", "date", _days_in_range, "区间天数(⚠️ 随区间变)"),
+}
 
 #: 分布锚 —— 渠道的抽样权重。来源：`generator.py::_CHANNEL_WEIGHTS`。
 #:
@@ -193,11 +222,9 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> Tuple[List[str], int]:
                 print(f"{dish:10s} {price:10.2f} {(got_price if got_price is not None else float('nan')):10.2f}   "
                       f"{food_cost:12.4f} {(got_cost if got_cost is not None else float('nan')):10.4f} {mark}")
 
-            # ── 绝对量锚：比值锚对「同倍缩放」是瞎的，这里补上 ──────────────
+            # ── 分组数锚：比值锚对「同倍缩放」是瞎的，这里补上 ──────────────
             print()
-            for label, (metric, dim) in (("菜品数", ("sales_qty", "product")),
-                                         ("门店数", ("revenue", "store")),
-                                         ("食材数", ("wastage_cost", "ingredient"))):
+            for label, (metric, dim, want_spec, how) in _GROUP_COUNT_ANCHORS.items():
                 async with pool.acquire() as c3:
                     await c3.execute(
                         "SELECT set_config('app.factory_id', $1, false)", factory_id)
@@ -206,11 +233,13 @@ async def run(factory_id: str, rng: Tuple[date, date]) -> Tuple[List[str], int]:
                         dimension_key=dim, aggregation_key="compare",
                         date_range=rng, available_columns=cols)
                 checked += 1
-                got, want = len(r.rows), _ABSOLUTE_ANCHORS[label]
+                want = want_spec(rng) if callable(want_spec) else want_spec
+                got = len(r.rows)
                 ok = got == want
                 if not ok:
-                    failures.append(f"{label}: 源码 {want}, 算出来 {got}")
-                print(f"绝对量·{label}: 源码 {want}, 算出来 {got} {'' if ok else '❌'}")
+                    failures.append(f"{label}: 源码 {want}, 算出来 {got}  [{how}]")
+                print(f"分组数·{label:12s} 源码 {want:>4}  算出来 {got:>4}  "
+                      f"[{how}] {'' if ok else '❌'}")
 
             # ── 跨粒度对账：全店汇总类格子的锚 ────────────────────────────
             #

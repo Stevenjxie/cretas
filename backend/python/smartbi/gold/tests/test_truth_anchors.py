@@ -19,7 +19,7 @@ import sys
 import pytest
 
 from smartbi.scripts.registry_truth_check import (
-    _ABSOLUTE_ANCHORS,
+    _GROUP_COUNT_ANCHORS,
     _ANCHORS,
     _CHANNEL_WEIGHTS,
     _RANGE_ANCHORS,
@@ -80,11 +80,53 @@ def test_absolute_anchors_match_the_generator_source():
     if seed is None:
         pytest.skip("读不到生成器源码 —— ⚠️ 这是 skip 不是 pass")
 
+    import importlib
+
+    gen = importlib.import_module("mock_platform.world.generator")
+
+    def _want(label):
+        return _GROUP_COUNT_ANCHORS[label][2]
+
     for label, source in (("菜品数", seed._DISHES),
                           ("门店数", seed._STORES),
                           ("食材数", seed._INGREDIENTS)):
-        assert _ABSOLUTE_ANCHORS[label] == len(source), (
-            f"{label} 的锚 {_ABSOLUTE_ANCHORS[label]} ≠ 源码清单长度 {len(source)}")
+        assert _want(label) == len(source), (
+            f"{label} 的锚 {_want(label)} ≠ 源码清单长度 {len(source)}")
+
+    # 菜品类别数 = `_DISHES` 的 category 去重；⛔ 别硬写一个数
+    assert _want("菜品类别数") == len({c for _n, c, *_ in seed._DISHES})
+    # 损耗类型数 = generator 的类型码表长度
+    assert _want("损耗类型数") == len(gen._WASTAGE_TYPE_CODE)
+    # 日期数是**函数**不是常量 —— 它随查询区间变
+    import datetime as _dt
+
+    fn = _want("日期数")
+    assert callable(fn), "日期数的期望值必须是函数 —— 它随区间变，写成常量必然假红"
+    assert fn((_dt.date(2026, 7, 1), _dt.date(2026, 7, 31))) == 31
+    assert fn((_dt.date(2026, 7, 1), _dt.date(2026, 7, 10))) == 10
+
+
+def test_fragile_dimensions_are_deliberately_not_anchored():
+    """⛔ 承重: 这几个维度**故意不锚** —— 锚上去会红在**正确的变化**上。
+
+    · `table` / `wastage_reason`：整列 NULL，只有一个「未填写」组。
+      锚在 1 上 = 锚「这列还是空的」，客户真填了台位号就红。
+    · `meal_period`：采集侧映射出 4 个可能值，数据里只有 2 个（生成器只在
+      两段营业）—— **两个来源的交集**，生成器改营业时段就红。
+    · `staff` = 门店 × 餐段，餐段脆它也脆。
+    · `hour` / `city` / `brand`：值来自生成器营业时段和采集层默认值，
+      **不在 seed.py / generator.py 的常量里**。
+
+    ⛔ 判据：锚必须钉在**一个**源码事实上。靠两个东西交集才成立的是脆锚 ——
+       它红的时候，你分不清是系统错了还是生成器变了。
+    """
+    fragile = {"table", "wastage_reason", "meal_period", "staff",
+               "hour", "city", "brand"}
+    anchored_dims = {v[1] for v in _GROUP_COUNT_ANCHORS.values()}
+    leaked = fragile & anchored_dims
+    assert not leaked, (
+        f"这些维度是**故意不锚**的，却被加进了分组数锚: {sorted(leaked)} —— "
+        f"⛔ 加之前先确认它的期望值钉在**一个**源码事实上")
 
 
 def test_channel_weights_match_the_generator_source():
