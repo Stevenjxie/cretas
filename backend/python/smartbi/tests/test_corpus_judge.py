@@ -36,14 +36,28 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # import corpus_judge without needing real DB or LLM API keys.
 
 
+# ⚠️ 2026-08-10: 这段桩曾经**污染整个 pytest 会话**。
+#    原实现有两个问题:
+#      1. `sys.modules["common.llm_router"].SLOT = _SLOT` 是**无条件赋值** —— 真
+#         router 已经加载时, 它会**就地覆写真模块的属性**;
+#      2. 塞进 sys.modules 的桩**从不还原**, 之后任何 test import 真 router 拿到
+#         的都是桩。
+#    实测后果: 把 smartbi/tests 并进全套跑, **7 个原本绿的别处用例被带红**
+#    (tests/test_llm_router_fallback ×2 / gold/test_semantic_planner_budget ×2 /
+#     gold/test_llm_capacity_gate ×2 / restaurant/test_batch_regression_golden ×1),
+#    而且症状离原因极远 —— 看起来像 router 自己坏了。
+#    判据: **测试给 sys.modules 打桩必须(a)不碰已经真实加载的模块 (b)用完还原。**
+_STUBBED: list[str] = []
+
+
 def _ensure_stub(module_name: str) -> None:
-    """Register an empty module stub if not already present."""
-    if module_name not in sys.modules:
-        parts = module_name.split(".")
-        for i in range(1, len(parts) + 1):
-            name = ".".join(parts[:i])
-            if name not in sys.modules:
-                sys.modules[name] = types.ModuleType(name)
+    """只在模块**尚未加载**时注册空桩, 并记下是我们造的, 以便用完还原。"""
+    parts = module_name.split(".")
+    for i in range(1, len(parts) + 1):
+        name = ".".join(parts[:i])
+        if name not in sys.modules:
+            sys.modules[name] = types.ModuleType(name)
+            _STUBBED.append(name)
 
 
 # Stubs needed before importing the script
@@ -66,8 +80,10 @@ class _SLOT(enum.Enum):
 async def _stub_call_chain(slot, payload, timeout=30.0):
     return {}
 
-sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
-sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
+# ⛔ 只在桩是**我们造的**时候才写属性 —— 真 router 已加载时绝不覆写它。
+if "common.llm_router" in _STUBBED:
+    sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
+    sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
 
 # Now safe to import the module under test
 from scripts.corpus_judge import (  # noqa: E402,F401
@@ -80,6 +96,12 @@ from scripts.corpus_judge import (  # noqa: E402,F401
     run_judge,
     _FACTUAL_QA_SOURCES,
 )
+
+# ⛔ 用完立刻把桩从 sys.modules 摘掉 —— corpus_judge 只在**它自己的 import 期**需要
+#    这些桩; 留着就会让本会话后面所有 test 拿到假的 common.llm_router。
+for _name in reversed(_STUBBED):
+    sys.modules.pop(_name, None)
+_STUBBED.clear()
 
 
 # ---------------------------------------------------------------------------

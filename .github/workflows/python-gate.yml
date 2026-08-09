@@ -121,6 +121,7 @@ jobs:
             smartbi/gold/tests \
             smartbi/ingestion/tests \
             smartbi/services \
+            smartbi/tests \
             --timeout=60 \
             --ignore=tests/test_data_accuracy.py \
             $EXCLUDES \
