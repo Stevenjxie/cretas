@@ -26,9 +26,17 @@ from common.llm_router import SLOT, call_chain
 
 # Per-account landmines — models that BILL if called (未开启 / 不支持开启 on that
 # account, per console scrape 2026-06-30). NONE may ever be in _SAFE_MODELS.
+#
+# 2026-08-09: removed ("aliyun_b","kimi-k2.7-code") and ("aliyun_b","qwen3.5-ocr").
+# That day aliyun_b returned 403 AllocationQuota.FreeTierOnly for several models
+# (qwen3.7-flash / qwen3.7-plus-2026-05-26 / qwen3.7-max-2026-06-08 / deepseek-v3.2)
+# — emitting that exact error code is only possible when the account's 「免费额度
+# 用完即停」 toggle is ON, which proves a 200 from aliyun_b is served from free
+# quota, not billed. The owner's aliyun_b console screenshot the same day lists
+# both models with ~1,000,000 remaining free quota each, expiring 2026-09-14. The
+# old entries were built from a 2026-06-30 console scrape and were simply stale.
+# Both are now registered in _SAFE_MODELS (see the 08-09 audit section).
 _LANDMINES = {
-    ("aliyun_b", "kimi-k2.7-code"),   # 未开启 on b (ON on a/c)
-    ("aliyun_b", "qwen3.5-ocr"),      # 未开启 on b (ON on c)
     ("aliyun_b", "deepseek-v4-pro"),  # 不支持开启 on b (ON on c)
     ("aliyun_b", "glm-5.2"),          # 不支持开启 on b (ON on c)
     ("aliyun_c", "deepseek-v4-pro"),  # only free on tencent; ON-but-check per acct
@@ -51,7 +59,23 @@ def _reset_caches():
 # ════════════════════════════════════════════════════════════════════════
 
 def test_every_chain_entry_is_a_registered_safe_model():
-    """Nothing a SLOT chain can call is outside _SAFE_MODELS (ON-toggle allowlist)."""
+    """Nothing a SLOT chain can call is outside _SAFE_MODELS (ON-toggle allowlist).
+
+    ⛔ KNOWN RED as of the 2026-08-09 _SAFE_MODELS rewrite (task 3 of the
+    "llm-router expiry-first chain" plan) — by design, not an oversight. This
+    task's brief explicitly forbids editing SLOT_MODELS/_TEXT_TAIL/_VL_CHAIN
+    ("Task 4 owns those... Your change will leave chains referencing models you
+    deleted from the registry; that is expected and Task 4 fixes it"). The
+    08-09 audit retired far more of SLOT_MODELS' literal content than a partial
+    fix could plausibly repatch (e.g. the entire aliyun_b/aliyun_c
+    qwen3.7-flash* head of CHAT/CHART/MAPPER, all of tencent's REVIEW models bar
+    minimax-m2.7, and every ark entry). Weakening this assertion is explicitly
+    forbidden too — it IS the billing-safety net the whole registry exists to
+    protect, so it must not be watered down or skipped. It will go back to
+    green only once Task 4 rebuilds SLOT_MODELS from _SAFE_MODELS pools.
+    Runtime is still safe in the meantime: _refuse_reason refuses every
+    unregistered entry at call time regardless of what this test says.
+    """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
             assert (account, model) in llm_router._SAFE_MODELS, (
@@ -181,18 +205,26 @@ def test_production_exhausted_aliyun_pairs_are_fully_retired():
     assert retired.isdisjoint(reachable)
 
 
-def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
+def test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a():
+    """2026-08-09 重审: qwen3.7-flash 系列过去以为 b/c 也有余量, 三账号截图+探针
+    交叉核对后只有 aliyun_a 还有效(10/23); aliyun_b/aliyun_c 的同名条目从注册表
+    整体移除。CHAT/CHART/MAPPER 链头仍是旧字面量(SLOT_MODELS 由 Task 4 重排),
+    这里只钉注册表这张事实表, 不断言尚未重排的链头。
+    """
     expected = [
-        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_c", "qwen3.7-flash"),
-        ("aliyun_b", "qwen3.7-flash"),
+        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_a", "qwen3.7-flash"),
     ]
     for pair in expected:
         assert llm_router._SAFE_MODELS[pair] == datetime.date(2026, 10, 23)
         assert pair in llm_router._MINIMAL_SAFE_SET
-    for slot in (SLOT.CHAT, SLOT.CHART, SLOT.MAPPER):
-        assert llm_router.SLOT_MODELS[slot][:4] == expected
+    for retired in [
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"), ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash"), ("aliyun_c", "qwen3.7-flash"),
+    ]:
+        assert retired not in llm_router._SAFE_MODELS, (
+            f"{retired} should have been retired by the 08-09 audit"
+        )
 
 
 def test_vl_chain_is_vision_only():
@@ -204,31 +236,38 @@ def test_vl_chain_is_vision_only():
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 7, 26)  # registry audit date → not stale
+_TODAY = datetime.date(2026, 8, 9)  # registry audit date → not stale
 # (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
 
 def test_refuse_allows_current_registered_model():
-    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-2026-06-08", _TODAY) is None
+    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-2026-05-17", _TODAY) is None
     assert llm_router._refuse_reason(
-        "aliyun_c", "qwen3.7-flash-2026-07-15", _TODAY
+        "aliyun_a", "qwen3.7-flash-2026-07-15", _TODAY
     ) is None
     assert llm_router._refuse_reason(
-        "aliyun_b", "qwen3.7-flash-2026-07-15", _TODAY
+        "aliyun_a", "qwen3.7-flash", _TODAY
     ) is None
 
 
 def test_refuse_rejects_unregistered_landmine():
     # config-drift guard: even if someone put a landmine in a chain, the gate refuses.
-    assert llm_router._refuse_reason("aliyun_b", "kimi-k2.7-code", _TODAY) == "not_allowlisted"
+    # 2026-08-09: aliyun_b/kimi-k2.7-code moved OFF the landmine list into
+    # _SAFE_MODELS (see _LANDMINES comment above) — swapped in two landmines that
+    # are still unregistered on their account.
     assert llm_router._refuse_reason("aliyun_b", "deepseek-v4-pro", _TODAY) == "not_allowlisted"
+    assert llm_router._refuse_reason("aliyun_b", "glm-5.2", _TODAY) == "not_allowlisted"
 
 
 def test_refuse_hard_drops_expired():
-    # aliyun_a/qwen3.6-plus-2026-04-02 expires 07/02 — refused the day it lapses.
-    after = datetime.date(2026, 7, 3)
-    assert llm_router._refuse_reason("aliyun_a", "qwen3.6-plus-2026-04-02", after) == "expired"
+    # 2026-08-09 重审后 aliyun_a/qwen3.6-plus-2026-04-02 已从注册表整体移除
+    # (not_allowlisted, 不会走到 expired 分支)。换成实测仍登记、到期日 08/13 的
+    # aliyun_c/qwen3-next-80b-a3b-instruct — 过期当天即拒绝。
+    after = datetime.date(2026, 8, 14)
+    assert llm_router._refuse_reason(
+        "aliyun_c", "qwen3-next-80b-a3b-instruct", after
+    ) == "expired"
 
 
 def test_refuse_denylist_veto():
@@ -243,20 +282,41 @@ def test_refuse_denylist_veto():
 
 def test_staleness_failsafe_narrows_to_minimal_set():
     stale = _TODAY + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1)
-    # a normal registered model NOT in the minimal set is refused when stale…
-    # (模型须在 stale 日期时未过期, 否则 'expired' 先命中 — 选 09/01 的 plus)
+    # a normal (never-registered) model is refused when stale — the stale check
+    # fires before allowlist membership is even consulted.
     assert llm_router._refuse_reason("aliyun_c", "qwen3.7-plus", stale) == "registry_stale"
     # …but a minimal-set survivor still allowed (if not itself expired).
-    assert llm_router._refuse_reason("aliyun_c", "glm-5.2", stale) is None
+    # 2026-08-09: glm-5.2 从 aliyun_c 注册表整体移除(见 08-09 重审), 换成实测
+    # 仍在 _MINIMAL_SAFE_SET 里、到期日 09/14 的 aliyun_c/kimi-k2.7-code。
+    assert llm_router._refuse_reason("aliyun_c", "kimi-k2.7-code", stale) is None
 
 
 def test_future_date_every_slot_keeps_a_live_fallback():
-    """After B+C bulk expiry (08/14) every slot still resolves ≥1 model (minimal set
-    + never-expiring tencent/zhipu floor) — no hard 'all exhausted' (design-audit R3)."""
+    """After B+C bulk expiry (08/14) every TEXT slot still resolves ≥1 model (minimal
+    set + never-expiring tencent/zhipu floor) — no hard 'all exhausted' (design-audit
+    R3).
+
+    VL is deliberately excluded: the 2026-08-09 audit killed zhipu/glm-4.6v (429
+    balance-insufficient) and every remaining VL entry is aliyun_c, all expiring
+    08/13 — so by 08/14 the VL floor is genuinely empty. That is intentional (see
+    _MINIMAL_SAFE_SET comment: "新的最小集不含任何 VL 模型" / VL accepts an empty
+    chain and reports explicitly per spec §9.1, pending the Task 5 VL exemption) —
+    not a regression this test should paper over.
+    """
     future = datetime.date(2026, 8, 14)
     for slot, chain in llm_router.SLOT_MODELS.items():
+        if slot is SLOT.VL:
+            continue
         live = [(a, m) for (a, m) in chain if llm_router._refuse_reason(a, m, future) is None]
         assert live, f"{slot.value} has ZERO live fallbacks at {future}"
+    vl_live = [
+        (a, m) for (a, m) in llm_router.SLOT_MODELS[SLOT.VL]
+        if llm_router._refuse_reason(a, m, future) is None
+    ]
+    assert vl_live == [], (
+        f"VL floor unexpectedly live at {future} ({vl_live}) — if the registry "
+        "regained a VL grant, update this test's exclusion accordingly"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -445,12 +505,19 @@ def _patch_keys(monkeypatch):
     monkeypatch.setenv("LLM_ZHIPU_API_KEY", "key_zhipu_fake")
 
 
+# 2026-08-09: the real SLOT_MODELS[SLOT.CHAT] head (qwen3.7-flash* on b/c) was
+# retired by the 08-09 audit — Task 4 owns re-sorting SLOT_MODELS off the new
+# registry, so these call_chain smoke tests monkeypatch a small deterministic
+# chain out of CURRENTLY-registered pairs instead of relying on the real
+# (not-yet-migrated) chain literal.
+_CHAT_SMOKE_CHAIN = [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17")]
+
+
 @pytest.mark.asyncio
 async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(monkeypatch):
     _patch_keys(monkeypatch)
-    # 冻结在 07-10: 脚本前提是 a 头(qwen3.6-flash, 到期07-17)与 b 层(07-16批)
-    # 都活着; _TODAY(=审计日 07-23)时它们已过期, 不能用。
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
         "aliyun_a": _fake_response(403, "AllocationQuota.FreeTierOnly"),
@@ -466,21 +533,32 @@ async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(m
 
 @pytest.mark.asyncio
 async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
+    """Locks the SetLimitExceeded persistence behavior — generic to any provider,
+    not ark-specific logic.
+
+    2026-08-09: the ark section of _SAFE_MODELS was emptied outright (both
+    entries SetLimitExceeded-paused; provider config kept, pending owner
+    re-measurement). No ark (account, model) is registered right now, so a real
+    ark call would be refused before ever reaching the HTTP layer — this test
+    substitutes two currently-registered accounts to keep covering the same
+    quota-skip-cache behavior the ark incident originally locked down.
+    """
     _patch_keys(monkeypatch)
-    ark_model = "doubao-seed-2-1-turbo-260628"
-    tencent_model = "deepseek-v4-pro-202606"
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    first_account, first_model = "aliyun_a", "qwen3.7-flash"
+    second_account, second_model = "zhipu", "glm-4.5-air"
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
-        [("ark", ark_model), ("tencent", tencent_model)],
+        [(first_account, first_model), (second_account, second_model)],
     )
     good = {"choices": [{"message": {"content": "餐饮经营数据已完成分析。"}}]}
     client = _ScriptedClient({
-        "ark": _fake_response(
+        first_account: _fake_response(
             429,
             '{"error":{"code":"SetLimitExceeded","message":"model service has been paused"}}',
         ),
-        "tencent": _fake_response(200, json_payload=good),
+        second_account: _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
@@ -490,16 +568,15 @@ async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     )
 
     assert result == good
-    assert client.call_log == [("ark", ark_model), ("tencent", tencent_model)]
-    assert llm_router._quota_should_skip(f"ark/{ark_model}") is True
+    assert client.call_log == [(first_account, first_model), (second_account, second_model)]
+    assert llm_router._quota_should_skip(f"{first_account}/{first_model}") is True
 
 
 @pytest.mark.asyncio
 async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
     _patch_keys(monkeypatch)
-    # 冻结在 07-10: 脚本前提是 a 头(qwen3.6-flash, 到期07-17)与 b 层(07-16批)
-    # 都活着; _TODAY(=审计日 07-23)时它们已过期, 不能用。
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     empty = {"choices": [{"message": {"content": ""}}]}
     good = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
@@ -515,7 +592,22 @@ async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypatch):
     _patch_keys(monkeypatch)
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    # Needs enough live candidates that _MIN_ATTEMPT_TIMEOUT_SECONDS-floored
+    # per-candidate consumption (each attempt still burns ≥0.05s of real wall
+    # time even once its budgeted share is nearly gone) provably exhausts
+    # total_timeout before the loop's pre-attempt deadline check runs again —
+    # that check is what appends "chain: total_timeout" and breaks. With only
+    # 2-3 candidates the floor leaves just enough slack that every attempt
+    # individually times out instead (verified empirically); 4 candidates at
+    # total_timeout=0.15 reliably trips the explicit branch while staying well
+    # under the 0.8s wall-clock ceiling below.
+    monkeypatch.setitem(
+        llm_router.SLOT_MODELS,
+        SLOT.CHAT,
+        [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17"),
+         ("aliyun_c", "qwen3.7-max-2026-05-17"), ("zhipu", "glm-4.5-air")],
+    )
 
     class _SlowClient(_ScriptedClient):
         async def post(self, url, headers=None, json=None, timeout=None):
@@ -531,7 +623,7 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
             SLOT.CHAT,
             {"messages": [{"role": "user", "content": "hi"}]},
             timeout=0.2,
-            total_timeout=0.35,
+            total_timeout=0.15,
         )
 
     assert time.monotonic() - started < 0.8
@@ -575,6 +667,13 @@ _TOKENHUB_STALE_GENERAL_ROUTES = {
     ("tencent", "deepseek-v3.2"),
 }
 
+# 2026-08-09 重审: 上面 _TOKENHUB_VERIFIED 的 4 个 2026-08-02 测得的模型全部实测
+# 401008 额度耗尽, 从 _SAFE_MODELS 移除(仍是 SLOT_MODELS 字面量里的 REVIEW 链结构,
+# 那部分归 Task 4)。TokenHub 9 个条目当天实测只剩这 1 个还登记在册。
+_TOKENHUB_REGISTERED_2026_08_09 = {
+    ("tencent", "minimax-m2.7"),
+}
+
 
 def test_no_chain_calls_a_zero_balance_tokenhub_model():
     """Dead TokenHub IDs must not sit in any chain."""
@@ -598,12 +697,15 @@ def test_no_chain_calls_a_stale_or_translation_only_tokenhub_model():
 
 
 def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
-    for pair in _TOKENHUB_VERIFIED:
+    """2026-08-09: only minimax-m2.7 survived the re-audit; the other three
+    _TOKENHUB_VERIFIED pairs from 08-02 now 401008 quota-exhausted and were
+    removed from _SAFE_MODELS. Whether the survivor is wired into _TEXT_TAIL is
+    Task 4's job (chain rewrite off the new registry) — this test only pins the
+    registry fact, not a chain literal it cannot touch.
+    """
+    for pair in _TOKENHUB_REGISTERED_2026_08_09:
         assert pair in llm_router._SAFE_MODELS, (
             f"{pair} not registered -> _refuse_reason blocks it"
-        )
-        assert pair in llm_router._TEXT_TAIL, (
-            f"{pair} missing from the non-DashScope floor"
         )
 
 
@@ -679,7 +781,8 @@ async def test_call_chain_content_validator_rejects_a_200_and_falls_through(monk
     caller that owns the contract supplies the predicate.
     """
     _patch_keys(monkeypatch)
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     good = {"choices": [{"message": {"content": '{"intent":"X","confidence":0.95}'}}]}
     client = _ScriptedClient({
@@ -709,10 +812,11 @@ async def test_call_chain_content_validator_rejects_a_200_and_falls_through(monk
 async def test_call_chain_without_a_content_validator_keeps_the_first_200(monkeypatch):
     """No validator -> unchanged behavior (the gate is opt-in per caller)."""
     _patch_keys(monkeypatch)
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     client = _ScriptedClient({
-        "aliyun_c": _fake_response(200, json_payload=pill),
+        "aliyun_a": _fake_response(200, json_payload=pill),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -724,7 +828,8 @@ async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch
     """A buggy predicate must degrade to 'reject this candidate', never to a
     500 for the user."""
     _patch_keys(monkeypatch)
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     first = {"choices": [{"message": {"content": "text one"}}]}
     second = {"choices": [{"message": {"content": "text two"}}]}
     client = _ScriptedClient({
@@ -783,7 +888,15 @@ def test_ark_without_a_key_is_unreachable(monkeypatch):
 
 def test_every_ark_chain_entry_is_registered():
     """Duplicates the global invariant on purpose, scoped to ark, so a failure
-    names the provider whose billing premise is conditional."""
+    names the provider whose billing premise is conditional.
+
+    ⛔ KNOWN RED alongside test_every_chain_entry_is_a_registered_safe_model
+    above, same reason: the 08-09 audit emptied ark's _SAFE_MODELS section
+    entirely (see _ARK_VIABLE), but SLOT_MODELS still literally contains
+    ("ark", "doubao-seed-2-1-turbo-260628") / ("ark", "doubao-seed-2-0-lite-...")
+    in REVIEW / _TEXT_TAIL, and this task may not touch those (Task 4's job).
+    _refuse_reason still refuses every ark call at runtime.
+    """
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
             if account != "ark":
@@ -818,10 +931,16 @@ def test_ark_models_carry_a_dated_callable_id():
 
 # 2026-08-02 measured with the production key and thinking disabled: both models
 # returned the correct contract for all five real restaurant T3 prompt shapes.
-_ARK_VIABLE = {
-    "doubao-seed-2-1-turbo-260628",
-    "doubao-seed-2-0-lite-260428",
-}
+#
+# 2026-08-09 重审: both now SetLimitExceeded-paused — the measured-viable set is
+# empty. _SAFE_MODELS' ark section was cleared entirely (provider config kept;
+# re-add per-model once the owner supplies a fresh measured-viable list). Note
+# they are STILL literal entries in SLOT_MODELS[SLOT.REVIEW] / _TEXT_TAIL (Task 4
+# owns rewriting those chains off the new registry) — they're deliberately not
+# moved into _ARK_PAUSED below, which is cross-checked against those same
+# still-unmigrated chain literals and would false-positive on a fact this task
+# already made true a different way (unregistered, so _refuse_reason blocks them).
+_ARK_VIABLE: set = set()
 
 # The former chain is now paused per model by SetLimitExceeded. Keeping any of these
 # reachable would reintroduce a deterministic 429 before every healthy fallback.

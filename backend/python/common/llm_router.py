@@ -92,7 +92,7 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 26)  # 三控制台实测核对
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 8, 9)   # 三控制台截图 ∩ 生产探针全量核对
 # (2026-07-26 用户逐账户控制台截图): 所拍 A/B/C 模型均已开启
 # “免费额度用完即停”。这里只收录经任务能力筛选后的通用文本模型，不把
 # OCR/VL/Math/Character/Code 专用 SKU 混入通用链。B/C 两账户的
@@ -112,145 +112,63 @@ _BULK_EXPIRY: Dict[str, datetime.date] = {
 
 _d = datetime.date
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
-    # ── aliyun_a (90bc) — ONLY the 13 screenshot-confirmed ON models. NO VL/deepseek/
-    #    glm (toggle unknown → could bill). Sooner expiries → used first (use-it-or-lose-it).
-    ("aliyun_a", "qwen3.6-plus-2026-04-02"): _d(2026, 7, 2),
-    ("aliyun_a", "qwen3.6-flash"): _d(2026, 7, 17),
-    ("aliyun_a", "kimi-k2.6"): _d(2026, 7, 21),
-    ("aliyun_a", "qwen3.5-plus-2026-04-20"): _d(2026, 7, 23),
-    ("aliyun_a", "qwen3.6-27b"): _d(2026, 7, 23),
-    ("aliyun_a", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
+    # ══ 2026-08-09 全量重审 ══════════════════════════════════════════════
+    # 判据: 控制台显示有余量 ∩ 探针(经 _apply_slot_params, 判据为非空 content)通过。
+    # 单边证据一律不收 —— 探针 200 但控制台无余量的最危险: 那说明「免费额度
+    # 用完即停」没覆盖它, 那个 200 可能是真在计费(glm-5.2 即因此三账号全删)。
+    # 顺序无意义, 链顺序由 _build_chain 按到期日算; 这里只是事实表。
+
+    # ── aliyun_a (控制台 8 个有额度, 全部通过探针) ──
+    ("aliyun_a", "qwen3.8-max"): _d(2026, 11, 1),
+    ("aliyun_a", "deepseek-v4-flash-0731"): _d(2026, 10, 31),
+    ("aliyun_a", "qwen3.7-flash"): _d(2026, 10, 23),
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"): _d(2026, 10, 23),
+    ("aliyun_a", "qwen3.5-ocr"): _d(2026, 9, 14),
+    ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),
     ("aliyun_a", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
     ("aliyun_a", "qwen3.7-max-preview"): _d(2026, 8, 24),
-    ("aliyun_a", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
-    ("aliyun_a", "qwen3.7-max-2026-06-08"): _d(2026, 9, 8),
-    ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),  # thinking-only → REASONING slot only
 
-    # ── aliyun_b (3177) — bulk 07/16; premium drained. Curated good ON models.
-    ("aliyun_b", "qwen3.7-flash-2026-07-15"): _d(2026, 10, 23),
-    ("aliyun_b", "qwen3.7-flash"): _d(2026, 10, 23),
-    ("aliyun_b", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
-    ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
+    # ── aliyun_b (控制台 6 个有额度, 全部通过探针) ──
+    ("aliyun_b", "qwen3.8-max"): _d(2026, 11, 1),
+    ("aliyun_b", "deepseek-v4-flash-0731"): _d(2026, 10, 31),
+    ("aliyun_b", "qwen3.5-ocr"): _d(2026, 9, 14),
+    ("aliyun_b", "kimi-k2.7-code"): _d(2026, 9, 14),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
-    ("aliyun_b", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
-    ("aliyun_b", "qwen3-max-preview"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3-max-2025-09-23"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3.5-397b-a17b"): _d(2026, 7, 16),
-    ("aliyun_b", "deepseek-v3"): _d(2026, 7, 16),
-    ("aliyun_b", "deepseek-v3.2"): _d(2026, 7, 16),
-    ("aliyun_b", "deepseek-r1"): _d(2026, 7, 16),          # thinking-only
-    ("aliyun_b", "deepseek-r1-0528"): _d(2026, 7, 16),     # thinking-only
-    ("aliyun_b", "glm-5"): _d(2026, 7, 16),
-    ("aliyun_b", "glm-4.7"): _d(2026, 7, 16),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
-    ("aliyun_b", "qwen-turbo"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen-flash"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3-coder-flash"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen-plus-latest"): _d(2026, 7, 16),     # exhausted-ON (403 safe)
-    ("aliyun_b", "qwen3-vl-plus-2025-12-19"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen-vl-max"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3-vl-plus"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3-vl-32b-instruct"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3-vl-flash"): _d(2026, 7, 16),
-    ("aliyun_b", "qwen3.6-flash-2026-04-16"): _d(2026, 7, 17),
-    ("aliyun_b", "kimi-k2.6"): _d(2026, 7, 21),
-    ("aliyun_b", "qwen3.5-plus-2026-04-20"): _d(2026, 7, 23),
-    ("aliyun_b", "qwen3.6-27b"): _d(2026, 7, 23),
+    ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
 
-    # ── aliyun_c (a736) — bulk 08/13; fullest account, nearly all ON+quota.
-    ("aliyun_c", "qwen3.7-flash-2026-07-15"): _d(2026, 10, 23),
-    ("aliyun_c", "qwen3.7-flash"): _d(2026, 10, 23),
-    ("aliyun_c", "qwen3.5-flash"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3.6-flash-2026-04-16"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-coder-flash"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen-plus-latest"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-max-preview"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-max-2025-09-23"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3.7-max-2026-06-08"): _d(2026, 9, 8),
+    # ── aliyun_c 长期 (> 08-13) ──
+    ("aliyun_c", "qwen3.8-max"): _d(2026, 11, 1),
+    ("aliyun_c", "kimi-k2.7-code"): _d(2026, 9, 14),
+    ("aliyun_c", "qwen3.5-ocr"): _d(2026, 9, 14),
+    ("aliyun_c", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
+    ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max"): _d(2026, 8, 20),
     ("aliyun_c", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
-    ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),
-    ("aliyun_c", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
-    ("aliyun_c", "deepseek-v3.1"): _d(2026, 8, 13),
-    ("aliyun_c", "deepseek-v3"): _d(2026, 8, 13),
-    ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
-    ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
-    ("aliyun_c", "deepseek-r1"): _d(2026, 8, 13),          # thinking-only
-    ("aliyun_c", "deepseek-r1-0528"): _d(2026, 8, 13),     # thinking-only
-    ("aliyun_c", "glm-5"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-5.1"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-5.2"): _d(2026, 9, 15),
-    ("aliyun_c", "glm-4.6"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-4.7"): _d(2026, 8, 13),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
-    ("aliyun_c", "qwen3-vl-plus-2025-12-19"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen-vl-max"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-plus"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-32b-instruct"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-30b-a3b-instruct"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): _d(2026, 8, 13),  # thinking-only
-    ("aliyun_c", "kimi-k2.6"): _d(2026, 8, 13),
-    ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),     # thinking-only
-    ("aliyun_c", "kimi-k2.7-code"): _d(2026, 9, 14),       # thinking-only
 
-    # ── tencent (m00t) TokenHub trial — 用完即停 safe, no DashScope expiry (None).
-    #
-    # 计费安全前提(不变): 该账号后付费未开启, 额度耗尽直接 402 拒绝而非计费
-    # (实测报文 401008 "free trial quota exhausted ... postpaid billing is not
-    # enabled")。所以整段用 None(不过期), 靠"用完即停"兜住 billing。
-    #
-    # 🔴 2026-07-30 晚, 按**控制台的服务 ID + 余量两列**核对了整张表(此前一直靠 402
-    # 反推, 得出了"额度没领"的错误结论)。判据只有控制台的「状态 + 余量」——
-    # `/v1/models` 的 status 只说模型在不在线, 与有没有额度是两件事。
-    #
-    # ⛔ 余额 0 / 已停止 —— 保留登记但**不得进任何 chain**(调它只会白烧一次请求,
-    # 然后把该 (account,model) 塞进 6h quota-skip 缓存):
-    ("tencent", "deepseek-v4-flash"): None,   # 控制台: 已停止, 余 0 / 1M
-    ("tencent", "glm-5.1"): None,             # 控制台: 已停止, 余 0 / 500k
-    ("tencent", "qwen3.5-flash"): None,       # 控制台: 已停止, 余 0 / 1M
-    #
-    # ✅ 2026-08-02 按腾讯官方的逐模型 thinking 参数重测餐饮 T3 五种契约:
-    # DeepSeek / GLM / MiniMax-M3 用 thinking.disabled，Qwen 用
-    # enable_thinking=false；四者均 5/5。之前没有翻译这些参数，导致 Qwen 20s
-    # 超时、其余模型把 500 token 烧在 reasoning_content 后返回空 content。
-    ("tencent", "deepseek-v4-pro-202606"): None,   # 5/5, 2.05-2.63s
-    ("tencent", "glm-5.2"): None,                  # 5/5, 2.54-3.53s
-    ("tencent", "qwen3.5-plus"): None,             # 5/5, 3.08-4.09s
-    ("tencent", "minimax-m3"): None,               # 5/5, 1.30-5.58s
-    #
-    # ⚠️ 只在放宽 max_tokens 后可用: TokenHub 忽略 enable_thinking=false, 500 token
-    # 全烧在 reasoning_content 上, content 返回空。见 _TOKENHUB_MIN_MAX_TOKENS。
-    ("tencent", "minimax-m2.7"): None,        # 余 908k
-    #
-    # ⚠️ 需要 temperature=1(TokenHub 的按模型采样约束), 见 _TOKENHUB_FORCED_TEMPERATURE。
-    ("tencent", "kimi-k2.6"): None,           # 余 393k
-    #
-    # ⛔ 2026-08-02 生产实测不得进 chain:
-    #   hy-mt2-pro              → 401008，且官方定位是翻译模型，不是通用语义模型
-    #   deepseek-v3.1-terminus  → 已从 /v1/models 消失并返回 401008
-    #   deepseek-v3.2           → pre-offline 且当前服务返回 401008
-    # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
+    # ── aliyun_c 08-13 到期 (优先榨干; _build_chain 会把它们排在最前) ──
+    ("aliyun_c", "qwen3-next-80b-a3b-instruct"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
+    ("aliyun_c", "glm-4.6"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3.5-plus-2026-02-15"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-max-2025-09-23"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-flash-2026-01-22"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-32b-instruct"): _d(2026, 8, 13),
+    ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-r1"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-r1-0528"): _d(2026, 8, 13),
+    ("aliyun_c", "MiniMax-M2.5"): _d(2026, 8, 13),
+
+    # ── 地板 (无到期日 → _expiry_of 返回 _FAR_FUTURE → 必然排最后) ──
+    # tencent 9 个条目实测只剩这 1 个: 7 个 401008 FREE_QUOTA_EXHAUSTED,
+    # kimi-k2.6 走参数层仍返回空内容。ark 两个全部 SetLimitExceeded → 条目
+    # 清空, 但 _provider_config 里的 ark 配置与代码路径保留, 待 owner 提供
+    # 完整可用清单后按判据加回(改数据即可, 不改代码)。
+    # zhipu/glm-4.6v 已因 429 余额不足死亡, 从 VL 地板剔除(见 Task 5 VL 豁免)。
+    ("tencent", "minimax-m2.7"): None,
     ("zhipu", "glm-4.5-air"): None,
-    ("zhipu", "glm-4.6v"): None,  # VL
-    # ── ark (Volcengine 火山方舟) — 每模型 50 万免费额度, 与 DashScope/TokenHub
-    # 完全独立。⛔ 计费前提是账号级的「安心体验模式」开启(超额自动暂停, 不计费),
-    # Steve 2026-07-30 确认开启; 关掉的话这一段必须全部退出 chain。详见
-    # _provider_config 里 "ark" 的注释。
-    #
-    # 2026-08-02 旧五个配置项均已被逐模型 SetLimitExceeded 暂停；账号、密钥和
-    # /models 正常。改登记同一安心体验账号里仍可调用、且真实餐饮 T3 5/5 的两个
-    # dated endpoint。Turbo 3.27-4.87s；Lite 2.66-5.20s，仅放更深 fallback。
-    ("ark", "doubao-seed-2-1-turbo-260628"): None,
-    ("ark", "doubao-seed-2-0-lite-260428"): None,
-    # ⛔ 实测**不登记**(别再加回来):
-    #   doubao-seed-2-0-pro-260215    AOV intent=null/confidence=0.3，仅 4/5
-    #   doubao-seed-2-0-mini-260428 / deepseek-v4-flash-260425 /
-    #   doubao-seed-2-1-pro-260628 / glm-5-2-260617 /
-    #   deepseek-v4-pro-260425        → 429 SetLimitExceeded，模型服务已暂停
-    #   glm-4-5-air / qwen3-32b / qwen3-14b / qwen2-5-72b / doubao-smart-router
-    #     → 全部 404 InvalidEndpointOrModel.NotFound。它们**在 /api/v3/models
-    #       列表里且没有 status=Shutdown**, 但本账号没开通 —— 那个接口列的是
-    #       平台全量模型, **不是账号的可调清单**。别拿它当开通凭据。
-    #   doubao-seed-evolving          控制台显示"未开通"
 }
 
 # Thinking-only models (cannot disable thinking → always reason → slow). Confined to
@@ -271,24 +189,15 @@ _THINKING_ONLY: frozenset = frozenset({
 # (tencent/zhipu 用完即停) so NO slot — including VL — goes fully dark under staleness.
 # Fail SAFE, not open.
 _MINIMAL_SAFE_SET: frozenset = frozenset({
-    ("aliyun_c", "qwen3.7-flash-2026-07-15"),  # 10/23 fast JSON/text
-    ("aliyun_b", "qwen3.7-flash-2026-07-15"),  # independent-account fallback
-    ("aliyun_c", "qwen3.7-flash"),
-    ("aliyun_b", "qwen3.7-flash"),
-    ("aliyun_c", "qwen3.7-max-2026-06-08"),   # 09/08 max
-    ("aliyun_c", "glm-5.2"),                  # 09/15 quality
-    ("aliyun_c", "qwen-plus-latest"),
-    ("aliyun_c", "qwen3.6-flash-2026-04-16"),  # 07-23 实测: 替换额度耗尽的 qwen3.5-flash
-    ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
-    # text floor. 2026-07-30: 原本钉的是 tencent/qwen3.5-flash, 而控制台显示它
-    # **已停止且余额 0** —— 也就是说"注册表过期时退守的最小安全集"里的非阿里云地板
-    # 指向一个死模型, fail-safe 会 fail 成没有地板。换成实测 5/5 通过的 hy-mt2-pro。
-    # 2026-08-09: hy-mt2-pro 从未进过 _SAFE_MODELS —— 它在这里等于不存在
-    # (_refuse_reason 的 stale 分支之后紧接着就查 _SAFE_MODELS 成员资格)。
-    # 换成当天实测可用的 tencent/minimax-m2.7 (经 _apply_slot_params 返回非空
-    # 内容, 6.7s)。闸: test_minimal_safe_set_is_subset_of_safe_models。
-    ("tencent", "minimax-m2.7"), ("zhipu", "glm-4.5-air"),
-    ("zhipu", "glm-4.6v"),                    # VL floor (never expires)
+    # 2026-08-09 重建: 旧集合 13 个条目里 8 个已实测死亡 —— fail-safe 退守的
+    # 目标本身是死的。只收「跑道最长 + 当天探针通过」的条目。
+    ("aliyun_a", "qwen3.8-max"), ("aliyun_b", "qwen3.8-max"),
+    ("aliyun_c", "qwen3.8-max"),                       # 11/01, 三账号各 100 万
+    ("aliyun_a", "deepseek-v4-flash-0731"),            # 10/31
+    ("aliyun_a", "qwen3.7-flash"),                     # 10/23 fast JSON/text
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"),          # 10/23
+    ("aliyun_c", "kimi-k2.7-code"),                    # 09/14
+    ("tencent", "minimax-m2.7"), ("zhipu", "glm-4.5-air"),   # 非 DashScope 文本地板
 })
 
 
