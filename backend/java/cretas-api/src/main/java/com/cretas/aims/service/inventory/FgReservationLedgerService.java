@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.entity.inventory.FgReservationLedger;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.repository.inventory.FgReservationLedgerRepository;
@@ -132,6 +133,40 @@ public class FgReservationLedgerService {
     public boolean hasActiveReservation(String salesOrderId, String batchId) {
         return getActiveReservedForOrderAndBatch(salesOrderId, batchId)
                 .compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    /**
+     * 返回一个工厂销售订单当前生效的精确预留批次；跨工厂或失去批次关联的行不会泄漏。
+     */
+    @Transactional(readOnly = true)
+    public List<SalesOrderReservationDTO> listActiveReservations(String factoryId, String salesOrderId) {
+        if (factoryId == null || salesOrderId == null) {
+            return List.of();
+        }
+        return ledgerRepository.findBySalesOrderIdAndStatus(
+                        salesOrderId, FgReservationLedger.Status.ACTIVE).stream()
+                .filter(row -> factoryId.equals(row.getFactoryId()))
+                .filter(row -> row.getReservedQty() != null
+                        && row.getReservedQty().compareTo(BigDecimal.ZERO) > 0)
+                .map(row -> finishedGoodsBatchRepository.findById(row.getFinishedGoodsBatchId())
+                        .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                        .map(batch -> SalesOrderReservationDTO.builder()
+                                .reservationId(row.getId())
+                                .salesOrderItemId(row.getSalesOrderItemId())
+                                .finishedGoodsBatchId(batch.getId())
+                                .batchNumber(batch.getBatchNumber())
+                                .productTypeId(row.getProductTypeId())
+                                .productName(batch.getProductName())
+                                .reservedQuantity(row.getReservedQty())
+                                .unit(batch.getUnit())
+                                .status(row.getStatus())
+                                .build())
+                        .orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .sorted(java.util.Comparator.comparing(
+                        SalesOrderReservationDTO::getBatchNumber,
+                        java.util.Comparator.nullsLast(String::compareTo)))
+                .toList();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

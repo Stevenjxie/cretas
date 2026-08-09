@@ -5,7 +5,9 @@ import com.cretas.aims.dto.approval.ExecutionContext;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
@@ -736,6 +738,18 @@ public class SalesServiceImpl implements SalesService {
         }
         org.hibernate.Hibernate.initialize(order.getSuppliedMaterials());
         return order;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SalesOrderReservationDTO> getActiveReservations(String factoryId, String orderId) {
+        getSalesOrderById(factoryId, orderId);
+        if (reservationLedgerService == null) {
+            throw new BusinessException(503, "成品预留服务暂不可用")
+                    .withCode("FG_RESERVATION_SERVICE_UNAVAILABLE")
+                    .withHint("请稍后刷新订单详情；不要改用普通库存代替客户预留库存");
+        }
+        return reservationLedgerService.listActiveReservations(factoryId, orderId);
     }
 
     @Override
@@ -3170,8 +3184,83 @@ public class SalesServiceImpl implements SalesService {
             }
         }
 
+        autoAllocatePrestockedReservations(factoryId, record);
+
         // 复用 shipDelivery 逻辑 — 含批次分配校验 + 扣库存 + 自动 AR
         return shipDelivery(factoryId, deliveryId, userId);
+    }
+
+    /**
+     * 客户已有成品库存已经在财审时精确预留；仓管只核对实发数量，不应返回销售模块再选批次。
+     * 推荐必须完整覆盖每一行后才写分配，任何不足都在扣库存前失败并由外层事务整体回滚。
+     */
+    private void autoAllocatePrestockedReservations(String factoryId, SalesDeliveryRecord record) {
+        if (record == null || record.getSalesOrderId() == null) {
+            return;
+        }
+        SalesOrder salesOrder = salesOrderRepository.findById(record.getSalesOrderId())
+                .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
+                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+        if (!factoryId.equals(salesOrder.getFactoryId())) {
+            throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
+                    .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
+        }
+        if (salesOrder.getCustomerStockFulfillmentMode()
+                != CustomerStockFulfillmentMode.PRESTOCKED) {
+            return;
+        }
+        if (batchAllocationService == null) {
+            throw new BusinessException(503, "客户预留批次分配服务暂不可用")
+                    .withCode("PRESTOCKED_BATCH_ALLOCATION_UNAVAILABLE")
+                    .withHint("请稍后重试；系统未扣减任何成品库存");
+        }
+
+        for (SalesDeliveryItem item : record.getItems()) {
+            String deliveryItemId = String.valueOf(item.getId());
+            if (batchAllocationService.isFullyAllocated(factoryId, deliveryItemId)) {
+                continue;
+            }
+            BigDecimal required = item.getDeliveredQuantity();
+            if (required == null || required.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "产品 " + item.getProductName() + " 的实发数量必须大于 0")
+                        .withCode("DELIVERY_ACTUAL_QUANTITY_INVALID")
+                        .withHint("请填写本次实际装车数量；系统未扣减任何成品库存");
+            }
+
+            List<Map<String, Object>> recommendations = batchAllocationService.recommendFifo(
+                    factoryId,
+                    deliveryItemId,
+                    item.getProductTypeId(),
+                    required,
+                    item.getUnit(),
+                    item.getSourceWarehouseCode());
+            BigDecimal recommendedTotal = recommendations.stream()
+                    .map(row -> row.get("recommendedQuantity"))
+                    .filter(Objects::nonNull)
+                    .map(value -> value instanceof BigDecimal decimal
+                            ? decimal : new BigDecimal(String.valueOf(value)))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (recommendedTotal.compareTo(required) != 0) {
+                throw new BusinessException(409, "产品 " + item.getProductName()
+                        + " 的客户预留库存不足：需 " + required + item.getUnit()
+                        + "，可匹配 " + recommendedTotal + item.getUnit())
+                        .withCode("PRESTOCKED_RESERVATION_INSUFFICIENT")
+                        .withHint("请核对销售订单预留数量，或把实发数量改为本次实际可发数量；系统未扣减任何库存")
+                        .withHintTarget("仓储管理 → 出货管理");
+            }
+
+            List<BatchAllocationDTO> allocations = recommendations.stream()
+                    .map(row -> {
+                        BatchAllocationDTO allocation = new BatchAllocationDTO();
+                        allocation.setFinishedGoodsBatchId(String.valueOf(row.get("batchId")));
+                        Object quantity = row.get("recommendedQuantity");
+                        allocation.setAllocatedQty(quantity instanceof BigDecimal decimal
+                                ? decimal : new BigDecimal(String.valueOf(quantity)));
+                        return allocation;
+                    })
+                    .toList();
+            batchAllocationService.allocateBatches(factoryId, deliveryItemId, allocations);
+        }
     }
 
     @Override

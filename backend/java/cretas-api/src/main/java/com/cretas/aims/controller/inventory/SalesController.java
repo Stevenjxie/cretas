@@ -10,6 +10,7 @@ import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.RepairSalesOrderItemSourceWarehouseRequest;
+import com.cretas.aims.dto.inventory.SalesOrderReservationDTO;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.dto.sales.AdjustPriceRequest;
 import com.cretas.aims.dto.sales.AdjustPriceResponse;
@@ -414,6 +415,15 @@ public class SalesController {
         return ApiResponse.success("查询成功", order);
     }
 
+    @GetMapping("/orders/{orderId}/reservations")
+    @Operation(summary = "销售订单当前生效的成品预留批次（只读）")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<List<SalesOrderReservationDTO>> getOrderReservations(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        return ApiResponse.success("查询成功", salesService.getActiveReservations(factoryId, orderId));
+    }
+
     @GetMapping("/orders/{orderId}/approval-progress")
     @Operation(summary = "销售订单 OA 审批进度（只读）")
     @RequirePermission({"sales:read_write", "sales:read"})
@@ -704,15 +714,15 @@ public class SalesController {
     }
 
     @PostMapping("/deliveries/{deliveryId}/ship")
-    @Operation(summary = "发货确认（扣减成品库存）")
+    @Operation(summary = "已停用：发货确认只能由仓库执行")
     @RequirePermission("sales:read_write")
     public ApiResponse<SalesDeliveryRecord> shipDelivery(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String deliveryId,
             @RequestHeader("Authorization") String authorization) {
-        Long userId = extractUserId(authorization);
-        SalesDeliveryRecord record = salesService.shipDelivery(factoryId, deliveryId, userId);
-        return ApiResponse.success("发货成功，成品库存已扣减", record);
+        throw new BusinessException(410, "销售侧直接发货入口已停用")
+                .withCode("SALES_DELIVERY_WAREHOUSE_ONLY")
+                .withHint("请前往仓储管理 → 出货管理，由仓管核对实发数量并确认出库");
     }
 
     @PostMapping("/deliveries/{deliveryId}/delivered")

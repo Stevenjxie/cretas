@@ -56,8 +56,7 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canViewLinkedPurchases = computed(() => permissionStore.canAccess('procurement'));
-// Issue #740 (六扇门 May10): 仓库角色才能 confirm 发货 (扣库存). 销售只看不动.
-const canWarehouseConfirm = computed(() => permissionStore.canWrite('warehouse'));
+const canAccessWarehouse = computed(() => permissionStore.canAccess('warehouse'));
 const orderId = computed(() => route.params.id as string);
 
 const loading = ref(false);
@@ -95,6 +94,26 @@ const isCustomerSuppliedOrder = computed(() =>
   order.value?.processingMode === 'TOLL_PROCESSING'
     && order.value?.materialSupplyMode === 'CUSTOMER_SUPPLIED',
 );
+const isPrestockedCustomerStock = computed(() =>
+  isCustomerSuppliedOrder.value
+    && order.value?.customerStockFulfillmentMode === 'PRESTOCKED',
+);
+const isOrderDrivenCustomerSuppliedOrder = computed(() =>
+  isCustomerSuppliedOrder.value && !isPrestockedCustomerStock.value,
+);
+type SalesOrderReservation = {
+  reservationId: string;
+  finishedGoodsBatchId: string;
+  batchNumber: string;
+  productTypeId: string;
+  productName: string;
+  reservedQuantity: number;
+  unit: string;
+  status: string;
+};
+const activeReservations = ref<SalesOrderReservation[]>([]);
+const reservationsLoading = ref(false);
+const reservationsFailed = ref(false);
 
 function customerMaterialProgress(row: CustomerSuppliedMaterialRequirement): string {
   const expected = Number(row.expectedQuantity || 0);
@@ -471,6 +490,12 @@ async function loadOrder() {
     const res = await get(`/${factoryId.value}/sales/orders/${orderId.value}`);
     if (res.success && res.data) {
       order.value = res.data;
+      if (res.data.customerStockFulfillmentMode === 'PRESTOCKED') {
+        await loadActiveReservations();
+      } else {
+        activeReservations.value = [];
+        reservationsFailed.value = false;
+      }
     } else {
       notFound.value = true;
       order.value = null;
@@ -484,6 +509,23 @@ async function loadOrder() {
     order.value = null;
   }
   finally { loading.value = false; }
+}
+
+async function loadActiveReservations() {
+  reservationsLoading.value = true;
+  reservationsFailed.value = false;
+  try {
+    const res = await get<SalesOrderReservation[]>(
+      `/${factoryId.value}/sales/orders/${orderId.value}/reservations`,
+    );
+    activeReservations.value = res.success && Array.isArray(res.data) ? res.data : [];
+    reservationsFailed.value = !res.success;
+  } catch {
+    activeReservations.value = [];
+    reservationsFailed.value = true;
+  } finally {
+    reservationsLoading.value = false;
+  }
 }
 
 async function loadApprovalProgress() {
@@ -882,20 +924,6 @@ async function handleCreateShipment() {
       await loadDeliveries();
     }
   } catch (e) { handleCatchError(e, '子发运单创建失败，请检查网络'); }
-  finally { submitting.value = false; }
-}
-
-async function handleShip(deliveryId: string) {
-  if (submitting.value) return;
-  try {
-    await ElMessageBox.confirm('确认发货？将扣减成品库存', '确认');
-  } catch { return; }
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/sales/deliveries/${deliveryId}/ship`);
-    if (res.success) { ElMessage.success('发货成功'); loadDeliveries(); loadOrder(); }
-    else { ElMessage.error(res.message || '发货失败，请重试'); }
-  } catch (e) { handleCatchError(e, '发货失败，请检查网络'); }
   finally { submitting.value = false; }
 }
 
@@ -1557,8 +1585,7 @@ async function handleQuickPayFull() {
               type="primary"
               @click="router.push(`/production/plans?salesOrderId=${orderId}`)"
             >查看生产计划</el-button>
-            <!-- Rule 2 (fool-proof-design): 与下方发货记录里"确认发货"(handleShip, 真正扣库存) 区分标签,
-                 避免点错静默无反应 —— 这个按钮只是打开"新建发货单"对话框. -->
+            <!-- 销售只创建发货任务；库存扣减固定由仓库出货管理确认。 -->
             <el-tooltip
               v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)"
               :content="deliveryAction.tooltip"
@@ -1574,7 +1601,7 @@ async function handleQuickPayFull() {
                 >{{ deliveryAction.label }}</el-button>
               </span>
             </el-tooltip>
-            <el-button v-if="isCustomerSuppliedOrder" type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
+            <el-button v-if="isOrderDrivenCustomerSuppliedOrder" type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
             <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
                  Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
             <el-button v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
@@ -1589,7 +1616,7 @@ async function handleQuickPayFull() {
               @click="router.push(`/sales/orders/${orderId}/profit`)"
             >产品级利润分析</el-button>
           </div>
-          <div class="header-right" v-else-if="order && isCustomerSuppliedOrder">
+          <div class="header-right" v-else-if="order && isOrderDrivenCustomerSuppliedOrder">
             <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
           </div>
         </div>
@@ -1639,7 +1666,47 @@ async function handleQuickPayFull() {
               <el-descriptions-item label="备注" :span="3">{{ order.remark || '-' }}</el-descriptions-item>
             </el-descriptions>
 
-            <section v-if="isCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带原料收货进度">
+            <section v-if="isPrestockedCustomerStock" class="customer-supplied-progress" aria-label="客户已有成品库存预留">
+              <div class="section-heading">
+                <div>
+                  <h3>客户已有成品库存</h3>
+                  <p>以下批次已精确预留给本销售订单；销售创建发货单后，由仓管核对实发数量并确认出库。</p>
+                </div>
+                <el-button
+                  v-if="canAccessWarehouse"
+                  type="warning"
+                  plain
+                  @click="router.push('/warehouse/shipments')"
+                >前往仓库确认出库</el-button>
+              </div>
+              <el-alert
+                v-if="reservationsFailed"
+                type="error"
+                :closable="false"
+                show-icon
+                title="预留批次加载失败，请刷新后再创建发货单。"
+              />
+              <el-table
+                v-else
+                v-loading="reservationsLoading"
+                :data="activeReservations"
+                border
+                empty-text="当前没有生效中的客户成品预留"
+              >
+                <el-table-column prop="productName" label="成品" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.productName || row.productTypeId }}</template>
+                </el-table-column>
+                <el-table-column prop="batchNumber" label="精确批次" min-width="220" show-overflow-tooltip />
+                <el-table-column label="已预留数量" width="170" align="right">
+                  <template #default="{ row }">{{ row.reservedQuantity }} {{ displayUnit(row.unit) }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="100" align="center">
+                  <template #default><el-tag type="success">已预留</el-tag></template>
+                </el-table-column>
+              </el-table>
+            </section>
+
+            <section v-if="isOrderDrivenCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带原料收货进度">
               <div class="section-heading">
                 <div>
                   <h3>客户自带原料需求</h3>
@@ -1990,27 +2057,22 @@ async function handleQuickPayFull() {
                     v-if="row.recordRole === 'MASTER' && !['SHIPPED','DELIVERED','CANCELLED'].includes(row.status) && canWrite"
                     type="primary" link size="small" @click="openShipmentDialog(row)"
                   >新建分批发运</el-button>
-                  <!-- 分配批次: 销售/仓库均可 (planning 阶段) -->
-                  <el-button v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWrite" type="primary" link size="small" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.id, row.deliveryNumber)">
+                  <!-- 普通订单可由销售预先分配批次；PRESTOCKED 在仓库确认时按订单预留自动匹配。 -->
+                  <el-button v-if="!isPrestockedCustomerStock && row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWrite" type="primary" link size="small" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.id, row.deliveryNumber)">
                     {{ allocationSummary[String(row.id)]?.complete ? '查看/修改批次' : (allocationSummary[String(row.id)]?.allocated ? '继续分配/修改批次' : '分配批次') }}
                   </el-button>
-                  <!--
-                    Issue #740: 发货确认 (扣库存) 需要 warehouse:read_write 权限.
-                    销售看到此按钮 disable + tooltip "请前往 仓储管理 → 出货管理 由仓库确认".
-                  -->
                   <el-tooltip
-                    v-if="['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && !canWarehouseConfirm"
-                    content="发货确认 (扣库存) 由仓库角色操作, 请前往: 仓储管理 → 出货管理"
+                    v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status)"
+                    content="库存扣减只能由仓管在 仓储管理 → 出货管理 核对后执行"
                     placement="top"
                   >
-                    <el-button type="warning" link size="small" disabled>确认发货</el-button>
-                  </el-tooltip>
-                  <el-tooltip
-                    v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWarehouseConfirm"
-                    :content="allocationSummary[String(row.id)]?.complete ? '' : '需先完整分配本次子发运数量'"
-                    :disabled="allocationSummary[String(row.id)]?.complete"
-                  >
-                    <span><el-button type="warning" link size="small" :disabled="submitting || !allocationSummary[String(row.id)]?.complete" @click="handleShip(row.id)">确认发货</el-button></span>
+                    <el-button
+                      type="warning"
+                      link
+                      size="small"
+                      :disabled="!canAccessWarehouse"
+                      @click="router.push('/warehouse/shipments')"
+                    >等待仓库确认</el-button>
                   </el-tooltip>
                   <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="handleDelivered(row.id)">签收</el-button>
                 </template>
