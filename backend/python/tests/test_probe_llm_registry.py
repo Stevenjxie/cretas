@@ -68,10 +68,12 @@ def test_aggregate_verdicts_ok_anywhere_wins():
 def test_main_returns_zero_when_only_expiring_soon(monkeypatch):
     """只有「expiring soon」条目时, main() 返回 0: 7 天内到期的提醒连续多天
     都会非空, 若也计入退出码 cron 告警会连续多天触发, 炸到没人再读。所以
-    只有「dead」(注册表说活、实测不可用)才翻转退出码。"""
+    只有「dead」(注册表说活、实测不可用)才翻转退出码。
+
+    生产注册表 _SAFE_MODELS 已包含大量 2026-08-13 到期的条目，距 2026-08-09 为 4 天，
+    故在该日期冻结时自动满足 soon 条件。"""
     from datetime import date
     from scripts import probe_llm_registry
-    from common import llm_router
 
     # 模拟 _run 返回全部 ok 的结果
     async def mock_run():
@@ -80,31 +82,20 @@ def test_main_returns_zero_when_only_expiring_soon(monkeypatch):
             ("account2", "model2"): ("ok", ""),
         }
 
-    # 模拟 _today 返回 2026-08-09, 使得某些条目在 7 天内到期
-    # 我们需要模拟一个条目到期于 2026-08-14 (5 天后)
+    # 模拟 _today 返回 2026-08-09; 真实 _SAFE_MODELS 中已有入在 2026-08-13 的条目(4 天)
     mock_today = date(2026, 8, 9)
 
     monkeypatch.setattr("scripts.probe_llm_registry._run", mock_run)
     monkeypatch.setattr("common.llm_router._today", lambda: mock_today)
 
-    # 同时需要模拟 _SAFE_MODELS 来制造 soon 条目
-    # 为了最小化: 至少创建一个 (account, model) 对, 其到期日在 7 天内
-    original_safe_models = llm_router._SAFE_MODELS.copy()
-    llm_router._SAFE_MODELS[("account3", "model3")] = date(2026, 8, 14)  # 5 天后
-    monkeypatch.setattr("common.llm_router._SAFE_MODELS", llm_router._SAFE_MODELS)
-
-    try:
-        result = probe_llm_registry.main()
-        assert result == 0, f"expected exit code 0 (only soon), got {result}"
-    finally:
-        llm_router._SAFE_MODELS = original_safe_models
+    result = probe_llm_registry.main()
+    assert result == 0, f"expected exit code 0 (only soon), got {result}"
 
 
 def test_main_returns_one_when_dead(monkeypatch):
     """「dead」条目(注册表说活、实测不可用)使 main() 返回 1。"""
     from datetime import date
     from scripts import probe_llm_registry
-    from common import llm_router
 
     # 模拟 _run 返回一个 dead 条目 (error/quota)
     async def mock_run():
@@ -118,13 +109,37 @@ def test_main_returns_one_when_dead(monkeypatch):
     monkeypatch.setattr("scripts.probe_llm_registry._run", mock_run)
     monkeypatch.setattr("common.llm_router._today", lambda: mock_today)
 
-    # 需要确保 _SAFE_MODELS 中有我们测试的条目
-    original_safe_models = llm_router._SAFE_MODELS.copy()
-    llm_router._SAFE_MODELS[("account1", "model1")] = None  # 无到期日
-    monkeypatch.setattr("common.llm_router._SAFE_MODELS", llm_router._SAFE_MODELS)
+    result = probe_llm_registry.main()
+    assert result == 1, f"expected exit code 1 (has dead), got {result}"
 
-    try:
-        result = probe_llm_registry.main()
-        assert result == 1, f"expected exit code 1 (has dead), got {result}"
-    finally:
-        llm_router._SAFE_MODELS = original_safe_models
+
+# Guard test: 生产安全注册表不应被测试污染
+_SAFE_MODELS_BASELINE = None
+
+
+def _snapshot_safe_models():
+    """Capture immutable snapshot of _SAFE_MODELS at module import time."""
+    from common import llm_router
+    global _SAFE_MODELS_BASELINE
+    if _SAFE_MODELS_BASELINE is None:
+        _SAFE_MODELS_BASELINE = {k: v for k, v in llm_router._SAFE_MODELS.items()}
+
+
+_snapshot_safe_models()
+
+
+def test_probe_tests_do_not_mutate_safe_models():
+    """探针测试不应修改生产安全注册表 _SAFE_MODELS —— 该表是多个独立测试的
+    共享契约(test_llm_router_registry.py 按冻结内容验证)。测试间的
+    顺序依赖 (order-dependent failure) 是隐患：某个测试污染 _SAFE_MODELS，
+    后续测试在不同运行顺序下得到不同结果。使用 monkeypatch.setattr 时,
+    如果对象本身被改动再被 monkeypatch, monkeypatch 的 snapshots + restore
+    会失败——快速结论: 绝不在原地修改共享数据结构。"""
+    from common import llm_router
+
+    current = {k: v for k, v in llm_router._SAFE_MODELS.items()}
+    assert current == _SAFE_MODELS_BASELINE, (
+        f"_SAFE_MODELS was mutated during test run. "
+        f"Extra: {set(current.keys()) - set(_SAFE_MODELS_BASELINE.keys())}; "
+        f"Missing: {set(_SAFE_MODELS_BASELINE.keys()) - set(current.keys())}"
+    )
