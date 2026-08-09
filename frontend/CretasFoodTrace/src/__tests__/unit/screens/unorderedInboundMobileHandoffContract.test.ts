@@ -37,6 +37,13 @@ describe('unordered inbound mobile handoff contract', () => {
     expect(receipt).toContain('确认入库并结束预告？');
   });
 
+  it('uses cross-platform dialogs instead of the no-op React Native Web Alert', () => {
+    expect(receipt).toContain('<Dialog');
+    expect(receipt).toContain('visible={confirmationVisible}');
+    expect(receipt).toContain('visible={Boolean(successMessage)}');
+    expect(receipt).not.toContain('Alert.alert');
+  });
+
   it('does not route unordered inbound through quality inspection', () => {
     expect(receipt).not.toContain("navigate('WHInspect");
     expect(receipt).toContain('不进入生产前质检');
