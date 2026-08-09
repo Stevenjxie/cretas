@@ -5,6 +5,11 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
+import org.mockito.InOrder;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -21,7 +26,10 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -170,15 +178,15 @@ class ProductionPlanRepinAuthorityTest {
     }
 
     /**
-     * 🔴 真机抓到的半成品: 计划指针搬了, 批次冻结的运行时实例没搬。
+     * 🔴 真机抓到的半成品 —— 现在由 repin 自己搬平, 所以这里断言它<b>不再</b>拦。
      *
-     * <p>2026-08-09 PLAN-1786184738975 实测 —— 计划从 154/v2/rev264 重钉到 158/v4/rev272 后,
-     * 批次 10721 的实例(id=71)仍是 154/v2, nodes_json 冻结着旧图。界面却说「已更新到当前
-     * 生效配方」。宁可不给这个入口, 也不给假的。
+     * <p>2026-08-09 实测: 计划从 154/v2/rev264 重钉到 158/v4/rev272 后, 批次 10721 的实例
+     * (id=71)仍是 154/v2、nodes_json 冻结着旧图。曾经的做法是「见实例就不给入口」;
+     * 现在改成重钉时连批次权威一起搬 + 丢掉陈旧运行时, 于是入口必须重新给出来。
      */
     @Test
-    @DisplayName("🔴 已物化出运行时实例 → 拒绝(报工读的是批次冻结的旧图, 只改计划指针是骗人的)")
-    void rejectsWhenWorkflowInstanceAlreadyCompiled() throws Exception {
+    @DisplayName("已物化出运行时实例 → 不再拦(改由重钉自己搬批次权威 + 丢陈旧运行时)")
+    void materializedInstanceNoLongerBlocksRepin() throws Exception {
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
         ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
         when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of());
@@ -196,10 +204,77 @@ class ProductionPlanRepinAuthorityTest {
         inject(service, "productionBatchRepository", batchRepo);
         inject(service, "productionWorkflowInstanceRepository", instanceRepo);
 
-        assertThat(service.repinBlockedReason(FACTORY, PLAN_ID, false, () -> false))
-                .isEqualTo(ProductionPlanServiceImpl.REPIN_BLOCKED_MATERIALIZED);
+        assertThat(service.repinBlockedReason(FACTORY, PLAN_ID, false, () -> false)).isNull();
     }
 
+    /**
+     * 丢弃顺序必须是 端口 → 任务 → 实例。反过来会撞 fk_wtp_task_owner / fk_wpt_workflow_instance_owner
+     * (三条外键全是 NO ACTION, 不级联)。
+     */
+    @Test
+    @DisplayName("丢弃陈旧运行时: 端口 → 任务 → 实例, 一个都不能漏")
+    void dropsPortsThenTasksThenInstance() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductionWorkflowInstance instance = mock(ProductionWorkflowInstance.class);
+        when(instance.getId()).thenReturn(71L);
+        ProductionWorkflowInstanceRepository instanceRepo =
+                mock(ProductionWorkflowInstanceRepository.class);
+        when(instanceRepo.findByFactoryIdAndProductionBatchId(FACTORY, 10721L))
+                .thenReturn(Optional.of(instance));
+        WorkProcessTaskRepository taskRepo = mock(WorkProcessTaskRepository.class);
+        WorkflowTaskPortRepository portRepo = mock(WorkflowTaskPortRepository.class);
+        inject(service, "productionWorkflowInstanceRepository", instanceRepo);
+        inject(service, "repinWorkProcessTaskRepository", taskRepo);
+        inject(service, "repinWorkflowTaskPortRepository", portRepo);
+        inject(service, "entityManager", entityManagerReturning(0L));
+
+        service.dropCompiledRuntime(FACTORY, 10721L);
+
+        InOrder order = inOrder(portRepo, taskRepo, instanceRepo);
+        order.verify(portRepo).deleteAll(any());
+        order.verify(taskRepo).deleteAll(any());
+        order.verify(instanceRepo).delete(instance);
+    }
+
+    /**
+     * 🔴 无外键的引用删不着也拦不住 —— 有任何一条就 fail closed。
+     *
+     * <p>production_reports / semi_finished_inventory / process_checkin_records 用普通列指向任务,
+     * 数据库不会替我们挡; 真删下去就是一堆指向不存在任务的孤儿行。
+     */
+    @Test
+    @DisplayName("🔴 任务已被无外键的列引用 → 拒绝丢弃(不留孤儿)")
+    void refusesToDropWhenTasksAreSoftReferenced() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductionWorkflowInstance instance = mock(ProductionWorkflowInstance.class);
+        when(instance.getId()).thenReturn(71L);
+        ProductionWorkflowInstanceRepository instanceRepo =
+                mock(ProductionWorkflowInstanceRepository.class);
+        when(instanceRepo.findByFactoryIdAndProductionBatchId(FACTORY, 10721L))
+                .thenReturn(Optional.of(instance));
+        WorkProcessTaskRepository taskRepo = mock(WorkProcessTaskRepository.class);
+        inject(service, "productionWorkflowInstanceRepository", instanceRepo);
+        inject(service, "repinWorkProcessTaskRepository", taskRepo);
+        inject(service, "entityManager", entityManagerReturning(1L));
+
+        Throwable thrown = catchThrowable(() -> service.dropCompiledRuntime(FACTORY, 10721L));
+
+        assertThat(thrown).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) thrown).getErrorCode())
+                .isEqualTo("PRODUCTION_PLAN_TASKS_REFERENCED");
+        verifyNoInteractions(taskRepo);
+    }
+
+    private EntityManager entityManagerReturning(long softReferences) {
+        EntityManager em = mock(EntityManager.class);
+        Query query = mock(Query.class);
+        when(em.createNativeQuery(any(String.class))).thenReturn(query);
+        when(query.setParameter(any(String.class), any())).thenReturn(query);
+        when(query.getSingleResult()).thenReturn(softReferences);
+        return em;
+    }
     @Test
     @DisplayName("干净计划 → 菜单判据放行(阴性对照: 上一条不是因为恒返回原因才绿)")
     void menuPredicateAllowsCleanPlan() throws Exception {

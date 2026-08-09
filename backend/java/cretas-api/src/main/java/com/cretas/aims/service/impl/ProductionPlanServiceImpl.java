@@ -99,6 +99,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository
             productionWorkflowInstanceRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository
+            repinWorkProcessTaskRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.WorkflowTaskPortRepository
+            repinWorkflowTaskPortRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -466,15 +474,128 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 与新建计划走**同一个** applyPlanUnitAuthority —— 不另写一套赋值,
         // 否则两处口径迟早分叉(本仓最常见的缺陷形态)。
         applyPlanUnitAuthority(plan, authority);
-        return productionPlanRepository.save(plan);
+        ProductionPlan saved = productionPlanRepository.save(plan);
+        // 只改计划指针是骗人的: 批次自己存了一份权威(DB 触发器**只在 INSERT 时**从计划复制),
+        //    报工读的运行时实例又是按批次那份编译并冻结的。三样一起搬, 否则界面说换了、
+        //    操作工报的还是旧工艺(2026-08-09 真机实测 PLAN-1786184738975)。
+        repinPlanBatches(factoryId, saved);
+        return saved;
+    }
+
+    /**
+     * 把计划的新权威搬到它名下的批次, 并丢掉据旧权威编译的运行时产物让它重编译。
+     *
+     * <p>调用前必须已经过 {@link #requirePlanNotStarted} —— 这里删的是编译产物
+     * (实例/任务/端口), 只有一克料没动过的计划才允许。
+     */
+    private void repinPlanBatches(String factoryId, ProductionPlan plan) {
+        if (productionBatchRepository == null) {
+            return;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+        if (batches == null || batches.isEmpty()) {
+            return;
+        }
+        for (ProductionBatch batch : batches) {
+            if (batch.getId() == null) {
+                continue;
+            }
+            dropCompiledRuntime(factoryId, batch.getId());
+            copyPlanAuthorityToBatch(factoryId, plan.getId(), batch.getId());
+        }
+    }
+
+    /**
+     * 批次那几列在实体上是 {@code insertable=false, updatable=false}(归 DB 触发器所有),
+     * 而触发器只挂 BEFORE INSERT —— 所以重钉只能走原生 UPDATE, 逐列照抄触发器 WORKFLOW 分支。
+     */
+    private void copyPlanAuthorityToBatch(String factoryId, String planId, Long batchId) {
+        entityManager.createNativeQuery("""
+                UPDATE production_batches b
+                   SET workflow_selection_mode = p.workflow_selection_mode,
+                       selected_workflow_id = p.selected_workflow_id,
+                       selected_workflow_version = p.selected_workflow_version,
+                       selected_workflow_revision_id = p.selected_workflow_revision_id,
+                       selected_workflow_revision_hash = p.selected_workflow_revision_hash,
+                       selected_bom_family_id = p.selected_bom_family_id,
+                       selected_bom_recipe_ids_by_product =
+                           COALESCE(p.selected_bom_recipe_ids_by_product, '{}'::jsonb),
+                       selected_bom_versions_by_product =
+                           COALESCE(p.selected_bom_versions_by_product, '{}'::jsonb),
+                       workflow_output_units_by_product =
+                           COALESCE(p.workflow_output_units_by_product, '{}'::jsonb),
+                       target_finished_good_ids =
+                           COALESCE(p.target_finished_good_ids, '[]'::jsonb)
+                  FROM production_plans p
+                 WHERE b.id = :batchId
+                   AND b.factory_id = :factoryId
+                   AND p.id = :planId
+                   AND p.factory_id = :factoryId
+                """)
+                .setParameter("batchId", batchId)
+                .setParameter("planId", planId)
+                .setParameter("factoryId", factoryId)
+                .executeUpdate();
+    }
+
+    /**
+     * 丢掉按旧权威编译的运行时(端口 → 任务 → 实例), 让下次 materializeIfActive 重新编译。
+     *
+     * <p>外键只有三条且全在这个三元组内部(ports→tasks / ports→instance / tasks→instance),
+     * 但另有几张表用<b>无外键</b>的列指向任务 —— 那种引用删的时候一声不吭, 留下孤儿。
+     * 有任何一条就 fail closed 不删。
+     */
+    void dropCompiledRuntime(String factoryId, Long batchId) {   // 包内可见: 供闸测直接调
+        if (productionWorkflowInstanceRepository == null) {
+            return;
+        }
+        var instance = productionWorkflowInstanceRepository
+                .findByFactoryIdAndProductionBatchId(factoryId, batchId).orElse(null);
+        if (instance == null) {
+            return;
+        }
+        requireNoSoftReferencesToTasks(instance.getId());
+        if (repinWorkflowTaskPortRepository != null) {
+            repinWorkflowTaskPortRepository.deleteAll(repinWorkflowTaskPortRepository
+                    .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId()));
+        }
+        if (repinWorkProcessTaskRepository != null) {
+            repinWorkProcessTaskRepository.deleteAll(repinWorkProcessTaskRepository
+                    .findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
+                            factoryId, instance.getId()));
+        }
+        productionWorkflowInstanceRepository.delete(instance);
+        entityManager.flush();
+        log.info("重钉配方: 已丢弃陈旧运行时实例 factoryId={}, batchId={}, instanceId={}",
+                factoryId, batchId, instance.getId());
+    }
+
+    private void requireNoSoftReferencesToTasks(Long instanceId) {
+        Number referencing = (Number) entityManager.createNativeQuery("""
+                SELECT (SELECT COUNT(*) FROM production_reports r
+                         WHERE r.work_process_task_id IN (
+                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                     + (SELECT COUNT(*) FROM semi_finished_inventory s
+                         WHERE s.source_work_process_task_id IN (
+                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                     + (SELECT COUNT(*) FROM process_checkin_records c
+                         WHERE c.process_task_id IN (
+                               SELECT id FROM work_process_tasks WHERE workflow_instance_id = :iid))
+                """)
+                .setParameter("iid", instanceId)
+                .getSingleResult();
+        if (referencing != null && referencing.longValue() > 0) {
+            throw new BusinessException(409, "该计划的报工任务已被引用，不能更换配方版本")
+                    .withCode("PRODUCTION_PLAN_TASKS_REFERENCED")
+                    .withHint("已有报工/入库/打卡记录挂在这些任务上；如需按新配方生产请新建计划")
+                    .withSeverity("warning");
+        }
     }
 
     static final String REPIN_BLOCKED_STARTED =
             "已投料/已报工，保持原配方快照；如需按新配方生产请新建计划";
     static final String REPIN_BLOCKED_LOCKED = "计划已锁定";
-
-    static final String REPIN_BLOCKED_MATERIALIZED =
-            "已生成生产批次，报工按批次冻结的工艺图走；如需按新配方生产请新建计划";
 
     /**
      * 「能不能更新到当前配方」的<b>唯一</b>判据 —— 菜单灰显与端点拒绝都走这里。
@@ -494,29 +615,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (hasActivity != null && hasActivity.getAsBoolean()) {
             return REPIN_BLOCKED_STARTED;
         }
-        if (hasCompiledWorkflowInstance(factoryId, planId)) {
-            return REPIN_BLOCKED_MATERIALIZED;
-        }
         return locked ? REPIN_BLOCKED_LOCKED : null;
-    }
-
-    /**
-     * 批次已经物化出运行时实例 → 只改计划指针是<b>骗人的</b>。
-     *
-     * <p>真机实测(2026-08-09, PLAN-1786184738975): 把计划指针从 154/v2/rev264 重钉到
-     * 158/v4/rev272 之后, 该计划批次 10721 的 production_workflow_instances(id=71) 仍然是
-     * 154/v2, nodes_json 还冻结着旧图(没有副产、没有调料绑定) —— 操作工报的还是旧工艺,
-     * 而界面已经告诉他「已更新到当前生效配方」。宁可不给, 不给假的。
-     */
-    private boolean hasCompiledWorkflowInstance(String factoryId, String planId) {
-        if (productionWorkflowInstanceRepository == null || productionBatchRepository == null) {
-            return false;
-        }
-        List<ProductionBatch> batches =
-                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
-        return batches != null && batches.stream().anyMatch(batch -> batch.getId() != null
-                && productionWorkflowInstanceRepository
-                        .findByFactoryIdAndProductionBatchId(factoryId, batch.getId()).isPresent());
     }
 
     /** 三信号判据: rowStatus / submissionStatus / interimSettledAt 任一命中即视为已开工。 */
@@ -543,9 +642,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (REPIN_BLOCKED_LOCKED.equals(reason)) {
             message = "该计划已锁定，不能更换配方版本";
             code = "PRODUCTION_PLAN_LOCKED";
-        } else if (REPIN_BLOCKED_MATERIALIZED.equals(reason)) {
-            message = "该计划已生成生产批次，不能更换配方版本";
-            code = "PRODUCTION_PLAN_WORKFLOW_MATERIALIZED";
         } else {
             message = "该计划已经开工，不能更换配方版本";
             code = "PRODUCTION_PLAN_ALREADY_STARTED";
