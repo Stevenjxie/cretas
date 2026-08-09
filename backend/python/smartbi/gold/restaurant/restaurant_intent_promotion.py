@@ -311,6 +311,13 @@ async def aggregate_candidates(
            AND (agg_meta->>'tier') = 'llm'
            AND (agg_meta->>'served') = 'true'
            AND (agg_meta->>'contract_pass') = 'true'
+           -- 🔴 2026-08-09 新增: 判定模型说「答到了」才有资格被学。
+           --    在此之前, 一个答非所问的计划(客单价问句 -> 空维度营收概览,
+           --    served=true / contract_pass=true / confidence=0.95)完全满足
+           --    上面三条, 有资格晋升成零 token 路由 —— 把一次理解错误
+           --    固化成永久的、稳定的、自信的错答案。
+           -- ⛔ 用 = 'true' 而不是 <> 'false': 判不了(null)也不学。
+           AND (agg_meta->>'answered_judgment') = 'true'
          GROUP BY trim(query)
         HAVING MAX(COALESCE((agg_meta->>'confidence')::float, 0)) >= $1
             OR COUNT(*) >= $2
@@ -394,9 +401,28 @@ async def aggregate_misses(
                array_agg(DISTINCT agg_meta->>'miss_reason')         AS reasons,
                array_agg(DISTINCT agg_meta->>'spec_intent')
                    FILTER (WHERE agg_meta->>'spec_intent' IS NOT NULL) AS spec_intents,
-               MAX(created_at)                                      AS last_seen
+               MAX(created_at)                                      AS last_seen,
+               array_agg(DISTINCT agg_meta->>'answered_missing')
+                   FILTER (WHERE agg_meta->>'answered_missing' IS NOT NULL) AS answered_missing,
+               array_agg(DISTINCT template_code)                    AS codes
           FROM smart_bi_llm_fallback_log
+         -- 🔴 2026-08-09 补两个来源。此前只收「门口没接住」这一种,
+         --    而「没做到」实际有三种, 另两种各自掉在别处:
+         --
+         --    ① resolver 收下了但算不出(served=false, template_code 是该
+         --       resolver 的码而不是 MISS 哨兵) —— 晋升侧因 served='true'
+         --       排除它, miss 侧因 template_code<>'MISS' 也排除它,
+         --       于是掉进两个谓词之间的空洞。实测「哪个菜最赚钱」问了两次,
+         --       两条日志都在, --misses 报告里 0 条。
+         --
+         --    ② 算出来了但答非所问(served=true, 判定模型说没答到) ——
+         --       系统认为自己成功了, 连「我没做到」都不知道。
+         --
+         -- ⛔ 判定为 null(判不了)**不收**: 供应商池一干, 每条回答都会涌进
+         --    清单, 而清单是决定「接下来补哪个能力」的唯一依据。
          WHERE template_code = 'RESTAURANT_OPS_MISS'
+            OR (agg_meta->>'served') = 'false'
+            OR (agg_meta->>'answered_judgment') = 'false'
          GROUP BY trim(query)
          ORDER BY COUNT(*) DESC, MAX(created_at) DESC
          LIMIT $1
@@ -416,6 +442,10 @@ async def aggregate_misses(
             "spec_intents": sorted(x for x in (r["spec_intents"] or []) if x),
             "last_seen": r["last_seen"],
             "family": classify_question_family((r["norm_query"] or "").strip()),
+            # 判定模型说清了「缺什么」—— 待办清单按它分组, 才知道要补哪个能力。
+            "answered_missing": sorted(
+                x for x in (r["answered_missing"] or []) if x),
+            "codes": sorted(x for x in (r["codes"] or []) if x),
         }
         for r in rows
         if (r["norm_query"] or "").strip()

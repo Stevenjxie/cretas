@@ -2738,6 +2738,22 @@ def _semantic_plan_cache_key(factory_id: str, query: str) -> Tuple[str, str, str
     return (factory_id, _normalize_exact_phrase(query), version)
 
 
+def _semantic_plan_cache_evict(factory_id: str, query: str) -> bool:
+    """把这句话的计划从缓存里踢掉。判定说「没答到」时调。
+
+    🔴 存在的理由: 缓存的准入判据只有两条(能 JSON 往返 / 非澄清态), 没有
+       「答到了没有」。「客单价最高的店」那个错计划因此被存了下来, 之后 6 小时内
+       每次问同一句话都零成本、稳定地重放同一个错答案 —— 比偶尔出错更难发现,
+       因为它每次都一样, 看起来像「系统就是这么设计的」。
+
+    ⚠️ 判定跑在回答之后, 所以这次逐出救不了**当次**回答(用户已经拿到了),
+       它救的是**接下来 6 小时**。⛔ 不要为了救当次而把判定挪到回答之前 ——
+       那会给每次提问都加上一次模型调用的延迟, 且实测判定有误杀。
+    """
+    key = _semantic_plan_cache_key(factory_id, query)
+    return _SEMANTIC_PLAN_CACHE.pop(key, None) is not None
+
+
 def _semantic_plan_cache_get(
     factory_id: str,
     query: str,
@@ -6800,6 +6816,49 @@ async def _parse_continuation(
 
 # ─── Flywheel v1: capture + candidate listing (spec section 5) ────────────
 
+#: 已经判过的 (租户, 整句归一化, plan_hash)。判定的是「这个计划对这句话答没答到」,
+#: 而计划固定时答案形状就固定 —— 同一组合判第二次是纯浪费。
+#: ⚠️ 进程内缓存, 重启即清: 重判一次的代价只是一次模型调用, 而跨进程共享要引入
+#:    一张表 + 它自己的失效问题, 不值得。
+_JUDGED_PLANS: "OrderedDict[Tuple[str, str, str], bool]" = OrderedDict()
+_JUDGED_PLANS_MAX = 2000
+
+
+def _judge_key(factory_id: str, query: str, spec) -> Tuple[str, str, str]:
+    """判定去重的身份 = (租户, 整句归一化, 计划指纹)。
+
+    ⛔ 与计划缓存用同一个归一化函数 —— 两处用不同的归一化, 会出现
+       「缓存认为是同一句、判定认为是两句」的错位, 那时去重就白做了。
+    """
+    return (factory_id, _normalize_exact_phrase(query), getattr(spec, "plan_hash", "") or "")
+
+
+def _should_judge(spec, served: bool, answer: str, key=None) -> bool:
+    """要不要为这次回答花一次判定调用。
+
+    ⛔ 判定的目的是决定「学不学」, 所以只在**可能被学**或**可能已经学错**的
+       情况下才判:
+       · 走大模型的(tier=llm)  —— 它是晋升候选的来源
+       · 命中缓存/晋升路由的   —— 它**已经**被学了, 如果学错了要能发现
+       澄清态不判(它没有给出结论, 没什么可答错的), 空答案不判。
+
+    ⚠️ 同一 (租户, 句子, 计划) 只判一次 —— 计划固定则答案形状固定,
+       每次缓存命中都判一遍等于把「零 token 快路径」变成「每次一次模型调用」,
+       那会把这个改动做成净负收益。
+    """
+    if not answer or not answer.strip():
+        return False
+    if getattr(spec, "clarification_needed", False):
+        return False
+    if not served:
+        # 没端出去的(resolver 拒绝/契约不过)本来就是失败, 不必再花钱判 ——
+        # 它靠 served=false 直接进待办清单。
+        return False
+    if key is not None and key in _JUDGED_PLANS:
+        return False
+    return True
+
+
 async def log_intent_capture(
     pool,
     spec: RestaurantQuerySpec,
@@ -6852,6 +6911,54 @@ async def log_intent_capture(
         }
         if source:
             agg_meta["source"] = source
+
+        # ── 判定：这个回答答的是不是所问 ────────────────────────────────
+        #
+        # 🔴 2026-08-09 之前这里缺一整块：链路上没有任何一处比对「问的是什么」
+        #    与「答的是什么」。答案契约(_contract.validate)比对的是
+        #    **规划层记下来的要求**, 规划层一旦漏记, 契约就是瞎的 ——
+        #    「客单价最高的店」被编译成空维度的 SALES_SUMMARY, 端出一份营收概览,
+        #    契约照样判通过, 然后这个错计划被写进缓存永久重放。
+        #
+        # ⚠️ 位置：本函数整个跑在**回答已经发出之后**(调用方一律
+        #    `asyncio.create_task(log_intent_capture(...))`)，所以这次模型调用
+        #    对用户是零延迟。⛔ 不要把它挪到回答之前。
+        #
+        # ⚠️ 判定结果**只写日志**, 由「学不学」的两个消费者(计划缓存 / 晋升候选)
+        #    去读。⛔ 绝不用它拦回答 —— 实测 6 个样本有 1 个误杀,
+        #    拦掉好答案的代价由用户承担, 而不学的代价只是下次多花一次模型调用。
+        judged: Optional[bool] = None
+        judge_missing = ""
+        judge_key = _judge_key(factory_id, query, spec)
+        if _should_judge(spec, served, answer, key=judge_key):
+            from smartbi.gold.restaurant.answer_addresses_query import (
+                judge_answer_addresses_query,
+            )
+            judged, judge_missing = await judge_answer_addresses_query(query, answer)
+            # ⚠️ 只记住「判出结果」的; 判不了(None)不记 —— 否则供应商池干掉的
+            #    那几分钟会把一批组合永久标成「判过了」, 之后再也不判。
+            if judged is not None:
+                _JUDGED_PLANS[judge_key] = judged
+            if judged is False:
+                # ⛔ 不只是「不再存」, 而是把已经存进去的踢掉 —— 缓存写在
+                #    回答那一刻就完成了, 判定晚一步, 不主动逐出就等于让这个
+                #    错计划继续重放满 6 小时。
+                if _semantic_plan_cache_evict(factory_id, query):
+                    logger.warning(
+                        "[restaurant-intent] 判定「没答到」, 已逐出计划缓存: "
+                        "factory=%s query=%.30s missing=%.60s",
+                        factory_id, query, judge_missing)
+                while len(_JUDGED_PLANS) > _JUDGED_PLANS_MAX:
+                    _JUDGED_PLANS.popitem(last=False)
+        elif judge_key in _JUDGED_PLANS:
+            # 判过的组合直接复用结论 —— 计划固定则答案形状固定。
+            judged = _JUDGED_PLANS[judge_key]
+        # None = 判不了(模型不可用/输出不可解析)。⛔ 不能写成 false ——
+        # 「判不了」不该进待办清单, 否则供应商池一干, 清单就被噪音淹掉。
+        agg_meta["answered_judgment"] = judged
+        if judged is False and judge_missing:
+            agg_meta["answered_missing"] = judge_missing
+
         return await log_template_hit(
             pool, query, factory_id, None,
             spec.intent or "RESTAURANT_OPS_CLARIFICATION",
