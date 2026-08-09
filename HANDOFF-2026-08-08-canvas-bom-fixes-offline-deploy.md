@@ -235,3 +235,16 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 | LEGACY(非 Workflow)模式的计划 | ❌ 未测 |
 
 回归: `*ProductionPlan*,*WorkProcessTask*,*WorkflowRuntime*,*ProductProcessWorkflow*` 共 479 项, **新增失败 0**(基线 469 项同样 13 个 error, 逐条同名 —— 既有问题, 与本轮无关)。
+
+#### E2E 收尾: 重钉后的计划**正式报工**已走完(10:55)
+
+| 步骤 | 证据 |
+|---|---|
+| 提交按钮为何灰 | 按钮 `title` 自己说清楚了:「"实际产出"至少选择 1 项，当前尚未选择」—— 产出明细的「选用」勾选列没勾。勾上三项即解锁(防呆 Rule 1 在这条路上是生效的) |
+| 确认框 | 「库存扣减：拓扑原料R4 100kg / 产出入库：成品C 8盒；成品D 4盒；**验收-副产-肥油 3kg**」|
+| `process_sheet_rows` | 3 行全 `submission_status=SUBMITTED`: `PB-PLAN-1786184738975-B0301E17-72657` / `CLK-B-20260809-55558` / **`CLK-SEMI-778844c5-RMT_1785`**(副产) |
+| 副产库存 | `semi_finished_inventory`: produced 3.00 / available 3.00 / `AVAILABLE` |
+| 成品批次 | `PB-PLAN-…-72657` 8.00 box `IN_PROGRESS` |
+| **能力位随之翻转** | 报工前 `canRepinAuthority=true` → 报工后 **false**「已投料/已报工…」—— 三信号判据在真实状态变化上是对的, 不是快照巧合 |
+
+→ 上一节列的四项里, 「重钉后按正式报工提交」**已闭环**。仍未验: 多批次计划 / 孤儿守卫真被触发 / LEGACY 模式。
