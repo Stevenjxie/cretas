@@ -84,14 +84,24 @@
 #        smartbi/gold/tests/test_review_connected_contract.py`
 #        —— 改前 41 failed / 406 passed, 改后 447 passed。
 
-# ── ③ 断言失败, 需逐个 triage (6 个) ─────────────────────────────────────────
-# 这一组最值得先看 —— 断言失败意味着「测试说的和代码做的不一致」, 可能是过期测试,
-# 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
-tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
-tests/test_store_kpi_dashboard.py                                        # 'skipped' != 'ok'
+# ── ③ 断言失败 —— ✅ 已清空 (2026-08-10) ────────────────────────────────────
+# 曾有 6 个。清账过程见上方两批注释。最后两条:
+#   · tests/test_smartbi_api.py —— docstring 第一行就写着「E2E Tests」, fixture 是
+#     指向活服务的 httpx.AsyncClient。python-gate.yml 用 `-k "not e2e"` 筛 E2E, 但
+#     `-k` 匹配名字与 marker, 而本文件模块名/类名/用例名里一个 "e2e" 都没有 → 从来
+#     没被筛掉。补 `pytest.mark.e2e`。
+#     判据: **「靠名字筛」的机制, 要么给被筛对象一个显式 marker, 要么它迟早漏掉。**
+#   · tests/test_store_kpi_dashboard.py —— 随 ① 组的可达性闸一起自动好了(它的失败
+#     真因也是连不上真库, 而不是断言错)。
 
-# ── ④ 缺可选依赖 pyarrow (1 个) ──────────────────────────────────────────────
-# `ImportError: pyarrow is required for converting a pandas dataframe to Polars`。
-# 最便宜的解法是给 workflow 的 pip 装一行 pyarrow; 没做是因为要先确认生产环境
-# 是否也依赖它 —— 若生产不装 pyarrow, 那这条代码路径在线上本来就是坏的, 那是另一个问题。
-smartbi/services/materialized_analytics/templates/test_reviews_sentiment_live.py
+# ── ④ 缺可选依赖 pyarrow —— ✅ 已清空 (2026-08-10) ──────────────────────────
+# `pl.from_pandas` 需要 pyarrow。按台账原话「先确认生产环境是否也依赖它」查了:
+#   prod venv 实测 polars 1.43.0 / pandas 1.5.3 / **pyarrow 缺席**, requirements
+#   也只声明 polars。而全仓 grep `from_pandas` / `to_polars`, **非测试代码里一次
+#   都没出现** —— 生产只在原生 polars 上工作, pandas→polars 只存在于本用例读 Excel
+#   夹具的那一步。
+# 所以正解是 `pytest.importorskip("pyarrow")`(测试专属依赖缺席 → 跳过), 而不是给
+# 生产装一个它不需要的包。
+
+# ⛔ 清单为空 —— 门禁现在守着全部文件。往这里加一条之前, 先把上面四组的判据读一遍:
+#    半数以上的「失败」最后查出来是**测试自己过期或守卫失效**, 不是代码坏了。
