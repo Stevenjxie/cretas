@@ -151,6 +151,15 @@ def test_scope_prompt_distinguishes_depth_and_business_line():
 def test_only_production_chain_questions_force_the_current_sop_source():
     assert _uses_current_production_sop("多个原料连接到工序时怎么报工")
     assert _uses_current_production_sop("Workflow 的成品单位为什么是盒")
+    assert _uses_current_production_sop(
+        "工厂没有分段字典时，物料类别和新建料号分别怎么保存？"
+    )
+    assert _uses_current_production_sop(
+        "没有 L1/L2/L3 字典时，新建物料的编码由谁填写？"
+    )
+    assert _uses_current_production_sop(
+        "无分类码的类别应该怎样显示？编辑已有物料能不能改料号？"
+    )
     assert not _uses_current_production_sop("登录页忘记密码怎么办")
     assert not _uses_current_production_sop("设备保养入口在哪里")
 
