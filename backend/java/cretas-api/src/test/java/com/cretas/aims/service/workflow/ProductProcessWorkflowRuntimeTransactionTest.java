@@ -75,6 +75,8 @@ class ProductProcessWorkflowRuntimeTransactionTest {
     @MockBean private ProductTypeRepository productTypeRepository;
     @MockBean private ProductProcessWorkflowActivationRepository activationRepository;
     @MockBean private ProductProcessWorkflowRepository workflowRepository;
+    @MockBean private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository
+            revisionRepository;
     @MockBean private com.cretas.aims.repository.unit.ProductUnitConversionRepository conversionRepository;
     @MockBean private com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator unitValidator;
     @MockBean private com.cretas.aims.service.unit.UnitContractService unitContractService;
@@ -130,6 +132,31 @@ class ProductProcessWorkflowRuntimeTransactionTest {
         batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         batch.setSelectedWorkflowId(7701L);
         batch.setSelectedWorkflowVersion(4);
+        // 🔴 「画布即 BOM」之后, 批次必须带**完整**权威(精确 revision + BOM 家族/配方/版本/产出单位),
+        //    否则 materializeIfActive 直接 WORKFLOW_BATCH_AUTHORITY_INCOMPLETE。
+        //    本测真正要验的是端口选择组能否穿过真 JPA 往返, 权威只是入场券 —— 补齐即可。
+        batch.setSelectedWorkflowRevisionId(8801L);
+        batch.setSelectedWorkflowRevisionHash("tx-revision-hash");
+        batch.setSelectedBomFamilyId("TX-BOM-FAMILY");
+        batch.setSelectedBomRecipeIdsByProduct(
+                new java.util.LinkedHashMap<>(java.util.Map.of("TX-PIG", "TX-RECIPE")));
+        batch.setSelectedBomVersionsByProduct(
+                new java.util.LinkedHashMap<>(java.util.Map.of("TX-PIG", 1)));
+        batch.setWorkflowOutputUnitsByProduct(
+                new java.util.LinkedHashMap<>(java.util.Map.of("TX-PIG", "kg")));
+        batch.setTargetFinishedGoodIds(java.util.List.of("TX-PIG"));
+
+        com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
+                new com.cretas.aims.entity.ProductProcessWorkflowRevision();
+        revision.setId(8801L);
+        revision.setFactoryId("TX-F001");
+        revision.setProductTypeId("TX-PIG");
+        revision.setWorkflowId(7701L);
+        revision.setDefinitionVersion(4);
+        revision.setRevisionNumber(1);
+        revision.setRevisionHash("tx-revision-hash");
+        revision.setStatus(
+                com.cretas.aims.entity.ProductProcessWorkflowRevision.Status.PUBLISHED);
 
         ProductProcessWorkflow workflow = new ProductProcessWorkflow();
         workflow.setId(7701L);
@@ -149,6 +176,20 @@ class ProductProcessWorkflowRuntimeTransactionTest {
                 .thenReturn(Optional.of(mock(ProductType.class)));
         when(workflowRepository.lockByIdAndFactoryId(7701L, "TX-F001"))
                 .thenReturn(Optional.of(workflow));
+        when(revisionRepository.findByIdAndFactoryId(8801L, "TX-F001"))
+                .thenReturn(Optional.of(revision));
+        // unitContractService 是 @MockBean, 不打桩就返回 null → normalized.recognized() NPE。
+        // 单位识别不是本测的被测行为, 给一个「认得出的 kg」即可。
+        com.cretas.aims.service.unit.CanonicalUnit kg = new com.cretas.aims.service.unit.CanonicalUnit(
+                "kg", com.cretas.aims.service.unit.UnitDimension.MASS, "kg",
+                java.math.BigDecimal.ONE, "千克", 3,
+                java.util.Set.of(), null, true);
+        when(unitContractService.normalize(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(new com.cretas.aims.service.unit.UnitNormalizationResult("kg", "kg", kg));
+        when(unitContractService.describe(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Optional.of(kg));
     }
 
     private CompiledProductProcessWorkflow compiledWithInvalidPort() {

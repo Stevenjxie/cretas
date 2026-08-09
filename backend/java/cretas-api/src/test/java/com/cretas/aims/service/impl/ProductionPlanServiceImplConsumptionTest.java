@@ -87,10 +87,13 @@ class ProductionPlanServiceImplConsumptionTest {
         return p;
     }
 
+    // 🔴 2026-08-09: 桩必须打在**真正被调用的**方法上。生产代码早已换成
+    //    findByIdAndFactoryIdForUpdate(租户隔离 + SELECT FOR UPDATE 行锁), 而这里还桩着
+    //    findById —— 桩不生效 → 返回 empty → ResourceNotFound, 三条测试长期红着。
     @Test
     void nullUnitPriceBatch_doesNotFail_populatesZeroCostAndOperator() {
         when(planRepo.findById("PLAN-1")).thenReturn(Optional.of(plan("PLAN-1", 99L)));
-        when(batchRepo.findById("MB-1")).thenReturn(Optional.of(batch("MB-1", null)));  // 未录价
+        when(batchRepo.findByIdAndFactoryIdForUpdate("MB-1", "F006")).thenReturn(Optional.of(batch("MB-1", null)));  // 未录价
         when(consumptionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
         svc.recordMaterialConsumption("F006", "PLAN-1", "MB-1", new BigDecimal("10"), 42L);
@@ -106,7 +109,7 @@ class ProductionPlanServiceImplConsumptionTest {
     @Test
     void pricedBatch_computesTotalCost_operatorWins() {
         when(planRepo.findById("PLAN-2")).thenReturn(Optional.of(plan("PLAN-2", 99L)));
-        when(batchRepo.findById("MB-2")).thenReturn(Optional.of(batch("MB-2", "8.50")));
+        when(batchRepo.findByIdAndFactoryIdForUpdate("MB-2", "F006")).thenReturn(Optional.of(batch("MB-2", "8.50")));
         when(consumptionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
         svc.recordMaterialConsumption("F006", "PLAN-2", "MB-2", new BigDecimal("10"), 42L);
@@ -120,7 +123,7 @@ class ProductionPlanServiceImplConsumptionTest {
     @Test
     void nullOperator_fallsBackToPlanCreator() {
         when(planRepo.findById("PLAN-3")).thenReturn(Optional.of(plan("PLAN-3", 77L)));
-        when(batchRepo.findById("MB-3")).thenReturn(Optional.of(batch("MB-3", "8.50")));
+        when(batchRepo.findByIdAndFactoryIdForUpdate("MB-3", "F006")).thenReturn(Optional.of(batch("MB-3", "8.50")));
         when(consumptionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
         svc.recordMaterialConsumption("F006", "PLAN-3", "MB-3", new BigDecimal("10"), null);
