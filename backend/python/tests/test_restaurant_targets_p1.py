@@ -382,6 +382,67 @@ def test_forecast_upward_trend_projects_higher():
     assert last > first
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "已知未修的隐患, 且**试过的修法都更差**, 故留成会说话的红灯而不是删掉。\n"
+        "缺陷: 拿原值判 IQR, 在周内规律干净的序列上会把整个最忙的那天全删光 ——\n"
+        "「工作日 1000 / 周六 3000」连续 8 周, 40 个 1000 把 Q1=Q3=1000 顶成\n"
+        "IQR=0, fence 收成一个点, 8 个周六一个不剩。而那正是模型最该学的信号。\n"
+        "为什么先不修(2026-08-10 实测, scripts/forecast_backtest.py):\n"
+        "  · 旧清洗器在真实租户上剔除 **0/120 天** —— 它在真实数据上根本没开火,\n"
+        "    所以这个缺陷只在合成的干净序列上咬人, 是隐患不是正在发生的故障。\n"
+        "  · 「先按星期几拉平再判离群」这个直觉修法实测更差:\n"
+        "        RES_3101_009 h=30   16.75% → 21.02%(OK 翻 FAIL)\n"
+        "        DEMO_REST    h=30   18.41% → 23.03%(OK 翻 FAIL)\n"
+        "    把围栏从 1.5 放宽到 3.0(剔除 15→7 天)**没有救回来**(21.26%), 说明\n"
+        "    机制不是「剔太狠」。两个假设连续被证伪, 没有继续猜下去。\n"
+        "修它的前提: 先能解释清楚为什么剔掉 7/120 天会让 h=30 差 4.5 个百分点。\n"
+        "strict=True —— 谁真修好了这里会 xpass 报错, 提醒把这段说明一并改掉。"
+    ),
+)
+def test_clean_outliers_does_not_eat_the_busiest_weekday():
+    """干净的周内规律不该被当成离群点删掉。"""
+    from datetime import timedelta
+
+    series = []
+    for i in range(56):
+        d = date(2026, 1, 5) + timedelta(days=i)
+        series.append((d, 3000.0 if d.weekday() == 5 else 1000.0))
+
+    cleaned = _clean_outliers(series)
+    sat_kept = sum(1 for d, _ in cleaned if d.weekday() == 5)
+    assert sat_kept == 8, f"8 个周六应全部保留, 实际只剩 {sat_kept}"
+    assert len(cleaned) == 56
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "同上一条的同一个隐患的另一面: 真异常会被剔除(这一半是对的), 但同一星期几\n"
+        "的其它 7 个正常观测**也被连坐删光**。修法与上一条绑定, 一起做或一起不做。"
+    ),
+)
+def test_clean_outliers_still_catches_a_genuinely_anomalous_day():
+    """真异常要剔除, 但不该连累同一星期几的正常观测。"""
+    from datetime import timedelta
+
+    series = []
+    for i in range(56):
+        d = date(2026, 1, 5) + timedelta(days=i)
+        series.append((d, 3000.0 if d.weekday() == 5 else 1000.0))
+    # 第 4 个周六炸成 30000(该星期几正常值的 10 倍)
+    spike_at = [i for i, (d, _) in enumerate(series) if d.weekday() == 5][3]
+    spike_date = series[spike_at][0]
+    series[spike_at] = (spike_date, 30000.0)
+
+    cleaned = _clean_outliers(series)
+    kept = {d for d, _ in cleaned}
+    assert spike_date not in kept, "真正的异常日应被剔除"
+    sat_kept = sum(1 for d, _ in cleaned if d.weekday() == 5)
+    assert sat_kept == 7, f"其余 7 个周六应保留(尖峰不该连累同侪), 实际 {sat_kept}"
+
+
 def test_target_forecast_model_labels_cover_every_model_type():
     """预测端能吐出的每一种 model_type, 渲染端都要有说法。
 
