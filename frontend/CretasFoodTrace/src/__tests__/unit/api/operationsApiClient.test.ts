@@ -33,7 +33,7 @@ describe('operationsApiClient', () => {
   it('creates only the coordination notice payload', async () => {
     mockPost.mockResolvedValue({
       success: true,
-      data: { id: 'notice-2', status: 'OPEN', receiptCount: 0 },
+      data: { id: 'notice-2', status: 'PENDING_APPROVAL', receiptCount: 0 },
       message: 'created',
     });
 
@@ -44,8 +44,9 @@ describe('operationsApiClient', () => {
       contactPhone: '13800000000',
       remark: '上午到厂',
     };
-    await operationsApiClient.createCustomerMaterialArrival(payload, FACTORY_ID);
+    const result = await operationsApiClient.createCustomerMaterialArrival(payload, FACTORY_ID);
 
+    expect(result.data.status).toBe('PENDING_APPROVAL');
     expect(mockPost).toHaveBeenCalledWith(BASE, payload);
     expect(JSON.stringify(mockPost.mock.calls[0][1])).not.toContain('quantity');
     expect(JSON.stringify(mockPost.mock.calls[0][1])).not.toContain('materialId');

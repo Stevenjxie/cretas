@@ -25,10 +25,10 @@ const reusedOrderSources = [
 ));
 
 describe('operations coordinator mobile boundary', () => {
-  it('supports notice create, view and pre-receipt cancel', () => {
-    expect(screenSource).toContain('新建预告');
-    expect(screenSource).toContain('发送给仓储');
-    expect(screenSource).toContain("item.status === 'OPEN' && !item.receiptCount");
+  it('supports application create, view and pre-approval withdrawal', () => {
+    expect(screenSource).toContain('发起申请');
+    expect(screenSource).toContain('提交审批');
+    expect(screenSource).toContain("item.status === 'PENDING_APPROVAL'");
   });
 
   it('matches the backend role matrix: operations write, adjacent modules read', () => {
@@ -40,10 +40,16 @@ describe('operations coordinator mobile boundary', () => {
   });
 
   it('states that warehouse owns material and quantity receipt facts', () => {
-    expect(screenSource).toContain('通知仓储，不直接入库');
-    expect(screenSource).toContain('物料、数量和批次由仓管');
+    expect(screenSource).toContain('这里只申请，不处理入库');
+    expect(screenSource).toContain('审批通过后再由仓管核对实物');
     expect(screenSource).not.toContain('label="物料');
     expect(screenSource).not.toContain('label="数量');
+  });
+
+  it('lists pending applications without reusing the warehouse receivable filter', () => {
+    expect(screenSource).toContain('listCustomerMaterialArrivals(false)');
+    expect(screenSource).toContain("notice.status === 'PENDING_APPROVAL'");
+    expect(screenSource).toContain("{ value: 'pending', label: '待审批' }");
   });
 
   it('keeps cross-business access read-oriented without registering create screens', () => {

@@ -76,6 +76,9 @@ class InventoryOwnershipRepositoryQueryValidationTest {
         assertThat(arrivalNotice.getAttribute("reason")).isNotNull();
         assertThat(arrivalNotice.getAttribute("customerId")).isNotNull();
         assertThat(arrivalNotice.getAttribute("status")).isNotNull();
+        assertThat(arrivalNotice.getAttribute("reviewedBy")).isNotNull();
+        assertThat(arrivalNotice.getAttribute("reviewedAt")).isNotNull();
+        assertThat(arrivalNotice.getAttribute("reviewRemark")).isNotNull();
 
         var plan = entityManager.getMetamodel().entity(ProductionPlan.class);
         assertThat(plan.getAttribute("customerId")).isNotNull();

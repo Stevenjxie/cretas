@@ -96,7 +96,7 @@ const businessRoutes: RouteRecordRaw[] = [
       {
         path: 'operations/customer-material-arrivals',
         name: 'CustomerMaterialArrivals',
-        redirect: () => ({ path: '/warehouse/materials', query: { view: 'receiving', action: 'unordered-inbound' } }),
+        redirect: '/warehouse/unordered-inbound-applications',
         meta: {
           requiresAuth: true,
           title: '无订单入库申请',
@@ -369,6 +369,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'WarehouseMaterialSegments',
             component: () => import('@/views/warehouse/material-segments/index.vue'),
             meta: { requiresAuth: true, title: '物料分类字典', module: 'warehouse' }
+          },
+          {
+            path: 'unordered-inbound-applications',
+            name: 'WarehouseUnorderedInboundApplications',
+            component: () => import('@/views/warehouse/unordered-inbound-applications/index.vue'),
+            meta: { requiresAuth: true, title: '无订单入库申请', module: 'warehouse' }
           },
           {
             path: 'materials',

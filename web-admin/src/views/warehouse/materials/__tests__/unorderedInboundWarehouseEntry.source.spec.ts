@@ -6,53 +6,59 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), 'utf8');
 }
 
-describe('无订单入库申请统一在仓储页内完成', () => {
+describe('无订单入库申请与实际入库严格分域', () => {
   const materials = source('src/views/warehouse/materials/list.vue');
-  const requestPanel = source('src/views/warehouse/materials/UnorderedInboundNoticePanel.vue');
+  const application = source('src/views/warehouse/unordered-inbound-applications/index.vue');
   const receivingPanel = source('src/views/warehouse/materials/PendingPurchaseReceivingPanel.vue');
   const router = source('src/router/index.ts');
   const menu = source('src/components/layout/menuConfig.ts');
   const api = source('src/api/customerMaterialArrival.ts');
 
-  it('不再增加独立运营菜单和页面，旧地址只做兼容跳转', () => {
-    expect(menu).not.toContain("path: '/operations', title:");
-    expect(menu).toContain("path: '/warehouse/materials', title: '原料 / 物料入库与批次'");
-    expect(existsSync(resolve(process.cwd(), 'src/views/operations/customer-material-arrivals/index.vue'))).toBe(false);
-    expect(router).toContain("path: 'operations/customer-material-arrivals'");
-    expect(router).toContain("path: '/warehouse/materials'");
-    expect(router).toContain("action: 'unordered-inbound'");
+  it('仓储侧边栏有独立申请审批页，旧地址仅做兼容跳转', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/views/warehouse/unordered-inbound-applications/index.vue'))).toBe(true);
+    expect(menu).toContain("path: '/warehouse/unordered-inbound-applications'");
+    expect(menu).toContain("title: '无订单入库申请'");
+    expect(router).toContain("path: 'unordered-inbound-applications'");
+    expect(router).toContain("redirect: '/warehouse/unordered-inbound-applications'");
   });
 
-  it('运营在仓储页创建申请，仓管仍只执行实际收货', () => {
-    expect(materials).toContain("permissionStore.canWrite('operations')");
-    expect(materials).toContain("permissionStore.canWrite('warehouse')");
-    expect(materials).toContain('v-if="factoryId && canManageUnorderedInbound"');
+  it('原料入库页不再内嵌申请表，只保留入库任务与批次', () => {
+    expect(materials).not.toContain('UnorderedInboundNoticePanel');
+    expect(materials).not.toContain("permissionStore.canWrite('operations')");
+    expect(materials).toContain('PendingPurchaseReceivingPanel');
     expect(materials).toContain(':can-write="canWrite"');
-    expect(requestPanel).toContain('发起无订单入库');
-    expect(requestPanel).toContain('发送给仓储');
-    expect(requestPanel).not.toContain('实际原料');
-    expect(requestPanel).not.toContain('实收数量');
-    expect(api).toContain('/operations/customer-material-arrivals');
   });
 
-  it('申请原因和库存归属固定映射，提交申请不会直接加库存', () => {
-    expect(requestPanel).toContain('value="CUSTOMER_MATERIAL"');
-    expect(requestPanel).toContain('value="GIFT"');
-    expect(requestPanel).toContain('value="OTHER"');
-    expect(requestPanel).toContain("form.reason === 'CUSTOMER_MATERIAL'");
-    expect(requestPanel).toContain('客户来料必须选择归属客户');
-    expect(requestPanel).toContain('客户所有：只能用于所选客户');
-    expect(requestPanel).toContain('公司所有：进入本厂普通库存');
-    expect(requestPanel).toContain('当前没有增加库存');
+  it('申请页只显示申请、审批、驳回、撤回与任务交接', () => {
+    expect(application).toContain("'PENDING_APPROVAL'");
+    expect(application).toContain("'REJECTED'");
+    expect(application).toContain('提交审批');
+    expect(application).toContain('确认通过并交接任务');
+    expect(application).toContain('rejectReasonOptions');
+    expect(application).toContain("{ value: 'OTHER', label: '其他' }");
+    expect(application).toContain('查看关联任务');
+    expect(application).not.toContain('createCustomerMaterialArrivalReceipt');
+    expect(application).not.toContain('receivedQuantity');
+    expect(application).not.toContain('materialTypeId');
+    expect(application).not.toContain('warehouseId');
   });
 
-  it('仓管确认时再次看到原因、客户、实物和最终所有权，且不出现来料质检', () => {
-    expect(receivingPanel).toContain("CUSTOMER_MATERIAL: '客户来料'");
-    expect(receivingPanel).toContain("GIFT: '赠予'");
-    expect(receivingPanel).toContain("OTHER: '其他无订单入库'");
-    expect(receivingPanel).toContain("? `客户所有（${task.customerName || '客户待核对'}，未绑定销售订单）`");
-    expect(receivingPanel).toContain("'公司所有（本厂普通库存）'");
-    expect(receivingPanel).toContain('确认后直接生成原料库存批次，不触发来料质检');
-    expect(receivingPanel).not.toContain('来料质检结果');
+  it('审批通过才跳转为精确的无订单入库任务', () => {
+    expect(api).toContain('/approve`');
+    expect(api).toContain('/reject`');
+    expect(application).toContain("sourceType: 'CUSTOMER_MATERIAL_ARRIVAL'");
+    expect(application).toContain('arrivalNoticeId: row.id');
+    expect(receivingPanel).toContain('arrivalNoticeId: exactArrivalNoticeId.value || undefined');
+    expect(receivingPanel).toContain('task.sourceId !== exactArrivalNoticeId.value');
+  });
+
+  it('申请原因和库存归属映射保持不变', () => {
+    expect(application).toContain('value="CUSTOMER_MATERIAL"');
+    expect(application).toContain('value="GIFT"');
+    expect(application).toContain('value="OTHER"');
+    expect(application).toContain('CUSTOMER_MATERIAL');
+    expect(application).toContain('客户来料必须选择归属客户');
+    expect(application).toContain('客户所有：只能用于所选客户');
+    expect(application).toContain('公司所有：进入本厂普通库存');
   });
 });
