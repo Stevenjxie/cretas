@@ -4,7 +4,7 @@ import com.cretas.aims.entity.enums.VoucherFlag;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.inventory.InternalTransfer;
-import com.cretas.aims.event.TransferCreatedEvent;
+import com.cretas.aims.event.TransferConfirmedEvent;
 import com.cretas.aims.event.TransferTerminatedEvent;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.voucher.VoucherService;
@@ -18,12 +18,14 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.util.Optional;
 
 /**
- * InternalTransfer 创建时 → 自动生成 INVENTORY_TRANSFER 凭证.
+ * InternalTransfer <b>确认入库</b>时 → 自动生成 INVENTORY_TRANSFER 凭证.
  *
- * <p>2026-08-09 修复 (六膳门 TRF-20260809-1790 善后): 新增 {@link #onTransferTerminated} ——
- * 调拨单取消/驳回时作废对应凭证。此前凭证在<b>创建</b>时就生成 (草稿阶段, 库存一分没动), 而
- * cancelTransfer/rejectTransfer 只翻状态不回收凭证 → 账上留着对应不到实物流的内部调拨凭证。
- * 与销售侧 2026-07-04 Bug 3 同形状, 修法照抄 {@code SalesOrderVoucherListener}。
+ * <p>2026-08-09 两处修复 (六膳门 TRF-20260809-1790 善后), 合起来堵住"账上有凭证、实物没动"这条缝:
+ * <ol>
+ *   <li>生成时点从"创建"迁到"确认入库" ({@link #onTransferConfirmed}) —— 对齐采购侧 2026-07-04
+ *       Bug 4 (PURCHASE_PAYMENT 从"入库单草稿创建"迁到"确认入库");</li>
+ *   <li>取消/驳回时作废存量凭证 ({@link #onTransferTerminated}) —— 对齐销售侧 2026-07-04 Bug 3。</li>
+ * </ol>
  */
 @Slf4j
 @Component
@@ -33,9 +35,19 @@ public class TransferVoucherListener {
     private final InternalTransferRepository internalTransferRepo;
     private final VoucherService voucherService;
 
+    /**
+     * 调拨<b>确认入库</b>后生成凭证 —— 库存真正搬完了才入账。
+     *
+     * <p>2026-08-09 修复: 触发事件从 {@code TransferCreatedEvent} (草稿创建) 迁到
+     * {@link TransferConfirmedEvent} (confirmTransfer 确认入库)。此前调拨单一建出来账上就有凭证,
+     * 从没被确认/中途放弃/被取消的草稿都会留下对应不到实物流的凭证 (六膳门 TRF-20260809-1790
+     * 的 ¥10,000 V-2026-0023 即是)。与采购侧 2026-07-04 Bug 4 的修法逐字一致。
+     *
+     * <p>入账日期不变 —— generator 取的是单据 {@code transferDate}, 不是事件时间。
+     */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
-    public void onTransferCreated(TransferCreatedEvent event) {
+    public void onTransferConfirmed(TransferConfirmedEvent event) {
         try {
             handleVoucherGeneration(event.getSourceFactoryId(), event.getTransferId());
         } catch (Exception e) {
@@ -47,8 +59,12 @@ public class TransferVoucherListener {
      * 调拨单取消 / 驳回 → 作废其 INVENTORY_TRANSFER 凭证 (若存在)。
      *
      * <p>幂等 + fail-soft: 无凭证 / 已 VOID / 已 REVERSED → 静默跳过; voidVoucher 异常仅日志告警,
-     * 不重抛 (AFTER_COMMIT 异步线程, 终止事务已提交, 重抛也回滚不了)。凭证生成在创建阶段, 正常
-     * 终止时应仍是 DRAFT → 直接 VOID; 万一已 POSTED → voidVoucher 内部转红字冲销。
+     * 不重抛 (AFTER_COMMIT 异步线程, 终止事务已提交, 重抛也回滚不了)。
+     *
+     * <p>凭证改为"确认入库才生成"后, 正常流程下被取消/驳回的单子<b>根本没有凭证</b> → 走
+     * isEmpty 静默跳过。本方法承接的是两类存量: ① 旧版本"创建即生成"留下的凭证;
+     * ② 财务用"批量补凭证"补过的。它们通常是 DRAFT → 直接 VOID; 万一已 POSTED →
+     * voidVoucher 内部转红字冲销。
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -83,7 +99,7 @@ public class TransferVoucherListener {
     private void handleVoucherGeneration(String factoryId, String transferId) {
         InternalTransfer t = internalTransferRepo.findById(transferId).orElse(null);
         if (t == null) {
-            log.warn("Transfer not found after created event: {}", transferId);
+            log.warn("Transfer not found after confirmed event: {}", transferId);
             return;
         }
         if (t.getVflag() != VoucherFlag.UNCREATED) {
