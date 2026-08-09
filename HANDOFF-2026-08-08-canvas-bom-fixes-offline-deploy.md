@@ -218,3 +218,20 @@ Steve 拍板：**已生产的坚决不影响；未开工但已建计划的必须
 | console | 0 error |
 
 **同源排查**: 全库只有 `production_plans` / `production_batches` 两张表存这份权威(各 4 列), 第三份是编译进 `production_workflow_instances.nodes_json` 的快照 —— 三处现已全部同搬, **没有第四份**。
+
+#### E2E 续: 重钉后的报工单真能落库
+
+- 报工页按新实例渲染: 投料 100kg → 三个产出各自算出出成率(成品C 0.80% / 成品D 0.40% / **副产肥油 3.00%**), 「系统将投入量等分为 1 锅」。
+- 「保存草稿」→ `process_sheet_rows` 落库 1 行(`DRAFT/DRAFT`, 10:49:06)。
+- 落了草稿之后 `canRepinAuthority` **仍然是 true** —— 草稿不算开工, 三信号判据在真机上按预期区分。
+
+**这一轮没验到的(如实记)**:
+
+| 项 | 状态 |
+|---|---|
+| 重钉后按「正式报工」提交 | ❌ 未走完 —— 需要 3 个产出各自的开始/结束时间(6 个日期选择器)。同一 revision 的提交链路本轮早些时候在**新建**计划上证过, 但没在**重钉后**的计划上再走一遍 |
+| 一个计划挂多个批次 | ❌ 未测 —— 代码里是循环, 样本只有 1 个批次 |
+| 孤儿守卫真被触发 | ❌ 未测 —— prod 上该 SELECT 返回 0; 抛错分支只有单测(mock 的 EntityManager)覆盖 |
+| LEGACY(非 Workflow)模式的计划 | ❌ 未测 |
+
+回归: `*ProductionPlan*,*WorkProcessTask*,*WorkflowRuntime*,*ProductProcessWorkflow*` 共 479 项, **新增失败 0**(基线 469 项同样 13 个 error, 逐条同名 —— 既有问题, 与本轮无关)。
