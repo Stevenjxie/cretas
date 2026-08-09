@@ -334,6 +334,22 @@ async def try_generic_answer(
        却说成全部」，那是最难被发现的一种错。
     ⚠️ 任何异常都吞成 None —— 这是**并行路径**，它坏了不该让原有链路跟着挂。
     """
+    # 🔴 承重: 归因/建议类问题**一律不接**, 哪怕格子算得出来。
+    #
+    #    2026-08-10 实测的真实事故(我自己造成的): 用户问「本月营收比上月低是
+    #    什么原因」, 答案契约**正确地**判定「没覆盖原因分析」并准备拒答,
+    #    而这条兜底接住了它, 回了一句「本月全部门店营收合计 ¥6,490,180.61。」
+    #    —— 用一个数字回答了「为什么」。
+    #
+    #    ⛔ 后果比答不出来严重得多: 系统本来会说「我不会用相邻指标替代」,
+    #       现在变成**答非所问、而且看起来像答对了**。
+    #    ⛔ 判据: 一个格子只能回答「是多少」。「为什么」「会怎样」「该做什么」
+    #       在结构上就不是取数问题 —— 能算出数 ≠ 能回答这个问题。
+    action = (getattr(spec, "analysis_action", "") or "").lower()
+    if action in ("diagnose", "optimize"):
+        logger.info("[generic-answer] 归因/建议类问题, 不接管: action=%s", action)
+        return None
+
     cells, untranslatable = spec_to_cells(spec)
     if not cells:
         return None

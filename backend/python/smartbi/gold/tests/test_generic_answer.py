@@ -697,3 +697,38 @@ def test_group_narration_merges_only_for_a_single_named_entity():
                        [{"dim_label": "A", "sales_qty": 1},
                         {"dim_label": "B", "sales_qty": 2}], (), "")]
     assert not render_group(many, "本月", entity=None).startswith("「")
+
+
+def test_generic_path_never_answers_why_or_what_should_i_do():
+    """🔴 承重: 归因/建议类问题一律不接 —— 哪怕格子算得出来。
+
+    2026-08-10 实测的真实事故（我自己造成的）：用户问「本月营收比上月低是
+    什么原因」，答案契约**正确地**判定「没覆盖原因分析」并准备拒答，
+    而契约失败兜底接住了它，回了一句
+        「本月全部门店营收合计 ¥6,490,180.61。」
+    —— 用一个数字回答了「为什么」。
+
+    ⛔ 后果比答不出来严重得多：系统本来会说「我不会用相邻指标替代」，
+       现在变成**答非所问、而且看起来像答对了**。
+    ⛔ 判据：一个格子只能回答「是多少」。**能算出数 ≠ 能回答这个问题。**
+    """
+    import inspect
+
+    from smartbi.gold.restaurant import generic_answer as GA
+
+    src = inspect.getsource(GA.try_generic_answer)
+    i_guard = src.find('action in ("diagnose", "optimize")')
+    i_cells = src.find("spec_to_cells(spec)")
+    assert i_guard != -1, "归因/建议的守卫不见了 —— 兜底会用一个数字回答「为什么」"
+    assert i_guard < i_cells, (
+        "🔴 守卫排在算格子之后 —— 那就白算了一遍, 而且很容易被后来的人挪掉")
+
+    # 规格层面也确认：这类问题**本身**是能翻译成格子的（所以守卫必须在），
+    # 而不是「反正也翻译不出来」。
+    from smartbi.gold.restaurant.generic_answer import spec_to_cells
+
+    cells, _ = spec_to_cells(_Spec(requested_metrics=("revenue",),
+                                   analysis_action="diagnose"))
+    assert cells == [("revenue", "all", "summary")], (
+        "归因问题**确实**能翻译出格子 —— 正因如此才必须靠 action 守卫拦住, "
+        "⛔ 不能指望「翻译不出来」自然挡掉")
