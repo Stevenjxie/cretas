@@ -379,25 +379,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 taskRepository, portRepository);
     }
 
-    @Test
-    void legacyPinnedBatchReturnsEmptyWithoutReadingWorkflowOrWritingRuntimeRows() {
-        ProductionBatch legacy = batch("F006", "PT-PIG");
-        legacy.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
-        when(factoryRepository.existsById("F006")).thenReturn(true);
-        when(batchRepository.findByIdAndFactoryId(901L, "F006"))
-                .thenReturn(Optional.of(legacy));
-        when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
-                .thenReturn(Optional.of(org.mockito.Mockito.mock(com.cretas.aims.entity.ProductType.class)));
-        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
-                .thenReturn(Optional.empty());
-
-        Optional<List<WorkProcessTaskDTO>> result =
-                service.materializeIfActive("F006", 901L, "PT-PIG");
-
-        assertTrue(result.isEmpty());
-        verifyNoInteractions(workflowRepository, compiler, taskRepository, portRepository);
-        verify(instanceRepository, never()).save(any());
-    }
 
     @Test
     void incompleteWorkflowPinFailsClosedWithoutReadingDefinitionOrWritingRows() {
@@ -474,25 +455,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
         verifyNoInteractions(activationRepository, workflowRepository, compiler, portRepository);
     }
 
-    @Test
-    void batchCreatedBeforeActivationCannotAdoptWorkflowOnFirstLaterRetry() {
-        ProductionBatch oldBatch = batch("F006", "PT-PIG");
-        oldBatch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
-        when(factoryRepository.existsById("F006")).thenReturn(true);
-        when(batchRepository.findByIdAndFactoryId(901L, "F006"))
-                .thenReturn(Optional.of(oldBatch));
-        when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
-                .thenReturn(Optional.of(org.mockito.Mockito.mock(com.cretas.aims.entity.ProductType.class)));
-        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
-                .thenReturn(Optional.empty());
-
-        Optional<List<WorkProcessTaskDTO>> retry =
-                service.materializeIfActive("F006", 901L, "PT-PIG");
-
-        assertTrue(retry.isEmpty());
-        verifyNoInteractions(workflowRepository, compiler, taskRepository, portRepository);
-        verify(instanceRepository, never()).save(any());
-    }
 
     @Test
     void nonReportableNodeRemainsOnlyInSnapshotAndHasNoTaskOrPorts() {

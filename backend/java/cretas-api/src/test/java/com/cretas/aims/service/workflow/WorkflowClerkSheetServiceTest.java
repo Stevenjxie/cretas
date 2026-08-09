@@ -95,16 +95,6 @@ class WorkflowClerkSheetServiceTest {
                 reportingUnitResolver);
     }
 
-    @Test
-    void returnsNullWhenPlanHasNoWorkflowBatch() {
-        ProductionBatch legacyBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.LEGACY);
-        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
-                .thenReturn(List.of(legacyBatch));
-
-        WorkflowClerkSheetConfigDTO result = service.getWorkflowSheetConfig("F006", "PLAN-1");
-
-        assertNull(result);
-    }
 
     @Test
     void returnsNullWhenPlanHasNoBatchesAtAll() {

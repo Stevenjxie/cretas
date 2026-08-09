@@ -108,7 +108,7 @@ class ProductionPlanUpdateGuardTest {
         p.setPlannedQuantity(new BigDecimal("100"));
         p.setPlannedUnit("kg");
         p.setWorkflowSelectionMode(
-                com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.LEGACY);
+                com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         p.setPlannedDate(plannedDate);
         p.setStatus(status);
         p.setSourceType(PlanSourceType.MANUAL);
