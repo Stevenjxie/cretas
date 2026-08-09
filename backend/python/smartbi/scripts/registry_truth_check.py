@@ -1,0 +1,172 @@
+"""真值对账闸 —— 把聚合结果**还原成生成器的输入参数**，与源码常量逐条比。
+
+🔴 为什么需要它（2026-08-09/10 五轮对抗审计的唯一幸存结论）：
+
+   登记表能算 3168 个格子，而其中逐字核对过的只有 3 个。**跑得通不等于算对** ——
+   今天实测的扇出缺陷就是「SQL 跑得通、数字看着像那么回事、结论错 57 倍」
+   （米饭营收 ¥34,839 → ¥2,001,255，毛利率 99.5%）。
+
+⛔ 三条纪律，全部是被推翻出来的：
+
+   1. **左边从生成器源码取，绝不从数据库取。**
+      从库里读出 128 再拿去比 128 —— 那是恒真式，一次都红不了。
+
+   2. **右边必须走 `execute_cell`。**
+      手写 `SUM(i.amount)/SUM(i.qty)` 也是恒真式：`amount` 本来就是采集时
+      按 `qty × price` 算出来的，比值恒等于单价，只验了采集。
+      判别力来自**分子由登记表自己选表达式** —— 扇出时它会选错，比值当场变形。
+
+   3. **⛔ 不用 `_DISHES` 的第 4 列 `cost_cents`。**
+      源码注释写着它**已弃用**（全成本由 `_full_cost_cents()` 从配方推导）。
+      拿它当锚会红在一个不存在的问题上。这里用的是**食材成本**，
+      由 `_RECIPES × _INGREDIENTS.unit_price_cents` 推出来。
+
+⚠️ 比值锚对「分子分母同倍缩放」是瞎的（日期过滤错、采集丢行，两边一起变），
+   所以下面还有绝对量锚补这个盲区。
+
+用法：
+    python -m smartbi.scripts.registry_truth_check              # 全跑
+    python -m smartbi.scripts.registry_truth_check --window 7   # 指定月份
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from datetime import date
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import asyncpg
+
+from smartbi.gold.restaurant.generic_executor import (
+    UnsupportedCell,
+    execute_cell,
+    existing_columns,
+)
+
+#: 🔑 **锚 = 生成器源码常量**，取自 `mock-platform/mock_platform/world/seed.py`：
+#:     菜单价      `_DISHES` 的第 3 列 price_cents ÷ 100
+#:     每份食材成本 `food_cost_cents(dish, unit_price)` ÷ 100
+#:                 （= `_RECIPES` 逐行 用量 × `_INGREDIENTS` 单价 ÷ 1000）
+#:
+#: ⚠️ 这是**副本**。副本会漂移，所以有一道同步闸盯着它：
+#:    `test_truth_anchors.py::test_anchors_match_the_generator_source`
+#:    在能读到 seed.py 的地方重算一遍逐条比对，对不上就红。
+#:    ⛔ 别手改这里的数 —— 改了同步闸会红；要改先改 seed.py。
+_ANCHORS: Dict[str, Tuple[float, float]] = {
+    # 菜名: (菜单价, 每份食材成本)
+    "藤椒鸡": (58.00, 19.3300),
+    "水煮牛肉": (68.00, 28.1500),
+    "干锅花菜": (38.00, 6.2100),
+    "鲈鱼": (88.00, 32.9400),
+    "罗氏虾": (128.00, 49.4300),
+    "娃娃菜": (22.00, 3.2000),
+    "米饭": (3.00, 0.8100),
+    "酸梅汤": (12.00, 2.7900),
+    "红糖糍粑": (26.00, 2.7800),
+    "凉拌木耳": (18.00, 3.3500),
+}
+
+#: 绝对量锚 —— 补比值锚的盲区（同倍缩放时比值不变）。
+_ABSOLUTE_ANCHORS = {"菜品数": len(_ANCHORS)}
+
+#: 1 分钱。单价与食材成本都是「每份恒定」的量，比值应当精确到分。
+_TOLERANCE = 0.011
+
+
+async def _ratio(conn, cols, *, factory_id: str, numerator: str, dish: str,
+                 rng: Tuple[date, date]) -> Optional[float]:
+    """`numerator ÷ 销量`，两边**都走 execute_cell**，都过滤到这一道菜。"""
+    out = []
+    for metric in (numerator, "sales_qty"):
+        r = await execute_cell(
+            conn, factory_id=factory_id, metric_key=metric,
+            dimension_key="product", aggregation_key="summary",
+            date_range=rng, available_columns=cols, entity_filter=dish)
+        if not r.ok or not r.rows:
+            return None
+        out.append(r.rows[0].get(metric))
+    top, bottom = out
+    if top is None or not bottom:
+        return None
+    return float(top) / float(bottom)
+
+
+async def run(factory_id: str, rng: Tuple[date, date]) -> List[str]:
+    failures: List[str] = []
+    pool = await asyncpg.create_pool(
+        host=os.getenv("SMARTBI_DB_HOST", "localhost"),
+        user=os.getenv("SMARTBI_DB_USER", "smartbi_user"),
+        database=os.getenv("SMARTBI_DB_NAME", "smartbi_prod_db"),
+        password=os.environ["SMARTBI_DB_PASSWORD"], min_size=1, max_size=3)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id)
+            cols = await existing_columns(conn)
+
+            print(f"{'菜品':10s} {'锚·菜单价':>10s} {'算出来':>10s}   "
+                  f"{'锚·食材成本':>12s} {'算出来':>10s}")
+            print("-" * 62)
+            for dish, (price, food_cost) in _ANCHORS.items():
+                async with pool.acquire() as c2:
+                    await c2.execute(
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id)
+                    got_price = await _ratio(c2, cols, factory_id=factory_id,
+                                             numerator="revenue", dish=dish, rng=rng)
+                    got_cost = await _ratio(c2, cols, factory_id=factory_id,
+                                            numerator="food_cost", dish=dish, rng=rng)
+                mark = "  "
+                if got_price is None or abs(got_price - price) > _TOLERANCE:
+                    failures.append(
+                        f"{dish} 菜单价: 源码 {price:.2f}, 算出来 {got_price}")
+                    mark = "❌"
+                if got_cost is None or abs(got_cost - food_cost) > _TOLERANCE:
+                    failures.append(
+                        f"{dish} 每份食材成本: 源码 {food_cost:.4f}, 算出来 {got_cost}")
+                    mark = "❌"
+                print(f"{dish:10s} {price:10.2f} {(got_price if got_price is not None else float('nan')):10.2f}   "
+                      f"{food_cost:12.4f} {(got_cost if got_cost is not None else float('nan')):10.4f} {mark}")
+
+            # ── 绝对量锚：比值锚对「同倍缩放」是瞎的，这里补上 ──────────────
+            async with pool.acquire() as c3:
+                await c3.execute(
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id)
+                r = await execute_cell(
+                    c3, factory_id=factory_id, metric_key="sales_qty",
+                    dimension_key="product", aggregation_key="compare",
+                    date_range=rng, available_columns=cols)
+            got_dishes = len(r.rows)
+            if got_dishes != _ABSOLUTE_ANCHORS["菜品数"]:
+                failures.append(
+                    f"菜品数: 源码 {_ABSOLUTE_ANCHORS['菜品数']}, 算出来 {got_dishes}")
+            print(f"\n绝对量·菜品数: 源码 {_ABSOLUTE_ANCHORS['菜品数']}, 算出来 {got_dishes}")
+    finally:
+        await pool.close()
+    return failures
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--factory", default="MOCK_REST")
+    ap.add_argument("--year", type=int, default=2026)
+    ap.add_argument("--month", type=int, default=7,
+                    help="锚在**完整历史月份**上：当月还没走完时比值会因样本少而抖")
+    args = ap.parse_args(argv)
+    y, m = args.year, args.month
+    end_day = 31 if m in (1, 3, 5, 7, 8, 10, 12) else (30 if m != 2 else 28)
+    rng = (date(y, m, 1), date(y, m, end_day))
+    print(f"真值对账 · 租户 {args.factory} · 区间 {rng[0]} ~ {rng[1]}\n")
+    failures = asyncio.run(run(args.factory, rng))
+    if failures:
+        print(f"\nTRUTH_CHECK FAIL  {len(failures)} 条对不上:")
+        for f in failures:
+            print(f"  ❌ {f}")
+        return 1
+    print(f"\nTRUTH_CHECK OK  {len(_ANCHORS)*2 + len(_ABSOLUTE_ANCHORS)} 条锚全部对上")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
