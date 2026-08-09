@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.inventory.CreateCustomerMaterialArrivalNoticeRequest;
+import com.cretas.aims.dto.inventory.ReviewCustomerMaterialArrivalNoticeRequest;
 import com.cretas.aims.entity.inventory.CustomerMaterialArrivalNotice;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.CustomerMaterialArrivalNoticeService;
@@ -28,7 +29,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/operations/customer-material-arrivals")
 @RequiredArgsConstructor
-@RequireModule("operations")
 @Tag(name = "无订单入库申请", description = "运营登记客户来料、赠予或其他无订单到货来源")
 public class CustomerMaterialArrivalNoticeController {
 
@@ -36,7 +36,7 @@ public class CustomerMaterialArrivalNoticeController {
     private final MobileService mobileService;
 
     @GetMapping
-    @RequirePermission({"operations:read", "operations:read_write"})
+    @RequirePermission({"operations:read", "operations:read_write", "warehouse:read", "warehouse:read_write"})
     @Operation(summary = "查询无订单入库申请")
     public ApiResponse<List<CustomerMaterialArrivalNotice>> list(
             @PathVariable @NotBlank String factoryId,
@@ -45,6 +45,7 @@ public class CustomerMaterialArrivalNoticeController {
     }
 
     @PostMapping
+    @RequireModule("operations")
     @RequirePermission({"operations:write", "operations:read_write"})
     @Operation(summary = "创建无订单入库申请（不创建库存）")
     public ApiResponse<CustomerMaterialArrivalNotice> create(
@@ -56,6 +57,7 @@ public class CustomerMaterialArrivalNoticeController {
     }
 
     @PostMapping("/{noticeId}/cancel")
+    @RequireModule("operations")
     @RequirePermission({"operations:write", "operations:read_write"})
     @Operation(summary = "取消尚未发生收货的无订单入库申请")
     public ApiResponse<CustomerMaterialArrivalNotice> cancel(
@@ -63,6 +65,34 @@ public class CustomerMaterialArrivalNoticeController {
             @PathVariable @NotBlank String noticeId) {
         return ApiResponse.success("无订单入库申请已取消",
                 noticeService.cancel(factoryId, noticeId));
+    }
+
+    @PostMapping("/{noticeId}/approve")
+    @RequireModule("warehouse")
+    @RequirePermission({"warehouse:read_write", "warehouse:write"})
+    @Operation(summary = "审批通过并交接为仓储入库任务")
+    public ApiResponse<CustomerMaterialArrivalNotice> approve(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String noticeId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody(required = false) ReviewCustomerMaterialArrivalNoticeRequest request) {
+        return ApiResponse.success("审批通过，已进入入库任务与批次",
+                noticeService.approve(factoryId, noticeId, extractUserId(authorization),
+                        request == null ? null : request.getRemark()));
+    }
+
+    @PostMapping("/{noticeId}/reject")
+    @RequireModule("warehouse")
+    @RequirePermission({"warehouse:read_write", "warehouse:write"})
+    @Operation(summary = "驳回无订单入库申请")
+    public ApiResponse<CustomerMaterialArrivalNotice> reject(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String noticeId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody(required = false) ReviewCustomerMaterialArrivalNoticeRequest request) {
+        return ApiResponse.success("无订单入库申请已驳回",
+                noticeService.reject(factoryId, noticeId, extractUserId(authorization),
+                        request == null ? null : request.getRemark()));
     }
 
     private Long extractUserId(String authorization) {

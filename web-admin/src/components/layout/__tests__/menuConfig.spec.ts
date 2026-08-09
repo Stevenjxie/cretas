@@ -191,7 +191,8 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
   it('keeps warehouse operations together under the first inline section', () => {
-    expect(findGroup('/warehouse')!.children!.slice(0, 4).map((c) => c.path)).toEqual([
+    expect(findGroup('/warehouse')!.children!.slice(0, 5).map((c) => c.path)).toEqual([
+      '/warehouse/unordered-inbound-applications',
       '/warehouse/materials',
       '/warehouse/shipments',
       '/transfer/list',

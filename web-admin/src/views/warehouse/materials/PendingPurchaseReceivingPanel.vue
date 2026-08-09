@@ -210,6 +210,7 @@ const exactOrderNumber = computed(() => String(route.query.orderNo || route.quer
 const highlightedOrder = computed(() => exactOrderNumber.value || exactPurchaseOrderId.value);
 const exactSalesOrderId = computed(() => String(route.query.salesOrderId || '').trim());
 const exactSalesOrderNumber = computed(() => String(route.query.salesOrderNo || route.query.salesOrderNumber || '').trim());
+const exactArrivalNoticeId = computed(() => String(route.query.arrivalNoticeId || '').trim());
 const requestedSourceType = computed(() => {
   const sourceType = String(route.query.sourceType || '').trim().toUpperCase();
   return sourceType === 'SALES_ORDER_CUSTOMER_SUPPLIED'
@@ -220,7 +221,8 @@ const requestedSourceType = computed(() => {
       ? 'PURCHASE' as const
       : undefined;
 });
-const highlightedSource = computed(() => highlightedOrder.value || exactSalesOrderNumber.value || exactSalesOrderId.value);
+const highlightedSource = computed(() => highlightedOrder.value
+  || exactSalesOrderNumber.value || exactSalesOrderId.value || exactArrivalNoticeId.value);
 
 function isPurchaseTask(task: WarehouseReceivingTask): task is PurchaseReceivingTask {
   return task.sourceType === 'PURCHASE';
@@ -290,6 +292,7 @@ async function loadTasks() {
           orderNumber: exactPurchaseOrderId.value ? undefined : exactOrderNumber.value || undefined,
           salesOrderId: exactSalesOrderId.value || undefined,
           salesOrderNo: exactSalesOrderId.value ? undefined : exactSalesOrderNumber.value || undefined,
+          arrivalNoticeId: exactArrivalNoticeId.value || undefined,
           sourceType: requestedSourceType.value,
         });
     const rows = response.success && Array.isArray(response.data) ? response.data : [];
@@ -298,6 +301,8 @@ async function loadTasks() {
       if (isCustomerSuppliedTask(task) && exactSalesOrderId.value && task.salesOrderId !== exactSalesOrderId.value) return false;
       if (isCustomerSuppliedTask(task) && !exactSalesOrderId.value && exactSalesOrderNumber.value
         && task.salesOrderNo !== exactSalesOrderNumber.value) return false;
+      if (isCustomerMaterialArrivalTask(task) && exactArrivalNoticeId.value
+        && task.sourceId !== exactArrivalNoticeId.value) return false;
       return true;
     });
   } finally {

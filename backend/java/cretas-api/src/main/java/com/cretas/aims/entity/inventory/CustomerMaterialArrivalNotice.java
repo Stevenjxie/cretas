@@ -77,7 +77,16 @@ public class CustomerMaterialArrivalNotice extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
-    private CustomerMaterialArrivalStatus status = CustomerMaterialArrivalStatus.OPEN;
+    private CustomerMaterialArrivalStatus status = CustomerMaterialArrivalStatus.PENDING_APPROVAL;
+
+    @Column(name = "reviewed_by")
+    private Long reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private LocalDateTime reviewedAt;
+
+    @Column(name = "review_remark", length = 1000)
+    private String reviewRemark;
 
     @Column(name = "receipt_count", nullable = false)
     private Integer receiptCount = 0;
@@ -96,7 +105,7 @@ public class CustomerMaterialArrivalNotice extends BaseEntity {
     void assignDefaults() {
         if (id == null) id = UUID.randomUUID().toString();
         if (reason == null) reason = UnorderedInboundReason.CUSTOMER_MATERIAL;
-        if (status == null) status = CustomerMaterialArrivalStatus.OPEN;
+        if (status == null) status = CustomerMaterialArrivalStatus.PENDING_APPROVAL;
         if (receiptCount == null) receiptCount = 0;
     }
 }

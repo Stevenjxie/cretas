@@ -91,7 +91,7 @@ public class CustomerMaterialArrivalNoticeService {
         notice.setContactName(trimToNull(request.getContactName()));
         notice.setContactPhone(trimToNull(request.getContactPhone()));
         notice.setRemark(trimToNull(request.getRemark()));
-        notice.setStatus(CustomerMaterialArrivalStatus.OPEN);
+        notice.setStatus(CustomerMaterialArrivalStatus.PENDING_APPROVAL);
         notice.setReceiptCount(0);
         notice.setCreatedBy(userId);
         return noticeRepository.save(notice);
@@ -111,16 +111,49 @@ public class CustomerMaterialArrivalNoticeService {
         if (notice.getStatus() == CustomerMaterialArrivalStatus.CANCELLED) {
             return notice;
         }
-        if (notice.getReceiptCount() != null && notice.getReceiptCount() > 0) {
-            throw new BusinessException(409, "已有实际收货记录的无订单入库申请不能取消")
-                    .withCode("CUSTOMER_MATERIAL_ARRIVAL_ALREADY_RECEIVED")
-                    .withHint("请保留来源单据以维持库存追溯；如不再到货，可由仓储完成预告");
-        }
-        if (notice.getStatus() == CustomerMaterialArrivalStatus.RECEIVED) {
-            throw new BusinessException(409, "已完成的无订单入库申请不能取消")
-                    .withCode("CUSTOMER_MATERIAL_ARRIVAL_ALREADY_CLOSED");
+        if (notice.getStatus() != CustomerMaterialArrivalStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "只有待审批的无订单入库申请可以撤回")
+                    .withCode("UNORDERED_INBOUND_WITHDRAW_NOT_ALLOWED")
+                    .withHint("审批通过后已交接给入库任务与批次，申请页不再提供收货或撤回操作");
         }
         notice.setStatus(CustomerMaterialArrivalStatus.CANCELLED);
+        return noticeRepository.save(notice);
+    }
+
+    @Transactional
+    public CustomerMaterialArrivalNotice approve(String factoryId,
+                                                  String noticeId,
+                                                  Long reviewerId,
+                                                  String reviewRemark) {
+        CustomerMaterialArrivalNotice notice = requireForUpdate(factoryId, noticeId);
+        if (notice.getStatus() == CustomerMaterialArrivalStatus.OPEN) {
+            return notice;
+        }
+        if (notice.getStatus() != CustomerMaterialArrivalStatus.PENDING_APPROVAL) {
+            throw invalidReviewTransition(notice, "审批通过");
+        }
+        notice.setStatus(CustomerMaterialArrivalStatus.OPEN);
+        recordReview(notice, reviewerId, reviewRemark);
+        return noticeRepository.save(notice);
+    }
+
+    @Transactional
+    public CustomerMaterialArrivalNotice reject(String factoryId,
+                                                 String noticeId,
+                                                 Long reviewerId,
+                                                 String reviewRemark) {
+        if (trimToNull(reviewRemark) == null) {
+            throw invalid("驳回无订单入库申请必须填写原因", "remark");
+        }
+        CustomerMaterialArrivalNotice notice = requireForUpdate(factoryId, noticeId);
+        if (notice.getStatus() == CustomerMaterialArrivalStatus.REJECTED) {
+            return notice;
+        }
+        if (notice.getStatus() != CustomerMaterialArrivalStatus.PENDING_APPROVAL) {
+            throw invalidReviewTransition(notice, "审批驳回");
+        }
+        notice.setStatus(CustomerMaterialArrivalStatus.REJECTED);
+        recordReview(notice, reviewerId, reviewRemark);
         return noticeRepository.save(notice);
     }
 
@@ -142,9 +175,9 @@ public class CustomerMaterialArrivalNoticeService {
 
         CustomerMaterialArrivalNotice notice = requireForUpdate(factoryId, noticeId);
         if (!OPEN_STATUSES.contains(notice.getStatus())) {
-            throw new BusinessException(409, "该无订单入库申请已完成或已取消")
-                    .withCode("CUSTOMER_MATERIAL_ARRIVAL_CLOSED")
-                    .withHint("请刷新仓储待入库任务；系统没有增加库存");
+            throw new BusinessException(409, "该无订单入库申请尚未审批通过或已结束")
+                    .withCode("UNORDERED_INBOUND_NOT_RECEIVABLE")
+                    .withHint("只有审批通过后才会进入入库任务与批次；本次没有增加库存");
         }
         replay = materialBatchRepository
                 .findByFactoryIdAndSourceDocTypeAndSourceEventKey(
@@ -278,6 +311,21 @@ public class CustomerMaterialArrivalNoticeService {
 
     private BusinessException invalid(String message, String target) {
         return new BusinessException(400, message).withHintTarget(target);
+    }
+
+    private void recordReview(CustomerMaterialArrivalNotice notice,
+                              Long reviewerId,
+                              String reviewRemark) {
+        notice.setReviewedBy(reviewerId);
+        notice.setReviewedAt(LocalDateTime.now());
+        notice.setReviewRemark(trimToNull(reviewRemark));
+    }
+
+    private BusinessException invalidReviewTransition(CustomerMaterialArrivalNotice notice,
+                                                       String action) {
+        return new BusinessException(409, "当前状态不允许" + action)
+                .withCode("UNORDERED_INBOUND_REVIEW_NOT_ALLOWED")
+                .withHint("当前状态：" + notice.getStatus().name());
     }
 
     private String noticePrefix(UnorderedInboundReason reason) {
