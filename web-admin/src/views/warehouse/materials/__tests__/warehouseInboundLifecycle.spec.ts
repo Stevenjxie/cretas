@@ -71,4 +71,3 @@ describe('warehouse inbound lifecycle', () => {
     expect(receivingTaskLifecycle(arrival)).toBe('PARTIAL');
   });
 });
-

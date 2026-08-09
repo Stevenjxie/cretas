@@ -50,4 +50,3 @@ export function receivingLifecycleLabel(task: WarehouseReceivingTask): string {
   if (lifecycle === 'RECEIVING') return '收货中';
   return '待收货';
 }
-

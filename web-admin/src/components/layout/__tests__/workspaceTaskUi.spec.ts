@@ -62,4 +62,3 @@ describe('multi-task workspace and menu badges', () => {
     ])).toBe(2);
   });
 });
-
