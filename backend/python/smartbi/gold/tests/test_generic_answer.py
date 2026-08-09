@@ -26,6 +26,9 @@ class _Spec:
     ranking_limit: int = 5
     #: 批 1 新增。取值域 = 登记表的 AGGREGATIONS; None = 规划器没表态
     aggregation: object = None
+    #: 用户点名的菜/门店 —— 逐字对齐 `RestaurantQuerySpec.dish_slot` / `store_slots`
+    dish_slot: object = None
+    store_slots: Sequence[str] = field(default_factory=tuple)
     date_range: Tuple[datetime.date, datetime.date] = (
         datetime.date(2026, 8, 1), datetime.date(2026, 8, 9))
     window_label: str = "本月"
@@ -609,3 +612,88 @@ def test_the_audited_resolvers_all_still_exist():
     assert not missing, (
         f"审计表里这些 resolver 已经不在了: {missing} —— 请更新审计结论, "
         f"⛔ 别直接删断言")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 多指标 + 实体过滤 —— 「一句话问三个东西」
+# ═══════════════════════════════════════════════════════════════════════════
+def test_all_requested_metrics_become_cells_none_dropped():
+    """🔴 承重: 要 3 个指标就得出 3 个格子。
+
+    第一版只取 `metrics[0]`, 后两个**静默丢弃** —— 电池 [56]
+    「本月米饭的销量、毛利率和成本分别是多少」挂的就是这个。
+    """
+    from smartbi.gold.restaurant.generic_answer import spec_to_cells
+
+    spec = _Spec(requested_metrics=("sales_volume", "gross_margin", "recipe_cost"),
+                 dimensions=("dish",))
+    cells, untranslatable = spec_to_cells(spec)
+    assert [c[0] for c in cells] == ["sales_qty", "gross_margin", "food_cost"]
+    assert untranslatable == []
+
+
+def test_untranslatable_metrics_are_reported_not_swallowed():
+    """⛔ 承重: 答不了的指标要**单独报出来**, 不能吞掉。
+
+    吞掉 = 「答了一部分却说成全部」, 那是最难被发现的一种错。
+    """
+    from smartbi.gold.restaurant.generic_answer import spec_to_cells
+
+    cells, untranslatable = spec_to_cells(
+        _Spec(requested_metrics=("revenue", "net_profit", "staffing"),
+              dimensions=("store",)))
+    assert [c[0] for c in cells] == ["revenue"]
+    assert set(untranslatable) == {"net_profit", "staffing"}, (
+        "数据缺口项被吞掉了 —— 用户要了却没被告知没有")
+
+
+def test_named_entity_becomes_a_filter_not_a_full_listing():
+    """⛔ 用户点了名就只算那一个。给全部 10 道菜是答非所问,
+    而且**看起来像答对了**(米饭确实在里面)。"""
+    from smartbi.gold.restaurant.generic_answer import spec_entity_filter
+
+    assert spec_entity_filter(_Spec(dish_slot="米饭")) == ("product", "米饭")
+    assert spec_entity_filter(
+        _Spec(store_slots=("模拟·静安嘉里中心店",))) == ("store", "模拟·静安嘉里中心店")
+    # 多家门店不是「点名一个」—— 不该过滤
+    assert spec_entity_filter(_Spec(store_slots=("A店", "B店"))) is None
+    assert spec_entity_filter(_Spec()) is None
+
+
+def test_entity_filter_is_parameterised_never_interpolated():
+    """🔴 承重: 菜名是**用户原话摘抄**的, 拼进 SQL 就是注入口。"""
+    from smartbi.gold.restaurant.generic_executor import build_sql
+
+    evil = "米饭' OR '1'='1"
+    sql, _r, _b = build_sql("sales_qty", "product", "summary", entity_filter=evil)
+    assert evil not in sql, "🔴 实体名被拼进了 SQL"
+    assert "$4" in sql, "实体过滤没有走占位符"
+
+
+def test_entity_filter_refused_when_there_is_nothing_to_filter():
+    """「全店」没有可过滤的对象 —— 要拒绝, ⛔ 不许静默忽略。
+
+    静默忽略 = 用户点了名却拿到全部, 而答案里不会有任何迹象说明这一点。
+    """
+    from smartbi.gold.restaurant.generic_executor import UnsupportedCell, build_sql
+
+    with pytest.raises(UnsupportedCell):
+        build_sql("revenue", "all", "summary", entity_filter="米饭")
+
+
+def test_group_narration_merges_only_for_a_single_named_entity():
+    """点名一个实体 → 拼成一句; 否则各自成段(三个榜拼一句分不清谁是谁)。"""
+    from smartbi.gold.restaurant.generic_answer import render_group
+
+    one = [CellResult("sales_qty", "销量", "product", "summary", "qty",
+                      [{"dim_label": "米饭", "sales_qty": 61075}], (), ""),
+           CellResult("gross_margin", "毛利率", "product", "summary", "pct",
+                      [{"dim_label": "米饭", "gross_margin": 67.7}], (), "")]
+    text = render_group(one, "本月", entity="米饭")
+    assert text.startswith("「米饭」本月：")
+    assert "销量 61,075.0" in text and "毛利率 67.7%" in text
+
+    many = [CellResult("sales_qty", "销量", "product", "rank", "qty",
+                       [{"dim_label": "A", "sales_qty": 1},
+                        {"dim_label": "B", "sales_qty": 2}], (), "")]
+    assert not render_group(many, "本月", entity=None).startswith("「")

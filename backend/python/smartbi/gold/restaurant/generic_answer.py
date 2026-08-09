@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from smartbi.gold.restaurant.generic_executor import (
     CellResult,
@@ -77,7 +77,7 @@ def _dimension_key(name: str) -> Optional[str]:
     return mapped if mapped in DIMENSIONS else None
 
 
-def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
+def spec_to_cell(spec, _metric_override: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """规格 → (指标, 维度, 聚合)。翻译不出来就返回 None。
 
     ⛔ 返回 None 是**正常出口**，不是失败：它表示「这个问题不是一个
@@ -91,7 +91,8 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
        判据 = **写枚举对照表前，先去看产出方**真正会给哪些值，
        ⛔ 别按自己觉得合理的词去映射 —— 对不上时它不会报错，只会静默走别的分支。
     """
-    metrics = list(getattr(spec, "requested_metrics", ()) or ())
+    metrics = ([_metric_override] if _metric_override
+               else list(getattr(spec, "requested_metrics", ()) or ()))
     if not metrics:
         return None
     metric_key = _metric_key(metrics[0])
@@ -140,6 +141,49 @@ def spec_to_cell(spec) -> Optional[Tuple[str, str, str]]:
     if AGGREGATIONS[agg_key].needs_dimension and dim_key == "all":
         agg_key = "summary"
     return metric_key, dim_key, agg_key
+
+
+def spec_to_cells(spec) -> Tuple[List[Tuple[str, str, str]], List[str]]:
+    """规格 → **一组**格子 + 翻译不出来的指标名。
+
+    🔴 为什么要复数: 用户一句话可以问多个指标(「米饭的销量、毛利率和成本」),
+       规划器的 `requested_metrics` 本来就是元组。而第一版只取 `metrics[0]`,
+       **后面的静默丢弃** —— 电池 [56] 挂的就是这个: 要 3 个只算 1 个,
+       答案契约检测到不完整后拒答。系统没有编数糊弄, 但也答不上。
+
+    ⛔ 翻译不出来的指标要**单独返回**, 不能吞掉 —— 用户点了名的东西没答上,
+       必须让上层知道并如实说明。吞掉就是「答了一部分却说成全部」。
+
+    ⚠️ 所有指标共用同一个维度和聚合: 它们来自规格的同一组槽位, 不是每个指标
+       各有一套。维度上算不了的那个指标会在执行时被拒绝, 而不是在这里硬凑。
+    """
+    metrics = list(getattr(spec, "requested_metrics", ()) or ())
+    if not metrics:
+        return [], []
+    cells: List[Tuple[str, str, str]] = []
+    untranslatable: List[str] = []
+    for name in metrics:
+        one = spec_to_cell(spec, _metric_override=name)
+        if one is None:
+            untranslatable.append(name)
+        elif one not in cells:
+            cells.append(one)
+    return cells, untranslatable
+
+
+def spec_entity_filter(spec) -> Optional[Tuple[str, str]]:
+    """用户点名了某道菜/某家店时, 返回 (维度 key, 名字)。
+
+    ⛔ 点了名却不过滤 = 用户问「米饭的销量」得到全部 10 道菜 —— 答非所问,
+       而且看起来像答对了(米饭确实在里面)。
+    """
+    dish = getattr(spec, "dish_slot", None)
+    if dish:
+        return ("product", str(dish))
+    stores = list(getattr(spec, "store_slots", ()) or ())
+    if len(stores) == 1:
+        return ("store", str(stores[0]))
+    return None
 
 
 def spec_limit(spec) -> Optional[int]:
@@ -254,6 +298,27 @@ def render(result: CellResult, window_label: str) -> str:
     return f"{window_label}各{dim_label}{label}：\n{body}"
 
 
+def render_group(results: List[CellResult], window_label: str,
+                 entity: Optional[str] = None) -> str:
+    """一组格子合并成一段话。
+
+    ⚠️ 只在**点名了一个实体**（某道菜/某家店）且每个格子只有一行时才拼成一句 ——
+       那时几个数说的是同一个对象。否则各自成段：三个排行榜硬拼成一句话，
+       会让人分不清哪个数属于哪个榜。
+    """
+    if entity and all(len(r.rows) == 1 for r in results if r.ok):
+        parts = []
+        for r in results:
+            if not r.ok:
+                cols = "、".join(c.split(".")[-1] for c in r.missing_columns)
+                parts.append(f"{r.metric_label}（{cols} 还没有接入）")
+            else:
+                parts.append(
+                    f"{r.metric_label} {_fmt(r.rows[0].get(r.metric_key), r.unit)}")
+        return f"「{entity}」{window_label}：" + "、".join(parts) + "。"
+    return "\n\n".join(render(r, window_label) for r in results)
+
+
 async def try_generic_answer(
     spec, smartbi_pool, factory_id: str, *,
     date_range: Optional[Tuple[date, date]] = None,
@@ -261,37 +326,74 @@ async def try_generic_answer(
 ) -> Optional[Dict[str, Any]]:
     """尝试用通用执行器回答。返回 None = 这条不该走这里，调用方继续原路径。
 
+    🔴 一次算**一组**格子，不是一个 —— 用户问「米饭的销量、毛利率和成本」
+       要的是三个数。第一版只取 `metrics[0]`，**后两个静默丢弃**，
+       于是答案契约检测到不完整后拒答（电池 [56]）。
+
+    ⛔ 有指标翻译不出来时**如实说出来**，不吞掉 —— 吞掉就是「答了一部分
+       却说成全部」，那是最难被发现的一种错。
     ⚠️ 任何异常都吞成 None —— 这是**并行路径**，它坏了不该让原有链路跟着挂。
     """
-    cell = spec_to_cell(spec)
-    if cell is None:
+    cells, untranslatable = spec_to_cells(spec)
+    if not cells:
         return None
-    metric_key, dim_key, agg_key = cell
     rng = date_range or getattr(spec, "date_range", None)
     if not rng:
         return None
+    ent = spec_entity_filter(spec)
+    # ⛔ 点名的实体必须与这组格子的维度一致，否则过滤会打在错的列上
+    #    （问「米饭的销量」却按门店分组时，拿菜名去比门店名 = 永远 0 行）。
+    ent_value = ent[1] if (ent and all(c[1] == ent[0] for c in cells)) else None
+
+    results: List[CellResult] = []
     try:
         async with smartbi_pool.acquire() as conn:
             await conn.execute(
                 "SELECT set_config('app.factory_id', $1, false)", factory_id)
             cols = await existing_columns(conn)
-            result = await execute_cell(
-                conn, factory_id=factory_id, metric_key=metric_key,
-                dimension_key=dim_key, aggregation_key=agg_key,
-                date_range=rng, available_columns=cols,
-                limit_override=spec_limit(spec))
-    except UnsupportedCell as exc:
-        logger.info("[generic-answer] 组合不成立, 交回原路径: %s", exc)
-        return None
+            for metric_key, dim_key, agg_key in cells:
+                try:
+                    results.append(await execute_cell(
+                        conn, factory_id=factory_id, metric_key=metric_key,
+                        dimension_key=dim_key, aggregation_key=agg_key,
+                        date_range=rng, available_columns=cols,
+                        limit_override=spec_limit(spec),
+                        entity_filter=ent_value))
+                except UnsupportedCell as exc:
+                    # ⛔ 单个格子不成立不该让整组失败，但要记下来如实说。
+                    logger.info("[generic-answer] 组合不成立: %s", exc)
+                    untranslatable.append(metric_key)
     except Exception:  # noqa: BLE001 — 并行路径, 坏了不连累主链路
         logger.exception("[generic-answer] 执行失败, 交回原路径")
         return None
 
+    served = [r for r in results if r.ok and r.rows]
+    if not served:
+        return None
+    text = render_group(results, window_label or "所选区间", ent_value)
+    if untranslatable:
+        # ⛔ 如实披露：用户要了、但这里给不了的那些。
+        # ⚠️ 说人话，不能甩内部键名（用户看到 "net_profit" 等于没说）。
+        #    中文名取自规划器自己的词表首词，⛔ 不另建一张显示名表 ——
+        #    另建就是第 N 张手写表，且加指标时两处必然漂移。
+        #    ⚠️ 延迟 import：`restaurant_intent` → `restaurant_ops_router` →
+        #       本模块，模块级 import 会成环。
+        try:
+            from smartbi.gold.restaurant.restaurant_intent import (
+                _REQUEST_METRIC_RULES as _RULES)
+            zh = {k: (words[0] if words else k) for k, words in _RULES}
+        except Exception:  # noqa: BLE001 — 拿不到就退回键名, 不因措辞挂掉回答
+            zh = {}
+        names = "、".join(zh.get(m, m) for m in untranslatable)
+        text += (f"\n\n以下这些本次没有给出：{names}"
+                 " —— 系统没有这项数据，也没有用相邻指标替代。")
     return {
-        "code": f"GENERIC_{metric_key.upper()}_{dim_key.upper()}_{agg_key.upper()}",
-        "title": f"{result.metric_label}分析",
-        "answer_text": render(result, window_label or "所选区间"),
-        "rows": result.rows,
-        "served": result.ok and bool(result.rows),
-        "cell": cell,
+        "code": "GENERIC_" + "+".join(f"{m.upper()}_{d.upper()}_{a.upper()}"
+                                      for m, d, a in cells),
+        "title": "、".join(r.metric_label for r in results) + "分析",
+        "answer_text": text,
+        "rows": [r.rows for r in results],
+        "served": bool(served),
+        "cell": cells[0],
+        "cells": cells,
     }

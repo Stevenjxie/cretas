@@ -119,7 +119,8 @@ def _base_metrics_of(item) -> List[str]:
 
 
 def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
-              limit_override: Optional[int] = None) -> Tuple[str, Tuple[str, ...], List[str]]:
+              limit_override: Optional[int] = None,
+              entity_filter: Optional[str] = None) -> Tuple[str, Tuple[str, ...], List[str]]:
     """返回 (SQL, 依赖的列, 参与计算的基础指标)。
 
     参数占位：$1=factory_id, $2=起始日期, $3=结束日期。
@@ -185,6 +186,18 @@ def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
     #    `missing FROM-clause entry for table "t"`（2026-08-09 加损耗指标时实测撞到）。
     sql += (f" WHERE {alias}.factory_id = $1 "
             f"AND {alias}.date >= $2 AND {alias}.date <= $3\n")
+    # 🔑 实体过滤: 用户点名了某道菜/某家店时, 只算那一个。
+    #
+    # ⛔ 走占位符 $4, **绝不字符串拼接** —— 菜名是用户原话摘抄的, 拼接就是注入口。
+    # ⚠️ 比的是 `label_expr`(展示名, 如 p.name) 而不是 `group_expr`(内部 id):
+    #    规格里的 `dish_slot` 是**用户说的名字**, 不是 id。
+    # ⛔ 只在有分组维度时才允许 —— 「全店」没有可过滤的对象, 传进来要拒绝而不是
+    #    静默忽略(静默忽略 = 用户点了名却给了全部, 答非所问)。
+    if entity_filter is not None:
+        if not dim.label_expr:
+            raise UnsupportedCell(
+                f"「{dim.label}」没有可过滤的对象 —— 点名某一个的问法在这个维度上不成立")
+        sql += f"   AND {dim.label_expr} = $4\n"
     if group_cols:
         sql += f" GROUP BY {', '.join(group_cols)}\n"
     if agg.order:
@@ -293,11 +306,13 @@ async def execute_cell(
     date_range: Tuple[date, date],
     available_columns: Optional[set] = None,
     limit_override: Optional[int] = None,
+    entity_filter: Optional[str] = None,
 ) -> CellResult:
     """执行一个格子。缺列时**不发 SQL**，直接回「缺什么」。"""
     item, dim, agg = _resolve_spec(metric_key, dimension_key, aggregation_key)
     sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key,
-                                     limit_override=limit_override)
+                                     limit_override=limit_override,
+                                     entity_filter=entity_filter)
 
     cols = available_columns if available_columns is not None else await existing_columns(conn)
     missing = tuple(c for c in requires if c not in cols)
@@ -311,7 +326,10 @@ async def execute_cell(
                           unit, [], missing, sql)
 
     start, end = date_range
-    rows = await conn.fetch(sql, factory_id, start, end)
+    args = [factory_id, start, end]
+    if entity_filter is not None:
+        args.append(entity_filter)
+    rows = await conn.fetch(sql, *args)
     # 值列名: 派生量用它自己的 key, 基础指标用它的 key —— 两者都是 item.key。
     processed = _post_process([dict(r) for r in rows], agg, getattr(item, "key", metric_key))
     return CellResult(
