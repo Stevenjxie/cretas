@@ -35,6 +35,27 @@ name: Python Gate
 #    判据: **模块导入期不要改全局 IO / 不要 exit** —— 一个导入期副作用挡住了
 #          75 个文件几个月。
 #
+#    2026-08-10 第二次实测 —— **试着把它加进下面的路径清单, 结果否掉了这个想法**:
+#      单独跑 smartbi/tests : 771 passed / 19 failed / 31 errors(集中在 17 个文件)
+#      并进全套一起跑       : **37 failed**, 其中 **7 个是原本绿的别处用例**:
+#          tests/test_llm_router_fallback.py                     ×2
+#          smartbi/gold/tests/test_semantic_planner_budget.py    ×2
+#          smartbi/gold/tests/test_llm_capacity_gate.py          ×2
+#          smartbi/services/restaurant/tests/test_batch_regression_golden.py ×1
+#      另外 test_sweep_drivers.py(18) / test_supplier_price_ingest.py(11) 单独跑是绿的,
+#      并进来才红 —— 同样是顺序/全局态问题。
+#    ⛔ 所以拦路的**不是**「这 17 个文件自己坏」, 而是**这个目录的全局态污染会外溢**,
+#      把别人的绿用例带红。纳入门禁的前置条件是先找出污染源(疑似 LLM router / 全局
+#      单例被模块级改写), 而不是把 17 个文件挂上台账了事 —— 那样闸会因为别处的红而
+#      变红, 债记在错的地方。
+#    判据: **「单独跑绿」不能推出「并进去也绿」; 要纳入一批测试, 必须用并进去之后的
+#          读数做决定。**
+#    📌 已经试过二分定位污染源, **没定到**: 传目录名 `smartbi/tests` 能稳定复现,
+#       把 75 个文件逐个列在命令行上(排序后)**就不复现** —— 说明是**顺序依赖**,
+#       而不是某一个文件单独作恶。(文件数两种数法都是 75, 不是清单遗漏。)
+#       下一步该用 `-p no:randomly` + `--co -q` 对比两种形式的实际收集顺序, 或用
+#       pytest-order / 逐步前缀法沿真实顺序二分。留给独立一轮。
+#
 # ⚠️ `smartbi/gold/tests` 本机 35 failed 全是同一句
 #    `RuntimeError: There is no current event loop in thread 'MainThread'` ——
 #    本机 py3.11 + pytest 9 的 asyncio 行为, 而这里跑的是 **py3.10**。
