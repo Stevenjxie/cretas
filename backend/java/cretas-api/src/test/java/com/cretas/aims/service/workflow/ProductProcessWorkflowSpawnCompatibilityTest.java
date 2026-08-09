@@ -4,7 +4,6 @@ import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -30,7 +29,6 @@ import static org.mockito.Mockito.when;
 class ProductProcessWorkflowSpawnCompatibilityTest {
 
     @Mock private WorkProcessTaskRepository taskRepository;
-    @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private WorkProcessRepository workProcessRepository;
     @Mock private UserRepository userRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
@@ -43,7 +41,6 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
     void setUp() {
         service = new WorkProcessTaskServiceImpl(
                 taskRepository,
-                productWorkProcessRepository,
                 workProcessRepository,
                 userRepository,
                 productionBatchRepository,
@@ -65,7 +62,7 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertEquals(List.of("TRIM", "TRIM"), result.stream()
                 .map(WorkProcessTaskDTO::getWorkProcessId).toList());
-        verifyNoInteractions(productWorkProcessRepository, workProcessRepository);
+        verifyNoInteractions(workProcessRepository);
         verify(taskRepository, never()).saveAll(any());
     }
 
@@ -84,7 +81,7 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
 
         assertEquals(List.of("__MATERIAL_INPUT__", "__FINAL_OUTPUT__"), result.stream()
                 .map(WorkProcessTaskDTO::getWorkProcessId).toList());
-        verifyNoInteractions(runtimeService, productWorkProcessRepository);
+        verifyNoInteractions(runtimeService);
     }
 
     @Test
@@ -108,43 +105,29 @@ class ProductProcessWorkflowSpawnCompatibilityTest {
         List<WorkProcessTaskDTO> result = service.spawnTasks("F006", 903L, "PT-PIG");
 
         assertEquals(81L, result.get(0).getId());
-        verifyNoInteractions(runtimeService, productWorkProcessRepository);
+        verifyNoInteractions(runtimeService);
     }
 
+    /**
+     * 🔴 2026-08-09 (Steve 拍板): 老路(LEGACY)整条下架。
+     *
+     * <p>原用例名 {@code inactiveOrDisabledActivationExecutesExactLegacyBranch} —— 断言画布未启用时
+     * 回落到 product_work_processes 工序模板逐道 spawn。那条回落已删: 现在画布物化不出任务就
+     * 当场 fail closed, 不再悄悄换一套规则继续跑。
+     */
     @Test
-    void inactiveOrDisabledActivationExecutesExactLegacyBranch() {
-        ProductWorkProcess legacy = ProductWorkProcess.builder()
-                .id(91L)
-                .factoryId("F006")
-                .productTypeId("PT-CHICKEN")
-                .workProcessId("CUT")
-                .processOrder(1)
-                .isActive(true)
-                .reportingRequired(true)
-                .build();
+    void noActiveWorkflowFailsClosedInsteadOfFallingBackToTemplates() {
         when(runtimeService.materializeIfActive("F006", 904L, "PT-CHICKEN"))
                 .thenReturn(Optional.empty());
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
-                "F006", "PT-CHICKEN")).thenReturn(List.of(legacy));
-        // 🔴 legacy 分支现在要求工序定义配了投入/产出单位(缺就 422 fail closed)。
-        //    原夹具返回空定义列表, 于是两个单位都取不到 —— 补一个真实定义, 断言不受影响。
-        when(workProcessRepository.findByFactoryIdAndIdIn("F006", List.of("CUT")))
-                .thenReturn(List.of(com.cretas.aims.entity.WorkProcess.builder()
-                        .id("CUT")
-                        .factoryId("F006")
-                        .unit("kg")
-                        .outputUnit("kg")
-                        .build()));
-        when(taskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        List<WorkProcessTaskDTO> result = service.spawnTasks("F006", 904L, "PT-CHICKEN");
+        com.cretas.aims.exception.BusinessException thrown =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        com.cretas.aims.exception.BusinessException.class,
+                        () -> service.spawnTasks("F006", 904L, "PT-CHICKEN"));
 
-        assertEquals(1, result.size());
-        assertEquals(91L, result.get(0).getProductWorkProcessId());
-        assertEquals("CUT", result.get(0).getWorkProcessId());
-        assertEquals(null, result.get(0).getWorkflowNodeId());
+        assertEquals("WORKFLOW_REQUIRED", thrown.getErrorCode());
+        verify(taskRepository, never()).saveAll(any());
     }
-
     private WorkProcessTaskDTO workflowTask(String nodeId, String processId) {
         return WorkProcessTaskDTO.builder()
                 .factoryId("F006")

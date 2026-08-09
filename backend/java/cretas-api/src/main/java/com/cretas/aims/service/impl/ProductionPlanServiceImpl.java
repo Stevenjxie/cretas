@@ -427,10 +427,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withHintTarget("selectedWorkflowId");
             }
         }
-        return new PlanUnitAuthority(productionBaseUnit, productionBaseUnit,
-                resolveNetWeightGramsForProduct(factoryId, productTypeId),
-                ProductionBatch.WorkflowSelectionMode.LEGACY,
-                null, null, null, null, Map.of());
+        // 🔴 2026-08-09 (Steve 拍板): 老路(LEGACY)整条下架 —— 系统只认画布工艺。
+        //
+        // 这里原本回落成 LEGACY 权威(工艺/BOM 字段全 null, 报工走 product_work_processes 模板)。
+        // 现在没有已发布并启用的画布工艺 = 不能生产, 当场 fail closed。
+        // ⚠️ 这是**有意的**收紧: 拍板时已知 509 个产品里只有 8 个配了画布工艺,
+        //    其余产品要先补工艺才能建计划。不要因为「挡住了很多产品」就把这里改回回落。
+        throw new BusinessException(409, "该产品尚未配置生产工艺，不能生产")
+                .withCode("WORKFLOW_REQUIRED")
+                .withHint("请先在「产品工艺画布」为该产品建立工艺，发布并启用后再建计划")
+                .withHintTarget("productTypeId")
+                .withSeverity("BLOCKING");
     }
 
     private BigDecimal resolveNetWeightGramsForProduct(String factoryId, String productTypeId) {
