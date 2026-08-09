@@ -498,8 +498,9 @@ async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
     from common.llm_router import SLOT
     args, kwargs = mock_chain.call_args
     assert args[0] == SLOT.REVIEW
-    assert kwargs["timeout"] == 5.0
-    assert kwargs["total_timeout"] == 12.0
+    assert kwargs["timeout"] == 10.0
+    assert kwargs["total_timeout"] == 25.0
+    assert args[1]["max_tokens"] == 1000
 
 
 @pytest.mark.asyncio
