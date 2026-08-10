@@ -137,9 +137,45 @@ describe('辅料 cell', () => {
     expect(confirmed.find('[data-testid="aux-unknown-reason"]').exists()).toBe(false);
     expect(confirmed.text()).toContain('换算契约');
 
-    // 两态都要灰化 + 不给"加辅料"入口
-    expect(unknown.find('[data-testid="aux-add"]').exists()).toBe(false);
+    // 2026-08-10: unknown 态**保留**入口(缺席不是否定, 见下面两条用例),
+    // 只有 unsupported 才关 —— 这一条断言随之反过来。
+    expect(unknown.find('[data-testid="aux-add"]').exists()).toBe(true);
     expect(confirmed.find('[data-testid="aux-add"]').exists()).toBe(false);
+  });
+
+  // 🔴 判据: 缺席不是否定。「没有可确认的结论」不能渲染成「已确认不行」——
+  //    unknown 的真因往往在别处(别条工序的目录不符 / 数据没加载 / 该产品还没建过配方),
+  //    跟"这道工序不能加辅料"没有任何关系。挡住入口等于替用户下了一个代码给不出证据的结论。
+  it('unknown 态保留「+ 加辅料」入口 —— 缺席不是否定', () => {
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data: { ...baseData, usageSupported: null, rows: [] } },
+    });
+
+    expect(w.find('[data-testid="aux-add"]').exists()).toBe(true);
+    // 文案也要换成真话: 不能再说"暂不能新增辅料"
+    expect(w.find('[data-testid="aux-unknown-reason"]').text()).not.toContain('暂不能新增');
+  });
+
+  it('unsupported 态仍然关闭入口并给具体诊断', () => {
+    // 这条是回归保护 —— 放开 unknown 不等于连 unsupported 一起放开。
+    // unsupported 是**已确认**不可换算, 代码拿得出证据, 该挡就挡。
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data: { ...baseData, usageSupported: false, rows: [] } },
+    });
+
+    expect(w.find('[data-testid="aux-add"]').exists()).toBe(false);
+    expect(w.find('[data-testid="aux-greyed-reason"]').text()).toContain('换算契约');
+  });
+
+  it('只读用户在 unknown 态下仍然不给入口', () => {
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: false, data: { ...baseData, usageSupported: null, rows: [] } },
+    });
+
+    expect(w.find('[data-testid="aux-add"]').exists()).toBe(false);
   });
 
   it('灰态(不可换算/未知)下已配置的行仍然渲染, 不能连数据一起藏起来', () => {

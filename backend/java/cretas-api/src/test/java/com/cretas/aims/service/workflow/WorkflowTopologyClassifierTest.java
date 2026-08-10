@@ -57,6 +57,47 @@ class WorkflowTopologyClassifierTest {
         assertEquals(1, topology.logicalRootInputCount());
     }
 
+    @Test
+    void excludesByproductNodesFromTerminalOutputs() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-1", "FG-BY"));
+        markByproduct(definition, "FG-BY");
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of("FG-1"), topology.terminalOutputSkuIds());
+        assertEquals(WorkflowTopology.Type.SINGLE_OUTPUT_PRODUCT, topology.type());
+    }
+
+    @Test
+    void treatsStringTrueByproductFlagTheSameAsBoolean() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-1", "FG-BY"));
+        definition.getNodes().stream()
+                .filter(node -> "FG-BY".equals(node.getData().get("skuId")))
+                .forEach(node -> node.getData().put("isByproduct", "true"));
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of("FG-1"), topology.terminalOutputSkuIds());
+    }
+
+    @Test
+    void fallsBackToInvalidWhenEveryTerminalIsAByproduct() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-BY"));
+        markByproduct(definition, "FG-BY");
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of(), topology.terminalOutputSkuIds());
+        assertEquals(WorkflowTopology.Type.INVALID, topology.type());
+    }
+
+    private void markByproduct(ProductProcessWorkflowDTO definition, String skuId) {
+        definition.getNodes().stream()
+                .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
+                .filter(node -> skuId.equals(node.getData().get("skuId")))
+                .forEach(node -> node.getData().put("isByproduct", true));
+    }
+
     private ProductProcessWorkflowDTO graph(List<String> roots, List<String> terminals) {
         return graph(roots, terminals, false);
     }
@@ -83,11 +124,15 @@ class WorkflowTopologyClassifierTest {
                     "materialNodeId", id)));
         }
         if (mutuallySubstitutableRoots) {
-            processData.put("portGroups", List.of(new LinkedHashMap<>(Map.of(
-                    "id", "input-alternatives",
-                    "direction", "INPUT",
-                    "mode", "EXACTLY_ONE",
-                    "portIds", ports.stream().map(port -> port.get("id")).toList()))));
+            // 2026-08-10: 替代组的载体从工序的 EXACTLY_ONE 端口组换成原料节点自己的
+            // substituteOfNodeId —— portGroups 那条路从来没生效过(normalizeDraft 每次保存
+            // 都 remove 掉它, 且 RuntimeCompiler 在 ACTUAL_IO 下完全绕过它)。
+            // 第 2..N 个原料指向第 1 个, 只有一层(成链由 ProductProcessWorkflowValidator 拒绝)。
+            String mainRootNodeId = "raw-0";
+            nodes.stream()
+                    .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                    .filter(node -> !mainRootNodeId.equals(node.getId()))
+                    .forEach(node -> node.getData().put("substituteOfNodeId", mainRootNodeId));
         }
         index = 0;
         for (String terminal : terminals) {

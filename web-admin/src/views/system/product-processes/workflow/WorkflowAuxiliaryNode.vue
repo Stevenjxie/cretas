@@ -32,8 +32,12 @@
       标准用量不可用 —— 该工序的投入基准缺少可换算的单位契约，「每 kg 投入」没有分母可算。
       请先到该工序 Cell 的「单位关系」中补上换算契约，再回来配置辅料。
     </div>
+    <!-- 🔴 缺席不是否定 (2026-08-10): 这句以前写的是「暂不能新增辅料」, 而 unknown 的真因
+         往往在别处(别条工序的目录不符 / 数据没加载 / 该产品还没建过配方) —— 跟"这道工序
+         能不能加辅料"没有任何关系。「没有可确认的结论」不能渲染成「已确认不行」, 更不能
+         据此把入口关掉: 那是替用户下了一个代码给不出证据的结论。 -->
     <div v-else-if="usageState === 'unknown'" class="aux-greyed-reason aux-unknown-reason" data-testid="aux-unknown-reason">
-      标准用量状态尚未确定，暂不能新增辅料。已配置的辅料仍会照常显示。
+      尚未建立配方，点「+ 加辅料」即可创建。已配置的辅料仍会照常显示。
     </div>
 
     <!-- 已配置的行必须无条件渲染 —— 灰态只应该关掉"新增"入口, 不能连已有数据一起藏起来
@@ -68,8 +72,11 @@
       </div>
     </div>
 
+    <!-- ⛔ 条件是 `!== 'unsupported'` 不是 `=== 'supported'`: unknown 也放行。
+         只有 unsupported 才是**已确认**不可换算 —— 那时代码拿得出证据, 该挡就挡。
+         打开后如果真的失败, 由 openAuxiliaryEditor 显示后端给出的真实原因。 -->
     <button
-      v-if="canWrite && usageState === 'supported'"
+      v-if="canWrite && usageState !== 'unsupported'"
       type="button"
       class="aux-add nodrag"
       data-testid="aux-add"

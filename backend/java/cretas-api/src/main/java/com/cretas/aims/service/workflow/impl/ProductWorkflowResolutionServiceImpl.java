@@ -153,8 +153,8 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .orElseThrow(() -> new BusinessException(409, "生产计划固定的 Workflow 版本已失效")
                         .withCode("WORKFLOW_PINNED_VERSION_INVALID"));
         WorkflowTopology topology = parseTopology(workflow);
-        if (!matchesSelection(topology, new HashSet<>(targets), targets.size())) {
-            throw noMatchingWorkflow(targets.size());
+        if (!matchesExactly(topology, new HashSet<>(targets))) {
+            throw exactOutputSetRequired(targets, topology);
         }
     }
 
@@ -193,9 +193,9 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .filter(row -> java.util.Objects.equals(row.getActiveDefinitionVersion(), definitionVersion))
                 .orElseThrow(this::staleSelection);
         ResolvedWorkflow resolved = loadResolved(factoryId, activation);
-        if (resolved == null || !matchesSelection(
-                resolved.topology, new HashSet<>(targets), targets.size())) {
-            throw noMatchingWorkflow(targets.size());
+        if (resolved == null) throw noMatchingWorkflow(targets.size());
+        if (!matchesExactly(resolved.topology, new HashSet<>(targets))) {
+            throw exactOutputSetRequired(targets, resolved.topology);
         }
         return buildPlanOutputContract(factoryId, resolved, targets);
     }
@@ -378,9 +378,9 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
                 .orElseThrow(() -> noMatchingWorkflow(requested.size()));
         ResolvedWorkflow resolved = loadResolved(factoryId, activation);
-        if (resolved == null || !matchesSelection(
-                resolved.topology, new HashSet<>(requested), requested.size())) {
-            throw noMatchingWorkflow(requested.size());
+        if (resolved == null) throw noMatchingWorkflow(requested.size());
+        if (!matchesExactly(resolved.topology, new HashSet<>(requested))) {
+            throw exactOutputSetRequired(requested, resolved.topology);
         }
         return resolved;
     }
@@ -730,6 +730,53 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .filter(s -> s != null && !s.isBlank())
                 .distinct()
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 从「包含请求集合的那些工艺图」里挑最接近的一张，返回它比请求多出来的成品 ——
+     * 也就是用户少勾了哪几个。没有任何图覆盖请求时返回空列表。
+     *
+     * <p>package-private + static: 判定是纯函数，单独可测，不必为它 mock 整套仓储。
+     * <p>sorted() 不能省: terminalSkuIds 是 Set，不排序错误文案里的顺序会随哈希变。
+     */
+    static List<String> smallestMissingSiblings(
+            Set<String> requested, List<Set<String>> supersetTerminals) {
+        return supersetTerminals.stream()
+                .filter(terminals -> terminals.containsAll(requested))
+                .min(Comparator.comparingInt(Set::size))
+                .map(terminals -> terminals.stream()
+                        .filter(sku -> !requested.contains(sku))
+                        .sorted()
+                        .toList())
+                .orElse(List.of());
+    }
+
+    /**
+     * 🔴 2026-08-10 (D6): 建计划侧要求「终端产出集合 == 勾选集合」，不是包含。
+     *
+     * <p>⛔ 只给写入路径用。发现路径(requireResolutionCandidates → resolveForOutputs)
+     * 必须保持包含语义 —— BOM 复制(BomCopyServiceImpl)与辅料工作台
+     * (BomSeasoningWorkspaceServiceImpl:452)靠它按单个成品反查工序路径，
+     * 改成相等会把那两处整页打成 409。
+     */
+    private boolean matchesExactly(WorkflowTopology topology, Set<String> requestedSet) {
+        return matchesSelection(topology, requestedSet, requestedSet.size())
+                && new HashSet<>(topology.terminalOutputSkuIds()).size() == requestedSet.size();
+    }
+
+    private BusinessException exactOutputSetRequired(
+            List<String> requested, WorkflowTopology topology) {
+        List<String> missing = smallestMissingSiblings(
+                new HashSet<>(requested), List.of(new HashSet<>(topology.terminalOutputSkuIds())));
+        String hint = missing.isEmpty()
+                ? "请前往 Workflow 配置为这批成品建立工艺，或分开创建生产计划"
+                : "这批成品由一张联产工艺一锅同时产出，请把 " + String.join("、", missing)
+                        + " 一并勾选，或分开创建生产计划";
+        return new BusinessException(409, "没有终端产出与所选成品完全一致的工艺 Workflow")
+                .withCode("WORKFLOW_EXACT_OUTPUT_SET_REQUIRED")
+                .withHint(hint)
+                .withHintTarget("targetFinishedGoodIds")
+                .withSeverity("warning");
     }
 
     private BusinessException noMatchingWorkflow(int requestedCount) {

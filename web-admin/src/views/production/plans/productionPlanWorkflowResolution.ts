@@ -18,9 +18,9 @@ export function workflowCandidateOutputIds(candidate: WorkflowResolutionCandidat
 
 /**
  * 计划匹配只看已发布 Workflow 的真实终端产出，不看 owner：
- * - 完全匹配优先；
- * - 没有完全匹配时，选择能够覆盖所选成品的最小终端产出超集；
- * - 同一最小层级保留全部候选，交给用户按工序链显式选择。
+ * - 只认完全匹配：图的终端产出集合必须等于所选成品集合（2026-08-10 D6）；
+ * - 没有完全匹配就返回 NONE，不再退回「额外联产成品最少」的超集候选；
+ * - 完全匹配有多张时全部保留，交给用户按工序链显式选择。
  */
 export function resolvePlanWorkflowCandidates(
   requestedProductTypeIds: readonly string[],
@@ -35,18 +35,18 @@ export function resolvePlanWorkflowCandidates(
     return coversRequested;
   });
 
-  const exact = matching.filter((candidate) => {
+  // 🔴 2026-08-10 (D6): 只认精确匹配, 不再退回「额外联产成品最少」的超集候选。
+  //
+  // 后端写入侧(requireResolutionForAnchor / resolvePinnedPlanOutputContract /
+  // assertPinnedWorkflowCoversOutputs)已收紧为相等判定; 这里若保留兜底, 候选列表会把
+  // 联产图摆给用户, 点下去才被后端拒 —— 同一条规则两处口径打架。
+  //
+  // 注意: 后端**发现路径**(resolveForOutputs)仍是包含语义, 那是给 BOM 复制与辅料
+  // 工作台用的。本文件服务的是建计划, 用精确口径。
+  const samePriority = matching.filter((candidate) => {
     const outputs = workflowCandidateOutputIds(candidate);
     return outputs.length === requested.length && requested.every((id) => outputs.includes(id));
   });
-  const smallestOutputCount = matching.length > 0
-    ? Math.min(...matching.map((item) => workflowCandidateOutputIds(item).length))
-    : Number.POSITIVE_INFINITY;
-  const samePriority = exact.length > 0
-    ? exact
-    : matching.filter(
-        (candidate) => workflowCandidateOutputIds(candidate).length === smallestOutputCount,
-      );
 
   return {
     mode: samePriority.length === 0

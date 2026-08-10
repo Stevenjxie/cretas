@@ -450,6 +450,60 @@ describe('product process workflow model', () => {
     expect(ordinalZero.errors).toEqual([]);
   });
 
+  it('substituteOfNodeId 能通过 patch 白名单落库', () => {
+    const definition = substitutableDefinition();
+    const second = definition.nodes.find((node) => node.id === 'raw:2');
+    if (!second) throw new Error('raw:2 fixture is missing');
+
+    const upserted = applyWorkflowPatches(definition, [{
+      op: 'UPSERT_NODE',
+      node: { ...second, data: { ...second.data, substituteOfNodeId: 'raw' } },
+    }]);
+
+    expect(upserted.errors).toEqual([]);
+    expect(upserted.definition.nodes.find((node) => node.id === 'raw:2')?.data)
+      .toMatchObject({ substituteOfNodeId: 'raw' });
+
+    const set = applyWorkflowPatches(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'raw:2', path: 'substituteOfNodeId', value: 'raw',
+    }]);
+
+    expect(set.errors).toEqual([]);
+    expect(set.summary).toHaveLength(1);
+    expect(set.definition.nodes.find((node) => node.id === 'raw:2')?.data)
+      .toMatchObject({ substituteOfNodeId: 'raw' });
+
+    const cleared = applyWorkflowPatches(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'raw:2', path: 'substituteOfNodeId', value: null,
+    }]);
+
+    expect(cleared.errors).toEqual([]);
+    expect(cleared.definition.nodes.find((node) => node.id === 'raw:2')?.data)
+      .toMatchObject({ substituteOfNodeId: null });
+  });
+
+  it('substituteOfNodeId 只接受字符串或 null', () => {
+    const definition = substitutableDefinition();
+    const second = definition.nodes.find((node) => node.id === 'raw:2');
+    if (!second) throw new Error('raw:2 fixture is missing');
+    const invalidValues: unknown[] = [7, { execute: true }, ['raw'], true];
+
+    invalidValues.forEach((value) => {
+      expectWorkflowPatchRejected(definition, [{
+        op: 'SET_NODE_FIELD', nodeId: 'raw:2', path: 'substituteOfNodeId', value,
+      }]);
+      expectWorkflowPatchRejected(definition, [{
+        op: 'UPSERT_NODE',
+        node: { ...second, data: { ...second.data, substituteOfNodeId: value } },
+      }]);
+    });
+
+    // 工序节点不该有替代料字段 —— 它是物料节点的载体
+    expectWorkflowPatchRejected(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'substituteOfNodeId', value: 'raw',
+    }]);
+  });
+
   it('detects an unbound SKU and a cycle before publish', () => {
     const definition = branchedDefinition();
     const finished = definition.nodes.find((node) => node.id === 'finished');
@@ -566,6 +620,16 @@ function simpleWorkflowDefinition(): ProductProcessWorkflowDefinition {
     ],
     viewport: { x: 0, y: 0, zoom: 1 },
   };
+}
+
+/** 两个原料 Cell 的最小图 —— 第二个可以声明自己是第一个的替代料。 */
+function substitutableDefinition(): ProductProcessWorkflowDefinition {
+  const definition = simpleWorkflowDefinition();
+  definition.nodes.push({
+    id: 'raw:2', kind: 'RAW_MATERIAL', position: { x: 16, y: 128 },
+    data: { name: 'Raw 2', skuId: 'RM-2', baseUnit: 'kg' },
+  });
+  return definition;
 }
 
 function branchedDefinition(): ProductProcessWorkflowDefinition {

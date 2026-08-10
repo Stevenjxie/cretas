@@ -34,34 +34,46 @@ describe('production plan Workflow resolution', () => {
     expect(result.candidates.map((item) => item.workflowId)).toEqual([1]);
   });
 
-  it('single selection falls back to the smallest multi-output superset', () => {
+  // 以下三条原本断言「没有精确图时退回最小超集」(原名 single selection falls back to the
+  // smallest multi-output superset / keeps all candidates in the smallest superset layer /
+  // multiple selections accept one shared multi-output Workflow)。2026-08-10 (D6) 建计划侧
+  // 改为精确匹配, 超集候选摆出来点下去必被后端拒, 因此断言反向。
+  it('single selection no longer falls back to a multi-output superset', () => {
     const result = resolvePlanWorkflowCandidates(['FG-A'], [
       candidate(2, ['FG-A', 'FG-B']),
       candidate(3, ['FG-A', 'FG-B', 'FG-C']),
     ]);
 
-    expect(result.mode).toBe('SINGLE_OUTPUT');
-    expect(result.candidates.map((item) => item.workflowId)).toEqual([2]);
+    expect(result.mode).toBe('NONE');
+    expect(result.candidates).toEqual([]);
   });
 
-  it('single selection keeps all candidates in the smallest superset layer', () => {
+  it('single selection drops the whole smallest superset layer instead of offering it', () => {
     const result = resolvePlanWorkflowCandidates(['FG-A'], [
       candidate(2, ['FG-A', 'FG-B']),
       candidate(3, ['FG-A', 'FG-B', 'FG-C']),
       candidate(4, ['FG-A', 'FG-D']),
     ]);
 
-    expect(result.candidates.map((item) => item.workflowId)).toEqual([2, 4]);
+    expect(result.candidates).toEqual([]);
   });
 
-  it('multiple selections accept one shared multi-output Workflow', () => {
+  it('multiple selections reject a shared Workflow that also produces extra outputs', () => {
     const result = resolvePlanWorkflowCandidates(['FG-A', 'FG-B'], [
       candidate(1, ['FG-A']),
       candidate(2, ['FG-A', 'FG-B', 'FG-C']),
     ]);
 
+    expect(result.mode).toBe('NONE');
+    expect(result.candidates).toEqual([]);
+  });
+
+  it('multiple selections accept a Workflow whose terminal set equals the selection', () => {
+    const exact = candidate(22, ['FG-A', 'FG-B']);
+    const result = resolvePlanWorkflowCandidates(['FG-A', 'FG-B'], [candidate(1, ['FG-A']), exact]);
+
     expect(result.mode).toBe('SHARED_MULTI_OUTPUT');
-    expect(result.candidates.map((item) => item.workflowId)).toEqual([2]);
+    expect(result.candidates).toEqual([exact]);
   });
 
   it('keeps all exact candidates and excludes supersets from the same decision layer', () => {
@@ -74,14 +86,16 @@ describe('production plan Workflow resolution', () => {
     ).candidates).toEqual([exactA, exactB]);
   });
 
-  it('keeps only the smallest superset layer when no exact graph exists', () => {
+  // 原名 keeps only the smallest superset layer when no exact graph exists —— 同上, D6 之后
+  // 没有精确图就没有候选, 不再挑「最小的那层超集」。
+  it('offers nothing when only supersets exist, no matter how small the smallest layer is', () => {
     const smallA = candidate(5, ['FG-A', 'FG-B', 'FG-C']);
     const large = candidate(6, ['FG-A', 'FG-B', 'FG-C', 'FG-D']);
     const smallB = candidate(7, ['FG-A', 'FG-B', 'FG-E']);
 
     expect(resolvePlanWorkflowCandidates(
       ['FG-A', 'FG-B'], [large, smallA, smallB],
-    ).candidates).toEqual([smallA, smallB]);
+    )).toEqual({ mode: 'NONE', candidates: [] });
   });
 
   it('multiple selections reject unrelated single-output Workflows', () => {
@@ -148,6 +162,24 @@ describe('production plan Workflow resolution', () => {
     expect(workflowCandidateTopologyLabel(manyToOne)).toBe('多→1 · 多投入单产出');
     expect(workflowCandidateTopologyLabel(oneToMany)).toBe('1→多 · 单投入多成品');
     expect(workflowCandidateTopologyLabel(manyToMany)).toBe('多→多 · 多投入联产');
+  });
+
+  it('无精确候选时不再退回联产超集 —— 与后端写入侧 D6 同口径', () => {
+    const joint = candidate(20, ['FG-1', 'FG-2']);
+
+    const resolution = resolvePlanWorkflowCandidates(['FG-1'], [joint]);
+
+    expect(resolution.mode).toBe('NONE');
+    expect(resolution.candidates).toEqual([]);
+  });
+
+  it('勾齐联产图的全部成品才给候选', () => {
+    const joint = candidate(21, ['FG-1', 'FG-2']);
+
+    const resolution = resolvePlanWorkflowCandidates(['FG-1', 'FG-2'], [joint]);
+
+    expect(resolution.mode).toBe('SHARED_MULTI_OUTPUT');
+    expect(resolution.candidates).toEqual([joint]);
   });
 
   it('does not guess an input topology when an older response lacks the logical count', () => {

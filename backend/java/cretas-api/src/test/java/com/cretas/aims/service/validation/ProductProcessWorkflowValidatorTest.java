@@ -12,6 +12,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductProcessWorkflowValidatorTest {
 
@@ -151,6 +152,79 @@ class ProductProcessWorkflowValidatorTest {
                 });
 
         assertDoesNotThrow(() -> validator.validateStructureComplete(definition));
+    }
+
+    @Test
+    void draftAcceptsOneLevelSubstituteReference() {
+        ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+        node(definition, "raw-b").getData().put("substituteOfNodeId", "raw-a");
+
+        assertDoesNotThrow(() -> validator.validateForDraft(definition));
+    }
+
+    @Test
+    void rejectsSubstituteOfNodeIdPointingAtItself() {
+        ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+        node(definition, "raw-b").getData().put("substituteOfNodeId", "raw-b");
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateForDraft(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID", error.getErrorCode());
+        // 🔴 必须断言这句话本身: 自引用同时也满足「成链」规则(parent 就是自己, 它当然带着
+        //    substituteOfNodeId), 只断言 errorCode 的话, 把自引用规则整条删掉测试照样全绿
+        //    —— 实测过, 变异不红。用户看到的诊断是哪一句, 才是这条规则唯一的可观测产物。
+        assertTrue(error.getMessage().contains("不能指向自己"),
+                "自引用要按自引用报, 不能报成「替代关系只能有一层」: " + error.getMessage());
+    }
+
+    @Test
+    void rejectsSubstituteOfNodeIdPointingAtMissingNode() {
+        ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+        node(definition, "raw-b").getData().put("substituteOfNodeId", "raw-ghost");
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateForDraft(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID", error.getErrorCode());
+    }
+
+    @Test
+    void rejectsSubstituteOfNodeIdPointingAtNonRawMaterial() {
+        for (String target : List.of("process", "semi")) {
+            ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+            node(definition, "raw-b").getData().put("substituteOfNodeId", target);
+
+            BusinessException error = assertThrows(
+                    BusinessException.class,
+                    () -> validator.validateForDraft(definition));
+
+            assertEquals("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID", error.getErrorCode());
+        }
+    }
+
+    @Test
+    void rejectsSubstituteChain() {
+        // A→B→C: 并查集会把三个合成一个逻辑投入, 但业务上没人这么表达。只允许一层。
+        ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+        ProductProcessWorkflowDTO.Node third = material("raw-c", "RAW_MATERIAL");
+        definition.getNodes().add(third);
+        node(definition, "raw-b").getData().put("substituteOfNodeId", "raw-a");
+        third.getData().put("substituteOfNodeId", "raw-b");
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateForDraft(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID", error.getErrorCode());
+    }
+
+    private ProductProcessWorkflowDTO.Node node(ProductProcessWorkflowDTO definition, String id) {
+        return definition.getNodes().stream()
+                .filter(candidate -> id.equals(candidate.getId()))
+                .findFirst().orElseThrow();
     }
 
     private ProductProcessWorkflowDTO validMultiInputDefinition() {
