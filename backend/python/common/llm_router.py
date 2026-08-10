@@ -165,7 +165,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # ── aliyun_c 08-13 到期 (优先榨干; _build_chain 会把它们排在最前) ──
     ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): _d(2026, 8, 13),
-    ("aliyun_c", "qwen3.5-plus-2026-02-15"): _d(2026, 8, 13),
     # ("aliyun_c", "qwen3-max-2025-09-23") 移除 08-10: 见下方段落。
     # ("aliyun_c", "qwen3-vl-32b-instruct") 移除 08-10: 见下方段落。
     ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),
@@ -280,7 +279,6 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("aliyun_a", "qwen3.8-max"): (1.0, 2.8),
     ("aliyun_c", "qwen3.8-max"): (1.0, 2.8),
     ("aliyun_b", "qwen3.8-max"): (1.0, 2.9),
-    ("aliyun_c", "qwen3.5-plus-2026-02-15"): (1.0, 3.8),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): (1.0, 4.1),
     ("aliyun_c", "deepseek-v3.2-exp"): (1.0, 4.7),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): (1.0, 9.7),
@@ -290,6 +288,80 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("aliyun_b", "kimi-k2.7-code"): (1.0, 16.1),
     ("aliyun_c", "kimi-k2.7-code"): (1.0, 19.2),
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 计划合法性 —— 「按能力排」真正用得上的那把尺子 (2026-08-10 实测)
+#
+# 值 = 在 7 道真实电池问句上, 模型**编造提示词里没有的枚举值**的处数。
+# 产出: `python -m smartbi.scripts.llm_capability_rank --schema --slot review`
+#       (合法值从 `_build_t3_prompt` 现解析, ⛔ 不在任何地方另写一份枚举)
+#
+# 🔑 为什么是这把尺子, 前两把为什么不行:
+#   · 契约合格率: 19 个候选 18 个满分 —— 地板题。照它排序会退化成纯延迟升序,
+#     实测把电池从 83 打到 61(见 _build_chain docstring 里的自我推翻)。
+#   · 与参照模型比对: 参照自己会因额度烧完而死, 死了就全 0。
+#   本表判的不是「答得对不对」(那要人猜标准答案), 而是「有没有编说明书里没有的
+#   值」—— 客观, 且直接对应下游失败: 确定性代码只认枚举内的值。
+#
+# 🔴 端到端佐证: `qwen3.5-plus` 在「下周需要多少兼职」上编 `named="next_week"`;
+#    它当链头的三轮电池里 [51] **三轮全挂**, 而 glm-4.6 当链头的三轮**一次没挂**。
+#
+# ⚠️ 单样本噪声: 同一模型在不同账号上打分不完全一致(qwen3.7-max-2026-05-17
+#    在 a 上 1 处、b/c 上 0 处)。**别把它当精确排名** —— 它只可靠区分
+#    「稳定零越界」与「会编枚举」两档, 所以下面的 `_plan_schema_tier` 也只分档。
+_PLAN_SCHEMA_MEASURED_AT = datetime.date(2026, 8, 10)
+_PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
+    ("aliyun_a", "qwen3.7-flash"): 0,
+    ("aliyun_a", "qwen3.8-max"): 0,
+    ("aliyun_b", "qwen3.8-max"): 0,
+    ("aliyun_c", "qwen3.8-max"): 0,
+    ("aliyun_b", "qwen3.7-max-2026-05-17"): 0,
+    ("aliyun_c", "qwen3.7-max-2026-05-17"): 0,
+    ("aliyun_c", "qwen3.7-max-2026-05-20"): 0,
+    ("aliyun_a", "kimi-k2.7-code"): 0,
+    ("aliyun_c", "kimi-k2.7-code"): 0,
+    ("aliyun_a", "deepseek-v4-flash-0731"): 1,   # 编 "tomorrow"
+    ("aliyun_b", "deepseek-v4-flash-0731"): 1,   # 编 "tomorrow"
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"): 1, # 编 "tomorrow"
+    ("aliyun_a", "qwen3.7-max-2026-05-17"): 1,   # 编 "next_week"
+    ("aliyun_b", "kimi-k2.7-code"): 1,           # 编 "next_week"
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"): 2,  # 编 "yesterday" + "tomorrow"
+}
+
+
+# 单跳延迟上界 —— **只作布尔约束, 不作连续排序键**。
+#
+# 🔴 这个区别就是 2026-08-10 那次回归的全部内容: 把中位延迟当**连续键**排序,
+#    在「上一位全平手」时会退化成「最小最快的模型排最前」(实测 83→61)。
+#    而作为**约束**它是对的: 实测 p50 超过单跳预算的模型放在前面, 只会把
+#    「答不出来」换成「等到超时」—— 它连一次成功都产生不了, 却吃掉总预算,
+#    后面健康的模型一个都轮不上。
+#
+# ⚠️ 这个值是**排序用的启发式上界**, 不是真正的超时 —— 真超时由调用方按槽传入
+#    (餐饮 T3 高精度路径传 10.0s)。写在这里只是为了让链的顺序不把必然超时的
+#    候选顶到前面; 两者不需要逐字相等, 但这个值不该比任何调用方的单跳预算大。
+_ORDERING_LATENCY_CEILING_SECONDS = 10.0
+
+
+def _over_budget_tier(account: str, model: str) -> int:
+    """0 = 实测在预算内, 1 = 没测过, 2 = 实测必然超时。"""
+    measured = _CAPABILITY.get((account, model))
+    if measured is None:
+        return 1
+    return 0 if measured[1] <= _ORDERING_LATENCY_CEILING_SECONDS else 2
+
+
+def _plan_schema_tier(account: str, model: str) -> int:
+    """0 = 实测零越界, 1 = **没测过**, 2 = 实测有越界。
+
+    与 `_capability_tier` 同一条纪律: 没测过的既不提前也不沉底 —— 它没有证据
+    支持任何一边, 把「缺席」折叠进任何一侧都是拿沉默当证据。
+    """
+    got = _PLAN_SCHEMA_VIOLATIONS.get((account, model))
+    if got is None:
+        return 1
+    return 0 if got == 0 else 2
 
 
 def _capability_stale(today: Optional[datetime.date] = None) -> bool:
@@ -894,7 +966,6 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 # 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
-    ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
     ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
     ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
     # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
@@ -921,7 +992,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.CHAT: [
         ("aliyun_c", "deepseek-v3.2-exp"),             # 08-13  0.9s
         ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
-        ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
         # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
         # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
@@ -1065,7 +1135,8 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
         # 隐式实现同一件事; 能力档一旦能把某个 aliyun 条目沉到底(实测不达标
         # 的 deepseek-v3.2 就是), 那个隐式保证当场失效 —— 所以显式写出来。
         1 if p in tail_set else 0,
-        _capability_tier(*p), _expiry_of(*p))))
+        _capability_tier(*p), _over_budget_tier(*p),
+        _plan_schema_tier(*p), _expiry_of(*p))))
 
 
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}

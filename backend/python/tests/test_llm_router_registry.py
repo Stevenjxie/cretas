@@ -58,7 +58,6 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_c", "qwen3.7-max-2026-05-20"): datetime.date(2026, 8, 20),
     ("aliyun_c", "deepseek-v3.2-exp"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3.5-plus-2026-02-15"): datetime.date(2026, 8, 13),
     ("aliyun_c", "kimi-k2-thinking"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): datetime.date(2026, 8, 13),
@@ -74,7 +73,11 @@ _FROZEN_ALIYUN_REGISTRY = {
 #   aliyun_c/qwen3-next-80b-a3b-instruct
 #   aliyun_c/qwen3-vl-flash-2026-01-22 ← 唯一 VL, 移除后 SLOT.VL 变空链(§9.1 已拍板)
 # 移除只需探针证据(准入才要控制台余量 ∩ 探针双证) —— 移除永远不制造计费风险。
-# 08-13 那批 aliyun_c 免费额度正在成批烧完, 未来几天还会有。
+# 08-13 那批 aliyun_c 免费额度正在成批烧完 —— 同一天稍晚又淘汰 1 条:
+#   aliyun_c/qwen3.5-plus-2026-02-15  ← 上一次淘汰后它接替成为 REVIEW 链头,
+#                                        几小时内也烧完。今天第三个死在链头上的。
+# 📌 这正是「按到期日升序」的直接后果: 链头位置本身是最大消耗源, 而排在链头的
+#    恰恰是额度最少的那个 —— 排序策略在持续地把自己的头部烧掉。
 
 
 def test_aliyun_registry_matches_frozen_probe_result():

@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import statistics
 import sys
 import time
@@ -383,9 +384,142 @@ def compare_main(argv: Optional[Sequence[str]] = None) -> int:
         print()
     return 0
 
+# ═══════════════════════════════════════════════════════════════════════════
+# `--schema` —— 合法性打分: 模型有没有遵守**提示词自己给的枚举**。
+#
+# 这是本文件里第一把真正有区分度、又不需要人写标准答案的尺子。前两把都不行:
+#   · 契约合格率(main): 19 个候选 18 个满分 —— 地板题, 区分不出强弱。照它排序会
+#     退化成纯延迟升序 = 最小最快的排最前(2026-08-10 实测造成回归 83→61)。
+#   · 与参照模型一致率(compare): 需要一个「已知好用」的参照, 而参照本身会因为
+#     额度烧完而死(glm-4.6 当天 403), 死了就全 0, 看起来像候选全差。
+#
+# 这把尺子的答案**来自提示词本身**: `_build_t3_prompt` 里逐字列着 intent 清单、
+# named 时间的合法取值、analysis_action 的四个值、requested_metrics 白名单。
+# 解析那份说明书, 再看模型输出有没有越界。
+#
+# 🔑 判据: **不判「答得对不对」(那要我猜), 判「有没有编造说明书里没有的值」。**
+#    后者客观, 且直接对应下游失败方式 —— 确定性代码只认枚举内的值, 编出来的
+#    `next_week` / `tomorrow` 到了下游要么被丢弃要么走错分支。
+#
+# 2026-08-10 实测区分度(prod, 7 道真实电池问句):
+#    qwen3.8-max ×3账号 / qwen3.7-max-2026-05-20 / qwen3.7-flash   0 违规
+#    deepseek-v4-flash-0731 / qwen3.7-flash-2026-07-15             编 "tomorrow"
+#    qwen3.6-plus                                                  编 "yesterday"+"tomorrow"
+# 同期端到端电池: glm-4.6 头 83/83/84; qwen3.5-plus 头 82/73/81 且 [51] 三轮全挂
+# —— [51]「下周需要多少兼职」正是它编 "next_week" 的那道题, 机制与读数对得上。
+#
+# ⚠️ 单样本噪声: 同一个模型在不同账号上打分不完全一致(qwen3.7-max-2026-05-17
+#    在 a 上 1 处、b/c 上 0 处)。**别把这张表当精确排名**, 它只可靠地区分
+#    「稳定零违规」与「会编枚举」两档。qwen3.8-max 三个账号全 0 是最强的信号。
 
+_INTENT_LINE_RE = re.compile(r'^\s*-\s*"(RESTAURANT_OPS_[A-Z_]+)"', re.M)
+_NAMED_VALUES_RE = re.compile(r'\{"type":\s*"named",\s*"value":\s*([^}]+)\}')
+_ACTION_RE = re.compile(r'analysis_action 必须是\s*([a-z、\s]+?)\s*之一')
+_METRIC_RE = re.compile(r'([a-z_]+)\(')
+
+
+def prompt_vocabulary(prompt: str) -> Dict[str, frozenset]:
+    """从提示词里解析出它自己声明的合法取值。
+
+    ⛔ 不在这里另写一份枚举 —— 提示词一改这里跟着改, 不可能漂。
+    每一项都带**下限断言**: 解析空了就抛, 免得「没解析到」被当成「模型没违规」。
+    """
+    intents = frozenset(_INTENT_LINE_RE.findall(prompt))
+    named_raw = _NAMED_VALUES_RE.search(prompt)
+    named = frozenset(re.findall(r'"([a-z_]+)"', named_raw.group(1))) if named_raw else frozenset()
+    action_raw = _ACTION_RE.search(prompt)
+    actions = frozenset(
+        a for a in re.split(r'[、\s]+', action_raw.group(1)) if a) if action_raw else frozenset()
+    metric_block = prompt.split("requested_metrics 只能使用:", 1)
+    metrics = frozenset(
+        _METRIC_RE.findall(metric_block[1][:1500])) if len(metric_block) > 1 else frozenset()
+
+    for name, got, floor in (("intents", intents, 10), ("named", named, 2),
+                             ("actions", actions, 4), ("metrics", metrics, 8)):
+        if len(got) < floor:
+            raise RuntimeError(
+                f"从提示词解析 {name} 只拿到 {len(got)} 项(<{floor}) —— 解析坏了。"
+                f"⛔ 这时候一切「零违规」都是假的, 不许当读数用。")
+    return {"intents": intents, "named": named, "actions": actions, "metrics": metrics}
+
+
+def schema_violations(plan: Dict[str, Any], vocab: Dict[str, frozenset]) -> List[str]:
+    """这份计划里有几处越界。返回人类可读的违规说明。"""
+    bad: List[str] = []
+    intent = plan.get("intent")
+    if intent and intent not in vocab["intents"]:
+        bad.append(f"intent={intent} 不在清单内")
+    action = plan.get("analysis_action")
+    if action and action not in vocab["actions"]:
+        bad.append(f"analysis_action={action} 不在 {sorted(vocab['actions'])}")
+    tr = plan.get("time_range") or {}
+    if isinstance(tr, dict) and tr.get("type") == "named":
+        value = tr.get("value")
+        if value not in vocab["named"]:
+            bad.append(f'time_range named="{value}" 不在 {sorted(vocab["named"])} —— 编的')
+    for metric in (plan.get("requested_metrics") or []):
+        if metric not in vocab["metrics"]:
+            bad.append(f"requested_metrics 含 {metric}, 不在白名单")
+    return bad
+
+
+def schema_main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--slot", default="review")
+    ap.add_argument("--candidates", default="", help="逗号分隔 account/model; 空=槽内全池")
+    args = ap.parse_args(argv)
+
+    from smartbi.gold.restaurant import restaurant_intent as ri
+    slot = r.SLOT[args.slot.upper()]
+    vocab = prompt_vocabulary(ri._build_t3_prompt("本月营收多少", None, None, (), None))
+    print(f"[schema] 从提示词解析: intent {len(vocab['intents'])} 个 / "
+          f"named {sorted(vocab['named'])} / action {sorted(vocab['actions'])} / "
+          f"metric {len(vocab['metrics'])} 个")
+
+    pairs = ([tuple(s.split("/", 1)) for s in args.candidates.split(",") if s]
+             or list(dict.fromkeys(r._SLOT_POOLS[slot])))
+
+    async def run():
+        async with httpx.AsyncClient() as client:
+            rows = []
+            for account, model in pairs:
+                plans = await _plans_for(client, account, model, slot)
+                bad, dead = [], 0
+                for q, plan in plans.items():
+                    if plan is None:
+                        dead += 1
+                        continue
+                    for v in schema_violations(plan, vocab):
+                        bad.append(f"{q} → {v}")
+                rows.append(((account, model), bad, dead, len(plans)))
+            return rows
+
+    rows = asyncio.run(run())
+    rows.sort(key=lambda x: (x[2] == x[3], x[2] > 0, len(x[1]), x[0]))
+    print(f"\n题目 {len(_HARD_QUERIES)} 条 (回归电池真实问句)\n")
+    for (account, model), bad, dead, total in rows:
+        if dead == total:
+            # 🔴 一条计划都没吐出来时**不许打印「0 处越界」** —— 那看起来像满分。
+            #    2026-08-10 首跑就踩到: qwen3.5-plus 7/7 拿不到计划(它当时已 403),
+            #    报表却把它和真正零违规的模型并排显示成 "0 处越界"。
+            #    「没测到」必须和「测了没问题」长得不一样。
+            print(f"  —— 无读数  {account}/{model}  ({total}/{total} 拿不到计划, "
+                  f"多半已 403/不可达; ⛔ 不要当成零违规)")
+            continue
+        flag = f"  ⚠{dead}/{total} 拿不到计划(下列越界只覆盖剩下的)" if dead else ""
+        print(f"  {len(bad)} 处越界  {account}/{model}{flag}")
+        for line in bad[:4]:
+            print(f"      · {line}")
+    return 0
+
+
+# ⚠️ 入口块**必须留在文件最末尾**: 它引用上面所有 *_main 函数。往本文件追加新
+#    mode 时, 新函数要写在这一段**之前** —— 已经踩过两次 NameError。
 if __name__ == "__main__":
     import sys as _sys
+    if "--schema" in _sys.argv:
+        _sys.argv.remove("--schema")
+        raise SystemExit(schema_main())
     if "--compare" in _sys.argv:
         _sys.argv.remove("--compare")
         raise SystemExit(compare_main())
