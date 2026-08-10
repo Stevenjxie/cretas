@@ -467,3 +467,39 @@ export function resolveWorkflowByOutputs(factoryId: string, productTypeIds: stri
     { productTypeIds }
   )
 }
+
+/** 配置侧反查结果里的一张图。 */
+export interface WorkflowOutputDirectoryEntry {
+  workflowId: number
+  definitionVersion: number
+  /** 这张图的**存放锚点** —— 打开它要用这个 id, 但它不代表这张图只产出它。 */
+  ownerProductTypeId: string
+  ownerProductName: string
+  workflowType: 'SINGLE_OUTPUT_PRODUCT' | 'RAW_MATERIAL_SPLIT' | 'JOINT_PRODUCTION'
+  terminalOutputs: { productTypeId: string; productName: string }[]
+  /** false = 锚点不是这张图的产出之一(归属对象与产出对不上的那种图)。 */
+  anchorIsTerminalOutput: boolean
+}
+
+export interface WorkflowOutputDirectory {
+  finishedGoodProductTypeId: string
+  workflows: WorkflowOutputDirectoryEntry[]
+}
+
+/**
+ * 配置侧「按产出成品反查工艺图」——「哪些已启用的图会产出这个成品」。
+ * GET /{factoryId}/product-process-workflows/producing?finishedGoodProductTypeId=...
+ *
+ * ⛔ 与上面的 resolveWorkflowByOutputs 是**两个入口**, 不要互相替代:
+ * 那条是计划侧精确语义(勾选集合 == 终端集合, 只返最高优先层), 会把超集图丢掉;
+ * 这条是配置侧包含语义, 全部返回 —— 配置界面要靠它把用户领到图上, 丢一张就是找不到。
+ *
+ * 查询串直接拼进 URL(并做 encodeURIComponent), 不走 axios config.params ——
+ * 这个项目踩过「raw fetch 通但页面调不通」正是 config 传参写法引起的。
+ */
+export function findWorkflowsProducing(factoryId: string, finishedGoodProductTypeId: string) {
+  return get<WorkflowOutputDirectory>(
+    `/${factoryId}/product-process-workflows/producing`
+      + `?finishedGoodProductTypeId=${encodeURIComponent(finishedGoodProductTypeId)}`
+  )
+}

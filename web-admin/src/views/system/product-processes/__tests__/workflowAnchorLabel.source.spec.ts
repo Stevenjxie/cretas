@@ -21,8 +21,15 @@ describe('workflow anchor selector wording matches the SOP (Google Sheet 2026-07
     expect(pageSource).toContain('toolbar-field-label');
   });
 
+  /**
+   * 2026-08-11: 措辞从「属于哪个成品或原料」改成「存放在哪个成品或原料下」。
+   * 「属于」把存放位置说成了归属/身份, 而一张原料分流图的锚点只能填一个成品 ——
+   * 于是画布顶部「系统研判：原料分流」与顶部下拉的「成品 · 拓扑成品C」在同一屏打架。
+   * 契约不变(仍然明说这个下拉在挑什么, 不用含混的「关联的」), 只是不再暗示身份。
+   */
   it('states plainly what the selector picks instead of the vague "关联的"', () => {
-    expect(pageSource).toContain('选择本条工艺属于哪个成品或原料');
+    expect(pageSource).toContain('选择本条工艺存放在哪个成品或原料下');
+    expect(pageSource).not.toContain('选择关联的');
   });
 
   it('keeps the SOP pointing at that same on-screen control', () => {

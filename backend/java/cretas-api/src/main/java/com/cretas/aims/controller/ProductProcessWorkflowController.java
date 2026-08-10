@@ -7,6 +7,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
+import com.cretas.aims.dto.workflow.WorkflowOutputDirectoryDTO;
 import com.cretas.aims.dto.workflow.WorkflowOutputResolutionDTO;
 import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
 import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateRequest;
@@ -14,6 +15,7 @@ import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import com.cretas.aims.service.workflow.WorkflowOutputDirectoryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -41,25 +43,35 @@ public class ProductProcessWorkflowController {
     private final ProductProcessWorkflowService service;
     private final ProductProcessWorkflowActivationService activationService;
     private final ProductWorkflowResolutionService resolutionService;
+    private final WorkflowOutputDirectoryService outputDirectoryService;
 
     @Autowired
     public ProductProcessWorkflowController(
             ProductProcessWorkflowService service,
             ProductProcessWorkflowActivationService activationService,
-            ProductWorkflowResolutionService resolutionService) {
+            ProductWorkflowResolutionService resolutionService,
+            WorkflowOutputDirectoryService outputDirectoryService) {
         this.service = service;
         this.activationService = activationService;
         this.resolutionService = resolutionService;
+        this.outputDirectoryService = outputDirectoryService;
     }
 
     public ProductProcessWorkflowController(ProductProcessWorkflowService service) {
-        this(service, null, null);
+        this(service, null, null, null);
     }
 
     public ProductProcessWorkflowController(
             ProductProcessWorkflowService service,
             ProductProcessWorkflowActivationService activationService) {
-        this(service, activationService, null);
+        this(service, activationService, null, null);
+    }
+
+    public ProductProcessWorkflowController(
+            ProductProcessWorkflowService service,
+            ProductProcessWorkflowActivationService activationService,
+            ProductWorkflowResolutionService resolutionService) {
+        this(service, activationService, resolutionService, null);
     }
 
     @GetMapping("/{productTypeId}")
@@ -81,6 +93,26 @@ public class ProductProcessWorkflowController {
             @PathVariable String factoryId,
             @Valid @RequestBody WorkflowOutputResolutionDTO.Request request) {
         return ApiResponse.success(resolutionService.resolveForOutputs(factoryId, request.getProductTypeIds()));
+    }
+
+    /**
+     * 配置侧「按产出成品反查工艺图」。
+     *
+     * <p>⛔ 与上面的 POST /resolve-by-outputs 是**两个入口**, 不是同一个加开关:
+     * 那条是计划侧精确语义(勾选集合 == 终端集合, 只返最高优先层), 这条是配置侧包含语义
+     * (终端集合 ⊇ {这个成品}, 全部返回)。spec §4.5。
+     *
+     * <p>字面量段 /producing 与 GET /{productTypeId} 不冲突(Spring 字面量优先),
+     * 与 /{productTypeId}/versions 也不冲突(第一段字面量比路径变量更具体)。
+     * ProductProcessWorkflowProducingRouteTest 用 MockMvc 把这条优先级钉住。
+     */
+    @GetMapping("/producing")
+    @Operation(summary = "只读: 反查所有终端产出包含该成品的已启用 Workflow(包含语义)")
+    public ApiResponse<WorkflowOutputDirectoryDTO> findWorkflowsProducing(
+            @PathVariable String factoryId,
+            @RequestParam String finishedGoodProductTypeId) {
+        return ApiResponse.success(
+                outputDirectoryService.findWorkflowsProducing(factoryId, finishedGoodProductTypeId));
     }
 
     @GetMapping("/{productTypeId}/versions")
