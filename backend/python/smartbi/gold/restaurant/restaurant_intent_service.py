@@ -314,6 +314,28 @@ def _drop_planner_invented_metrics(spec, query):
     if not requested or not query:
         return spec
 
+    # 🔴 2026-08-10 prod: 澄清延续轮里 `query` 只是**用户这一轮的半句话**, 不是他
+    #    问的那个问题。菜品链第 3 轮实测:
+    #      turn1 「米饭的销量是多少」 → 反问时间
+    #      turn2 「本月」             → 反问门店
+    #      turn3 「全部门店」          → planner 正确继承出 sales_volume,
+    #                                  这里却判「原句一个词都没沾」把它剥掉
+    #    日志原文: [restaurant-contract] 去掉 planner 自造的指标要求:
+    #              ('sales_volume',) -> () query='全部门店'
+    #    后果不是少一个指标, 是整轮**换了个问题回答** —— 用户收到全店营收概览,
+    #    「米饭」不见了。而回归电池里这一轮一断, 后面同链 6+ 轮全部连坐:
+    #    实测同一版本两轮 80/85 与 61/85, 差的 19 条几乎都是这条链的下游。
+    #
+    # 🔑 本函数自己的判据是「要求覆盖的应该是**用户问了什么**」。多轮澄清里
+    #    用户问的是**累积的那句话**, 不是最后那个片段 —— 所以在延续轮上,
+    #    「这一轮没提到」根本不构成「planner 编的」的证据。
+    # ⛔ 取舍写明: 这里选择在延续轮**完全不剥**, 而不是去拼历史文本重新判。
+    #    拼历史会把同一会话里更早的、无关的提问也算成「用户提过」, 那是把一条
+    #    精确的判据换成一条更松的判据; 而延续轮的指标来自被密封的原句(已经过
+    #    trusted-context 校验), 它「是编的」的可能性本来就不在本函数要防的那类。
+    if getattr(spec, "is_clarification_continuation", False):
+        return spec
+
     kept = tuple(
         m for m in requested
         # 没登记词表的指标一律保留 —— 判不了就别动(同维度那条的处理)。

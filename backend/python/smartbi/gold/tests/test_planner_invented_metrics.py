@@ -111,3 +111,43 @@ def test_filter_is_applied_only_at_the_contract_check():
     assert "_contract.validate(\n            _drop_planner_invented_metrics(spec, query)" in src, (
         "过滤必须发生在契约校验的入参处; 换了写法就把这道闸架空了"
     )
+
+
+# ── 2026-08-10: 澄清延续轮 ────────────────────────────────────────────────
+@dataclass
+class _ContinuationSpec:
+    requested_metrics: Tuple[str, ...] = field(default=())
+    is_clarification_continuation: bool = False
+
+
+def test_clarification_continuation_keeps_inherited_metrics():
+    """🔴 prod 实测的那条链: 延续轮的 query 只是半句话, 不是用户问的问题。
+
+        turn1 「米饭的销量是多少」 → 反问时间
+        turn2 「本月」             → 反问门店
+        turn3 「全部门店」          → planner 继承出 sales_volume
+
+    在 turn3 上按 `query='全部门店'` 判「一个指标词都没沾」, 就会把继承来的
+    sales_volume 当成 planner 编的剥掉 —— 后果不是少一个指标, 是整轮换了个
+    问题回答(用户收到全店营收概览, 「米饭」不见了), 而回归电池里这一轮一断,
+    同链后面 6+ 轮全部连坐。
+    """
+    spec = _ContinuationSpec(("sales_volume",), is_clarification_continuation=True)
+    assert drop(spec, "全部门店").requested_metrics == ("sales_volume",)
+    assert drop(spec, "全部门店") is spec, "延续轮应原样返回, 不该造新对象"
+
+
+def test_non_continuation_turn_still_drops_invented_metrics():
+    """阴性对照: 豁免只对延续轮生效。
+
+    没有这条, 把豁免写成无条件 `return spec` 也能让上面那条通过 —— 那等于
+    把整个函数删掉, 2026-08-07 的假拒当场回来。
+    """
+    spec = _ContinuationSpec(ALL_THREE, is_clarification_continuation=False)
+    assert drop(spec, "最近30天各门店对比如何").requested_metrics == ()
+
+
+def test_continuation_flag_absent_behaves_like_false():
+    """没有这个字段的 spec(旧调用方/测试替身)必须仍走原逻辑, 不能因 getattr 失败
+    而静默全部保留。"""
+    assert drop(_Spec(ALL_THREE), "最近30天各门店对比如何").requested_metrics == ()
