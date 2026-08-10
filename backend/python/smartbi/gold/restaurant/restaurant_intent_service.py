@@ -231,6 +231,12 @@ def _store_scope_disclosure(spec: Any) -> str:
     )
 
 
+# 「用户点了某家店, 计划却是全店 resolver」这条拒答理由。
+# ⛔ 做成常量是因为下游要**按这个理由**决定能不能把死胡同换成歧义消解 ——
+#    两处各写一份字面量, 改一处就静默失联(症状是"歧义消解不出现", 不报错)。
+_STORE_SCOPE_MISMATCH = "门店范围不能由全店或全门店 resolver 代答"
+
+
 def _execution_mismatch(
     spec: RestaurantQuerySpec,
     plan: Tuple[str, ...],
@@ -260,7 +266,7 @@ def _execution_mismatch(
         code in ("RESTAURANT_OPS_SALES_SUMMARY", "RESTAURANT_OPS_GROSS_MARGIN")
         for code in plan
     ):
-        return "门店范围不能由全店或全门店 resolver 代答"
+        return _STORE_SCOPE_MISMATCH
     # ⛔ 两侧都归一到登记表的 key 再比。`_RESOLVER_DIMENSIONS` 写的是旧词汇
     #    (dish/time), 而规格现在给的是登记表的键(product/date) —— 不归一就是
     #    「口径不同的两个集合做子集判断」, 结果是**恒不成立**: 2026-08-09 实测
@@ -282,6 +288,43 @@ async def _known_data_gap(pool, factory_id: str, query: str):
     from smartbi.gold.restaurant.data_gaps import honest_gap_answer
 
     return await honest_gap_answer(pool, factory_id, query or "")
+
+
+async def _store_disambiguation(pool, factory_id, store_mention,
+                                action_warning, spec):
+    """门店提及匹配到多家时返回「请确认门店」澄清; 否则返回 None(交回原路)。
+
+    ⛔ 只处理 **>1 家** 这一种。恰好 1 家说明规划层本该用它却没用 —— 那是另一个
+       缺陷, 在这里"顺手修好"会把它藏起来。让它继续走原拒答, 好歹留下日志。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import (
+        _canonicalize_store_mention,
+    )
+    try:
+        matched = await _canonicalize_store_mention(pool, factory_id, store_mention)
+    except Exception:  # noqa: BLE001 — 消解失败不该把原本的拒答也弄没
+        logger.exception("[restaurant-intent] 门店歧义消解异常, 退回原拒答")
+        return None
+    if len(matched) < 2:
+        return None
+    options = "、".join(matched[:3])
+    logger.info(
+        "[restaurant-intent] 门店提及有歧义 -> 给候选而不是死胡同: "
+        "mention=%r candidates=%s", store_mention, matched[:3])
+    return {
+        "kind": "clarification",
+        "answer_text": _prepend_action_warning(
+            f"「{store_mention}」匹配到多家门店：{options}。"
+            "请指定其中一家后再查询。",
+            action_warning,
+        ),
+        "contract_pass": False,
+        "structured_context": _clarification_structured_context(spec),
+        "spec": spec,
+        "followups": [
+            {"label": f"只看{name}", "question": name} for name in matched[:3]
+        ],
+    }
 
 
 def _drop_planner_invented_metrics(spec, query):
@@ -1277,6 +1320,22 @@ async def tiered_answer(
                 tuple(spec.requested_metrics), dish_mention, store_mention,
                 store_dish, (query or "")[:60],
             )
+            # 🔴 2026-08-10: 「本月社区店的营收」长期红在这里 —— 用户**说了**门店
+            #    (「社区店」), 只是它匹配到两家没消解成功; 规划层于是把 store_scope
+            #    当成「用户没提」补了全店默认, 这道闸再正确地判口径不符 → 用户拿到
+            #    一句死胡同拒答, **连按钮都没有**。
+            #    判据: **「没解析出 X」不等于「用户没提 X」** —— 把前者当后者就是
+            #    拿缺席当证据。
+            # ⛔ 复用 `_canonicalize_store_mention` —— 「匹配到多家门店」这套消解在
+            #    STORE_MARGIN 的 resolver 里早就有。另写一份就是第二个载体, 而今天
+            #    一整轮的缺陷几乎都是「能力长在另一个载体上」。
+            # 📌 与 2026-08-07 那次撤回方向相反且不冲突: 那次撤回的是**压掉**澄清
+            #    (拿 5 条 UX 契约换一次点击, 不划算); 这里是把死胡同**换成**澄清。
+            if mismatch == _STORE_SCOPE_MISMATCH and store_mention:
+                ambiguous = await _store_disambiguation(
+                    pool, factory_id, store_mention, action_warning, spec)
+                if ambiguous is not None:
+                    return ambiguous
             mismatch_result = {
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
