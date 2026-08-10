@@ -103,7 +103,15 @@
 # 所以正解是 `pytest.importorskip("pyarrow")`(测试专属依赖缺席 → 跳过), 而不是给
 # 生产装一个它不需要的包。
 
-# ── ⑤ smartbi/tests 遗留脚手架 (20 个, 2026-08-10 随该目录纳入门禁时挂账) ───────
+# ── ⑤ smartbi/tests 遗留脚手架 (12 个; 曾 20, 2026-08-10 自动判别接管 8 个) ─────
+# 🔽 清掉的 8 个不是「修好了」, 是**根本不该被 pytest 收集**: 它们的 `test_*` 函数
+#    **全部带参数、零个无参数**, 且都有 main() + __main__ 入口 —— 是 main() 里手工
+#    调用的脚手架(如 `async def test_x(detector) -> Result`, 带参数有返回值),
+#    pytest 把参数当 fixture 找, 于是 27 个 `fixture not found`。
+#    conftest 的判别式已扩到这一形态(仍是自动判别, 不是文件清单)。
+#    ⚠️ 第一版判别式只看「有没有 def test_」, 漏了这一种 ——
+#    判据: **「是不是测试」不能只看函数名前缀, 还要看 pytest 调不调得动**
+#          (无参数, 或参数是真 fixture)。
 # 这个目录整体在门禁之外好几个月, 两道拦路的东西已经修掉:
 #   · 导入期改绑 stdio(3 个文件) + 纯脚本导入期 exit(1) → 整轮收集归零。
 #   · **sys.modules 打桩不还原**(test_corpus_judge / test_corpus_p2loop /
@@ -125,19 +133,11 @@
 smartbi/tests/test_sweep_drivers.py            # (d) 18 —— 单独跑绿, 并进来才红(顺序依赖)
 smartbi/tests/test_supplier_price_ingest.py    # (d) 11 —— 同上
 smartbi/tests/test_factory_production_etl.py   # (d) 12 —— assert 6 == date(2026,6,5) 等
-smartbi/tests/test_excel_edge_cases.py         # (a) fixture 'parser' not found ×10
-smartbi/tests/test_structure_detector.py       # (a) fixture 'detector' not found ×7
-smartbi/tests/test_multi_sheet_analysis.py     # (a) fixture 'parser' not found ×5
-smartbi/tests/test_multirow_header.py          # (a) fixture 'df_raw' not found ×2
-smartbi/tests/test_header_llm_selector.py      # (a) 同上 ×2
-smartbi/tests/test_header_advanced.py          # (a) 同上 ×1
 smartbi/tests/test_export_validate.py          # (b) FileNotFoundError ×5
 smartbi/tests/test_smart_analyzer.py           # (b) FileNotFoundError ×4
 smartbi/tests/test_llm_structure_analysis.py   # (b) ModuleNotFoundError 'create_test_excel' ×2
-smartbi/tests/test_e2e_unified_analyzer.py     # (c) 收集期 ModuleNotFoundError 'services.utils'
 smartbi/tests/test_enhanced_analysis.py        # (c) 收集期 import 失败
 smartbi/tests/test_full_e2e_with_save.py       # (c) 收集期 import 失败
-smartbi/tests/test_e2e_realtime.py             # (c) 收集期 import 失败
 smartbi/tests/test_auto_learning.py            # (c) 收集期 AttributeError
 smartbi/tests/test_revenue_report_helpers.py   # (d) ValueError: too many values to unpack ×3
 smartbi/tests/test_revenue_report_dual_write_hook.py  # (d) 断言失败 ×1
