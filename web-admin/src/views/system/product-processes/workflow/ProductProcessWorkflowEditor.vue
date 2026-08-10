@@ -1363,10 +1363,17 @@ const rawOwnerMode = computed(() => props.rawOwnerMode === true);
 const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
   // ⛔ 浮层节点(辅料/包材 cell)不是画布拓扑的一部分, 混进去会把
   // rootInputCount/terminalOutputCount 算错, 让「系统研判」标签失真。
+  // ⛔ isByproduct / substituteOfNodeId 必须一起传下去 —— 分类器认得它们不等于它收得到。
+  // 漏传的话「副产不计终端」「替代组合并」两条规则在真实画布上一次都不会生效, 而
+  // workflowClassification.spec.ts 直接构造入参, 照样全绿(闸在找错地方)。
   stripBomOverlay(flowNodes.value).map((node) => ({
     id: node.id,
     kind: nodeKind(node),
     skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
+    isByproduct: (node.data as MaterialNodeData)?.isByproduct === true,
+    substituteOfNodeId: typeof node.data?.substituteOfNodeId === 'string'
+      ? node.data.substituteOfNodeId
+      : undefined,
   })),
   // 边也要剥。包材浮层边是「真实产出 → bom-overlay:pack:x」, 不剥的话那个真实产出
   // 会被算进 outgoing, classifyWorkflowTopology 的 !outgoing.has(id) 就把它排除出

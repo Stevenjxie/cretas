@@ -124,11 +124,15 @@ class WorkflowTopologyClassifierTest {
                     "materialNodeId", id)));
         }
         if (mutuallySubstitutableRoots) {
-            processData.put("portGroups", List.of(new LinkedHashMap<>(Map.of(
-                    "id", "input-alternatives",
-                    "direction", "INPUT",
-                    "mode", "EXACTLY_ONE",
-                    "portIds", ports.stream().map(port -> port.get("id")).toList()))));
+            // 2026-08-10: 替代组的载体从工序的 EXACTLY_ONE 端口组换成原料节点自己的
+            // substituteOfNodeId —— portGroups 那条路从来没生效过(normalizeDraft 每次保存
+            // 都 remove 掉它, 且 RuntimeCompiler 在 ACTUAL_IO 下完全绕过它)。
+            // 第 2..N 个原料指向第 1 个, 只有一层(成链由 ProductProcessWorkflowValidator 拒绝)。
+            String mainRootNodeId = "raw-0";
+            nodes.stream()
+                    .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                    .filter(node -> !mainRootNodeId.equals(node.getId()))
+                    .forEach(node -> node.getData().put("substituteOfNodeId", mainRootNodeId));
         }
         index = 0;
         for (String terminal : terminals) {

@@ -59,8 +59,16 @@ public final class WorkflowTopologyClassifier {
     }
 
     /**
-     * A group of root raw-material ports configured as EXACTLY_ONE is one logical input: the
-     * materials are alternatives, not simultaneous requirements. Other roots remain independent.
+     * 一组「互为替代」的根原料算一个逻辑投入 —— 它们是二选一, 不是同时都要。
+     *
+     * <p>2026-08-10: 载体从工序的 EXACTLY_ONE 端口组换成原料节点自己的
+     * substituteOfNodeId。原因见 spec §5.2b: portGroups 会被
+     * {@code WorkflowActualIoSemantics#normalizeDraft} 每次保存都删掉, 且
+     * RuntimeCompiler 在 ACTUAL_IO 下完全绕过它, prod 35 条 revision 里一条
+     * portGroups 都没有 —— 那条路从来没生效过。
+     *
+     * <p>合法性(自引用/悬空/成链)由 {@code ProductProcessWorkflowValidator} 保证,
+     * 这里只做合并, 不重复校验。
      */
     private static int logicalRootCount(
             ProductProcessWorkflowDTO definition, Set<String> rootNodeIds) {
@@ -68,46 +76,12 @@ public final class WorkflowTopologyClassifier {
         Map<String, String> parent = new HashMap<>();
         rootNodeIds.forEach(id -> parent.put(id, id));
         for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
-            if (node == null || !"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
-            Map<String, String> materialNodeByPortId = inputMaterialNodeByPortId(node.getData());
-            Object rawGroups = node.getData().get("portGroups");
-            if (!(rawGroups instanceof List<?> groups)) continue;
-            for (Object rawGroup : groups) {
-                if (!(rawGroup instanceof Map<?, ?> group)
-                        || !"INPUT".equals(stringValue(group, "direction"))
-                        || !"EXACTLY_ONE".equals(stringValue(group, "mode"))) {
-                    continue;
-                }
-                Object rawPortIds = group.get("portIds");
-                if (!(rawPortIds instanceof List<?> portIds)) continue;
-                List<String> alternativeRoots = portIds.stream()
-                        .map(String::valueOf)
-                        .map(materialNodeByPortId::get)
-                        .filter(rootNodeIds::contains)
-                        .distinct()
-                        .toList();
-                if (alternativeRoots.size() < 2) continue;
-                String first = alternativeRoots.getFirst();
-                alternativeRoots.stream().skip(1).forEach(root -> union(parent, first, root));
-            }
+            if (node == null || !rootNodeIds.contains(node.getId()) || node.getData() == null) continue;
+            String target = stringValue(node.getData(), "substituteOfNodeId");
+            if (target == null || !rootNodeIds.contains(target)) continue;
+            union(parent, target, node.getId());
         }
         return (int) rootNodeIds.stream().map(id -> find(parent, id)).distinct().count();
-    }
-
-    private static Map<String, String> inputMaterialNodeByPortId(Map<String, Object> data) {
-        Map<String, String> result = new HashMap<>();
-        Object rawPorts = data.get("ports");
-        if (!(rawPorts instanceof List<?> ports)) return result;
-        for (Object rawPort : ports) {
-            if (!(rawPort instanceof Map<?, ?> port)
-                    || !"INPUT".equals(stringValue(port, "direction"))) {
-                continue;
-            }
-            String portId = stringValue(port, "id");
-            String materialNodeId = stringValue(port, "materialNodeId");
-            if (portId != null && materialNodeId != null) result.put(portId, materialNodeId);
-        }
-        return result;
     }
 
     private static void union(Map<String, String> parent, String left, String right) {

@@ -116,6 +116,9 @@ interface EditorVm {
     relation: '' | 'SUBSTITUTE' | 'PARALLEL';
   };
   confirmAddRawInput: () => void;
+  derivedWorkflowClassification: {
+    type: string; label: string; rootInputCount: number; terminalOutputCount: number;
+  };
   updateProcessData: (processId: string, patch: Record<string, unknown>) => void;
   addStandaloneRaw: () => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => Promise<void>;
@@ -1230,6 +1233,44 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
   });
 
+  it('研判收得到替代关系 —— 两个根声明替代后合成一个逻辑投入', async () => {
+    const vm = await mountEditor();
+
+    const independent = classifyGraph(vm, [
+      topoNode('r1', 'RAW_MATERIAL'), topoNode('r2', 'RAW_MATERIAL'),
+      topoNode('p', 'PROCESS'), topoNode('f1', 'FINISHED_GOOD'), topoNode('f2', 'FINISHED_GOOD'),
+    ], [
+      { id: 'e1', source: 'r1', target: 'p' }, { id: 'e2', source: 'r2', target: 'p' },
+      { id: 'e3', source: 'p', target: 'f1' }, { id: 'e4', source: 'p', target: 'f2' },
+    ]);
+    expect(independent).toMatchObject({ type: 'JOINT_PRODUCTION', rootInputCount: 2 });
+
+    const substituted = classifyGraph(vm, [
+      topoNode('r1', 'RAW_MATERIAL'),
+      topoNode('r2', 'RAW_MATERIAL', { substituteOfNodeId: 'r1' }),
+      topoNode('p', 'PROCESS'), topoNode('f1', 'FINISHED_GOOD'), topoNode('f2', 'FINISHED_GOOD'),
+    ], [
+      { id: 'e1', source: 'r1', target: 'p' }, { id: 'e2', source: 'r2', target: 'p' },
+      { id: 'e3', source: 'p', target: 'f1' }, { id: 'e4', source: 'p', target: 'f2' },
+    ]);
+    expect(substituted).toMatchObject({ type: 'RAW_SPLIT', rootInputCount: 1 });
+  });
+
+  it('研判收得到副产标记 —— 主成品 + 副产是单产出', async () => {
+    const vm = await mountEditor();
+
+    const result = classifyGraph(vm, [
+      topoNode('r1', 'RAW_MATERIAL'), topoNode('p', 'PROCESS'),
+      topoNode('f1', 'FINISHED_GOOD'),
+      topoNode('fby', 'FINISHED_GOOD', { isByproduct: true }),
+    ], [
+      { id: 'e1', source: 'r1', target: 'p' },
+      { id: 'e2', source: 'p', target: 'f1' }, { id: 'e3', source: 'p', target: 'fby' },
+    ]);
+
+    expect(result).toMatchObject({ type: 'PRODUCT', terminalOutputCount: 1 });
+  });
+
   it('该工序还没有任何原料时不弹窗, 直接建独立投入', async () => {
     const wrapper = await mountEditorWrapper();
     const vm = wrapper.vm as unknown as EditorVm;
@@ -1246,6 +1287,21 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
   });
 });
+
+// 🔴 分类器认得 isByproduct / substituteOfNodeId, **不等于**编辑器把它们传得到。
+//    漏传的话两条规则在真实画布上一次都不会生效, 而 workflowClassification.spec.ts
+//    直接构造入参、照样全绿 —— 那就是「闸在找错地方」。这两条用例走编辑器的真实入参路径。
+function classifyGraph(vm: EditorVm, nodes: EditorNode[], edges: Array<{
+  id: string; source: string; target: string;
+}>): EditorVm['derivedWorkflowClassification'] {
+  vm.flowNodes = nodes;
+  vm.flowEdges = edges;
+  return vm.derivedWorkflowClassification;
+}
+
+function topoNode(id: string, kind: string, data: Record<string, unknown> = {}): EditorNode {
+  return { id, position: { x: 0, y: 0 }, data: { kind, skuId: id, ...data } };
+}
 
 function addProcessOffRaw(vm: EditorVm): EditorNode {
   vm.openAddProcess('raw');
