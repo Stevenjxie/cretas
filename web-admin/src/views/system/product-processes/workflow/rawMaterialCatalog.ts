@@ -51,6 +51,32 @@ export function filterRawMaterialsBySegment(
   });
 }
 
+/**
+ * Resolve a legacy/free-text raw Cell name to one real material identity.
+ *
+ * This is deliberately exact and fail-closed: the editor may project a unique
+ * match into the in-memory canvas, but it must never guess between two material
+ * records. A unique match from the current product BOM wins over same-named
+ * catalog rows outside that BOM because the Cell name normally originates from
+ * the product's persisted recipe.
+ */
+export function resolveRawMaterialByExactName(
+  name: string,
+  options: RawMaterialPickerOption[],
+  preferredIds: string[] = [],
+): RawMaterialPickerOption | null {
+  const normalizedName = normalizeMaterialName(name);
+  if (!normalizedName) return null;
+
+  const exactMatches = options
+    .filter(isRawMaterialOption)
+    .filter((option) => normalizeMaterialName(option.name) === normalizedName);
+  const preferredIdSet = new Set(preferredIds);
+  const preferredMatches = exactMatches.filter((option) => preferredIdSet.has(option.id));
+  const candidates = preferredMatches.length > 0 ? preferredMatches : exactMatches;
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function copyActiveNode(node: MaterialSegmentNode): MaterialSegmentNode {
   const children = (node.children || [])
     .filter((child) => child.isActive !== false)

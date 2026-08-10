@@ -23,7 +23,7 @@ import type {
  * ⚠️ 顺带说明当初那条浮层边的下场，作为「浮层是脆的」的实证：
  * 副产浮层的 `bom-byp-out` sourceHandle **在 WorkflowMaterialNode.vue 里从来没有
  * 对应的 <Handle>**（包材的 `bom-pack-out` 有）。按下面这段注释预言的失败模式，
- * 那条虚线不报错、直接不渲染 —— 副产 cell 一直是飘在成品下方、没有连线的。
+ * 那条投影连线不报错、直接不渲染 —— 副产 cell 一直是飘在成品下方、没有连线的。
  * 真实节点走真实边，不存在这种"两边字符串对不齐就静默失效"的耦合。
  */
 export const BOM_OVERLAY_PREFIX = 'bom-overlay:';
@@ -43,7 +43,7 @@ export function stripBomOverlay<T extends { id: string }>(nodes: T[]): T[] {
 }
 
 /**
- * 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的虚线连接)同样不属于工艺定义。
+ * 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的投影连接)同样不属于工艺定义。
  * 一条浮层边永远只有一端是浮层节点(另一端是真实工艺节点), 所以 source/target
  * 都要判——只查 source 会漏掉「产出 → 包材」方向(浮层 id 在 target 侧)。
  */
@@ -57,8 +57,8 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  * 从 BOM 数据派生浮层节点/连线 —— deriveBomOverlay。
  *
  * 布局规则（原型已定）：辅料 cell 挂在它服务的工序正上方（y - AUX_OFFSET_Y）；
- * 包材 cell 挂在它服务的终端产出右侧（x + PACK_OFFSET_X）。连线一律虚线，
- * 不表达真实物料流向 —— 只是「这个 cell 归属于哪个工艺节点」的视觉指向。
+ * 包材 cell 挂在它服务的终端产出右侧（x + PACK_OFFSET_X）。投影连线使用与
+ * 普通 Workflow 一致的蓝色实线和箭头；它仍只表达归属，不代表执行物料流。
  */
 const AUX_OFFSET_Y = 220;
 // 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
@@ -171,7 +171,7 @@ export interface OverlayEdge {
   target: string;
   targetHandle?: string;
   type: 'smoothstep';
-  style: { stroke: string; strokeWidth: number; strokeDasharray: string };
+  style: { stroke: string; strokeWidth: number };
 }
 
 export interface BomOverlayResult {
@@ -218,7 +218,7 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         target: node.id,
         targetHandle: AUX_OVERLAY_TARGET_HANDLE,
         type: 'smoothstep',
-        style: { stroke: '#d9822b', strokeWidth: 2, strokeDasharray: '5 4' },
+        style: { stroke: '#1b65a8', strokeWidth: 2 },
       });
     }
 
@@ -243,7 +243,7 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         target: packId,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
         type: 'smoothstep',
-        style: { stroke: '#c2415d', strokeWidth: 2, strokeDasharray: '5 4' },
+        style: { stroke: '#1b65a8', strokeWidth: 2 },
       });
     }
   }

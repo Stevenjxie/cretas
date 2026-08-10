@@ -700,6 +700,7 @@ import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
+  resolveRawMaterialByExactName,
   type MaterialSegmentNode,
   type RawMaterialPickerOption,
 } from './rawMaterialCatalog';
@@ -1395,7 +1396,36 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
   if (!rawOwnerMode.value) await catalogPromise;
   await loadProductBom();
+  if (projectUniqueRawMaterialBindings()) refreshPortMaterialMetadata();
   await loadBomOverlayData();
+}
+
+/**
+ * Fill the real identity of legacy/free-text raw Cells after the catalog and
+ * current product BOM have loaded. This is an in-memory hydration projection:
+ * it intentionally does not call mutate(), set dirty, or schedule autosave.
+ * A later explicit save/publish persists the already-visible identity.
+ */
+function projectUniqueRawMaterialBindings(): boolean {
+  let changed = false;
+  flowNodes.value.forEach((node) => {
+    if (node.data?.kind !== 'RAW_MATERIAL' || String(node.data?.skuId || '')) return;
+    const option = resolveRawMaterialByExactName(
+      String(node.data?.name || ''),
+      rawMaterialOptions.value,
+      bomRawMaterialIdList.value,
+    );
+    if (!option) return;
+    Object.assign(node.data, {
+      name: option.name,
+      skuId: option.id,
+      skuCode: option.code || option.id,
+      baseUnit: workflowReportingUnit('RAW_MATERIAL', option.unit || String(node.data?.baseUnit || 'kg')),
+      bound: true,
+    });
+    changed = true;
+  });
+  return changed;
 }
 
 // #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
@@ -2510,6 +2540,7 @@ function refreshBomOverlay(): void {
       targetHandle: edge.targetHandle,
       type: edge.type,
       style: edge.style,
+      markerEnd: MarkerType.ArrowClosed,
       selectable: false,
       deletable: false,
       updatable: false,
@@ -2531,6 +2562,7 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
     markerEnd: MarkerType.ArrowClosed,
     style: { stroke: '#1b65a8', strokeWidth: 2 },
   }));
+  projectUniqueRawMaterialBindings();
   refreshPortMaterialMetadata();
   refreshBomOverlay();
   return false;
@@ -2552,7 +2584,7 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
     // ⛔ 浮层节点(辅料/包材 cell)是 BOM 数据的投影, 不属于工艺定义。
     // 混进去会改 revision hash → 改一克盐就让所有 BOM 需要重新对齐。
     nodes: stripBomOverlay(flowNodes.value).map(serializeFlowNode),
-    // ⛔ 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的虚线连接)同理必须剥离,
+    // ⛔ 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的投影连接)同样必须剥离,
     // 否则序列化出的定义会带着指向已被剥离节点的悬空引用发去后端。
     edges: stripBomOverlayEdges(flowEdges.value).map(serializeFlowEdge),
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
@@ -2651,6 +2683,7 @@ function mutate(action: () => void): void {
   if (!canEdit.value) return;
   remember();
   action();
+  projectUniqueRawMaterialBindings();
   refreshPortMaterialMetadata();
   // ⛔ must-fix #7: hydrate() 早就会重新派生浮层(#node-bomAuxiliary/#node-bomPackaging),
   // 但大多数图编辑(加工序/加端口/连线...)走的是 mutate() 直接改 flowNodes/flowEdges,

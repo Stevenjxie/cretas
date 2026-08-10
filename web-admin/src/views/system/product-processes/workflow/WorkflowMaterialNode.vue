@@ -16,9 +16,9 @@
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
     <!-- FINISHED_GOOD 没有真实的下游产出 handle(它是终端), 但 BOM 浮层的包材 cell
-         需要从它引一条虚线出去 —— 用独立 id 的 handle 承载, 不与上面的 "output"
+         需要从它引一条投影连线出去 —— 用独立 id 的 handle 承载, 不与上面的 "output"
          (真实工艺连线用)混用, 两者互斥(kind 不可能同时满足两个 v-if)。
-         ⛔ :connectable="false" 是硬约束, 不是可省的默认值: 这个 handle 只是给浮层虚线
+         ⛔ :connectable="false" 是硬约束, 不是可省的默认值: 这个 handle 只是给浮层投影连线
          挂点用的视觉锚点, 绝不能被用来发起/接受真实拖拽连线 —— evaluateWorkflowConnection
          把 "非 PROCESS → PROCESS" 一律判合法, 如果这个 handle 可连, 用户从"成品"拖一条线
          到任意工序就会被 onConnect/attachInputBinding 当真写进该工序 data.ports 里一个
@@ -76,7 +76,7 @@
     </div>
 
     <div
-      v-if="kind === 'RAW_MATERIAL' && canWrite && rawMaterialSegments.length > 0"
+      v-if="showRawBindingPicker && rawMaterialSegments.length > 0"
       class="raw-category-filter-shell nodrag nowheel"
       data-testid="raw-segment-filter-shell"
       @wheel.stop
@@ -101,7 +101,7 @@
     </div>
 
     <el-select
-      v-if="kind === 'RAW_MATERIAL' && canWrite"
+      v-if="showRawBindingPicker"
       ref="rawSelectorRef"
       class="nodrag nowheel raw-selector"
       :model-value="data.skuId"
@@ -112,7 +112,7 @@
       popper-class="workflow-raw-selector-popper nowheel nodrag"
       :filter-method="handleRawFilter"
       @visible-change="handleRawVisibleChange"
-      @change="(value: string) => emit('selectRawSku', value)"
+      @change="handleSelectRawSku"
     >
       <el-option-group v-if="bomRawOptions.length > 0" label="本产品 BOM 原料" data-testid="bom-raw-group">
         <el-option
@@ -178,6 +178,13 @@
     </template>
 
     <div v-if="kind !== 'FINISHED_GOOD' && canWrite" class="node-actions nodrag">
+      <el-button
+        v-if="kind === 'RAW_MATERIAL' && data.skuId && !rawBindingEditing"
+        text
+        size="small"
+        data-testid="change-raw-material"
+        @click="rawBindingEditing = true"
+      >更换原料</el-button>
       <el-button size="small" text type="primary" @click="emit('addNext')">+ 后续工序</el-button>
     </div>
   </div>
@@ -258,6 +265,7 @@ const emit = defineEmits<{
 }>();
 
 const selectedRawSegmentPath = ref<string[]>([]);
+const rawBindingEditing = ref(false);
 const materialNodeRef = ref<HTMLElement | null>(null);
 const rawSegmentDropdownVisible = ref(false);
 interface CascaderExpose {
@@ -279,6 +287,16 @@ const rawCandidateOptions = computed(() => filterRawMaterialsBySegment(
 ).filter((option) => (
   option.id === props.data.skuId || !props.excludedRawMaterialIds.includes(option.id)
 )));
+const showRawBindingPicker = computed(() => (
+  props.kind === 'RAW_MATERIAL'
+  && props.canWrite
+  && (!props.data.skuId || rawBindingEditing.value)
+));
+
+function handleSelectRawSku(value: string): void {
+  rawBindingEditing.value = false;
+  emit('selectRawSku', value);
+}
 
 function closeRawSegmentDropdown(): void {
   rawSegmentCascaderRef.value?.togglePopperVisible(false);
@@ -501,7 +519,7 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
 .raw-selector, .raw-category-filter-shell, .sku-selector { width: 100%; margin-top: 8px; }
 .raw-category-filter { width: 100%; }
-.node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.node-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 6px; }
 /* #3 BOM 为空时的提示 (fool-proof-design Rule 5: 不留死胡同, 给出下一步动作) */
 .bom-hint {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px;
