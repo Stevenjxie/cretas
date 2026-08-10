@@ -57,6 +57,47 @@ class WorkflowTopologyClassifierTest {
         assertEquals(1, topology.logicalRootInputCount());
     }
 
+    @Test
+    void excludesByproductNodesFromTerminalOutputs() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-1", "FG-BY"));
+        markByproduct(definition, "FG-BY");
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of("FG-1"), topology.terminalOutputSkuIds());
+        assertEquals(WorkflowTopology.Type.SINGLE_OUTPUT_PRODUCT, topology.type());
+    }
+
+    @Test
+    void treatsStringTrueByproductFlagTheSameAsBoolean() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-1", "FG-BY"));
+        definition.getNodes().stream()
+                .filter(node -> "FG-BY".equals(node.getData().get("skuId")))
+                .forEach(node -> node.getData().put("isByproduct", "true"));
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of("FG-1"), topology.terminalOutputSkuIds());
+    }
+
+    @Test
+    void fallsBackToInvalidWhenEveryTerminalIsAByproduct() {
+        ProductProcessWorkflowDTO definition = graph(List.of("RAW-A"), List.of("FG-BY"));
+        markByproduct(definition, "FG-BY");
+
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(definition);
+
+        assertEquals(List.of(), topology.terminalOutputSkuIds());
+        assertEquals(WorkflowTopology.Type.INVALID, topology.type());
+    }
+
+    private void markByproduct(ProductProcessWorkflowDTO definition, String skuId) {
+        definition.getNodes().stream()
+                .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
+                .filter(node -> skuId.equals(node.getData().get("skuId")))
+                .forEach(node -> node.getData().put("isByproduct", true));
+    }
+
     private ProductProcessWorkflowDTO graph(List<String> roots, List<String> terminals) {
         return graph(roots, terminals, false);
     }

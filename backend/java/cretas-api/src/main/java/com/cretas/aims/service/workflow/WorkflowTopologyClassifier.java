@@ -34,7 +34,9 @@ public final class WorkflowTopologyClassifier {
             if (node == null || node.getId() == null || node.getData() == null) continue;
             String skuId = stringValue(node.getData(), "skuId");
             if (skuId == null) continue;
-            if ("FINISHED_GOOD".equals(node.getKind()) && !withOutgoing.contains(node.getId())) {
+            if ("FINISHED_GOOD".equals(node.getKind())
+                    && !withOutgoing.contains(node.getId())
+                    && !isByproduct(node)) {
                 terminals.add(skuId);
             }
             if ("RAW_MATERIAL".equals(node.getKind()) && !withIncoming.contains(node.getId())) {
@@ -121,6 +123,22 @@ public final class WorkflowTopologyClassifier {
         }
         parent.put(value, current);
         return current;
+    }
+
+    /**
+     * 副产是「附带出来的物料」而不是「要生产的成品」——不能进终端产出集合。
+     *
+     * <p>2026-08-10: 生产计划改为精确匹配(勾选集合必须等于终端产出集合)之后，副产若留在
+     * 集合里，建计划就会要求用户把副产也勾上。画布对副产的建模是「普通产出节点 +
+     * isByproduct 标记」(刻意没有 kind:'BYPRODUCT'，与材质正交)，所以只认这个标记 ——
+     * 与 ProductProcessWorkflowCatalogValidator#isByproductNode 同口径。
+     *
+     * <p>⚠️ 收窄会传导到 isSingleOutput()/isMultiOutput()：「主成品 + 副产」图变成单产出，
+     * 「只有副产」图变成 INVALID。两者都已被测试钉住。
+     */
+    private static boolean isByproduct(ProductProcessWorkflowDTO.Node node) {
+        Object flag = node.getData().get("isByproduct");
+        return Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(String.valueOf(flag));
     }
 
     private static String stringValue(Map<?, ?> data, String key) {
