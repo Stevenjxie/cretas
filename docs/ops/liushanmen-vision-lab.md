@@ -6,6 +6,21 @@
 
 云端 VL 默认关闭，额度上限为 0。本机 YOLO、Grounding DINO 或 LocateAnything 可作为离线辅助老师，但其候选框不是人工真值。
 
+Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆盖标签队列的
+`MARK-NEEDS-ANNOTATION.json`。生产 tray ONNX 负责全图预标注；已淘汰的历史 tray v7
+只能用于分歧排序。LocateAnything 是可失败跳过的二级 teacher，只允许从固定离线路径
+`B:\AIModels\LocateAnything-3B`、固定 revision
+`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 1024 长边的局部 crop；
+禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
+
+本地 tray 标注页只监听回环地址：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\tray_annotator_local.py `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --port 8765
+```
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。

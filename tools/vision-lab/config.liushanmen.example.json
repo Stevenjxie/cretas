@@ -64,5 +64,14 @@
     "enabled": false,
     "max_calls_per_run": 0,
     "monthly_budget_cny": 0
+  },
+  "tray_active_learning": {
+    "teacher_optional": true,
+    "teacher_model_path": "B:\\AIModels\\LocateAnything-3B",
+    "teacher_model_revision": "c32291ca5e996f5a7a485845b4f57a233936bba0",
+    "teacher_offline_only": true,
+    "teacher_crop_max_side": 1024,
+    "teacher_failure_mode": "skip",
+    "full_image_teacher_forbidden": true
   }
 }
