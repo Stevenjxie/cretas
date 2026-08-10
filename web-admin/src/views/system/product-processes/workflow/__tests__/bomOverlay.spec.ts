@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOM_OVERLAY_PREFIX,
   deriveBomOverlay,
+  isDerivedBomOverlayConnection,
   isBomOverlayNode,
   stripBomOverlay,
   stripBomOverlayEdges,
@@ -60,6 +61,47 @@ describe('stripBomOverlayEdges 滤掉浮层边(source 或 target 任一端是浮
     expect(result).toEqual([survivor1, survivor2]);
     expect(result[0]).toBe(survivor1);
     expect(result[1]).toBe(survivor2);
+  });
+});
+
+describe('Vue Flow 连接门只放行派生浮层边', () => {
+  it('放行辅料 cell 到所属工序的精确 handle 组合', () => {
+    expect(isDerivedBomOverlayConnection({
+      source: `${BOM_OVERLAY_PREFIX}aux:p1`,
+      sourceHandle: 'bom-aux-out',
+      target: 'p1',
+      targetHandle: 'bom-aux-in',
+    })).toBe(true);
+  });
+
+  it('放行成品到所属包材 cell 的精确 handle 组合', () => {
+    expect(isDerivedBomOverlayConnection({
+      source: 'o1',
+      sourceHandle: 'bom-pack-out',
+      target: `${BOM_OVERLAY_PREFIX}pack:o1`,
+      targetHandle: 'bom-pack-in',
+    })).toBe(true);
+  });
+
+  it.each([
+    {
+      source: `${BOM_OVERLAY_PREFIX}aux:p1`, sourceHandle: 'output',
+      target: 'p1', targetHandle: 'bom-aux-in',
+    },
+    {
+      source: `${BOM_OVERLAY_PREFIX}aux:p1`, sourceHandle: 'bom-aux-out',
+      target: 'p2', targetHandle: 'bom-aux-in',
+    },
+    {
+      source: 'o1', sourceHandle: 'bom-pack-out',
+      target: `${BOM_OVERLAY_PREFIX}pack:o2`, targetHandle: 'bom-pack-in',
+    },
+    {
+      source: 'material-1', sourceHandle: 'output',
+      target: 'process-1', targetHandle: 'input',
+    },
+  ])('拒绝非派生拓扑 %#', (connection) => {
+    expect(isDerivedBomOverlayConnection(connection)).toBe(false);
   });
 });
 

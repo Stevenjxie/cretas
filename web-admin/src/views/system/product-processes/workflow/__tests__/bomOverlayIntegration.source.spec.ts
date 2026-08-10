@@ -46,6 +46,15 @@ describe('画布接入 BOM 浮层', () => {
     expect(source).not.toMatch(/targetHandle:\s*'bom-pack-in'/);
   });
 
+  it('Vue Flow 的统一连接门先放行精确派生浮层边，避免 setEdges 静默过滤', () => {
+    const validationBody = source.slice(
+      source.indexOf('function isValidConnection'),
+      source.indexOf('function isValidConnection') + 900,
+    );
+    expect(validationBody).toContain('isDerivedBomOverlayConnection(connection)');
+    expect(validationBody).toMatch(/isBomOverlayNode\(source\)[\s\S]{0,80}isBomOverlayNode\(target\)[\s\S]{0,80}return false/);
+  });
+
   it('首次创建草稿钉住当前 Workflow revision，并用返回草稿刷新而不要求手工刷新', () => {
     expect(source).toContain('definition.value?.revisionId');
     expect(source).toContain('loadBomOverlayData({ preferredDraft: draft })');

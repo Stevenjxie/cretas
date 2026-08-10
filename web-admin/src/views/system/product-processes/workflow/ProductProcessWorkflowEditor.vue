@@ -709,6 +709,7 @@ import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
 import {
   deriveBomOverlay,
+  isDerivedBomOverlayConnection,
   isBomOverlayEdge,
   isBomOverlayNode,
   stripBomOverlay,
@@ -2742,6 +2743,10 @@ function isValidConnection(connection: Connection): boolean {
   const source = flowNodes.value.find((n) => n.id === connection.source);
   const target = flowNodes.value.find((n) => n.id === connection.target);
   if (!source || !target) return false;
+  // Vue Flow 也用这道门校验程序派生的 v-model edges。浮层节点没有工艺 kind，
+  // 必须先按精确的节点归属 + handle 组合放行，否则三条派生边会被静默丢弃。
+  if (isDerivedBomOverlayConnection(connection)) return true;
+  if (isBomOverlayNode(source) || isBomOverlayNode(target)) return false;
   return evaluateWorkflowConnection(nodeKind(source), nodeKind(target), source.id === target.id).valid;
 }
 
