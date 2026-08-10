@@ -5540,13 +5540,17 @@ async def resolve_store_margin(
             if not ranked_rows:
                 continue
             lines.append(f"**{current_store}**")
+            # ⚠️ 这个循环同时在建 ranked_entities / chart_* —— 表格只接管**文本**
+            #    那一半, 结构化产物原样留在循环里。把两者一起重写最容易漏掉后者,
+            #    而漏了不会报错: 答案照常显示, 只是图表和结构化上下文空了。
+            store_table_rows = []
             for index, row in enumerate(ranked_rows, 1):
                 quantity = float(row["qty"] or 0)
-                lines.append(
-                    f"{index}. {row['dish_name']} — 销量 "
-                    f"{_format_sales_quantity(quantity)} 份、"
-                    f"营收 ¥{float(row['revenue'] or 0):,.2f}"
-                )
+                store_table_rows.append([
+                    index, row["dish_name"],
+                    _format_sales_quantity(quantity),
+                    f"¥{float(row['revenue'] or 0):,.2f}",
+                ])
                 ranked_entities.append({
                     "type": "dish",
                     "id": row.get("product_id"),
@@ -5563,6 +5567,9 @@ async def resolve_store_margin(
                     else f"{current_store}·{row['dish_name']}"
                 )
                 chart_values.append(quantity)
+            lines.extend(_markdown_table(
+                ["#", "菜品", "销量（份）", "营收"],
+                store_table_rows, right_align={2, 3}))
             lines.append("")
 
         if not ranked_entities:
@@ -6068,11 +6075,11 @@ async def resolve_store_margin(
             per_store.values(), key=lambda e: e["qty"], reverse=True,
         )
         rank_lines = [f"**「{dish_mention}」{spec_note}各门店销量排行（{window_label}）：**", ""]
-        for idx, e in enumerate(ranked_dish_stores[:5], 1):
-            store_label = f"**{e['name']}**" if idx == 1 else e["name"]
-            rank_lines.append(
-                f"{idx}. {store_label} — 销量 {e['qty']:,.0f} 份、营收 ¥{e['revenue']:,.2f}"
-            )
+        rank_lines.extend(_markdown_table(
+            ["#", "门店", "销量（份）", "营收"],
+            [[idx, e["name"], f"{e['qty']:,.0f}", f"¥{e['revenue']:,.2f}"]
+             for idx, e in enumerate(ranked_dish_stores[:5], 1)],
+            right_align={2, 3}))
         rank_lines.append("")
         rank_lines.append(
             f"> 仅统计窗口内有该菜销售记录的 {len(ranked_dish_stores)} 家门店。"
@@ -7942,6 +7949,7 @@ async def resolve_channel_mix(
     total_rev = sum(float(r["revenue"]) for r in typed.values())
     lines = [f"**堂食 vs 外卖（{window_label}）：**", ""]
     kpis = []
+    channel_rows = []
     for name in ("堂食", "外卖"):
         r = typed.get(name)
         if r is None:
@@ -7950,17 +7958,30 @@ async def resolve_channel_mix(
         rev = float(r["revenue"])
         bill_pct = bills / total_bills * 100 if total_bills else 0.0
         rev_pct = rev / total_rev * 100 if total_rev else 0.0
+        # 渠道构成本来就是表格(渠道/营收/占比/单量/占比), 项目符号让人没法竖着比。
+        # ⚠️ 两个循环合成**一张**表: 堂食/外卖有金额, 其它渠道只有单量 —— 后者的
+        #    金额列留空, 而不是另起一张表。两张表会让人以为是两批不同口径的数。
         if can_see_money:
-            lines.append(
-                f"- {name}：¥{rev:,.0f}（营收占 {rev_pct:.1f}%），"
-                f"{bills:,} 单（单量占 **{bill_pct:.1f}%**）"
-            )
+            channel_rows.append([name, f"¥{rev:,.0f}", f"{rev_pct:.1f}%",
+                                 f"{bills:,}", f"{bill_pct:.1f}%"])
         else:
-            lines.append(f"- {name}：{bills:,} 单（单量占 **{bill_pct:.1f}%**）")
+            channel_rows.append([name, f"{bills:,}", f"{bill_pct:.1f}%"])
         kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
     for name, r in typed.items():
         if name not in ("堂食", "外卖"):
-            lines.append(f"- {name}：{int(r['bills']):,} 单")
+            other_bills = int(r["bills"])
+            other_pct = other_bills / total_bills * 100 if total_bills else 0.0
+            if can_see_money:
+                channel_rows.append([name, "—", "—", f"{other_bills:,}",
+                                     f"{other_pct:.1f}%"])
+            else:
+                channel_rows.append([name, f"{other_bills:,}", f"{other_pct:.1f}%"])
+    if channel_rows:
+        lines.extend(_markdown_table(
+            (["渠道", "营收", "营收占比", "单量", "单量占比"] if can_see_money
+             else ["渠道", "单量", "单量占比"]),
+            channel_rows,
+            right_align={1, 2, 3, 4} if can_see_money else {1, 2}))
     if untyped_bills:
         lines.append("")
         lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
