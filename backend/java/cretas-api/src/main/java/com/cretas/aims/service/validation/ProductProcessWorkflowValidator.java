@@ -68,6 +68,7 @@ public class ProductProcessWorkflowValidator {
             }
         }
 
+        validateSubstituteReferences(definition, nodesById);
         validateGraphSemantics(definition, nodesById);
         if (definition.getViewport() == null
                 || definition.getViewport().getZoom() == null
@@ -76,6 +77,45 @@ public class ProductProcessWorkflowValidator {
             invalid("画布缩放值必须在 0.35 到 1.80 之间");
         }
         assertAcyclic(definition.getNodes(), definition.getEdges());
+    }
+
+    /**
+     * 校验原料 Cell 上的替代料引用 {@code substituteOfNodeId}。
+     *
+     * <p>⛔ 合法性**必须**由后端保证, 不能只靠前端弹窗: AI 画布工具是第二个写图入口,
+     * 它的 {@code UPSERT_NODE} 完全绕过编辑器 UI。
+     *
+     * <p>只允许一层: A→B→C 会被 {@code logicalRootCount()} 的并查集合成一个逻辑投入,
+     * 但业务上没人这么表达, 且成环时会算出无意义的结果。
+     */
+    private void validateSubstituteReferences(
+            ProductProcessWorkflowDTO definition,
+            Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (!"RAW_MATERIAL".equals(node.getKind()) || node.getData() == null) {
+                continue;
+            }
+            Object raw = node.getData().get("substituteOfNodeId");
+            if (raw == null || String.valueOf(raw).isBlank()) {
+                continue;
+            }
+            String target = String.valueOf(raw);
+            if (target.equals(node.getId())) {
+                invalidSubstitute(node, "替代料不能指向自己");
+            }
+            ProductProcessWorkflowDTO.Node parent = nodesById.get(target);
+            if (parent == null) {
+                invalidSubstitute(node, "替代料指向的原料 Cell 不存在: " + target);
+            }
+            if (!"RAW_MATERIAL".equals(parent.getKind())) {
+                invalidSubstitute(node, "替代料只能指向原料 Cell");
+            }
+            Object parentRef = parent.getData() == null
+                    ? null : parent.getData().get("substituteOfNodeId");
+            if (parentRef != null && !String.valueOf(parentRef).isBlank()) {
+                invalidSubstitute(node, "替代关系只能有一层，不能指向另一个替代料");
+            }
+        }
     }
 
     public void validateForPublish(ProductProcessWorkflowDTO definition) {
@@ -466,6 +506,13 @@ public class ProductProcessWorkflowValidator {
         throw new BusinessException(400, message)
                 .withCode("PRODUCT_PROCESS_WORKFLOW_INVALID")
                 .withHint("请根据提示定位对应 Cell 后再保存或发布")
+                .withSeverity("warning");
+    }
+
+    private void invalidSubstitute(ProductProcessWorkflowDTO.Node node, String reason) {
+        throw new BusinessException(409, reason + ": " + displayName(node))
+                .withCode("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID")
+                .withHint("请在该原料 Cell 上重新选择它替代的主料，或改为独立投入")
                 .withSeverity("warning");
     }
 
