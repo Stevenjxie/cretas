@@ -330,26 +330,43 @@ _PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
 }
 
 
-# 单跳延迟上界 —— **只作布尔约束, 不作连续排序键**。
+# 单跳延迟预算 + 延迟档 —— **粗档参与排序, 不作连续键**。
 #
-# 🔴 这个区别就是 2026-08-10 那次回归的全部内容: 把中位延迟当**连续键**排序,
-#    在「上一位全平手」时会退化成「最小最快的模型排最前」(实测 83→61)。
-#    而作为**约束**它是对的: 实测 p50 超过单跳预算的模型放在前面, 只会把
-#    「答不出来」换成「等到超时」—— 它连一次成功都产生不了, 却吃掉总预算,
-#    后面健康的模型一个都轮不上。
+# 🔴 连续键 vs 粗档, 这个区别就是 2026-08-10 那次回归的全部内容: 把中位延迟当
+#    **连续键**, 在「上一位全平手」时会退化成「最小最快的模型排最前」(实测把
+#    回归电池从 83 打到 61)。粗档不会 —— 1.7s / 2.7s / 2.8s 同属一档, 它们之间
+#    仍由到期日决定先后, 只有跨档(2.8s vs 19.2s)才重排。
 #
-# ⚠️ 这个值是**排序用的启发式上界**, 不是真正的超时 —— 真超时由调用方按槽传入
-#    (餐饮 T3 高精度路径传 10.0s)。写在这里只是为了让链的顺序不把必然超时的
-#    候选顶到前面; 两者不需要逐字相等, 但这个值不该比任何调用方的单跳预算大。
-_ORDERING_LATENCY_CEILING_SECONDS = 10.0
+# ⚠️ owner 2026-08-10 拍板把预算从 10s 放宽到 25s: 实测零越界的 kimi-k2.7-code
+#    (12.9~19.2s)本来被 10s 上界整个挡在外面, 而**能答对但慢**好过**答不出来**。
+#    定 20s 而不是更大: 总预算必须放得下两次满额尝试(见 test_semantic_planner_budget
+#    的 test_total_budget_leaves_room_for_a_second_attempt), 20×2=40 ≤ 45 总预算,
+#    而 45 又在 nginx 默认 60s 之下留了 15s 余量。⚠️ kimi-k2.7-code 在 aliyun_c 上
+#    实测 19.2s, 正好卡在这条线上 —— 它是「勉强够得着」而不是「宽裕」。
+#    放宽前逐层核对过上游没有更短的闸: Java `RestaurantAgentRuntimeClient`
+#    是 `readTimeout(0)`(不限), 前端 75~180s, nginx 默认 60s —— Python 这 25s
+#    原本就是瓶颈, 放到 25/45 仍在 nginx 之下。
+#
+# ⛔ 但放宽**不等于**让慢模型往前排: 一个 19.2s 的模型排在 2.8s 的前面, 只会让
+#    降级路径上的用户多等 16 秒。所以 `_latency_band` 把「快」单独分一档。
+_SLOT_HOP_BUDGET_SECONDS = 20.0    # 单跳预算; restaurant_intent 直接 import 它,
+                                   # 不另写一份(两份必漂, 漂了就是「排序按 A 算、
+                                   # 真超时按 B 算」)
+_FAST_LATENCY_SECONDS = 5.0        # 「快」档门槛
 
 
-def _over_budget_tier(account: str, model: str) -> int:
-    """0 = 实测在预算内, 1 = 没测过, 2 = 实测必然超时。"""
+def _latency_band(account: str, model: str) -> int:
+    """0 = 实测快(≤5s), 1 = 没测过, 2 = 实测可接受(≤单跳预算), 3 = 实测必然超时。
+
+    「没测过」照例排在「实测好」与「实测差」之间 —— 缺席不构成任何一侧的证据。
+    """
     measured = _CAPABILITY.get((account, model))
     if measured is None:
         return 1
-    return 0 if measured[1] <= _ORDERING_LATENCY_CEILING_SECONDS else 2
+    p50 = measured[1]
+    if p50 <= _FAST_LATENCY_SECONDS:
+        return 0
+    return 2 if p50 <= _SLOT_HOP_BUDGET_SECONDS else 3
 
 
 def _plan_schema_tier(account: str, model: str) -> int:
@@ -1135,8 +1152,8 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
         # 隐式实现同一件事; 能力档一旦能把某个 aliyun 条目沉到底(实测不达标
         # 的 deepseek-v3.2 就是), 那个隐式保证当场失效 —— 所以显式写出来。
         1 if p in tail_set else 0,
-        _capability_tier(*p), _over_budget_tier(*p),
-        _plan_schema_tier(*p), _expiry_of(*p))))
+        _capability_tier(*p), _plan_schema_tier(*p),
+        _latency_band(*p), _expiry_of(*p))))
 
 
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}

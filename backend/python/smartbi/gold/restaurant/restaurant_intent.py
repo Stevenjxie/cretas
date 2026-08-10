@@ -4828,8 +4828,15 @@ _T3_MAX_TOKENS = 500
 # intent in 6.6-9.7 s, while 500 tokens truncated its JSON at ``confidence``.
 # Keep the whole cascade inside Java's independent 30 s deadline, but give the
 # semantic planner enough time and output room to finish one validated plan.
-_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 10.0
-_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 25.0
+# ⛔ 单跳预算**不在这里定义** —— 它同时被 llm_router 的 `_latency_band` 用来排序。
+#    两处各写一份必漂, 漂了就是「排序按 A 算、真超时按 B 算」: 排序以为某个候选
+#    在预算内、实际每次都超时, 而这种失败没有任何症状(只是那一跳白等)。
+from common.llm_router import _SLOT_HOP_BUDGET_SECONDS as _SEMANTIC_PROVIDER_TIMEOUT_SECONDS  # noqa: E402,F401
+
+# 总预算 = 单跳 × ~2 —— 至少要放得下「一个慢候选失败后, 还能再试一个」。
+# owner 2026-08-10 拍板从 25s 放宽到 45s(上游 nginx 默认 60s 之下)。
+# 📌 只有降级路径才吃得到这个预算: 链头健康时实测中位 1.6s / p95 2.8s。
+_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 45.0
 _SEMANTIC_MAX_TOKENS = 1000
 _T3_MIN_CONFIDENCE = 0.6
 

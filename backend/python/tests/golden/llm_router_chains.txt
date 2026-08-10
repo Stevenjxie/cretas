@@ -13,18 +13,18 @@
    2099-01-01  zhipu/glm-4.5-air
 == insights (len=17)
    2026-08-20  aliyun_c/qwen3.7-max-2026-05-20
-   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
    2026-10-23  aliyun_a/qwen3.7-flash
    2026-11-01  aliyun_c/qwen3.8-max
    2026-11-01  aliyun_a/qwen3.8-max
    2026-11-01  aliyun_b/qwen3.8-max
+   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
+   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
+   2026-09-14  aliyun_c/kimi-k2.7-code
+   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-13  aliyun_c/qwen3.6-plus-2026-04-02
    2026-10-23  aliyun_a/qwen3.7-flash-2026-07-15
    2026-10-31  aliyun_b/deepseek-v4-flash-0731
    2026-10-31  aliyun_a/deepseek-v4-flash-0731
-   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
-   2026-09-14  aliyun_c/kimi-k2.7-code
-   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-24  aliyun_a/qwen3.7-max-2026-05-17
    2026-09-14  aliyun_b/kimi-k2.7-code
    2099-01-01  tencent/minimax-m2.7
@@ -50,16 +50,16 @@
    2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
 == reasoning (len=21)
-   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
    2026-11-01  aliyun_c/qwen3.8-max
    2026-11-01  aliyun_a/qwen3.8-max
    2026-11-01  aliyun_b/qwen3.8-max
+   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
+   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
+   2026-09-14  aliyun_c/kimi-k2.7-code
+   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-13  aliyun_c/deepseek-v3.2-exp
    2026-10-31  aliyun_b/deepseek-v4-flash-0731
    2026-10-31  aliyun_a/deepseek-v4-flash-0731
-   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
-   2026-09-14  aliyun_c/kimi-k2.7-code
-   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-24  aliyun_a/qwen3.7-max-2026-05-17
    2026-09-14  aliyun_b/kimi-k2.7-code
    2026-08-13  aliyun_c/MiniMax-M2.5
@@ -74,18 +74,18 @@
 == vl (len=0)
 == review (len=17)
    2026-08-20  aliyun_c/qwen3.7-max-2026-05-20
-   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
    2026-10-23  aliyun_a/qwen3.7-flash
    2026-11-01  aliyun_c/qwen3.8-max
    2026-11-01  aliyun_a/qwen3.8-max
    2026-11-01  aliyun_b/qwen3.8-max
+   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
+   2026-08-24  aliyun_b/qwen3.7-max-2026-05-17
+   2026-09-14  aliyun_c/kimi-k2.7-code
+   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-13  aliyun_c/qwen3.6-plus-2026-04-02
    2026-10-23  aliyun_a/qwen3.7-flash-2026-07-15
    2026-10-31  aliyun_b/deepseek-v4-flash-0731
    2026-10-31  aliyun_a/deepseek-v4-flash-0731
-   2026-08-24  aliyun_c/qwen3.7-max-2026-05-17
-   2026-09-14  aliyun_c/kimi-k2.7-code
-   2026-09-14  aliyun_a/kimi-k2.7-code
    2026-08-24  aliyun_a/qwen3.7-max-2026-05-17
    2026-09-14  aliyun_b/kimi-k2.7-code
    2099-01-01  tencent/minimax-m2.7

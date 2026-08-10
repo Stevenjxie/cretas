@@ -229,11 +229,11 @@ def test_schema_violators_never_precede_schema_clean_models(monkeypatch):
 
     for slot, chain in chains.items():
         body = [p for p in chain if p not in tail]
-        # 只在「同为存活 + 同为预算内」的条目之间比 —— 前两档优先级更高, 一个
-        # 零越界但必然超时的模型排在越界模型后面是**对的**。
+        # 只在**同存活档**的条目之间比 —— 存活档优先级更高。延迟档排在合法档
+        # 之后, 所以不参与这里的分组: 一个零越界但慢的模型排在越界模型之后是
+        # **错的**(合法性优先于快慢), 这条正是要抓它。
         def rank(pair):
-            return (llm_router._capability_tier(*pair),
-                    llm_router._over_budget_tier(*pair))
+            return (llm_router._capability_tier(*pair),)
         for i, bad in enumerate(body):
             if bad not in violators:
                 continue
