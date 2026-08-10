@@ -46,6 +46,16 @@ export interface MaterialNodeData extends Record<string, unknown> {
    * 与 `ProcessPort.outputRole` 的关系: 那个字段已弃用(见其注释), 不要用它表达副产。
    */
   isByproduct?: boolean;
+  /**
+   * 本原料 cell 是哪个原料的替代料(值 = 被替代原料 cell 的 node id)。
+   * 空/缺省 = 独立投入(与主料一起投)。
+   *
+   * ⛔ 载体刻意放在**物料节点**上而不是工序的 portGroups:
+   * normalizeDraft 每次保存都会 remove 掉 PROCESS 节点的 portGroups,
+   * 且 RuntimeCompiler 在 ACTUAL_IO 下完全绕过它(2026-08-10 实测)。
+   * 物料节点不被 normalizeDraft 清洗, 字段才活得下来。
+   */
+  substituteOfNodeId?: string | null;
 }
 
 export interface ProcessPort {

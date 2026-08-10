@@ -426,7 +426,7 @@ function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string
       || path.startsWith('conversionRule.')
       || path === 'reportingRequired';
   }
-  return ['name', 'skuId', 'skuCode', 'specification'].includes(path);
+  return ['name', 'skuId', 'skuCode', 'specification', 'substituteOfNodeId'].includes(path);
 }
 
 const workflowPatchOperations = new Set([
@@ -438,7 +438,9 @@ const workflowNodeKinds = new Set<ProductProcessNodeKind>([
 const materialNodeKinds = new Set(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED_GOOD']);
 const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 'FORMULA']);
 const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE', 'OPTIONAL']);
-const materialDataKeys = new Set(['name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound']);
+const materialDataKeys = new Set([
+  'name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound', 'substituteOfNodeId',
+]);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
   'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
@@ -457,7 +459,7 @@ const portKeys = new Set([
  */
 const fieldPaths = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'ports', 'portGroups', 'conversionRule',
-  'conversionRule.mode', 'conversionRule.expression', 'reportingRequired',
+  'conversionRule.mode', 'conversionRule.expression', 'reportingRequired', 'substituteOfNodeId',
 ]);
 
 function sanitizeWorkflowPatch(raw: unknown): WorkflowPatch | null {
@@ -537,7 +539,8 @@ function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNo
     && optionalNullableString(value.skuCode)
     && optionalNullableString(value.specification)
     && optionalString(value.baseUnit)
-    && optionalBoolean(value.bound);
+    && optionalBoolean(value.bound)
+    && optionalNullableString(value.substituteOfNodeId);
 }
 
 function isProcessNodeData(value: Record<string, unknown>): value is ProcessNodeData {
@@ -617,7 +620,7 @@ function isConversionRule(value: unknown): boolean {
 function isAllowedFieldValue(path: string, value: unknown): boolean {
   if (path === 'name') return isNonBlankString(value);
   if (path === 'skuId') return typeof value === 'string';
-  if (['skuCode', 'specification', 'conversionRule.expression'].includes(path)) {
+  if (['skuCode', 'specification', 'conversionRule.expression', 'substituteOfNodeId'].includes(path)) {
     return value === null || typeof value === 'string';
   }
   if (path === 'reportingRequired') return typeof value === 'boolean';
