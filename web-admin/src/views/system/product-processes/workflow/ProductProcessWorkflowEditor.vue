@@ -2479,7 +2479,15 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
   const writableProcess = writableWorkspace?.processes
     .find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
   if (!writableWorkspace || !writableProcess) {
-    ElMessage.warning('辅料数据尚未加载完成，请稍后重试');
+    // 🔴 2026-08-10: 这里以前说「辅料数据尚未加载完成，请稍后重试」—— 那是编的。
+    // 走到这一行时草稿刚刚 ensure 成功、workspace 也已重载, "没加载完"不成立,
+    // 用户按提示重试一百次也是同一个结果。真实条件是**这道工序不在该配方的工序清单里**
+    // (联合生产走到别的产出 / 画布工序与已生效 BOM 的工序目录不符), 说清楚才有下一步。
+    ElMessage.warning(
+      writableWorkspace
+        ? '该工序不在当前 BOM 草稿的工序清单里，通常是画布工序与已生效 BOM 的工序目录不一致。请先保存画布草稿，让 BOM 跟着当前工艺重新对齐。'
+        : '该产品的 BOM 草稿尚未就绪，请先保存画布草稿再配置辅料。',
+    );
     return;
   }
 
