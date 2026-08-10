@@ -365,9 +365,18 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "BOM 尚未选择已保存的 Workflow 修订", "BOM_WORKFLOW_REVISION_REQUIRED");
         }
         ProductProcessWorkflowDTO definition = definitionFromRecipe(recipe);
-        validateStructureForBom(definition);
-        catalogValidator.validateForBomConfiguration(factoryId, recipe.getProductTypeId(), definition);
-        return resolveTargetGraph(recipe.getWorkflowRevisionId(), definition, recipe.getProductTypeId());
+        // 🔴 2026-08-10: 与 requireCompatible 同形状 —— 先切片, 再校验。
+        //
+        // 这条路是**辅料工作台**进门就走的那条(BomSeasoningWorkspaceServiceImpl#getWorkspace),
+        // 只做 requireCompatible 修不好那块屏: 打开辅料编辑器仍会跑一次全图目录检查, 画布上
+        // 不相干的工序照样把配置入口关掉。入参是单个 BomRecipe、校验 recipe.getProductTypeId(),
+        // 构造上就是单目标, 没有全图调用方。
+        PinnedWorkflowGraph graph = resolveTargetGraph(
+                recipe.getWorkflowRevisionId(), definition, recipe.getProductTypeId());
+        ProductProcessWorkflowDTO slice = sliceOf(definition, graph);
+        validateStructureForBom(slice);
+        catalogValidator.validateForBomConfiguration(factoryId, recipe.getProductTypeId(), slice);
+        return graph;
     }
 
     @Transactional(readOnly = true)
@@ -689,10 +698,78 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "Workflow 修订内容哈希不一致", "BOM_WORKFLOW_REVISION_HASH_INVALID");
         }
         ProductProcessWorkflowDTO definition = revisionSnapshotService.definition(revision);
-        validateStructureForBom(definition);
-        catalogValidator.validateForBomConfiguration(revision.getFactoryId(), targetProductTypeId, definition);
-        resolveTargetGraph(revision.getId(), definition, targetProductTypeId);
+        // 🔴 2026-08-10: 先切片, 再校验 —— 顺序不能反。
+        //
+        // 过去两道校验都吃整张 definition, 于是画布上任何一处不完整/不一致都会把**全图**的
+        // BOM 配置入口一起关掉: 一道工序的产出类型与目录不符, 连不相干工序的辅料 cell 都
+        // 加不了辅料(表现为「标准用量状态尚未确定」这句与真因无关的灰态提示)。
+        //
+        // resolveTargetGraph 本来就返回目标 SKU 的反向切片(PinnedWorkflowGraph javadoc:
+        // "Target-SKU reverse slice"), 把它提前, 后面两道校验只吃这个切片即可。
+        PinnedWorkflowGraph targetGraph = resolveTargetGraph(
+                revision.getId(), definition, targetProductTypeId);
+        ProductProcessWorkflowDTO slice = sliceOf(definition, targetGraph);
+        validateStructureForBom(slice);
+        catalogValidator.validateForBomConfiguration(
+                revision.getFactoryId(), targetProductTypeId, slice);
         return definition;
+    }
+
+    /**
+     * 用目标切片的节点/边组一份新的 DTO 交给校验器。
+     *
+     * <p>⛔ viewport 必须从原 definition 带过来: validateForDraft 会校验缩放值落在
+     * 0.35~1.80, 传 null 会当场判非法 —— 那是「切片没带全上下文」而不是「图有问题」。
+     * <p>⛔ 返回值只用于校验, <b>不要</b>拿它替换 requireCompatible 的返回值 ——
+     * 调用方拿到的必须仍是整张 definition。
+     */
+    private ProductProcessWorkflowDTO sliceOf(
+            ProductProcessWorkflowDTO full, PinnedWorkflowGraph graph) {
+        Map<String, ProductProcessWorkflowDTO.Node> byId = full.getNodes().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId,
+                        Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        LinkedHashMap<String, ProductProcessWorkflowDTO.Node> keep = new LinkedHashMap<>();
+        graph.nodes().forEach(node -> keep.put(node.getId(), node));
+        // 🔴 2026-08-10 修正: 工序的**同胞产出**必须一起带进切片。
+        //
+        // resolveTargetGraph 只回溯目标终端, 会把同一道工序的另一个产出排除在外
+        // (matrixC 明确断言了这个行为), 但工序节点的 ports 仍然引用它 ——
+        // validateGraphSemantics 会判「工序端口必须引用已存在的物料 Cell」,
+        // 结果是**任何切片里含多产出工序的图, BOM 一点都配不了**(matrixD 2进2出
+        // 原本是绿的), 比要修的 bug 更糟。
+        //
+        // 带上同胞不削弱本次收窄: 同一道工序一锅同时产出的东西, 本来就属于这个目标的
+        // 工艺契约。要拆掉的是**不相干链**的连坐, 不是同一道工序内部的。
+        for (ProductProcessWorkflowDTO.Node node : List.copyOf(keep.values())) {
+            if (!"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
+            if (!(node.getData().get("ports") instanceof List<?> ports)) continue;
+            for (Object rawPort : ports) {
+                if (!(rawPort instanceof Map<?, ?> port)) continue;
+                Object ref = port.get("materialNodeId");
+                if (ref == null) continue;
+                ProductProcessWorkflowDTO.Node sibling = byId.get(String.valueOf(ref));
+                if (sibling != null) keep.putIfAbsent(sibling.getId(), sibling);
+            }
+        }
+        // ⛔ 边要从 full 重算, 不能用 graph.edges() —— 节点集合已经扩大了。
+        List<ProductProcessWorkflowDTO.Edge> sliceEdges = full.getEdges().stream()
+                .filter(edge -> keep.containsKey(edge.getSource())
+                        && keep.containsKey(edge.getTarget()))
+                .toList();
+
+        ProductProcessWorkflowDTO slice = new ProductProcessWorkflowDTO();
+        slice.setId(full.getId());
+        slice.setFactoryId(full.getFactoryId());
+        slice.setProductTypeId(full.getProductTypeId());
+        slice.setSchemaVersion(full.getSchemaVersion());
+        slice.setStatus(full.getStatus());
+        slice.setVersion(full.getVersion());
+        slice.setRevisionId(full.getRevisionId());
+        slice.setRevisionHash(full.getRevisionHash());
+        slice.setViewport(full.getViewport());
+        slice.setNodes(List.copyOf(keep.values()));
+        slice.setEdges(sliceEdges);
+        return slice;
     }
 
     private void validateStructureForBom(ProductProcessWorkflowDTO definition) {
