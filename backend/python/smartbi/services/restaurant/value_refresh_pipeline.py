@@ -23,9 +23,22 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-# 成本分类关键词 (镜像 Java RestaurantFinancialMetricsFetcher FOOD/LABOR_KEYWORDS)。
-_FOOD_KEYWORDS = ("食材", "原料", "采购", "食品")
-_LABOR_KEYWORDS = ("人工", "人力", "工资", "薪", "劳务")
+# 成本分类关键词 —— 权威是 Java `RestaurantFinancialMetricsFetcher`
+# (FOOD_KEYWORDS / LABOR_KEYWORDS / RENT_KEYWORDS)。
+#
+# 🔴 2026-08-10 实测: 这两行**曾经漂离权威**, 而且是和另一份镜像各漂各的 ——
+#      Java(权威)  FOOD  = 食材 原材料 食品 饮料 酒水 菜品
+#      本文件(旧)  FOOD  = 食材 原料 采购 食品        ← 少 4 个, 多 2 个
+#      health_check_metrics.py    = 与 Java 一致
+#    两个文件的注释**都写着「镜像同一个 Java 类」**, 却互相矛盾。后果是真的:
+#    一条写着「酒水」/「菜品」的成本, 在 Java 与 health 里算食材成本, 在这里
+#    **不算**; 写「员工」的人工成本同理 —— 同一个数, 两条路算出来不一样。
+#
+# 判据: **注释说「镜像 X」不构成它真的等于 X。** 手工镜像漂移时不会响,
+#       只能靠一道会红的闸: test_java_keyword_mirrors_match_authority
+#       从 .java 源码解析出真值, 与这里逐字比对。
+_FOOD_KEYWORDS = ("食材", "原材料", "食品", "饮料", "酒水", "菜品")
+_LABOR_KEYWORDS = ("人工", "工资", "薪", "员工", "劳务")
 _REVENUE_KEYWORDS = ("收入", "营收", "营业额")
 
 
