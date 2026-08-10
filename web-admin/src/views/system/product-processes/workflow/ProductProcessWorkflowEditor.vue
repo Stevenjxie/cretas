@@ -598,7 +598,7 @@
             <el-option v-for="category in workProcessCategories" :key="category" :label="category" :value="category" />
           </el-select>
         </el-form-item>
-        <el-form-item label="默认产出类型" required>
+        <el-form-item label="当前产出类型" required>
           <el-radio-group v-model="processEditForm.defaultOutputMaterialKind">
             <el-radio-button label="SEMI_FINISHED">半成品</el-radio-button>
             <el-radio-button label="FINISHED_GOOD">成品</el-radio-button>
@@ -610,7 +610,7 @@
       </el-form>
       <template #footer>
         <el-button @click="processEditVisible = false">取消</el-button>
-        <el-button type="primary" :loading="processEditSaving" data-testid="save-process-edit" @click="saveQuickEditProcess">保存工序主数据</el-button>
+        <el-button type="primary" :loading="processEditSaving" data-testid="save-process-edit" @click="saveQuickEditProcess">保存</el-button>
       </template>
     </el-dialog>
 
@@ -688,7 +688,6 @@ import {
   getWorkProcessCategories,
   getProductWorkProcesses,
   updateWorkProcess,
-  updateWorkProcessOutputKind,
   type WorkProcessItem,
   type WorkProcessOutputMaterialKind,
 } from '@/api/processProduction';
@@ -3217,6 +3216,21 @@ async function selectMaterialSku(materialNodeId: string, skuId: string): Promise
 }
 
 function processOutputKind(processData: ProcessNodeData): WorkProcessOutputMaterialKind | null {
+  const primaryOutput = processData.ports
+    .filter((candidate) => candidate.direction === 'OUTPUT')
+    .sort((left, right) => left.ordinal - right.ordinal)[0];
+  const snapshotKind = primaryOutput?.materialKind;
+  if (snapshotKind === 'SEMI_FINISHED' || snapshotKind === 'FINISHED_GOOD') {
+    return snapshotKind;
+  }
+  const materialKind = flowNodes.value.find(
+    (node) => node.id === primaryOutput?.materialNodeId,
+  )?.data?.kind;
+  if (materialKind === 'SEMI_FINISHED' || materialKind === 'FINISHED_GOOD') {
+    return materialKind;
+  }
+  // The oldest legacy nodes may carry neither marker. Only then may the process
+  // catalog provide its creation-time suggestion.
   return workProcessOptions.value.find(
     (option) => option.id === processData.workProcessId,
   )?.defaultOutputMaterialKind ?? null;
@@ -3241,36 +3255,23 @@ async function ensurePrimaryOutputKind(
 
   const currentKind = processOutputKind(data);
   if (!needsPrimaryOutputKindUpdate(currentKind, nextKind, true)) return true;
-  const currentLabel = currentKind === 'FINISHED_GOOD' ? '成品出品工序' : '半成品工序';
-  const nextLabel = nextKind === 'FINISHED_GOOD' ? '成品出品工序' : '半成品工序';
+  const currentLabel = currentKind === 'FINISHED_GOOD' ? '成品' : '半成品';
+  const nextLabel = nextKind === 'FINISHED_GOOD' ? '成品' : '半成品';
   try {
     await ElMessageBox.confirm(
-      `工序“${data.processName}”当前配置为“${currentLabel}”，不能把主产出绑定为${nextKind === 'FINISHED_GOOD' ? '成品' : '半成品'}。是否快捷修改为“${nextLabel}”后继续？`,
+      `当前 Workflow 中，工序“${data.processName}”的主产出是“${currentLabel}”。是否将这个产出 Cell 改为${nextKind === 'FINISHED_GOOD' ? '成品' : '半成品'}并绑定所选 SKU？`,
       '产出类型不一致',
       {
         type: 'warning',
-        confirmButtonText: `修改为${nextLabel}`,
+        confirmButtonText: `改为${nextLabel}并绑定`,
         cancelButtonText: '取消选择',
       },
     );
-    const response = await updateWorkProcessOutputKind(
-      identity.factoryId,
-      data.workProcessId,
-      nextKind,
-    );
-    if (!response.success || !response.data) {
-      ElMessage.error(response.message || '工序产出类型修改失败');
-      return false;
-    }
-    const updatedProcess = response.data;
-    workProcessOptions.value = workProcessOptions.value.map(
-      (option) => option.id === updatedProcess.id ? updatedProcess : option,
-    );
-    ElMessage.success(`工序“${data.processName}”已修改为${nextLabel}`);
+    if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return false;
     return true;
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
-      console.error('[updateWorkProcessOutputKind] failed', error);
+      console.error('[ensurePrimaryOutputKind] confirmation failed', error);
     }
     return false;
   }
@@ -3311,15 +3312,19 @@ async function selectOutputSku(processId: string, portId: string, skuId: string)
     ),
   );
   if (requiresKindUpdate) {
-    void ensurePrimaryOutputKind(processId, portId, kind).then((compatible) => {
-      if (compatible) bindOutputSku(processId, portId, option);
-    });
+    const compatible = await ensurePrimaryOutputKind(processId, portId, kind);
+    if (compatible) bindOutputSku(processId, portId, option, { allowPrimaryKindChange: true });
     return;
   }
   bindOutputSku(processId, portId, option);
 }
 
-function bindOutputSku(processId: string, portId: string, option: SkuOption): boolean {
+function bindOutputSku(
+  processId: string,
+  portId: string,
+  option: SkuOption,
+  bindOptions: { allowPrimaryKindChange?: boolean } = {},
+): boolean {
   const kind = classifyOutputSkuCategory(option.productCategory);
   if (!kind) {
     ElMessage.error('所选 SKU 分类不能作为工序产出');
@@ -3335,7 +3340,10 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
     .filter((candidate) => candidate.direction === 'OUTPUT')
     .sort((left, right) => left.ordinal - right.ordinal)[0];
   const expectedKind = processOutputKind(data);
-  if (needsPrimaryOutputKindUpdate(expectedKind, kind, primaryOutputPort?.id === port.id)) {
+  if (
+    needsPrimaryOutputKindUpdate(expectedKind, kind, primaryOutputPort?.id === port.id)
+    && !bindOptions.allowPrimaryKindChange
+  ) {
     ElMessage.error(`工序“${data.processName}”的主产出类型与所选 SKU 不一致，请先修改工序产出类型`);
     return false;
   }
@@ -3389,7 +3397,7 @@ function openQuickEditProcess(processNodeId: string): void {
   processEditForm.value = {
     processName: master.processName,
     processCategory: master.processCategory || '',
-    defaultOutputMaterialKind: master.defaultOutputMaterialKind,
+    defaultOutputMaterialKind: processOutputKind(data) ?? master.defaultOutputMaterialKind,
     needsInput: master.needsInput !== false,
   };
   processEditVisible.value = true;
@@ -3409,6 +3417,16 @@ async function saveQuickEditProcess(): Promise<void> {
     return;
   }
   const data = node.data as ProcessNodeData;
+  const master = workProcessOptions.value.find((option) => option.id === data.workProcessId);
+  if (!master) {
+    ElMessage.warning('未找到该工序主数据，请刷新后重试');
+    return;
+  }
+  const nextProcessName = form.processName.trim();
+  const nextProcessCategory = form.processCategory.trim();
+  const masterFieldsChanged = nextProcessName !== master.processName
+    || nextProcessCategory !== (master.processCategory || '')
+    || form.needsInput !== (master.needsInput !== false);
   const currentOutputKind = processOutputKind(data);
   const nextOutputKind = form.defaultOutputMaterialKind;
   const incompatibleOutputPorts = currentOutputKind && currentOutputKind !== nextOutputKind
@@ -3438,17 +3456,19 @@ async function saveQuickEditProcess(): Promise<void> {
   }
   processEditSaving.value = true;
   try {
-    const response = await updateWorkProcess(identity.factoryId, data.workProcessId, {
-      processName: form.processName.trim(),
-      processCategory: form.processCategory.trim(),
-      defaultOutputMaterialKind: form.defaultOutputMaterialKind,
-      needsInput: form.needsInput,
-    });
-    if (!response.success || !response.data) throw new Error(response.message || '工序修改失败');
-    const updated = response.data;
-    workProcessOptions.value = workProcessOptions.value.map(
-      (option) => option.id === updated.id ? updated : option,
-    );
+    let updated = master;
+    if (masterFieldsChanged) {
+      const response = await updateWorkProcess(identity.factoryId, data.workProcessId, {
+        processName: nextProcessName,
+        processCategory: nextProcessCategory,
+        needsInput: form.needsInput,
+      });
+      if (!response.success || !response.data) throw new Error(response.message || '工序修改失败');
+      updated = response.data;
+      workProcessOptions.value = workProcessOptions.value.map(
+        (option) => option.id === updated.id ? updated : option,
+      );
+    }
     mutate(() => {
       data.processName = updated.processName;
       data.processCategory = updated.processCategory;
@@ -3482,7 +3502,9 @@ async function saveQuickEditProcess(): Promise<void> {
       });
     });
     processEditVisible.value = false;
-    ElMessage.success('工序主数据已更新，当前 Workflow 已刷新');
+    ElMessage.success(masterFieldsChanged
+      ? '工序信息及当前 Workflow 产出类型已更新'
+      : '当前 Workflow 产出类型已更新');
   } catch (error) {
     console.error('[ProductProcessWorkflow] quick edit process failed', error);
     ElMessage.error(error instanceof Error ? error.message : '工序修改失败');
