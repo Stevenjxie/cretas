@@ -346,15 +346,19 @@ run_rsync "学习毕业 CLI" -az --timeout=60 \
 # and secrets; only the tracked scripts are synchronized.
 log "INFO" "[3d/5] 同步 Python 定时任务入口..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
-run_rsync "Python 定时任务入口" -az --timeout=60 \
-    "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
-    "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
-    "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" \
+# ⚠️ 2026-08-10: 这里曾是**逐文件的白名单**(restaurant-ai-eval / refresh-demo-rest /
+#    probe-llm-registry 三行硬编)。新增一个 cron 脚本时忘了加进来, 结果是:
+#      · 仓里有、服务器上没有 → crontab 每天报 "No such file"
+#      · 而 crontab 的错误没人看 → **那道闸等于从来没上线过**
+#    本轮实测踩到: forecast-backtest-watch.sh 写好、cron 装好, 但同步不过去。
+#    (下面 3c2 的注释里也写着「这条纪律已经漏过两次」—— 说明靠纪律没用。)
+#    改成**整目录同步**: 清单由目录本身定义, 加脚本不必再记得改这里。
+#    判据: **「加了东西要记得同步到另一处」这种纪律必然会漏, 能按目录就别列清单。**
+run_rsync "Python 定时任务入口(整目录)" -az --timeout=60 \
+    --include='*.sh' --exclude='*' \
+    "$PROJECT_ROOT/scripts/cron/" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/cron/"
-ssh "$SERVER" "chmod +x \
-    /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
-    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh \
-    /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh"
+ssh "$SERVER" "chmod +x /www/wwwroot/cretas/code/scripts/cron/*.sh"
 
 # 3c2. 闭合 3c/3d 的白名单缺口 (2026-08-01).
 #
