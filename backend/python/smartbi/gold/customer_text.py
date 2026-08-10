@@ -121,6 +121,24 @@ def sanitize_customer_ai_text(value: Optional[str]) -> str:
         return ""
     cleaned_lines = []
     for raw_line in str(value).splitlines():
+        # ⛔ 空行是 markdown 的**块分隔符**, 不是可有可无的留白。
+        #
+        # 🔴 2026-08-11 prod 实测(打真接口读渲染结果): 08-10 起陆续上线的 8 张
+        #    markdown 表格, 到用户手里全都少了表头前的空行 ——
+        #        '**本月…菜品销量排行（卖得最好前 5）：**\n| # | 菜品 | …'
+        #    resolver 拼的明明是 `[标题, ""] + _markdown_table(...)`, 而响应里
+        #    `answer_text` 的连续空行数是 **0**。根因就是这里: 原实现用
+        #    `if line and ...` 把空行整行丢掉, 再用单个 `\n` 重拼。
+        #    不报错 —— markdown-it 需要空行才把表格当成一个块, 少了它整张表被并进
+        #    上一段渲染成一坨。
+        #
+        # 判据: **清洗文本的函数不能顺手改文本的结构。** 要删的是「实现细节」,
+        #       空行不是实现细节。
+        # ⚠️ 只保留**原本就是空行**的那些: 清洗之后才变空的(纯实现细节行)照旧丢掉,
+        #    否则删掉一行技术噪音会在原地留下一个空行。
+        if not raw_line.strip():
+            cleaned_lines.append("")
+            continue
         line = raw_line
         for old, new in _CUSTOMER_PLAIN_LANGUAGE_REPLACEMENTS:
             line = line.replace(old, new)

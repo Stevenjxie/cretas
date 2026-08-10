@@ -4,6 +4,72 @@ from smartbi.gold.customer_text import (
 )
 
 
+# ── 2026-08-11: 空行是 markdown 的结构, 不是可有可无的留白 ────────────────
+#
+# 🔴 prod 实测(打真接口读渲染结果): 08-10 起陆续上线的 8 张 markdown 表格,
+#    到用户手里**全都少了表头前的空行** ——
+#
+#        '**本月…菜品销量排行（卖得最好前 5）：**\n| # | 菜品 | 销量（份） | 营收 |'
+#
+#    resolver 明明拼的是 `[标题, ""] + _markdown_table(...)`(两个空行), Python
+#    响应里 `answer_text` 的连续空行数却是 **0**。根因在本模块: 它逐行清洗后用
+#    `if line and ...` 把**空行整行丢掉**, 再用单个 `\n` 重拼。
+#
+#    后果不报错 —— markdown-it 需要空行才把表格当成一个块, 少了它整张表被并进
+#    上一段渲染成一坨。`_markdown_table` 的 docstring 第一条警告的就是这个,
+#    但那句警告只管到了拼装点, 管不到下游这一层。
+#
+# 判据: **清洗文本的函数不能顺手改文本的结构。** 它要删的是「实现细节」,
+#       空行不是实现细节。
+def test_blank_lines_are_preserved_because_markdown_needs_them():
+    """🔴 承重: 空行必须留下, 否则每一张表都会被并进上一段。"""
+    raw = "\n".join([
+        "**本月菜品销量排行：**",
+        "",
+        "| # | 菜品 | 销量 |",
+        "| --- | --- | ---: |",
+        "| 1 | 米饭 | 1,345 |",
+    ])
+
+    cleaned = sanitize_customer_ai_text(raw)
+
+    assert "\n\n| # |" in cleaned, (
+        "表头前的空行被吃掉了 —— markdown-it 会把整张表并进上一段当普通文字")
+    assert cleaned.splitlines()[1] == "", "第二行应当仍是空行"
+
+
+def test_blank_line_between_paragraphs_survives():
+    """段落之间的空行同理 —— 少了它两段会连成一段。"""
+    cleaned = sanitize_customer_ai_text("第一段。\n\n第二段。")
+    assert cleaned == "第一段。\n\n第二段。"
+
+
+def test_dropping_a_tech_line_still_works_next_to_blank_lines():
+    """⛔ 阴性对照: 保留空行不能把「删实现细节」这件正事一起放过。
+
+    没有这条, 把清洗逻辑整个删掉也能让上面两条通过。
+    """
+    raw = "\n".join([
+        "当前整体毛利率为 70.1%。",
+        "",
+        "内部意图 RESTAURANT_OPS_GROSS_MARGIN。",
+        "",
+        "| # | 菜品 |",
+    ])
+
+    cleaned = sanitize_customer_ai_text(raw)
+
+    assert "RESTAURANT_OPS_" not in cleaned
+    assert "70.1%" in cleaned
+    assert "| # | 菜品 |" in cleaned
+
+
+def test_leading_and_trailing_blank_lines_are_still_trimmed():
+    """首尾空行没有结构意义, 照旧去掉 —— 保留空行不等于不 strip。"""
+    cleaned = sanitize_customer_ai_text("\n\n有效内容。\n\n")
+    assert cleaned == "有效内容。"
+
+
 def test_removes_tool_intent_api_and_table_identifiers():
     raw = "\n".join([
         "通过调用 income_statement_query 工具获取利润表数据。",
