@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendCommonDisplayUnits,
   canonicalSystemUnitCode,
   defaultUnitCode,
   findDuplicateUnit,
@@ -48,5 +49,32 @@ describe('system unit identity', () => {
     ]);
     expect(findDuplicateUnit(merged, ['盒'])?.unitCode).toBe('box');
     expect(findDuplicateUnit(merged, ['箱'])?.unitCode).toBe('case');
+  });
+
+  it('offers 件、个、只 as distinct inventory choices instead of collapsing 个 to 只', () => {
+    const catalog = [{
+      code: 'pcs',
+      label: '件',
+      dimension: 'COUNT',
+      baseCode: 'pcs',
+      displayScale: 0,
+      usageScopes: ['INVENTORY_QUANTITY'],
+    }];
+    const merged = appendCommonDisplayUnits(
+      mergeSystemUnitSources([
+        { unitCode: 'pcs', unitName: '只', unitSymbol: '只', aliasesJson: ['件', '个', '只'] },
+      ], catalog),
+      catalog,
+      'INVENTORY_QUANTITY',
+    );
+
+    expect(merged.map(({ unitCode, unitName }) => ({ unitCode, unitName }))).toEqual([
+      { unitCode: 'pcs', unitName: '件' },
+      { unitCode: '个', unitName: '个' },
+      { unitCode: '只', unitName: '只' },
+    ]);
+    expect(findDuplicateUnit(merged, ['件'])?.unitCode).toBe('pcs');
+    expect(findDuplicateUnit(merged, ['个'])?.unitCode).toBe('个');
+    expect(findDuplicateUnit(merged, ['只'])?.unitCode).toBe('只');
   });
 });
