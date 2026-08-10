@@ -32,6 +32,12 @@ export function isBomOverlayNode(node: { id: string }): boolean {
   return node.id.startsWith(BOM_OVERLAY_PREFIX);
 }
 
+export function isBomOverlayEdge(edge: { id: string; source?: string; target?: string }): boolean {
+  return edge.id.startsWith(`${BOM_OVERLAY_PREFIX}edge:`)
+    || (edge.source != null && isBomOverlayNode({ id: edge.source }))
+    || (edge.target != null && isBomOverlayNode({ id: edge.target }));
+}
+
 export function stripBomOverlay<T extends { id: string }>(nodes: T[]): T[] {
   return nodes.filter((node) => !isBomOverlayNode(node));
 }
@@ -55,7 +61,9 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  * 不表达真实物料流向 —— 只是「这个 cell 归属于哪个工艺节点」的视觉指向。
  */
 const AUX_OFFSET_Y = 220;
-const PACK_OFFSET_X = 220;
+// 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
+// 重叠，两个 handle 几乎落在同一点，视觉上像“没有线”。
+const PACK_OFFSET_X = 300;
 
 /**
  * 派生边挂靠的 handle id —— 必须与组件里 <Handle> 的 id 字面量一致
@@ -64,6 +72,7 @@ const PACK_OFFSET_X = 220;
  * 直接不渲染 —— 所以两侧都从这两个常量读, 不允许各自手写字面量。
  */
 export const AUX_OVERLAY_SOURCE_HANDLE = 'bom-aux-out';
+export const AUX_OVERLAY_TARGET_HANDLE = 'bom-aux-in';
 export const PACK_OVERLAY_SOURCE_HANDLE = 'bom-pack-out';
 export const PACK_OVERLAY_TARGET_HANDLE = 'bom-pack-in';
 
@@ -134,7 +143,8 @@ export interface OverlayEdge {
   sourceHandle?: string;
   target: string;
   targetHandle?: string;
-  style: { strokeDasharray: string };
+  type: 'smoothstep';
+  style: { stroke: string; strokeWidth: number; strokeDasharray: string };
 }
 
 export interface BomOverlayResult {
@@ -179,7 +189,9 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         source: auxId,
         sourceHandle: AUX_OVERLAY_SOURCE_HANDLE,
         target: node.id,
-        style: { strokeDasharray: '5 4' },
+        targetHandle: AUX_OVERLAY_TARGET_HANDLE,
+        type: 'smoothstep',
+        style: { stroke: '#d9822b', strokeWidth: 2, strokeDasharray: '5 4' },
       });
     }
 
@@ -203,7 +215,8 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
         target: packId,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
-        style: { strokeDasharray: '5 4' },
+        type: 'smoothstep',
+        style: { stroke: '#c2415d', strokeWidth: 2, strokeDasharray: '5 4' },
       });
     }
   }

@@ -1018,9 +1018,8 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(addedMaterials.every((material) => material.position.y % 16 === 0)).toBe(true);
   });
 
-  // must-fix #1 (final whole-branch review of Phase 3-1): BOM 浮层 cell(辅料/包材) 是
-  // BOM 数据的只读投影, 绝不能表现成普通可拖/可选/可删的工艺节点 —— 三条泄漏路径分别
-  // 是: 拖一像素让 dirty=true 静默 fork 出一份新草稿(即使是已发布 workflow); 点选把它
+  // BOM 浮层的业务数据仍是只读投影，但布局位置允许用户调整。拖动不能把 Workflow
+  // 标成 dirty；点选/删除仍必须被挡住，避免把浮层混进工艺定义。
   // 混进 selectedCellIds(污染「已选 N 个」计数与发给 AI 的 selectedNodeContext); 走
   // removeNode/removeSelectedElements 被当真删除。三条路径共享同一个根因(mutate() 里
   // 手动拼 flowNodes.value 时没给浮层节点设 draggable/selectable/deletable=false), 所以
@@ -1028,7 +1027,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   // 上面这个 describe 的 beforeEach(否则 apiMocks.get/getProductProcessWorkflow 等
   // 都是未实现的裸 vi.fn(), mountEditor() 会在 catalog/definition/activation 加载阶段
   // 直接炸掉)。
-  it('浮层 cell 的 draggable/selectable/deletable 均为 false, 且拖拽/点选/删除三条路径都被挡住', async () => {
+  it('浮层 cell 可拖动且保留位置，但不产生 Workflow dirty，也不可选删', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
@@ -1038,12 +1037,31 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     if (!auxCell) throw new Error('Expected an aux overlay cell after adding a process (must-fix #7 wires mutate() to refreshBomOverlay)');
 
     // 1) 节点级标志本身
-    expect(auxCell).toMatchObject({ draggable: false, selectable: false, deletable: false });
+    expect(auxCell).toMatchObject({ draggable: true, selectable: false, deletable: false });
 
-    // 2) 拖一像素不会把 dirty 翻回 true —— 这是"已发布 workflow 被静默 fork"事故的复现路径
+    // 2) 拖动只改浮层的会话布局，不会把 dirty 翻回 true，也不会在 BOM 重载时跳回去。
     vm.dirty = false;
-    vm.onNodeDragStop({ node: auxCell });
+    const movedPosition = { x: auxCell.position.x + 80, y: auxCell.position.y + 48 };
+    vm.onNodeDragStart({ node: auxCell });
+    vm.onNodeDragStop({ node: { ...auxCell, position: movedPosition } });
     expect(vm.dirty).toBe(false);
+    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position).toEqual(movedPosition);
+    vm.refreshBomOverlay();
+    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position).toEqual(movedPosition);
+    const auxEdge = vm.flowEdges.find((edge) => edge.source === auxCell.id);
+    if (!auxEdge) throw new Error('Expected the auxiliary projection edge to stay attached');
+    expect(auxEdge).toMatchObject({
+      sourceHandle: 'bom-aux-out',
+      targetHandle: 'bom-aux-in',
+      selectable: false,
+      deletable: false,
+      updatable: false,
+    });
+    const edgeCount = vm.flowEdges.length;
+    vm.onEdgeClick({ edge: auxEdge });
+    vm.removeEdgeById(auxEdge.id);
+    expect(vm.flowEdges).toHaveLength(edgeCount);
+    expect(vm.flowEdges.some((edge) => edge.id === auxEdge.id)).toBe(true);
 
     // 3) 点击浮层 cell 不会把它选中、不会混进 selectedCellIds/selectedNodeContext
     vm.onNodeClick({ node: auxCell });

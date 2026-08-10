@@ -138,11 +138,15 @@ describe('从 BOM 派生浮层', () => {
     const auxEdge = edges.find((e) => e.source === `${BOM_OVERLAY_PREFIX}aux:p1`);
     expect(auxEdge!.target).toBe('p1');
     expect(auxEdge!.sourceHandle).toBe('bom-aux-out');
+    expect(auxEdge!.targetHandle).toBe('bom-aux-in');
+    expect(auxEdge!.type).toBe('smoothstep');
+    expect(auxEdge!.style.strokeWidth).toBe(2);
     expect(auxEdge!.animated || auxEdge!.style?.strokeDasharray).toBeTruthy();
     const packEdge = edges.find((e) => e.target === `${BOM_OVERLAY_PREFIX}pack:o1`);
     expect(packEdge!.source).toBe('o1');
     expect(packEdge!.sourceHandle).toBe('bom-pack-out');
     expect(packEdge!.targetHandle).toBe('bom-pack-in');
+    expect(packEdge!.type).toBe('smoothstep');
   });
 
   it('原料与半成品节点不派生任何浮层', () => {

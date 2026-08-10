@@ -709,6 +709,7 @@ import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
 import {
   deriveBomOverlay,
+  isBomOverlayEdge,
   isBomOverlayNode,
   stripBomOverlay,
   stripBomOverlayEdges,
@@ -747,6 +748,7 @@ import {
   bomSeasoningApi,
   type BomItemSubstituteView,
   type BomRecipeItemView,
+  type BomRecipeSummary,
   type SeasoningBindingView,
   type SeasoningProcessView,
   type SeasoningWorkspace,
@@ -1027,7 +1029,7 @@ async function activateBomDraft(notice: DraftBomNotice | undefined): Promise<voi
  */
 const ensureBomDraftRecipe = createBomDraftEnsurer(
   bomRecipeApi.ensureDraft,
-  async () => { await loadBomOverlayData(); },
+  async (draft) => { await loadBomOverlayData({ preferredDraft: draft }); },
 );
 
 /**
@@ -1054,7 +1056,10 @@ async function resolveWritableRecipeId(
   // 都靠 ensureDraft 收敛成一个可写草稿 —— 不必让用户先跑去别的页面建首版。
   if (recipeId && bomOverlayRecipeWritable.value[recipeId]) return recipeId;
   try {
-    await ensureBomDraftRecipe(props.factoryId, productTypeId);
+    // 必须钉到画布当前 revision。省略它时，后端会按默认 Workflow 建草稿；当前正在
+    // 编辑另一版草稿时，返回 workspace 的 processNodeId 对不上画布，详情入口就会
+    // 误报“草稿已创建但未刷新”。
+    await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '无法创建 BOM 草稿，请稍后重试');
     return null;
@@ -2006,7 +2011,11 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
  *   但用户改完之后必须置 —— 否则数据进了定义、hash 也覆盖它, 却因为没人
  *   把图标记成 dirty 而永远不会被保存成新版本。两头都对、中间断掉。
  */
-async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Promise<void> {
+async function loadBomOverlayData(options: {
+  afterUserEdit?: boolean;
+  /** ensure-draft 刚返回的精确草稿。版本列表 GET 可能仍命中旧响应，不能因此丢掉它。 */
+  preferredDraft?: BomRecipeSummary;
+} = {}): Promise<void> {
   const factoryId = props.factoryId;
   const finishedNodes = flowNodes.value.filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId);
   const targets = finishedNodes.map((node) => ({ nodeId: node.id, skuId: String(node.data.skuId) }));
@@ -2037,10 +2046,17 @@ async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Pr
     const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
       try {
         const response = await bomRecipeApi.getVersionsByProduct(factoryId, skuId);
-        const versions = response?.success ? (response.data ?? []) : [];
+        const versions = response?.success ? [...(response.data ?? [])] : [];
+        if (options.preferredDraft?.productTypeId === skuId
+          && !versions.some((version) => version.id === options.preferredDraft?.id)) {
+          versions.unshift(options.preferredDraft);
+        }
         return { skuId, recipe: pickEditableRecipe(versions), versions };
       } catch {
-        return { skuId, recipe: null, versions: [] };
+        const preferred = options.preferredDraft?.productTypeId === skuId
+          ? options.preferredDraft
+          : null;
+        return { skuId, recipe: preferred, versions: preferred ? [preferred] : [] };
       }
     }));
     if (!stillCurrent()) return;
@@ -2449,6 +2465,13 @@ function isLoadedIdentityCurrent(identity: WorkflowIdentity): boolean {
  * 不依赖调用方记得再调一次。
  */
 function refreshBomOverlay(): void {
+  // BOM 数据重载、普通节点编辑和自动布局都会重新派生浮层。保留用户已经拖过的
+  // 位置，避免 Cell 一刷新就跳回默认位置；位置只属于当前画布会话，不写入工艺定义。
+  const existingOverlayPositions = new Map(
+    flowNodes.value
+      .filter(isBomOverlayNode)
+      .map((node) => [node.id, { x: node.position.x, y: node.position.y }] as const),
+  );
   const strippedNodes = stripBomOverlay(flowNodes.value);
   const strippedEdges = stripBomOverlayEdges(flowEdges.value);
   const workflowNodes: BomOverlaySourceNode[] = strippedNodes.map((node) => ({
@@ -2464,22 +2487,14 @@ function refreshBomOverlay(): void {
   });
   flowNodes.value = [
     ...strippedNodes,
-    // ⛔ 浮层 cell 必须是"不可拖/不可选/不可删"的只读投影 —— 三个标志缺一不可, 都要在
-    // 这里(唯一的浮层节点构造点)显式设。理由(详见 must-fix #1):
-    //   draggable:false  拖一像素也会让 onNodeDragStop 把 dirty 设 true → 白改一次草稿。
-    //   selectable:false 防止批量框选/Ctrl 多选把浮层 cell 混进 selectedCellIds
-    //                     (会污染「已选 N 个 Cell」计数与发给 AI 的 selectedNodeContext)。
-    //   deletable:false  VueFlow 自带的键盘/API 删除路径统一收口于此, 不依赖
-    //                     removeNode/removeSelectedElements 各自记得判断。
-    // 三者都设在"数据"这一层(而不是只在 :nodes-draggable="canEdit" 这种全局 prop 上),
-    // 这样以后就算有代码路径换一种方式设置画布级 draggable/selectable 默认值, 浮层节点
-    // 依然锁死 —— 不会重新变回"普通节点"。
+    // 浮层业务数据仍是只读投影：不可选、不可删；但位置是画布布局，允许拖动。
+    // onNodeDragStop 对浮层单独处理，不会制造 Workflow dirty 或新版本。
     ...overlayNodes.map((node) => ({
       id: node.id,
       type: node.type,
-      position: node.position,
+      position: existingOverlayPositions.get(node.id) ?? node.position,
       data: node.data,
-      draggable: false,
+      draggable: true,
       selectable: false,
       deletable: false,
     })),
@@ -2492,7 +2507,12 @@ function refreshBomOverlay(): void {
       sourceHandle: edge.sourceHandle,
       target: edge.target,
       targetHandle: edge.targetHandle,
+      type: edge.type,
       style: edge.style,
+      selectable: false,
+      deletable: false,
+      updatable: false,
+      zIndex: 1,
     })),
   ];
 }
@@ -2672,16 +2692,23 @@ function onNodeClick({ node, event }: NodeMouseEvent): void {
   selectEdgesConnectedTo(ids);
 }
 
-function onNodeDragStart(): void {
+function onNodeDragStart({ node }: { node: Node }): void {
   if (!canEdit.value) return;
+  if (isBomOverlayNode(node)) {
+    dragStartSnapshot.value = null;
+    return;
+  }
   dragStartSnapshot.value = currentDefinition();
 }
 
 function onNodeDragStop({ node }: { node: Node }): void {
   if (!canEdit.value) return;
-  // ⛔ 防御性早退, 不是唯一的门: node.draggable=false(见 refreshBomOverlay)已经让
-  // VueFlow 物理上拖不动浮层 cell, 这里只是不假设"以后不会有别的路径调用这个函数"。
-  if (isBomOverlayNode(node)) return;
+  if (isBomOverlayNode(node)) {
+    const overlay = flowNodes.value.find((candidate) => candidate.id === node.id);
+    if (overlay) overlay.position = { x: node.position.x, y: node.position.y };
+    dragStartSnapshot.value = null;
+    return;
+  }
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
   const target = flowNodes.value.find((candidate) => candidate.id === node.id);
@@ -2798,6 +2825,7 @@ function onConnectEnd(event?: MouseEvent | TouchEvent): void {
 
 // ── 连错可删 ────────────────────────────────────────────────
 function onEdgeClick({ edge, event }: EdgeMouseEvent): void {
+  if (isBomOverlayEdge(edge)) return;
   closeCanvasDropdowns(event);
   flowNodes.value = flowNodes.value.map((node) => (
     isCanvasElementSelected(node) ? { ...node, selected: false } : node
@@ -2813,7 +2841,7 @@ function onEdgeClick({ edge, event }: EdgeMouseEvent): void {
 function selectEdgesConnectedTo(nodeIds: Set<string>): void {
   flowEdges.value = flowEdges.value.map((edge) => ({
     ...edge,
-    selected: nodeIds.has(edge.source) || nodeIds.has(edge.target),
+    selected: !isBomOverlayEdge(edge) && (nodeIds.has(edge.source) || nodeIds.has(edge.target)),
   }));
   selectedEdgeId.value = '';
 }
@@ -2861,6 +2889,7 @@ function removeEdgeById(edgeId: string): void {
   if (!canEdit.value) return;
   const edge = flowEdges.value.find((e) => e.id === edgeId);
   if (!edge) return;
+  if (isBomOverlayEdge(edge)) return;
   mutate(() => {
     // 找到该边连的工序端 + 端口 id (INPUT: 边的 targetHandle=portId; OUTPUT: sourceHandle=portId)
     detachEdgePort(edge);
@@ -2911,7 +2940,12 @@ function removeSelectedElements(): void {
   // ⛔ 防御性过滤: selectedCellIds 理论上不该再混进浮层 id(onNodeClick/框选都已挡住),
   // 这里再筛一次是不假设那两道门永远不会被将来的改动绕开(同 removeNode 的早退)。
   const ids = selectedCellIds.value.filter((id) => !isBomOverlayNode({ id }));
-  const explicitlySelectedEdges = new Set(selectedEdgeIds.value);
+  const explicitlySelectedEdges = new Set(
+    selectedEdgeIds.value.filter((edgeId) => {
+      const edge = flowEdges.value.find((candidate) => candidate.id === edgeId);
+      return edge != null && !isBomOverlayEdge(edge);
+    }),
+  );
   if (ids.length === 0 && explicitlySelectedEdges.size === 0) return;
   const idSet = new Set(ids);
   const materialIds = new Set(flowNodes.value

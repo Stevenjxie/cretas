@@ -10,8 +10,13 @@ const HandleStub = defineComponent({
   name: 'Handle',
   inheritAttrs: false,
   props: { id: String, type: String, position: String },
-  setup() {
-    return () => h('span', { 'data-testid': 'handle-stub' });
+  setup(props) {
+    return () => h('span', {
+      'data-testid': 'handle-stub',
+      'data-handle-id': props.id,
+      'data-handle-type': props.type,
+      'data-position': props.position,
+    });
   },
 });
 
@@ -27,6 +32,17 @@ const baseData = {
 };
 
 describe('辅料 cell', () => {
+  it('renders the exact bottom source handle used by the derived edge', () => {
+    const w = mount(WorkflowAuxiliaryNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data: baseData },
+    });
+    const handle = w.get('[data-testid="handle-stub"]');
+    expect(handle.attributes('data-handle-id')).toBe('bom-aux-out');
+    expect(handle.attributes('data-handle-type')).toBe('source');
+    expect(handle.attributes('data-position')).toBe('bottom');
+  });
+
   it('渲染工序名与行数', () => {
     const w = mount(WorkflowAuxiliaryNode, {
       global: { stubs: { Handle: HandleStub } },
