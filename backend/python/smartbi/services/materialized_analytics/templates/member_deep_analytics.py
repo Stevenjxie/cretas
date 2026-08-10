@@ -65,9 +65,10 @@ _TOP_N = 10
 # Status labels considered "active" for KPI (rest = inactive/closed)
 _ACTIVE_STATUSES = ("正常", "激活", "已激活")
 # Meta-label rows to filter (合计/总计 etc.)
-_META_LABELS = ("合计", "总计", "小计", "汇总")
-
-
+# _META_LABELS 从 polars_backend 导入 —— 这里曾经各抄一份且抄漏了
+# (2026-08-10 实测: 本文件当时只有 4 个词, 权威有 12 个),
+# 认不出的汇总行会被当成明细算进去。判据: 这种判据只能有一处定义。
+from smartbi.services.materialized_analytics.compute.polars_backend import _META_LABELS  # noqa: E402
 @register
 class MemberDeepAnalytics(AnalysisTemplate):
 
