@@ -292,10 +292,21 @@ class ProcessSheetServiceImplTest {
         assertThat(result.getBatchNumber()).as("batchNumber 系统生成").isNotBlank();
         assertThat(result.getBatchId()).isNotNull();
 
-        // ProductionBatch is CLERK_WIP (planId=null on WIP)
+        // ProductionBatch is CLERK_WIP，且 2026-08-11 起**也挂 planId**
         ProductionBatch pb = batchRepo.findByIdAndFactoryId(result.getBatchId(), FACTORY_ID).orElseThrow();
         assertThat(pb.getBatchType()).as("WIP → CLERK_WIP").isEqualTo("CLERK_WIP");
-        assertThat(pb.getProductionPlanId()).as("WIP planId=null (avoid double-count)").isNull();
+        assertThat(pb.getProductionPlanId())
+                .as("WIP 也挂 planId —— DB 触发器把「无计划」当 LEGACY 老路拒绝(V20261029_77), "
+                        + "不挂就报不了工; 防重复计成本改由读取侧按 batch_type 排除")
+                .isEqualTo(planId);
+
+        // 防重复计成本的守卫搬到读取侧: 按 planId 查批次必须看不到这个 CLERK_WIP 批次。
+        // 这条断言承接了原来 "planId=null" 所守的东西 —— 若哪天有人把排除去掉,
+        // OrderCostBreakdownService / ProductionSummaryService / completeProduction 会重新
+        // 把中间工件当正式批次, 这里就会红。
+        assertThat(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, planId))
+                .as("按 planId 查批次不得返回 CLERK_WIP 中间工件(否则成本重复计/计划永远判不出完成)")
+                .noneMatch(b -> "CLERK_WIP".equals(b.getBatchType()));
 
         // RAW MaterialConsumption on the new batch
         List<MaterialConsumption> cons = consumptionRepo.findByProductionBatchId(result.getBatchId());
