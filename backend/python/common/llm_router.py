@@ -319,10 +319,12 @@ def _capability_tier(account: str, model: str) -> int:
     return 0 if measured[0] >= _CAPABILITY_PASS_FLOOR else 2
 
 
-def _capability_latency(account: str, model: str) -> float:
-    """中位延迟; 没测过 → inf, 于是同 tier 内它靠到期日决定先后而不是靠延迟。"""
-    measured = _CAPABILITY.get((account, model))
-    return measured[1] if measured else float("inf")
+# ⛔ 这里**刻意没有** `_capability_latency()` 排序键。第一版有, 它把链头从
+#    glm-4.6 换成了 qwen3-next-80b(更快更小), 回归电池同版本两轮逐条相同的
+#    61/85(改动前 80/85)。理由见 `_build_chain` docstring 里那段自我推翻:
+#    契约是地板题, 18/19 满分并列 → 排序退化成纯延迟升序 = 最小最快的排最前。
+#    延迟是**约束**不是**能力代理**; `_CAPABILITY` 里仍然存着 p50, 但它只用来
+#    给人看(llm_capability_rank 的报表会标出超预算的候选), 不参与排序。
 
 
 def _today() -> datetime.date:
@@ -1040,27 +1042,39 @@ _NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL})
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
-    """按**实测能力**拼链, 到期日退为末位平手键 (owner 2026-08-10 拍板「按能力排」)。
+    """排序键 = (地板置底, 实测能力档, 到期日)。
 
-    排序键 = (能力档, 中位延迟, 到期日):
-      1. 能力档 —— 实测达标 → 没测过 → 实测不达标 (见 `_capability_tier`)
-      2. 中位延迟升序 —— 慢模型自然沉底, 不需要另设一个"预算"常量;
-         13.4s 满分的模型放链头只会把「答不出来」换成「等到超时」, 把
-         call_chain 的总预算吃光, 后面健康的模型一个都轮不上。
-      3. 到期日升序 —— 原策略 use-it-or-lose-it 的合理内核**保留**: 同能力
-         同速度时依旧优先榨干快到期的免费额度。它只是不再能把一个已经耗尽
-         的模型顶到链头。
+    只有**有证据支撑**的那一档进排序键:
 
-    ⚠️ 这条改动**推翻**了 2026-08-09 的纯到期日排序。那版的失败形状很具体:
-       `aliyun_c/deepseek-v3.2` 08-13 到期(最早) → 排链头 → 而它实测 0/6
-       全 403 quota。排序键对「这个模型今天还活着吗」完全沉默。
-       ⚠️ 同时它也修好了 `_expiry_of` docstring 里一直写着、代码里一直没有的
-       那句 "soonest-expiry-first **WITHIN a quality tier**" —— 现在真有 tier 了。
+      1. 地板置底 —— 结构契约, 见下方行内注释
+      2. 能力档 —— 实测达标 → 没测过 → 实测不达标 (见 `_capability_tier`)。
+         唯一的实测依据是「这个 (账号,模型) 今天还答不答得出合契约的东西」。
+      3. 到期日升序 —— use-it-or-lose-it, 原策略的合理内核, 保留。
+
+    ⚠️ 这条修好了 2026-08-09 纯到期日排序的具体失败: `aliyun_c/deepseek-v3.2`
+       08-13 到期(最早) → 排链头 → 而它实测 0/6 全 403 quota。排序键对
+       「这个模型今天还活着吗」完全沉默。
+
+    🔴 **2026-08-10 当天自我推翻的一版, 记在这里免得再犯**: 第一版排序键在
+       能力档和到期日之间夹了一位**中位延迟升序**, 理由写的是「慢模型自然沉底」。
+       它带来了一次真实回归 —— 回归电池同版本两轮**逐条相同的 61/85**
+       (改动前 80/85)。
+
+       根因是我自己在 `_CAPABILITY` 的注释里已经写明的事实: 契约是**地板题**,
+       19 个候选 **18 个 6/6 满分**, 它区分不出模型强弱。18 个满分并列之后,
+       排序**退化成了纯延迟升序** —— 也就是「最小最快的模型排最前」。链头因此
+       从 glm-4.6 换成 qwen3-next-80b(0.8s), 而后者规划能力更弱。
+
+       🔑 判据: **一个量, 你刚判定它区分不出 A, 就不能拿它去给 A 排序。**
+          延迟是**约束**(超预算的不能进链), 不是**能力的代理**。快 ≠ 会规划。
+       ⛔ 想真正「按能力排」, 需要一道会让好模型和更好的模型分开的题。现在没有
+          —— 在有之前, 能力档只做「能不能用」这一件它做得到的事, 剩下的交回
+          到期日。
 
     能力表超龄(>21 天) → 忽略能力档, 退回纯到期日排序(即旧行为)。陈旧读数
     不比没有读数好, 但**默默用陈旧读数**比两者都坏。
 
-    稳定排序: 三个键全平手时保持 _SLOT_POOLS 里人写的顺序。
+    稳定排序: 键全平手时保持 _SLOT_POOLS 里人写的顺序(= 人审的质量优先级)。
     """
     entries = list(_SLOT_POOLS[slot])
     if slot not in _NO_TEXT_TAIL_SLOTS:
@@ -1075,7 +1089,7 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
         # 隐式实现同一件事; 能力档一旦能把某个 aliyun 条目沉到底(实测不达标
         # 的 deepseek-v3.2 就是), 那个隐式保证当场失效 —— 所以显式写出来。
         1 if p in tail_set else 0,
-        _capability_tier(*p), _capability_latency(*p), _expiry_of(*p))))
+        _capability_tier(*p), _expiry_of(*p))))
 
 
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}
