@@ -341,6 +341,23 @@ run_rsync "学习毕业 CLI" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/restaurant-intent-promote.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/"
 
+# 3c3. 监控脚本 (2026-08-10 加).
+#
+# ⚠️ 发现经过: `capability-watch.sh` 每 15 分钟由 cron 跑, 但**部署脚本里从来没有
+#    它** —— 服务器上那份(/www/wwwroot/cretas/capability-watch.sh)是有人手动 scp
+#    上去的。后果: 仓里改了监控逻辑, 线上跑的还是手动传的那份, 而两者何时分叉
+#    没有任何信号。同一路径下另有一份 code/scripts/monitoring/ 的**4 月旧副本**
+#    (连 Probe 5 都没有), 谁改错哪份都不会有人发现。
+#    判据: **cron 在跑的脚本必须由部署同步** —— 靠人手动 scp 的东西, 迟早与仓分叉,
+#          而分叉的那一刻不会有任何提示(同族: #2166「飞轮 CLI 从没被部署过」)。
+#    ⛔ 同步到 cron 实际使用的路径(/www/wwwroot/cretas/), 不是 code/ 下那份旧副本 ——
+#       改错位置等于什么都没做。
+log "INFO" "[3c3/5] 同步 监控脚本 (capability-watch)..."
+run_rsync "监控脚本" -az --timeout=60 \
+    "$PROJECT_ROOT/scripts/monitoring/capability-watch.sh" \
+    "$SERVER:/www/wwwroot/cretas/"
+ssh "$SERVER" "chmod +x /www/wwwroot/cretas/capability-watch.sh"
+
 # 3d. Keep active cron consumers on the same atomically selected runtime as
 # the production service. Host-local crontab entries continue to own schedule
 # and secrets; only the tracked scripts are synchronized.
