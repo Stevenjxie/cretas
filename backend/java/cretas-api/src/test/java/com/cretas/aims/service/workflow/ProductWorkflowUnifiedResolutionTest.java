@@ -27,6 +27,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -201,16 +202,48 @@ class ProductWorkflowUnifiedResolutionTest {
         assertEquals("WORKFLOW_SELECTED_VERSION_CHANGED", stale.getErrorCode());
     }
 
+    /**
+     * 2026-08-10 (D6): 本用例原名 pinnedPlanContractAcceptsOneSelectedProductFromJointOutputs，
+     * 断言「联产图里只勾一个成品也放行」—— 那正是本轮写入侧移除的行为。联产是一锅同时产出，
+     * 只勾 P1 建计划会让 P2 凭空出现在产线上却不在计划里。改为断言拒绝并指名少勾了谁。
+     */
     @Test
-    void pinnedPlanContractAcceptsOneSelectedProductFromJointOutputs() {
+    void pinnedPlanContractRejectsPartialSelectionOfJointOutputs() {
         activate(54L, "ANCHOR-JOINT", List.of("RAW-A", "RAW-B"), List.of("P1", "P2"),
                 LocalDateTime.now());
 
-        WorkflowPlanOutputContract contract = service.resolvePinnedPlanOutputContract(
-                "F1", "ANCHOR-JOINT", 54L, 1, List.of("P1"));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.resolvePinnedPlanOutputContract(
+                        "F1", "ANCHOR-JOINT", 54L, 1, List.of("P1")));
 
-        assertEquals(54L, contract.workflowId());
-        assertEquals(List.of("P1"), contract.outputUnitBySku().keySet().stream().toList());
+        assertEquals("WORKFLOW_EXACT_OUTPUT_SET_REQUIRED", error.getErrorCode());
+        assertTrue(error.getActionHint().contains("P2"), error.getActionHint());
+    }
+
+    @Test
+    void pinnedPlanContractAcceptsTheCompleteJointOutputSet() {
+        activate(55L, "ANCHOR-JOINT-FULL", List.of("RAW-A", "RAW-B"), List.of("P1", "P2"),
+                LocalDateTime.now());
+
+        WorkflowPlanOutputContract contract = service.resolvePinnedPlanOutputContract(
+                "F1", "ANCHOR-JOINT-FULL", 55L, 1, List.of("P1", "P2"));
+
+        assertEquals(55L, contract.workflowId());
+        assertEquals(List.of("P1", "P2"), contract.outputUnitBySku().keySet().stream().sorted().toList());
+    }
+
+    /** 写入侧另一处入口 requireResolutionForAnchor 也必须相等判定 (Step 8 变异闸靠它变红)。 */
+    @Test
+    void activePlanContractRejectsPartialSelectionOfJointOutputs() {
+        activate(56L, "ANCHOR-JOINT-ACTIVE", List.of("RAW-A", "RAW-B"), List.of("P1", "P2"),
+                LocalDateTime.now());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.resolveActivePlanOutputContract(
+                        "F1", "ANCHOR-JOINT-ACTIVE", List.of("P1")));
+
+        assertEquals("WORKFLOW_EXACT_OUTPUT_SET_REQUIRED", error.getErrorCode());
+        assertTrue(error.getActionHint().contains("P2"), error.getActionHint());
     }
 
     private void activate(
