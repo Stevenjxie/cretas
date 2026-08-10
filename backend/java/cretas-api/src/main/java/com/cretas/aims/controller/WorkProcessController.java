@@ -86,6 +86,9 @@ public class WorkProcessController {
         return ApiResponse.success(workProcessService.update(factoryId, id, dto));
     }
 
+    // Tracked Web clients now update Workflow-node snapshots instead of this master-data shortcut.
+    // Keep the route for deployed-client compatibility until access logs show zero callers for a full support window;
+    // then remove it together with UpdateWorkProcessOutputKindRequest and the service shortcut.
     @RequirePermission({"production:read_write"})
     @PatchMapping("/{id}/output-kind")
     @Operation(summary = "快捷修改工序主产出类型")

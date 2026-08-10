@@ -19,7 +19,6 @@ const apiMocks = vi.hoisted(() => ({
   getWorkProcessCategories: vi.fn(),
   getProductWorkProcesses: vi.fn(),
   updateWorkProcess: vi.fn(),
-  updateWorkProcessOutputKind: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   getWorkflowBomSyncPreflight: vi.fn(),
@@ -37,7 +36,6 @@ vi.mock('@/api/processProduction', () => ({
   getWorkProcessCategories: apiMocks.getWorkProcessCategories,
   getProductWorkProcesses: apiMocks.getProductWorkProcesses,
   updateWorkProcess: apiMocks.updateWorkProcess,
-  updateWorkProcessOutputKind: apiMocks.updateWorkProcessOutputKind,
 }));
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
