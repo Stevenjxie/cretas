@@ -243,5 +243,150 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return 0 if qualified else 1
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# `--compare` —— 拿「已知好用的模型」当参照，量候选在**难题**上的槽位一致率。
+#
+# 为什么不写标准答案表: 这些题的正确编码方式我只能猜(「昨天」该编成
+# {"type":"named","value":"yesterday"} 还是 {"type":"relative","unit":"day",
+# "count":1}? 提示词里 named 的例子只列了 today/this_week/this_month)。我猜错了,
+# 一个其实正确的模型会被判错 —— 那把尺子测的是我的猜测, 不是模型。
+#
+# 参照的来源是**电池结果**, 不是我的判断: `--ref` 指定的模型在 2026-08-10 04:40
+# 那轮全量电池上, 这批题全部通过; 而 08-10 下午链头换成 qwen3-next-80b 之后,
+# 同一批题成片挂掉。所以「与 ref 一致」= 「大概率能让电池过」。
+#
+# ⛔ 必须带阴性对照: 把已知坏的那个模型也放进候选。它**必须**得低分 ——
+#    如果它也得高分, 说明这把尺子测的不是我声称的东西, 读数一律作废。
+_HARD_QUERIES = [
+    # 08-10 下午链头换弱模型后成片挂掉的那批 —— 全是多槽且槽间要一致的问句
+    "本月全部门店哪道菜卖得最差",      # 排名方向 + limit + dish 维度
+    "昨天全部门店卖了多少钱",          # 相对日期
+    "本月全部门店订单量如何",          # 指标 orders 而不是 revenue
+    "全部门店2026年3月生意怎么样",     # 绝对月份
+    "明天怎么排班",                    # 预测 horizon → STAFFING_ADVICE
+    "下周需要多少兼职",                # 预测 horizon, 且不能退化成历史查询
+    # 正对照: 简单单槽问句, 所有模型都该一致。全体不一致 = 探针坏了。
+    "本月全部门店营收多少",
+]
+
+# 承重字段 —— 计划错在这些位上, 下游确定性代码就会去算另一个问题。
+_KEY_FIELDS = ("intent", "analysis_action", "requested_metrics", "time_range",
+               "dish", "store")
+
+
+def _plan_of(text: str) -> Optional[Dict[str, Any]]:
+    body = (text or "").strip()
+    if body.startswith("```"):
+        body = body.strip("`")
+        if body[:4].lower() == "json":
+            body = body[4:]
+        body = body.strip()
+    try:
+        parsed = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _norm(value: Any) -> Any:
+    """比较前归一: list 与 tuple 同义, 顺序无关(指标是集合语义), None/空串同义。"""
+    if isinstance(value, (list, tuple)):
+        return tuple(sorted(_norm(v) for v in value))
+    if isinstance(value, dict):
+        return tuple(sorted((k, _norm(v)) for k, v in value.items()))
+    if value == "":
+        return None
+    return value
+
+
+async def _plans_for(client: httpx.AsyncClient, account: str, model: str,
+                     slot: r.SLOT) -> Dict[str, Optional[Dict[str, Any]]]:
+    from smartbi.gold.restaurant import restaurant_intent as ri
+
+    base, key = r._provider_config(account)
+    out: Dict[str, Optional[Dict[str, Any]]] = {}
+    for query in _HARD_QUERIES:
+        prompt = ri._build_t3_prompt(query, None, None, (), None)
+        normalized = r._normalize_payload_for_provider({
+            "model": model,
+            "messages": [
+                {"role": "system",
+                 "content": "你只输出JSON格式的意图解析结果，不输出任何其他文字。"},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+            "max_tokens": ri._SEMANTIC_MAX_TOKENS,
+        }, account)
+        payload = r._apply_slot_params(slot, account, model, normalized)
+        try:
+            resp = await client.post(base.rstrip("/") + "/chat/completions",
+                                     json=payload,
+                                     headers={"Authorization": f"Bearer {key}"},
+                                     timeout=60.0)
+            content = (json.loads(resp.text)["choices"][0]["message"]
+                       .get("content") or "") if 200 <= resp.status_code < 300 else ""
+        except Exception:  # noqa: BLE001
+            content = ""
+        out[query] = _plan_of(content)
+    return out
+
+
+def compare_main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ref", default="aliyun_c/glm-4.6",
+                    help="参照模型 (电池上已知好用的那个)")
+    ap.add_argument("--candidates", default="", help="逗号分隔 account/model")
+    ap.add_argument("--slot", default="review")
+    args = ap.parse_args(argv)
+
+    slot = r.SLOT[args.slot.upper()]
+    pairs = [tuple(s.split("/", 1)) for s in
+             ([args.ref] + [c for c in args.candidates.split(",") if c])]
+
+    async def run() -> Dict[Tuple[str, str], Dict[str, Any]]:
+        async with httpx.AsyncClient() as client:
+            results = {}
+            for account, model in pairs:
+                results[(account, model)] = await _plans_for(
+                    client, account, model, slot)
+            return results
+
+    plans = asyncio.run(run())
+    ref_pair = pairs[0]
+    ref = plans[ref_pair]
+
+    print(f"[compare] 参照 = {ref_pair[0]}/{ref_pair[1]} (电池上已知好用)")
+    print(f"          难题 {len(_HARD_QUERIES)-1} 条 + 正对照 1 条; "
+          f"承重字段 {list(_KEY_FIELDS)}\n")
+
+    for pair in pairs[1:]:
+        got = plans[pair]
+        agree = 0
+        detail = []
+        for query in _HARD_QUERIES:
+            a, b = ref.get(query), got.get(query)
+            if a is None or b is None:
+                detail.append(f"    ✗ {query} —— {'参照' if a is None else '候选'}没吐出可解析计划")
+                continue
+            diffs = [f for f in _KEY_FIELDS if _norm(a.get(f)) != _norm(b.get(f))]
+            if diffs:
+                shown = ", ".join(
+                    f"{f}: ref={a.get(f)!r} vs {b.get(f)!r}" for f in diffs[:3])
+                detail.append(f"    ✗ {query} —— {shown}")
+            else:
+                agree += 1
+        print(f"  {pair[0]}/{pair[1]}: 与参照一致 {agree}/{len(_HARD_QUERIES)}")
+        for line in detail:
+            print(line)
+        print()
+    return 0
+
+
 if __name__ == "__main__":
+    import sys as _sys
+    if "--compare" in _sys.argv:
+        _sys.argv.remove("--compare")
+        raise SystemExit(compare_main())
     raise SystemExit(main())

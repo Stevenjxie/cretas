@@ -41,18 +41,15 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
         "_today",
         lambda: datetime.date(2026, 8, 9),
     )
-    # 2026-08-09: aliyun_c/qwen3.6-flash-2026-04-16 and aliyun_c/glm-5.2 were both
-    # retired from _SAFE_MODELS by the audit (see llm_router.py _SAFE_MODELS
-    # comment) — swapped for two pairs that ARE registered on aliyun_c today,
-    # keeping the same "slow head, healthy fallback" shape this test locks down.
-    monkeypatch.setitem(
-        llm_router.SLOT_MODELS,
-        SLOT.MAPPER,
-        [
-            ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
-            ("aliyun_c", "glm-4.6"),
-        ],
-    )
+    # ⛔ 这里**不写死模型名**。本测试锁的是「慢链头 + 健康后备」这个形状, 与具体
+    #    是哪两个模型无关; 而注册表随探针淘汰在动 —— 2026-08-09 因此换过一次,
+    #    2026-08-10 又淘汰 5 条再次撞上。写死名字 = 每次淘汰都要人手改测试,
+    #    改晚了测试红在「这个模型不在白名单」而不是它真正要守的预算行为上。
+    #    从注册表现取两个同账号 (aliyun_c) 的条目, 淘汰谁都不影响。
+    c_pairs = sorted(p for p in llm_router._SAFE_MODELS if p[0] == "aliyun_c")
+    assert len(c_pairs) >= 2, f"aliyun_c 上少于 2 个可用条目, 无法构造本用例: {c_pairs}"
+    slow_head, healthy = c_pairs[0], c_pairs[1]
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.MAPPER, [slow_head, healthy])
     good = {"choices": [{"message": {"content": '{"intent":"ok"}'}}]}
 
     class _BudgetClient:
@@ -62,7 +59,7 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
         async def post(self, _url, headers=None, json=None, timeout=None):
             model = json["model"]
             self.call_log.append(model)
-            if model == "qwen3-next-80b-a3b-instruct":
+            if model == slow_head[1]:
                 await asyncio.sleep(1)
                 raise AssertionError("wait_for must time out the slow head")
             await asyncio.sleep(0.06)
@@ -79,10 +76,7 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     )
 
     assert result == good
-    assert client.call_log == [
-        "qwen3-next-80b-a3b-instruct",
-        "glm-4.6",
-    ]
+    assert client.call_log == [slow_head[1], healthy[1]]
 
 
 def test_budget_reservation_does_not_change_unbounded_or_reasoning_calls():

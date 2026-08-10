@@ -308,13 +308,14 @@ def test_refuse_rejects_unregistered_landmine():
 
 
 def test_refuse_hard_drops_expired():
-    # 2026-08-09 重审后 aliyun_a/qwen3.6-plus-2026-04-02 已从注册表整体移除
-    # (not_allowlisted, 不会走到 expired 分支)。换成实测仍登记、到期日 08/13 的
-    # aliyun_c/qwen3-next-80b-a3b-instruct — 过期当天即拒绝。
-    after = datetime.date(2026, 8, 14)
-    assert llm_router._refuse_reason(
-        "aliyun_c", "qwen3-next-80b-a3b-instruct", after
-    ) == "expired"
+    # ⛔ 同样不写死模型名(见 test_llm_router_budget 里那段): 写死的那个一旦被探针
+    #    淘汰, 本条会红在 not_allowlisted —— 那是「测试引用了不存在的模型」,
+    #    不是「过期拒绝坏了」, 而两者长得一模一样。取注册表里到期最早的那条。
+    dated = [(exp, pair) for pair, exp in llm_router._SAFE_MODELS.items() if exp]
+    assert dated, "注册表里没有任何带到期日的条目, 本用例无法构造"
+    earliest_exp, pair = min(dated)
+    after = earliest_exp + datetime.timedelta(days=1)
+    assert llm_router._refuse_reason(pair[0], pair[1], after) == "expired"
 
 
 def test_refuse_denylist_veto():
@@ -774,34 +775,30 @@ def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
         assert pair in llm_router._TEXT_TAIL, f"{pair} registered but not wired into the floor"
 
 
-def test_negative_confidence_pill_now_precedes_the_non_aliyun_floor_in_review():
-    """Pre-2026-08-09 policy: REVIEW was hand-ordered so this pill
-    (aliyun_c/deepseek-v3.2 -- correct plan, confidence pinned at -0.95/-1.0)
-    sat AFTER the non-aliyun floor, because the router treated any HTTP 200 as
-    success and stopped, so anything ordered after a poison pill was dead
-    code. `_TOKENHUB_VERIFIED`'s four pairs from that era are gone from
-    _SAFE_MODELS entirely (see test_verified_tokenhub_models_are_registered_
-    and_in_the_text_tail); only minimax-m2.7 survives.
+def test_negative_confidence_safety_net_is_the_content_validator_not_chain_order():
+    """毒丸(计划正确但 confidence 恒为负)的防线在**内容校验**, 不在链顺序。
 
-    2026-08-09 rewrite inverts the ordering on purpose: _build_chain sorts by
-    expiry, and deepseek-v3.2 (a real, 08-13-dated grant) can never sort after
-    the never-expiring floor (_TEXT_TAIL entries have expiry=None ->
-    _FAR_FUTURE). The hand-curated safety-net ordering is structurally
-    unachievable under expiry-first sorting now, so the safety net moved down
-    a layer instead: `_t3_llm_parse` passes call_chain a content_validator
-    that treats negative confidence as invalid output and keeps falling
-    through, regardless of chain position -- ordering is no longer the
-    enforcement point. This test pins the new, intentional fact.
+    历史: 2026-08-09 之前 REVIEW 是人手排序的, 特意把 aliyun_c/deepseek-v3.2
+    这颗毒丸排在非 aliyun 地板**之后** —— 因为当时 router 把任何 HTTP 200 都当
+    成功就停下, 排在毒丸后面的等于死代码。
+
+    2026-08-09 改成按到期日排序后, 那种人手安全网**结构上就做不到了**(地板
+    到期日是 None → _FAR_FUTURE → 永远最后)。安全网因此下沉一层:
+    `_t3_llm_parse` 给 call_chain 传 `content_validator=_t3_contract_violation`,
+    负 confidence 被判无效并继续往下走, **与链上位置无关**。
+
+    2026-08-10: 那颗毒丸本身已被探针淘汰(403 quota, 从 _SAFE_MODELS 整体移除),
+    所以原来那条「毒丸排在地板之前」的断言现在引用的是一个不存在的模型。
+    ⛔ 不要把它改成随便挑另一个模型来顶替 —— 那条断言的**主语**是毒丸, 换个
+       健康模型去断言位置, 测的就不是同一件事了。改为直接钉住真正承重的那件事:
+       契约校验函数还在, 且它确实会把负 confidence 判为违约。
     """
-    chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
-    pill = chain.index(("aliyun_c", "deepseek-v3.2"))
-    floor_positions = [chain.index(p) for p in llm_router._TEXT_TAIL if p in chain]
-    assert floor_positions, "REVIEW cannot reach the non-aliyun floor at all"
-    assert pill < min(floor_positions), (
-        f"the pill at {pill} no longer sorts before the floor at "
-        f"{sorted(floor_positions)} -- if this flips back, re-check that the "
-        f"content_validator note above still matches call_chain's behavior"
-    )
+    from smartbi.gold.restaurant.restaurant_intent import _t3_contract_violation
+
+    assert _t3_contract_violation('{"intent":"X","confidence":-0.95}') == (
+        "t3_confidence_negative"), "负 confidence 不再被判违约 —— 安全网没了"
+    # 阴性对照: 正常 confidence 必须放行, 否则上面那条可以靠"永远判违约"蒙混。
+    assert _t3_contract_violation('{"intent":"X","confidence":0.9}') is None
 
 
 def test_tokenhub_kimi_is_forced_to_temperature_one():
