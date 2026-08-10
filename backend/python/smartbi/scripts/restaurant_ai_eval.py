@@ -19,7 +19,9 @@ import argparse
 import calendar as _calendar
 import datetime as _dt
 import json
+import os
 import random
+import re
 import string
 import sys
 import time
@@ -590,7 +592,110 @@ def _preflight_fixture(base: str, auth: Dict[str, str]) -> List[str]:
     return problems
 
 
+# ── 本轮取数条件 (provenance) ──────────────────────────────────────────
+#
+# 🔴 2026-08-11: 电池分数**不是代码版本的函数**, 是
+#        代码 × 今天哪个模型还活着 × 计划缓存冷热
+#    三者的函数。不记下来, 下一个人拿到两个分数就没法判断差异来自哪一项。
+#
+#    当天实测: 交接文档与我自己都报过「两轮读数完全一致」—— 它是**构造出来的**。
+#    第二轮 85 题里 59 题直接吃了第一轮刚写进 `_SEMANTIC_PLAN_CACHE`(进程内,
+#    TTL 6h) 的计划, 结构上不可能与第一轮不同。
+#    判据: **两个读数之间有因果链(前一轮把计划写进了后一轮读的缓存),
+#          就不构成重复验证。**
+#
+#    同一层缓存还会把**非确定性伪装成稳定**: 电池 [27] 连过 12 轮再连挂 2 轮,
+#    转折点压在一次部署重启上, 看着像那次部署的回归; 落库记录显示同代码同模型下
+#    21:16 通过、21:25 失败 —— planner 在摇摆, 缓存只是把某一次冻住了 6 小时,
+#    而部署重启 = 重掷骰子。
+#
+# ⛔ 不从 HTTP 响应判冷热: 实测同一句连打两次, 响应里
+#    matchMethod / cacheHitType / fromCache / source / queryPlanHash
+#    **逐字相同**, 没有任何字段能区分。权威信号只在服务日志里。
+_PROD_LOG_PATH = os.environ.get(
+    "RESTAURANT_EVAL_PROD_LOG", "/www/wwwroot/cretas/python-prod.log")
+
+_PLAN_CACHE_HIT_MARK = "zero-token plan-cache hit"
+_LLM_SERVED_RE = re.compile(r"slot=\S+ OK via (\S+)")
+
+
+def summarize_provenance(log_slice: str) -> Dict[str, Any]:
+    """数出本轮**在什么条件下取的数**: 几次吃了旧计划, 哪些模型在服务。
+
+    纯函数, 入参是本轮跨越的那段日志文本 —— 这样它能被单测覆盖。
+    「要发 HTTP 才能跑的判定逻辑没法被单测覆盖」是本文件早先栽过的坑
+    (见 `invariant_problems` 抽出来的那段注释)。
+    """
+    models: Dict[str, int] = {}
+    for model in _LLM_SERVED_RE.findall(log_slice):
+        models[model] = models.get(model, 0) + 1
+    return {
+        "cache_hits": log_slice.count(_PLAN_CACHE_HIT_MARK),
+        "fresh_parses": sum(models.values()),
+        "models": models,
+    }
+
+
+def render_provenance(info: Dict[str, Any]) -> List[str]:
+    """渲染成人话。
+
+    ⛔ 读不到日志时必须**明说不可知**, 不能省掉这一段 —— 缺失的段落会被读成
+       「没问题」。「沉默即通过」是本仓反复在拆的东西。
+    ⛔ 不设「缓存命中率超过 X% 才告警」这种阈值: 阈值是猜的, 而事实是精确的 ——
+       直接报「有几次吃的是旧计划」, 让读的人自己判断可比性。
+    """
+    head = ["", "── 本轮取数条件 ──"]
+    if info.get("unavailable"):
+        return head + [
+            f"⚠️ 取数条件**不可知**({info['unavailable']})。",
+            "   不要拿本轮分数与别轮直接比: 吃缓存的轮次是重放, 不是独立样本。",
+        ]
+    hits, fresh = info["cache_hits"], info["fresh_parses"]
+    lines = head + [f"计划缓存: 命中 {hits} / 真解析 {fresh}"]
+    if hits == 0:
+        lines.append("  ✅ 全冷 —— 可与其它**全冷**轮次比较。")
+    else:
+        lines.append(
+            f"  ⚠️ 其中 {hits} 次吃的是先前轮次写进缓存的计划 —— 这部分"
+            f"**不是独立样本**, 与上一轮一致属于结构性必然, 不构成复现。")
+    if info["models"]:
+        lines.append("服务模型: " + "、".join(
+            f"{m} ×{n}" for m, n in
+            sorted(info["models"].items(), key=lambda kv: (-kv[1], kv[0]))))
+    else:
+        lines.append("服务模型: (本轮没有真解析 —— 全部命中缓存)")
+    return lines
+
+
+def _log_cursor() -> Optional[int]:
+    """记下本轮开始时服务日志的长度, 之后只读这之后追加的部分。"""
+    try:
+        return os.path.getsize(_PROD_LOG_PATH)
+    except OSError:
+        return None
+
+
+def _provenance_since(start: Optional[int]) -> Dict[str, Any]:
+    if start is None:
+        return {"unavailable": f"读不到 {_PROD_LOG_PATH}"}
+    try:
+        if os.path.getsize(_PROD_LOG_PATH) < start:
+            # 轮转过就没法只读增量了 —— 说不可知, 别拿残缺的一段冒充完整。
+            return {"unavailable": "日志在本轮期间轮转过"}
+        with open(_PROD_LOG_PATH, "rb") as handle:
+            handle.seek(start)
+            raw = handle.read()
+    except OSError as exc:  # noqa: BLE001 — 取数条件读不到不该让电池崩
+        return {"unavailable": f"读日志失败: {exc}"}
+    return summarize_provenance(raw.decode("utf-8", "replace"))
+
+
 def run_eval(base: str, only: Optional[str] = None) -> int:
+    # 本轮开始时的日志长度 —— 收尾时只读这之后追加的那一段, 用来说清
+    # 「这一轮是在什么条件下取的数」(见 `summarize_provenance` 上面那段)。
+    # 放在登录之前: 预检夹具也会发查询、也会焐热缓存, 它同样属于本轮条件。
+    log_cursor = _log_cursor()
+
     # ── 登录：用租户自己的账号，不用免密 demo-login ──────────────────────
     #
     # 🔴 2026-08-06~08-09 这道电池连挂 4 天，就是因为它打的是
@@ -727,6 +832,8 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         print(f"\n耗时: 平均 {sum(latencies)/len(latencies):.1f}s | 中位 "
               f"{ordered[len(ordered)//2]:.1f}s | p95 {p95:.1f}s | 最慢 {ordered[-1]:.1f}s")
     print(f"== {passed} passed, {failed} failed / {passed + failed} run ==")
+    # ⛔ 无论成败都打 —— 取数条件是**读这个分数的前提**, 不是失败时才需要的附注。
+    print("\n".join(render_provenance(_provenance_since(log_cursor))))
     if failures:
         print("\n".join(["", "── 失败明细 ──", *failures]))
     return 1 if failed else 0
