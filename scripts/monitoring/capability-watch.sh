@@ -170,6 +170,39 @@ else
     SUMMARY="${SUMMARY}truth=OK "
 fi
 
+# ============ Probe 6: 可达性 (规划器能表达多少格) ============
+#
+# 2026-08-10 加。此前它只有一次性读数(2992/3168, 94%), **没人定期跑** —— 于是
+# 「规划器还能不能表达这些问法」这件事在两次人工检查之间是无人知晓的。
+# 而它退化的方式是静默的: 登记表某个键改名 / 别名指向失效 / 某个维度被摘掉,
+# 表现都只是「某类问法忽然答不出来」, 不报错。
+#
+# ⛔ 阈值用**地板值**不用等号: 写死 `== 2992` 的话, 下次给登记表加一个指标(格子
+#    总数变大)就会误报, 而误报几次之后这道闸就没人看了。地板值只在**倒退**时红。
+#    判据: **会随正常演进变化的量, 断言下界而不是等值。**
+REACH_FLOOR="${REACH_FLOOR:-2900}"
+REACH_OUT=$(cd /www/wwwroot/cretas/code/backend/python 2>/dev/null \
+    && set -a && . /www/wwwroot/cretas/.env.prod 2>/dev/null && set +a \
+    && PYTHONPATH=.:./smartbi ./venv-current/bin/python \
+       -m smartbi.scripts.registry_reachability 2>&1 | tail -6)
+REACH_LINE=$(printf '%s' "$REACH_OUT" | grep -E "^REACHABLE" | head -1)
+if [ -z "$REACH_LINE" ]; then
+    # 同 Probe 5 的判据: 没有结论行 = 闸没跑, 不是闸过了。
+    emit "ALERT reach: 可达性脚本没有产出结论行 —— ⛔ 这是「闸没跑」不是「闸过了」"
+    ALERT=1
+    SUMMARY="${SUMMARY}reach=NORUN "
+else
+    REACH_N=$(printf '%s' "$REACH_LINE" | sed -E 's#^REACHABLE ([0-9]+)/.*#\1#')
+    if [ -n "$REACH_N" ] && [ "$REACH_N" -lt "$REACH_FLOOR" ] 2>/dev/null; then
+        emit "ALERT reach: $REACH_LINE (低于地板 $REACH_FLOOR —— 有问法退化成答不出来)"
+        printf '%s' "$REACH_OUT" | tail -3 | while IFS= read -r l; do emit "  $l"; done
+        ALERT=1
+        SUMMARY="${SUMMARY}reach=DROP "
+    else
+        SUMMARY="${SUMMARY}reach=OK "
+    fi
+fi
+
 # ==================== Final emit ====================
 STATUS="OK"
 [ "$ALERT" -eq 1 ] && STATUS="ALERT"

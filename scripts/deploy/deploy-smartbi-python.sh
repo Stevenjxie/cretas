@@ -341,20 +341,41 @@ run_rsync "学习毕业 CLI" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/restaurant-intent-promote.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/"
 
+# 3c3. 监控脚本 (2026-08-10 加).
+#
+# ⚠️ 发现经过: `capability-watch.sh` 每 15 分钟由 cron 跑, 但**部署脚本里从来没有
+#    它** —— 服务器上那份(/www/wwwroot/cretas/capability-watch.sh)是有人手动 scp
+#    上去的。后果: 仓里改了监控逻辑, 线上跑的还是手动传的那份, 而两者何时分叉
+#    没有任何信号。同一路径下另有一份 code/scripts/monitoring/ 的**4 月旧副本**
+#    (连 Probe 5 都没有), 谁改错哪份都不会有人发现。
+#    判据: **cron 在跑的脚本必须由部署同步** —— 靠人手动 scp 的东西, 迟早与仓分叉,
+#          而分叉的那一刻不会有任何提示(同族: #2166「飞轮 CLI 从没被部署过」)。
+#    ⛔ 同步到 cron 实际使用的路径(/www/wwwroot/cretas/), 不是 code/ 下那份旧副本 ——
+#       改错位置等于什么都没做。
+log "INFO" "[3c3/5] 同步 监控脚本 (capability-watch)..."
+run_rsync "监控脚本" -az --timeout=60 \
+    "$PROJECT_ROOT/scripts/monitoring/capability-watch.sh" \
+    "$SERVER:/www/wwwroot/cretas/"
+ssh "$SERVER" "chmod +x /www/wwwroot/cretas/capability-watch.sh"
+
 # 3d. Keep active cron consumers on the same atomically selected runtime as
 # the production service. Host-local crontab entries continue to own schedule
 # and secrets; only the tracked scripts are synchronized.
 log "INFO" "[3d/5] 同步 Python 定时任务入口..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
-run_rsync "Python 定时任务入口" -az --timeout=60 \
-    "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
-    "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
-    "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" \
+# ⚠️ 2026-08-10: 这里曾是**逐文件的白名单**(restaurant-ai-eval / refresh-demo-rest /
+#    probe-llm-registry 三行硬编)。新增一个 cron 脚本时忘了加进来, 结果是:
+#      · 仓里有、服务器上没有 → crontab 每天报 "No such file"
+#      · 而 crontab 的错误没人看 → **那道闸等于从来没上线过**
+#    本轮实测踩到: forecast-backtest-watch.sh 写好、cron 装好, 但同步不过去。
+#    (下面 3c2 的注释里也写着「这条纪律已经漏过两次」—— 说明靠纪律没用。)
+#    改成**整目录同步**: 清单由目录本身定义, 加脚本不必再记得改这里。
+#    判据: **「加了东西要记得同步到另一处」这种纪律必然会漏, 能按目录就别列清单。**
+run_rsync "Python 定时任务入口(整目录)" -az --timeout=60 \
+    --include='*.sh' --exclude='*' \
+    "$PROJECT_ROOT/scripts/cron/" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/cron/"
-ssh "$SERVER" "chmod +x \
-    /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
-    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh \
-    /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh"
+ssh "$SERVER" "chmod +x /www/wwwroot/cretas/code/scripts/cron/*.sh"
 
 # 3c2. 闭合 3c/3d 的白名单缺口 (2026-08-01).
 #
