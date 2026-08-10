@@ -74,7 +74,9 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
                 "workflow must expose a stable instance ownership key");
         assertContains(sql,
                 "CONSTRAINT fk_ppwa_active_workflow_owner FOREIGN KEY (active_workflow_id, factory_id, product_type_id, active_definition_version) REFERENCES product_process_workflows(id, factory_id, product_type_id, definition_version)",
-                "activation must match workflow factory, product, and definition version");
+                "V20261028_52 baseline: activation originally matched workflow factory, product, and definition version"
+                        + " (product coupling superseded by V20261029_81 — see"
+                        + " v81DecouplesActivationPlanAndInstancePinsFromTheWorkflowOwnerSku)");
         assertContains(sql,
                 "CONSTRAINT uk_production_batch_runtime_owner UNIQUE (id, factory_id, product_type_id)",
                 "batch must expose a stable runtime ownership key");
@@ -83,7 +85,9 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
                 "instance must match batch factory and product");
         assertContains(sql,
                 "CONSTRAINT fk_pwi_workflow_owner FOREIGN KEY (workflow_id, factory_id, product_type_id) REFERENCES product_process_workflows(id, factory_id, product_type_id)",
-                "instance must match workflow factory and product");
+                "V20261028_52 baseline: instance originally matched workflow factory and product"
+                        + " (product coupling superseded by V20261029_81 — see"
+                        + " v81DecouplesActivationPlanAndInstancePinsFromTheWorkflowOwnerSku)");
         assertContains(sql,
                 "CONSTRAINT fk_wpt_workflow_instance_owner FOREIGN KEY (workflow_instance_id, factory_id) REFERENCES production_workflow_instances(id, factory_id)",
                 "task must match runtime instance factory");
@@ -179,6 +183,48 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
         assertFalse(sql.contains(
                         "selected_workflow_id, factory_id, product_type_id, selected_workflow_version"),
                 "a joint output SKU must not be forced to equal the workflow owner SKU");
+    }
+
+    @Test
+    void v81DecouplesActivationPlanAndInstancePinsFromTheWorkflowOwnerSku() throws Exception {
+        String sql = normalizedMigration(
+                "V20261029_81__decouple_workflow_owner_from_pins.sql");
+
+        assertContains(sql,
+                "CONSTRAINT uk_ppw_id_factory UNIQUE (id, factory_id)",
+                "the 3-column instance pin needs a tenant-safe workflow key without the owner SKU");
+
+        assertContains(sql, "DROP CONSTRAINT fk_ppwa_active_workflow_owner",
+                "the owner-SKU-coupled activation FK must be replaced");
+        assertContains(sql,
+                "FOREIGN KEY ( active_workflow_id, factory_id, active_definition_version )"
+                        + " REFERENCES product_process_workflows( id, factory_id, definition_version )",
+                "activation must still pin the exact workflow tenant and version");
+
+        assertContains(sql, "DROP CONSTRAINT fk_production_plan_selected_workflow",
+                "the owner-SKU-coupled production-plan FK must be replaced");
+        assertContains(sql,
+                "FOREIGN KEY ( selected_workflow_id, factory_id, selected_workflow_version )"
+                        + " REFERENCES product_process_workflows( id, factory_id, definition_version )",
+                "plan provenance must still pin the exact workflow tenant and version");
+
+        assertContains(sql, "ALTER TABLE production_workflow_instances",
+                "the runtime instance table is production_workflow_instances (the plan draft mis-named it)");
+        assertContains(sql, "DROP CONSTRAINT fk_pwi_workflow_owner",
+                "the owner-SKU-coupled runtime instance FK must be replaced");
+        assertContains(sql,
+                "FOREIGN KEY ( workflow_id, factory_id )"
+                        + " REFERENCES product_process_workflows( id, factory_id )",
+                "runtime instance must still pin the workflow tenant");
+
+        assertFalse(sql.contains(
+                        "active_workflow_id, factory_id, product_type_id, active_definition_version"),
+                "an activated workflow's outputs must not be forced to equal its owner SKU");
+        assertFalse(sql.contains(
+                        "selected_workflow_id, factory_id, product_type_id, selected_workflow_version"),
+                "a planned workflow's outputs must not be forced to equal its owner SKU");
+        assertFalse(sql.contains("workflow_id, factory_id, product_type_id )"),
+                "a compiled runtime instance must not be forced to equal the workflow owner SKU");
     }
 
     @Test
