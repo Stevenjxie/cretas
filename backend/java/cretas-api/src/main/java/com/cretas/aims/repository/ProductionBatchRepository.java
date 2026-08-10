@@ -310,11 +310,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * 调用方先用 {@code ProductionPlanRepository.findByFactoryIdAndSourceOrderId} 取订单的计划 ids,
      * 再用本方法取这些计划下的全部批次。空集合 → 空列表 (Spring Data IN-空 行为)。
      *
+     * <p><b>排除 CLERK_WIP</b> (2026-08-11): 逐道报工的中间半成品批次现在也挂 planId
+     * (见 {@code ClerkProcessEntryServiceImpl#createProductionBatch} 注释) —— 它们是画布内部的
+     * 中间工件, 原料成本已经沿 MaterialConsumption 边被成品批次回溯计入, 计进来会**重复计成本**。
+     * 这个排除对存量是**行为不变**的: 在 WIP 挂 planId 之前, CLERK_WIP 批次的 production_plan_id
+     * 恒为 NULL (prod 实测 40 行历史数据 CLERK_WIP 带计划数 = 0), 本查询本就返回不到它们。
+     * batchType 允许 null (历史空值行不被误排除), 与 {@link #findRecentPricedBatches} 口径一致。
+     *
      * @param factoryId 工厂ID (工厂隔离)
      * @param planIds   生产计划ID集合
-     * @return 这些计划下的全部生产批次
+     * @return 这些计划下的全部正式生产批次 (不含 CLERK_WIP 中间工件)
      */
-    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.productionPlanId IN :planIds")
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.productionPlanId IN :planIds "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP')")
     java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanIdIn(
             @Param("factoryId") String factoryId, @Param("planIds") Collection<String> planIds);
 
@@ -325,12 +333,22 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * <p>命名遵循本仓库既有约定 (其它 finder 均不带 {@code AndDeletedAtIsNull} 后缀);
      * 调用方依赖批次 status 守卫, 不依赖软删除过滤。空 → 空列表。
      *
+     * <p><b>排除 CLERK_WIP</b> (2026-08-11): 理由与行为不变性证明同
+     * {@link #findByFactoryIdAndProductionPlanIdIn}。本方法的调用方尤其不能看到中间工件 ——
+     * 计划级 {@code completeProduction} 会把查出来的批次级联完成并发 BatchCompletedEvent(建成品),
+     * 把中间半成品批次当成品完工会凭空造出不存在的成品。
+     * {@code OrderCostBreakdownService#computeByPlan} / {@code ProductionSummaryService} /
+     * {@code InterimSettleServiceImpl} / {@code PrintController} 也走这条。
+     *
      * @param factoryId        工厂ID (工厂隔离)
      * @param productionPlanId 生产计划ID
-     * @return 关联该计划的全部生产批次
+     * @return 关联该计划的全部正式生产批次 (不含 CLERK_WIP 中间工件)
      */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId "
+           + "AND b.productionPlanId = :productionPlanId "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP')")
     java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanId(
-            String factoryId, String productionPlanId);
+            @Param("factoryId") String factoryId, @Param("productionPlanId") String productionPlanId);
 
     /**
      * 三价对比看板 (per-SKU): 某产品最近一条已算出 {@code unitCost} 的批次 (按创建时间倒序).
@@ -357,11 +375,21 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * 统计关联生产计划中未完成的批次数量
      * 用于供应链联动：批次报工后判断PP是否全部完成
      *
+     * <p><b>排除 CLERK_WIP</b> (2026-08-11): 中间半成品批次常年停在 IN_PROGRESS (它没有"完工"
+     * 这个语义, 见 {@code ClerkProcessEntryServiceImpl} 建批时写死 IN_PROGRESS)。WIP 挂上 planId
+     * 之后若不排除, 本计数永远 &gt; 0 → **计划永远判不出"全部完成"**, 供应链联动直接失效。
+     * 对存量行为不变: WIP 之前 production_plan_id 恒为 NULL, 本就统计不到。
+     *
      * @param productionPlanId 生产计划ID
      * @param status 排除的状态（通常为 COMPLETED）
-     * @return 未处于指定状态的批次数量
+     * @return 未处于指定状态的正式批次数量 (不含 CLERK_WIP 中间工件)
      */
-    long countByProductionPlanIdAndStatusNot(String productionPlanId, ProductionBatchStatus status);
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.productionPlanId = :productionPlanId "
+           + "AND b.status <> :status "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP')")
+    long countByProductionPlanIdAndStatusNot(
+            @Param("productionPlanId") String productionPlanId,
+            @Param("status") ProductionBatchStatus status);
 
     /**
      * 按产品类型统计生产数量

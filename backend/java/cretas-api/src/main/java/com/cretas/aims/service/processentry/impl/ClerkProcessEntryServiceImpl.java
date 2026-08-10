@@ -236,7 +236,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
             // 4. 物化 WRITE 逻辑 (共享 seam) —— 建批 + 写消耗 + 调料/人工 + WIP 产出.
             MaterializeContext ctx = new MaterializeContext(
-                    factoryId, be.isFinished() ? planId : null, be.getProductTypeId(),
+                    factoryId, planId, be.getProductTypeId(),
                     recipeProductTypeId != null ? recipeProductTypeId : be.getProductTypeId(),
                     be.getBatchNumber(), be.isFinished(), laborRate, wksWarehouseId,
                     be.isFinished() ? null
@@ -311,7 +311,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal unitPrice = nz(resolvedUnitPrice);
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
-            writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), batch.getId(),
+            writeConsumption(ctx.getFactoryId(), consumptionPlanId(ctx), batch.getId(),
                     src.getId(), inventoryIdentity(src),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
             batchMaterialCost = batchMaterialCost.add(edgeCost);
@@ -438,7 +438,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal unitPrice = nz(resolvedUnitPrice);
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
-            writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), existingBatchId,
+            writeConsumption(ctx.getFactoryId(), consumptionPlanId(ctx), existingBatchId,
                     src.getId(), inventoryIdentity(src),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
             batchMaterialCost = batchMaterialCost.add(edgeCost);
@@ -562,10 +562,23 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         ProductionBatch batch = new ProductionBatch();
         batch.setFactoryId(ctx.getFactoryId());
-        // Only link FINISHED batches to the plan so OrderCostBreakdownService.compute()
-        // doesn't double-count WIP batch raw costs (WIP costs are already traced via
-        // traceCost() when the finished batch's consumption is followed upstream).
-        // NOTE: ctx.planId is already resolved by caller to (finished ? planId : null).
+        // 2026-08-11: WIP(中间半成品)批次**也挂计划**。原先只给 FINISHED 挂, 理由是
+        // OrderCostBreakdownService.compute() 会重复计 WIP 的原料成本 (WIP 成本已经沿
+        // MaterialConsumption 边被成品批次 traceCost() 回溯计入)。那个顾虑仍然成立,
+        // 但**解法换到了读取侧** —— ProductionBatchRepository 里三个按 planId 查批次的方法
+        // 已统一排除 batch_type='CLERK_WIP' (与该仓储已有 8+ 处同样写法一致)。
+        //
+        // ⛔ 为什么必须挂: DB 触发器 pin_production_batch_workflow_selection() 把
+        // "production_plan_id IS NULL" 当作 LEGACY 老路的判据, 不挂计划的批次一律拒绝
+        // (V20261029_77, LEGACY 老路已于 2026-08-09 下架)。于是中间半成品批次两头不是人 ——
+        // 既不许挂 planId, 又因为没挂 planId 被判 LEGACY 拒绝, 任何
+        // "原料→工序A→半成品→工序B→成品" 的画布在**第一道工序就 500**
+        // (prod F006 wf=163 实撞, traceId E528806C)。
+        //
+        // ⚠️ 别再改回 (finished ? planId : null): 那条路已经试过并撤回 —— 曾想在触发器侧
+        // 放行无计划的 CLERK_WIP (V20261029_82), 但那样批次会拿到列默认
+        // workflow_selection_mode='LEGACY', 而 Java 枚举 WorkflowSelectionMode 只剩 WORKFLOW
+        // 一个值, 行插得进去却读不回来 (V20261029_83 已撤回)。
         batch.setProductionPlanId(ctx.getPlanId());
         batch.setProductTypeId(ctx.getProductTypeId());
         batch.setBatchNumber(batchNumber);
@@ -814,6 +827,29 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
     // MaterialConsumption write
     // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 消耗行的 planId —— **有意与批次的 planId 不同**。
+     *
+     * <p>2026-08-11 起 ProductionBatch 无论成品/WIP 都挂 planId (DB 触发器
+     * {@code pin_production_batch_workflow_selection} 把"无计划"当 LEGACY 老路拒绝)。
+     * 但 {@link com.cretas.aims.entity.MaterialConsumption} 没有这个约束, 其
+     * {@code production_plan_id} 继续保持"非成品道为 null"的原语义, 一个字节都不动:
+     *
+     * <ul>
+     *   <li>小结扣减走 {@code findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull}
+     *       (按批次定位), 不依赖消耗行的 planId;</li>
+     *   <li>但撤销小结等路径仍有按 {@code productionPlanId} 查消耗的方法。若把在制道消耗
+     *       也挂上 planId, 这些查询会突然多命中一批以前查不到的行 —— 影响面没验过,
+     *       而修报工根本不需要动它。</li>
+     * </ul>
+     *
+     * <p>⛔ 别为了"一致性"把这里改成 {@code ctx.getPlanId()}: 批次挂计划是触发器逼的,
+     * 消耗行挂计划是纯粹的行为变更, 两者不是同一件事。
+     */
+    private static String consumptionPlanId(MaterializeContext ctx) {
+        return ctx.isFinished() ? ctx.getPlanId() : null;
+    }
 
     private void writeConsumption(String factoryId, String planId, Long batchId,
                                    String upstreamBatchId, String materialTypeId,

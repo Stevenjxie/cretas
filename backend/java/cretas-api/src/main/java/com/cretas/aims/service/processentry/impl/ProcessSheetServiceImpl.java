@@ -934,7 +934,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 7. 物化
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
-                req.isFinished() ? planId : null,
+                planId,
                 req.getProductTypeId(),
                 resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                 req.getBatchNumber(),
@@ -1329,10 +1329,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      *
      * <p><b>2026-08-04 放开</b>：原来这里是「运行批次上已有任何行 → 409」，理由写的是
      * 「另开 plan-linked 批次会让运行时快照有歧义」。实际不会：歧义由
-     * {@code WorkflowClerkSheetServiceImpl#findWorkflowRuntime} 守，而它只统计
-     * {@code workflowSelectionMode == WORKFLOW} 的批次；{@code clerkService.materializeBatch}
-     * 建的批次不带这个模式（同半成品道的 CLK-W 批次）。prod 上同一张计划已长期并存
-     * 1 个 WORKFLOW 批次 + 7 个文员批次，报工页正常。
+     * {@code WorkflowClerkSheetServiceImpl#findWorkflowRuntime} 守。
+     *
+     * <p><b>2026-08-11 更正</b>：上一段原本还写着「clerkService.materializeBatch 建的批次不带
+     * WORKFLOW 模式（同半成品道的 CLK-W 批次）」—— <b>这句现在不成立了</b>。WIP 批次改成也挂
+     * planId 之后，DB 触发器会把它们一并写成 {@code workflowSelectionMode == WORKFLOW}。
+     * 唯一性守卫仍然成立，但依据换了：{@code findWorkflowRuntime} 走
+     * {@code findByFactoryIdAndProductionPlanId}，该方法已统一排除 {@code batch_type='CLERK_WIP'}，
+     * 中间工件根本进不了候选集。<b>别再按「clerk 批次没有 WORKFLOW 模式」推理。</b>
      *
      * <p>为什么必须放开：库存生产 (SAFETY_STOCK) 的产品口径是「一张计划一直生产下去」——
      * 小结按 {@code sessionSeq} 分场次、每次小结各自生成成品批次、撤销能按场次精确逆转，
@@ -1539,7 +1543,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         StepEntry step = buildStepEntry(factoryId, one);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
-                one.isFinished() ? planId : null,
+                planId,
                 one.getProductTypeId(),
                 resolveRecipeProductTypeId(planId, one.getProductTypeId()),
                 one.getBatchNumber(),
@@ -2265,7 +2269,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             StepEntry step = buildStepEntry(factoryId, req);
             MaterializeContext ctx = new MaterializeContext(
                     factoryId,
-                    req.isFinished() ? planId : null,
+                    planId,
                     req.getProductTypeId(),
                     resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                     req.getBatchNumber(),
@@ -2317,7 +2321,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         StepEntry step = buildStepEntry(factoryId, req);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
-                req.isFinished() ? planId : null,
+                planId,
                 req.getProductTypeId(),
                 resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                 existing.getBatchNumber(),  // 保留现有批次号
