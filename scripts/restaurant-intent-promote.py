@@ -398,8 +398,16 @@ if __name__ == "__main__":
     ap.add_argument("--min-count", type=int, default=1, dest="min_count")
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument(
-        "--factory", default="DEMO_REST", dest="factory_id",
-        help="租户 (RLS GUC app.factory_id): fallback log 带 FORCE RLS, 不设则假性 0 行",
+        # 🔴 2026-08-09: 默认值原为 DEMO_REST —— 那个租户 08-05 已随租户收敛停用
+        #    (9 个账号 is_active=f)。默认值没跟着搬, 于是这份报告一直**站在一个
+        #    已停用租户的视角**看飞轮: 待办清单里混进 8 次「青花椒/有滋有味/
+        #    抖音松叶蟹」这类上一个租户的实体, 而按租户实体过滤又因为
+        #    factory_id 指向 DEMO_REST 而认不出它们是「外租户实体」。
+        #    ⛔ 与那道电池、与 cretas.demo.rest.* 是同一类遗留: **租户搬了,
+        #       指着它的默认值没搬**。
+        "--factory", default="MOCK_REST", dest="factory_id",
+        help="租户 (RLS GUC app.factory_id): fallback log 带 FORCE RLS, 不设则假性 0 行。"
+             "默认 MOCK_REST —— 当前唯一活跃的餐饮租户",
     )
     args = ap.parse_args()
 

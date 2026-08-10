@@ -758,7 +758,9 @@ public class TransferServiceImpl implements TransferService {
         transfer.setApprovedAt(LocalDateTime.now());
         transfer.setRejectReason(reason);
         log.info("驳回调拨: transferId={}, reason={}", transferId, reason);
-        return transferRepository.save(transfer);
+        InternalTransfer saved = transferRepository.save(transfer);
+        publishTerminated(saved, TransferStatus.REJECTED, reason);
+        return saved;
     }
 
     @Override
@@ -922,6 +924,9 @@ public class TransferServiceImpl implements TransferService {
                 transfer.setApprovedBy(actorId);
                 transfer.setApprovedAt(LocalDateTime.now());
                 transfer.setRejectReason(notes);
+                // OA 驳回/撤销/超时同样是终止 —— 凭证在创建时就生成了, 这条路不发事件
+                // 就会留下与 cancelTransfer 一模一样的悬空凭证。
+                publishTerminated(transfer, TransferStatus.REJECTED, notes);
             }
         }
     }
@@ -1047,7 +1052,20 @@ public class TransferServiceImpl implements TransferService {
         transfer.setStatus(TransferStatus.CONFIRMED);
         transfer.setConfirmedAt(now);
         log.info("调拨确认: transferId={}, 库存已更新", transferId);
-        return transferRepository.save(transfer);
+        InternalTransfer saved = transferRepository.save(transfer);
+        // 库存真正搬完了才通知凭证侧入账 —— 凭证原先挂在"创建"上, 草稿阶段就记账 (见
+        // TransferConfirmedEvent 的说明)。⚠️ 传【调出方】工厂: 跨厂调拨由调入方执行确认,
+        // 而凭证一直归属调出方, 传当前 factoryId 会把凭证记到错的厂。
+        if (applicationEventPublisher != null) {
+            try {
+                applicationEventPublisher.publishEvent(new com.cretas.aims.event.TransferConfirmedEvent(
+                        this, saved.getSourceFactoryId(), saved.getId()));
+            } catch (Exception e) {
+                // 发事件失败不该把已经完成的入库翻掉 —— 凭证可由财务补生成 (批量补凭证工具)。
+                log.warn("发布调拨确认事件失败: transferId={}, err={}", saved.getId(), e.getMessage());
+            }
+        }
+        return saved;
     }
 
     @Override
@@ -1098,6 +1116,8 @@ public class TransferServiceImpl implements TransferService {
             transfer.setStatus(TransferStatus.CANCELLED);
             transfer.setRejectReason(reason);
             transferRepository.save(transfer);
+            // 生产计划取消时批量关单也是终止 —— 同样要回收凭证。
+            publishTerminated(transfer, TransferStatus.CANCELLED, reason);
             closed++;
         }
         return closed;
@@ -1119,7 +1139,30 @@ public class TransferServiceImpl implements TransferService {
         transfer.setStatus(TransferStatus.CANCELLED);
         transfer.setRejectReason(reason);
         log.info("取消调拨: transferId={}, reason={}", transferId, reason);
-        return transferRepository.save(transfer);
+        InternalTransfer saved = transferRepository.save(transfer);
+        publishTerminated(saved, TransferStatus.CANCELLED, reason);
+        return saved;
+    }
+
+    /**
+     * 终止 (取消/驳回) 后通知凭证侧回收 —— INVENTORY_TRANSFER 凭证在<b>创建</b>时就生成了,
+     * 光翻状态会在账上留一张对应不到实物流的凭证 (2026-08-09 六膳门 TRF-20260809-1790 实证:
+     * 取消后借贷各 ¥10,000 的 V-2026-0023 仍挂在库里)。
+     *
+     * <p>只发事件、不在本事务内直接作废: voidVoucher 的内层 @Transactional 抛异常会污染终止主事务
+     * (doomed-tx)。理由与销售侧 {@code SalesOrderCancelledEvent} 逐字相同。
+     */
+    private void publishTerminated(InternalTransfer transfer, TransferStatus terminalStatus, String reason) {
+        if (applicationEventPublisher == null) return;
+        try {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.TransferTerminatedEvent(
+                    this, transfer.getSourceFactoryId(), transfer.getId(),
+                    terminalStatus.name(), reason));
+        } catch (Exception e) {
+            // 发事件失败不该把已经成立的终止翻掉 —— 凭证可由财务手工作废。
+            log.warn("发布调拨终止事件失败: transferId={}, status={}, err={}",
+                    transfer.getId(), terminalStatus, e.getMessage());
+        }
     }
 
     /** 校验当前 factoryId 必须是调拨单的调出方 */

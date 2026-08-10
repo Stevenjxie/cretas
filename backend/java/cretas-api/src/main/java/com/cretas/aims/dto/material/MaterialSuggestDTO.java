@@ -50,9 +50,9 @@ public class MaterialSuggestDTO {
     /** HIGH/MEDIUM/LOW. LOW suggestions are never silently written. */
     private String unitConfidence;
 
-    private String segmentL1Code;
-    private String segmentL2Code;
-    private String segmentL3Code;
+    private Long classificationL1Id;
+    private Long classificationL2Id;
+    private Long classificationL3Id;
     private String classificationConfidence;
     private String classificationReason;
     private List<MaterialTaxonomyCandidateDTO> classificationCandidates;

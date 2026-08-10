@@ -32,6 +32,8 @@ export interface UnitCatalogItem {
   active?: boolean;
 }
 
+const DISTINCT_COUNT_LABELS = new Set(['个', '只']);
+
 /**
  * The scientific catalog owns the canonical code/label pair. Historic global
  * rows may carry a stale label (for example box=箱), so merging by label can
@@ -73,6 +75,9 @@ export function mergeSystemUnitSources(
     const aliasesJson = [...new Set(unitAliases(existing))].filter((alias) => {
       const normalized = normalizeUnitIdentity(alias);
       if (!normalized || normalized === canonicalCode || normalized === canonicalName) return false;
+      // 「件 / 个 / 只」可以共享 COUNT 量纲，但库存业务必须保留用户选择的字面单位。
+      // pcs 的历史别名若继续吞掉「个 / 只」，UnitSelect 搜索后就只能回填「件」。
+      if (canonicalCode === 'pcs' && DISTINCT_COUNT_LABELS.has(normalized)) return false;
       const owner = canonicalLabelOwners.get(normalized);
       return !owner || owner === canonicalCode;
     });
@@ -94,11 +99,31 @@ export function mergeSystemUnitSources(
   return merged;
 }
 
-const COMMON_DISPLAY_ALIASES: SystemUnit[] = [
-  { unitCode: 'pcs', unitName: '只', unitSymbol: '只', aliasesJson: ['件', '个', 'pcs'], category: 'COUNT', isActive: true, isSystem: true },
+const COMMON_DISPLAY_UNITS: SystemUnit[] = [
+  // 后端 UnitContractService 会分别保存「件 / 个 / 只」的字面值；前端也必须给出三个可选项。
+  // 「件」由规范 pcs 目录项提供，这里补两个同量纲但业务语义独立的中文计数单位。
+  { unitCode: '个', unitName: '个', unitSymbol: '个', category: 'COUNT', isActive: true, isSystem: true },
+  { unitCode: '只', unitName: '只', unitSymbol: '只', category: 'COUNT', isActive: true, isSystem: true },
   { unitCode: 'kg', unitName: '公斤', unitSymbol: 'kg', aliasesJson: ['千克', 'kg'], category: 'WEIGHT', isActive: true, isSystem: true },
   { unitCode: 'g', unitName: '克', unitSymbol: 'g', aliasesJson: ['g'], category: 'WEIGHT', isActive: true, isSystem: true },
 ];
+
+export function appendCommonDisplayUnits(
+  units: SystemUnit[],
+  catalogItems: UnitCatalogItem[],
+  usageScope?: string,
+): SystemUnit[] {
+  const merged = [...units];
+  const allowedCodes = new Set(catalogItems.map((item) => normalizeUnitIdentity(item.code)));
+  for (const unit of COMMON_DISPLAY_UNITS) {
+    const requiredCatalogCode = DISTINCT_COUNT_LABELS.has(unit.unitCode) ? 'pcs' : unit.unitCode;
+    if ((!usageScope || allowedCodes.has(normalizeUnitIdentity(requiredCatalogCode)))
+      && !merged.some((candidate) => normalizeUnitIdentity(candidate.unitName) === normalizeUnitIdentity(unit.unitName))) {
+      merged.push(unit);
+    }
+  }
+  return merged;
+}
 
 const LEGACY_COMPOSITE_UNIT_CODES: Record<string, string> = {
   'pcs:只': 'pcs',
@@ -141,13 +166,11 @@ export async function listSystemUnits(factoryId: string, usageScope?: string) {
   const configuredUnits = usageScope
     ? (configured.data || []).filter((unit) => allowedCodes.has(normalizeUnitIdentity(unit.unitCode)))
     : (configured.data || []);
-  const merged = mergeSystemUnitSources(configuredUnits, catalogItems);
-  for (const alias of COMMON_DISPLAY_ALIASES) {
-    if ((!usageScope || allowedCodes.has(normalizeUnitIdentity(alias.unitCode.split(':')[0])))
-      && !merged.some((unit) => normalizeUnitIdentity(unit.unitName) === normalizeUnitIdentity(alias.unitName))) {
-      merged.push(alias);
-    }
-  }
+  const merged = appendCommonDisplayUnits(
+    mergeSystemUnitSources(configuredUnits, catalogItems),
+    catalogItems,
+    usageScope,
+  );
   return { ...configured, success: configured.success && catalog.success, data: merged };
 }
 
@@ -171,6 +194,9 @@ export function unitAliases(unit: SystemUnit): string[] {
 export function findDuplicateUnit(units: SystemUnit[], values: Array<string | null | undefined>): SystemUnit | null {
   const identities = new Set(values.map(normalizeUnitIdentity).filter(Boolean));
   if (identities.size === 0) return null;
+  const exact = units.find((unit) => [unit.unitCode, unit.unitName, unit.unitSymbol || '']
+    .some((value) => identities.has(normalizeUnitIdentity(value))));
+  if (exact) return exact;
   return units.find((unit) => unitAliases(unit).some((alias) => identities.has(normalizeUnitIdentity(alias)))) || null;
 }
 

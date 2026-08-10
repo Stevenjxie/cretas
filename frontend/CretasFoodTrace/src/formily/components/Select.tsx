@@ -6,8 +6,18 @@
  */
 
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, StyleSheet, Pressable, ScrollView } from 'react-native';
-import { TextInput, Menu, Chip, useTheme, Divider, Text } from 'react-native-paper';
+import { View, StyleSheet, Pressable, ScrollView, Modal } from 'react-native';
+import {
+  TextInput,
+  Menu,
+  Chip,
+  useTheme,
+  Divider,
+  Text,
+  Icon,
+  IconButton,
+  TouchableRipple,
+} from 'react-native-paper';
 import { connect, mapProps } from '@formily/react';
 import type { Field } from '@formily/core';
 
@@ -31,7 +41,7 @@ interface SelectProps {
   style?: object;
 }
 
-const InternalSelect: React.FC<SelectProps> = ({
+export const InternalSelect: React.FC<SelectProps> = ({
   value,
   onChange,
   onBlur,
@@ -109,32 +119,175 @@ const InternalSelect: React.FC<SelectProps> = ({
     return value === optValue;
   };
 
+  const anchor = (
+    <Pressable
+      testID="formily-select-anchor"
+      onPress={openMenu}
+      disabled={isDisabled}
+      accessibilityRole="combobox"
+      accessibilityState={{ disabled: isDisabled, expanded: visible }}
+      style={styles.anchor}
+    >
+      <TextInput
+        mode="outlined"
+        value={displayText}
+        placeholder={placeholder}
+        disabled={isDisabled}
+        error={error}
+        editable={false}
+        pointerEvents="none"
+        style={styles.input}
+        outlineColor={theme.colors.outline}
+        right={
+          <TextInput.Icon
+            icon={visible ? 'chevron-up' : 'chevron-down'}
+            disabled={isDisabled}
+          />
+        }
+      />
+    </Pressable>
+  );
+
+  const selectedChips = multiple && Array.isArray(value) && value.length > 0 && (
+    <View style={styles.chipsContainer}>
+      {value.map((v) => {
+        const opt = options.find(o => o.value === v);
+        if (!opt) return null;
+        return (
+          <Chip
+            key={String(v)}
+            mode="flat"
+            onClose={isDisabled ? undefined : () => handleSelect(v)}
+            style={styles.chip}
+            compact
+          >
+            {opt.label}
+          </Chip>
+        );
+      })}
+    </View>
+  );
+
+  // Searchable lists can be long and React Native Paper Menu's Portal is
+  // intermittent on Expo Web. A native Modal gives web and mobile users the
+  // same deterministic, focusable selection surface without changing simple
+  // non-searchable selects.
+  if (searchable) {
+    return (
+      <View style={[styles.container, style]}>
+        {anchor}
+        <Modal
+          visible={visible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeMenu}
+        >
+          <View style={styles.modalRoot} testID="formily-select-modal">
+            <Pressable
+              style={styles.modalBackdrop}
+              onPress={closeMenu}
+              accessibilityLabel="关闭选择列表"
+              testID="formily-select-modal-backdrop"
+            />
+            <View style={styles.modalContent} accessibilityViewIsModal>
+              <View style={styles.modalHeader}>
+                <Text variant="titleMedium" style={styles.modalTitle}>
+                  {placeholder}
+                </Text>
+                <IconButton
+                  icon="close"
+                  size={22}
+                  onPress={closeMenu}
+                  accessibilityLabel="关闭"
+                  testID="formily-select-modal-close"
+                />
+              </View>
+
+              <View style={styles.searchContainer}>
+                <TextInput
+                  mode="outlined"
+                  value={searchText}
+                  onChangeText={setSearchText}
+                  placeholder="搜索..."
+                  dense
+                  autoFocus
+                  style={styles.searchInput}
+                  left={<TextInput.Icon icon="magnify" size={18} />}
+                  testID="formily-select-search"
+                />
+              </View>
+              <Divider />
+
+              <ScrollView
+                style={styles.modalOptionsList}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={filteredOptions.length === 0 ? styles.emptyOptionsList : undefined}
+              >
+                {filteredOptions.length === 0 ? (
+                  <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>暂无匹配选项</Text>
+                  </View>
+                ) : (
+                  filteredOptions.map((option) => {
+                    const selected = isSelected(option.value);
+                    return (
+                      <TouchableRipple
+                        key={String(option.value)}
+                        onPress={() => handleSelect(option.value)}
+                        disabled={option.disabled}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected, disabled: option.disabled }}
+                        style={[styles.modalOption, selected && styles.selectedItem]}
+                        testID={`formily-select-option-${String(option.value)}`}
+                      >
+                        <View style={styles.modalOptionContent}>
+                          <Icon
+                            source={multiple
+                              ? selected ? 'checkbox-marked' : 'checkbox-blank-outline'
+                              : selected ? 'radiobox-marked' : 'radiobox-blank'}
+                            size={22}
+                            color={selected ? theme.colors.primary : theme.colors.onSurfaceVariant}
+                          />
+                          <Text
+                            style={[styles.modalOptionText, option.disabled && styles.disabledOptionText]}
+                            numberOfLines={2}
+                          >
+                            {option.label}
+                          </Text>
+                        </View>
+                      </TouchableRipple>
+                    );
+                  })
+                )}
+              </ScrollView>
+
+              {multiple && (
+                <>
+                  <Divider />
+                  <TouchableRipple
+                    onPress={closeMenu}
+                    style={styles.modalDone}
+                    accessibilityRole="button"
+                    testID="formily-select-modal-done"
+                  >
+                    <Text style={[styles.modalDoneText, { color: theme.colors.primary }]}>确定</Text>
+                  </TouchableRipple>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+        {selectedChips}
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, style]}>
       <Menu
         visible={visible}
         onDismiss={closeMenu}
-        anchor={
-          <Pressable onPress={openMenu} disabled={isDisabled}>
-            <TextInput
-              mode="outlined"
-              value={displayText}
-              placeholder={placeholder}
-              disabled={isDisabled}
-              error={error}
-              editable={false}
-              pointerEvents="none"
-              style={styles.input}
-              outlineColor={theme.colors.outline}
-              right={
-                <TextInput.Icon
-                  icon={visible ? 'chevron-up' : 'chevron-down'}
-                  disabled={isDisabled}
-                />
-              }
-            />
-          </Pressable>
-        }
+        anchor={anchor}
         contentStyle={styles.menuContent}
       >
         {searchable && (
@@ -195,32 +348,16 @@ const InternalSelect: React.FC<SelectProps> = ({
         )}
       </Menu>
 
-      {/* 多选时显示已选择的 Chips */}
-      {multiple && Array.isArray(value) && value.length > 0 && (
-        <View style={styles.chipsContainer}>
-          {value.map((v) => {
-            const opt = options.find(o => o.value === v);
-            if (!opt) return null;
-            return (
-              <Chip
-                key={String(v)}
-                mode="flat"
-                onClose={isDisabled ? undefined : () => handleSelect(v)}
-                style={styles.chip}
-                compact
-              >
-                {opt.label}
-              </Chip>
-            );
-          })}
-        </View>
-      )}
+      {selectedChips}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {},
+  anchor: {
+    minHeight: 56,
+  },
   input: {
     backgroundColor: 'transparent',
   },
@@ -248,6 +385,75 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingVertical: 4,
+  },
+  modalRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '75%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 8,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+  },
+  modalHeader: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  modalTitle: {
+    flex: 1,
+    fontWeight: '600',
+  },
+  modalOptionsList: {
+    maxHeight: 420,
+  },
+  emptyOptionsList: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  modalOption: {
+    minHeight: 52,
+    justifyContent: 'center',
+  },
+  modalOptionContent: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  modalOptionText: {
+    flex: 1,
+    lineHeight: 20,
+  },
+  disabledOptionText: {
+    opacity: 0.45,
+  },
+  modalDone: {
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalDoneText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   chipsContainer: {
     flexDirection: 'row',

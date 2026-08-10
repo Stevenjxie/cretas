@@ -775,6 +775,16 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     # 唯一非阿里/非智谱的活口); 其余 7 个 401008 FREE_QUOTA_EXHAUSTED,
     # kimi-k2.6 走参数层仍返回空内容。ark 两个全部 SetLimitExceeded → 清空。
     # 两家 provider 的配置与代码路径均保留, 待补齐清单后加回。
+    #
+    # ⛔ zhipu 必须留在**最后一位** —— 这条来自 2026-08-09 的一次生产事故(PR #2411,
+    #    合并时从被本次重写删除的旧 MAPPER 链搬运至此, 判据本身没有过时):
+    #    zhipu 在某些槽上会稳定超时, 而链是**串行且共享同一个总预算**。它排在前面
+    #    会把预算吃光, 后面本来 0.5-1.1s 就能答的候选**因为分不到时间而跟着超时**,
+    #    连续 2 次即被熔断 60 秒(CB_THRESHOLD=2, 403 与超时都计入失败)。当天实测
+    #    有 4 个健康候选被这样连坐熔断, 而单独打时它们全部 HTTP 200。
+    #    判据: **把一个会超时的候选排在前面, 等于把它后面的健康候选一起拖下水。**
+    #    注: 这两条到期日都是 None, 稳定排序会原样保留此处的书写顺序, 所以顺序
+    #    由这一行决定, 不由 _build_chain 决定。
     ("tencent", "minimax-m2.7"),
     ("zhipu", "glm-4.5-air"),
 ]
@@ -886,6 +896,16 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # test_every_text_slot_has_a_floor), 而"最后一跳偶尔 6.7s"被认为好于
     # "MAPPER 彻底答不出来"。⛔ 不要仅凭旧注释的"生产已证明会放大超时"就把
     # _TEXT_TAIL 从 MAPPER 摘掉 —— 那会让 MAPPER 在地板过期的那天重新变空链。
+    #
+    # ⛔ 往本池加模型前先读这条(2026-08-10 生产事故, PR #2411, 合并时搬运至此):
+    #    当时因为 qwen3.7-max / qwen3-max-2025-09-23 在 **REVIEW** 槽的真实 prompt
+    #    上打分 3/3, 就把它们加进了 MAPPER, 次日按 MAPPER 的契约又移除。
+    #    判据: **一个模型在 A 槽表现好, 不构成把它放进 B 槽的理由** —— 槽的契约
+    #    (延迟上界 / 成本 / 是否强制 thinking)先于打分。本池的契约是「短 JSON,
+    #    快而有界」, 由 test_mapper_uses_bounded_fast_models_without_max_or_reasoners
+    #    强制: 池内不得含 _THINKING_ONLY / _SLOW_MODELS / Max 档。
+    #    (该闸 2026-08-09 从「模型名不含 max/deepseek/kimi」改成按实测属性判 ——
+    #     名字代理会误伤 minimax-m2.7 里的 "max", 也拦不住一个叫得好听的慢模型。)
     SLOT.MAPPER: [
         ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
         ("aliyun_c", "deepseek-v3.2-exp"),

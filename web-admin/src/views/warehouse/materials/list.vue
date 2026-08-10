@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
 import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
-import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
@@ -16,14 +15,14 @@ import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
-import UnorderedInboundNoticePanel from './UnorderedInboundNoticePanel.vue';
+import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseInboundLifecycle';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
-const canManageUnorderedInbound = computed(() => permissionStore.canWrite('operations'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
 
@@ -31,6 +30,33 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchKeyword = ref('');
+
+type InboundWorkspaceTab = ReceivingTaskFilter | 'BATCHES';
+const activeInboundTab = ref<InboundWorkspaceTab>('ALL');
+const receivingCounts = ref<ReceivingLifecycleCounts>({
+  ALL: 0,
+  WAITING_RECEIVE: 0,
+  RECEIVING: 0,
+  PARTIAL: 0,
+});
+const receivingFilter = computed<ReceivingTaskFilter>(() =>
+  activeInboundTab.value === 'BATCHES' ? 'ALL' : activeInboundTab.value);
+const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
+  ? `${pagination.value.total} 个批次`
+  : `${receivingCounts.value[receivingFilter.value]} 项任务`);
+function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
+  receivingCounts.value = counts;
+}
+
+watch(
+  () => route.query.view,
+  (view) => {
+    const normalized = String(view || '').toUpperCase();
+    if (normalized === 'BATCHES' || normalized === 'INVENTORY') activeInboundTab.value = 'BATCHES';
+    else if (normalized === 'RECEIVING' || normalized === 'TASKS') activeInboundTab.value = 'ALL';
+  },
+  { immediate: true },
+);
 
 // ==================== 按物料汇总 / 按批次明细 切换 ====================
 // F006 六膳门客户原话痛点: 同一原料入库多次 → 一堆散批次看着重复。
@@ -460,19 +486,12 @@ async function handleGenerateLabel(row: TableRow) {
 <template>
   <CanvasAwareWrapper module-code="material_batch">
   <div class="page-wrapper">
-    <ConceptDisambiguationAlert
-      here-name="原料 / 物料批次"
-      here="由采购收货、客供料、调拨、退货或受控调整形成的原材料、包材、辅料批次"
-      other-name="生产管理 → 成品 / SKU (本厂生产)"
-      other="本厂生产的成品 / SKU（如「叮咚好食光卤猪蹄 200g」）"
-      other-path="/system/products"
-    />
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">原料 / 物料入库与批次</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">入库任务与批次</span>
+            <span class="data-count">当前 {{ currentRecordCount }}</span>
           </div>
           <div class="header-right">
             <el-input
@@ -493,28 +512,26 @@ async function handleGenerateLabel(row: TableRow) {
         </div>
       </template>
 
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        class="source-only-hint"
-        title="批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入；本页用于查询、追溯与标签管理。"
-      />
-
-      <UnorderedInboundNoticePanel
-        v-if="factoryId && canManageUnorderedInbound"
-        :factory-id="factoryId"
-        @refreshed="handleReceivingRefresh"
-      />
+      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
+        <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
+        <el-tab-pane :label="`待收货 ${receivingCounts.WAITING_RECEIVE}`" name="WAITING_RECEIVE" />
+        <el-tab-pane :label="`收货中 ${receivingCounts.RECEIVING}`" name="RECEIVING" />
+        <el-tab-pane :label="`部分入库 ${receivingCounts.PARTIAL}`" name="PARTIAL" />
+        <el-tab-pane :label="`已入库批次 ${pagination.total}`" name="BATCHES" />
+      </el-tabs>
 
       <PendingPurchaseReceivingPanel
-        v-if="factoryId"
+        v-if="factoryId && activeInboundTab !== 'BATCHES'"
         :factory-id="factoryId"
         :can-write="canWrite"
+        :status-filter="receivingFilter"
+        :show-heading="false"
+        @counts-changed="handleReceivingCounts"
         @refreshed="handleReceivingRefresh"
       />
 
-      <div class="search-bar">
+      <template v-else>
+      <div class="search-bar batch-toolbar">
         <el-radio-group v-model="viewMode" @change="handleViewModeChange">
           <el-radio-button label="detail">按批次明细</el-radio-button>
           <el-radio-button label="summary">按物料汇总</el-radio-button>
@@ -674,6 +691,7 @@ async function handleGenerateLabel(row: TableRow) {
           @size-change="handleSizeChange"
         />
       </div>
+      </template>
     </el-card>
 
     <!-- View Dialog -->
@@ -878,6 +896,9 @@ async function handleGenerateLabel(row: TableRow) {
   flex-wrap: wrap;
   align-items: center;
 }
+
+.inbound-status-tabs { margin-top: 0; }
+.batch-toolbar { margin-top: 4px; }
 
 .summary-hint {
   display: flex;

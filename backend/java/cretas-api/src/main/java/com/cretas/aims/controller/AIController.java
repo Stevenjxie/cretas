@@ -699,8 +699,8 @@ public class AIController {
             // 2. 创建原材料类型
             if (request.getMaterialTypes() != null && !request.getMaterialTypes().isEmpty()) {
                 throw new BusinessException(400,
-                        "AI批量建档暂不接受原料类型：每个原料必须先选择有效的L1、L2、L3编码分类")
-                        .withHint("请先在原料类型字典完成16位编码分类，再让AI引用已建原料")
+                        "AI批量建档暂不接受原料类型")
+                        .withHint("请在原料类型字典中选择基本类型建档；料号由系统建议，分类字典为可选")
                         .withHintTarget("materialTypes")
                         .withSeverity("BLOCKING");
             }

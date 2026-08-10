@@ -7,6 +7,7 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.material.MaterialPackagingSpec;
+import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +20,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,7 +40,7 @@ class ProductMasterDataRepositoryQueryValidationTest {
     @Autowired ProductProcessWorkflowRepository workflowRepository;
 
     @Test
-    void repositoriesBootAndProductQueriesHideRawMaterialOwner() {
+    void repositoriesBootAndProductQueriesHideRawMaterialOwner() throws Exception {
         Factory factory = new Factory();
         factory.setId("F-JPA-MASTER");
         factory.setName("JPA master data query gate factory");
@@ -75,16 +77,40 @@ class ProductMasterDataRepositoryQueryValidationTest {
         snapshot.setViewportJson("{\"x\":0,\"y\":0,\"zoom\":1}");
         entityManager.persist(snapshot);
 
+        MaterialCodeSegment l1 = taxonomy(factory.getId(), (short) 1, null, "原料");
+        entityManager.persist(l1);
+        entityManager.flush();
+        MaterialCodeSegment l2 = taxonomy(factory.getId(), (short) 2, l1.getId(), "肉类");
+        entityManager.persist(l2);
+        entityManager.flush();
+        MaterialCodeSegment l3 = taxonomy(factory.getId(), (short) 3, l2.getId(), "牛肉");
+        entityManager.persist(l3);
+        entityManager.flush();
+
         RawMaterialType raw = new RawMaterialType();
         raw.setId("R-JPA-MASTER");
         raw.setFactoryId(factory.getId());
-        raw.setCode("0010010001000001");
+        raw.setCode("YL065");
+        raw.setClassificationSegmentId(l3.getId());
+        raw.setPrimaryCode("001");
         raw.setName("  Raw Material  ");
         raw.setCategory("原料");
         raw.setUnit("kg");
         raw.setIsActive(true);
         raw.setCreatedBy(user.getId());
         entityManager.persist(raw);
+
+        RawMaterialType deletedRaw = new RawMaterialType();
+        deletedRaw.setId("R-JPA-DELETED");
+        deletedRaw.setFactoryId(factory.getId());
+        deletedRaw.setCode("YL066");
+        deletedRaw.setName("Deleted material code owner");
+        deletedRaw.setCategory("原料");
+        deletedRaw.setUnit("kg");
+        deletedRaw.setIsActive(false);
+        deletedRaw.setCreatedBy(user.getId());
+        deletedRaw.setDeletedAt(LocalDateTime.of(2026, 8, 1, 0, 0));
+        entityManager.persist(deletedRaw);
 
         MaterialPackagingSpec packagingSpec = new MaterialPackagingSpec();
         packagingSpec.setFactoryId(factory.getId());
@@ -134,6 +160,27 @@ class ProductMasterDataRepositoryQueryValidationTest {
         assertThat(materialRepository.existsByFactoryIdAndNormalizedName(factory.getId(), " raw material ")).isTrue();
         assertThat(materialRepository.existsByFactoryIdAndNormalizedNameExcludingId(
                 factory.getId(), " RAW MATERIAL ", raw.getId())).isFalse();
+        assertThat(materialRepository.findCodesByFactoryIdAndCodePrefix(factory.getId(), "yl"))
+                .containsExactly("YL065", "YL066");
+        String prefixQuery = RawMaterialTypeRepository.class
+                .getMethod("findCodesByFactoryIdAndCodePrefix", String.class, String.class)
+                .getAnnotation(org.springframework.data.jpa.repository.Query.class)
+                .value();
+        assertThat(prefixQuery)
+                .as("PostgreSQL stringtype=unspecified requires an explicit prefix parameter type")
+                .contains("CAST(:prefix AS VARCHAR)");
+        assertThat(materialRepository.findCodeConflictIncludingDeleted(factory.getId(), "yl066"))
+                .get()
+                .satisfies(conflict -> {
+                    assertThat(conflict.getName()).isEqualTo("Deleted material code owner");
+                    assertThat(conflict.getDeletedAt()).isNotNull();
+                });
+        assertThat(materialRepository.filterBySegmentPrefixAndKeyword(
+                factory.getId(), l1.getId(), "", PageRequest.of(0, 20)).getContent())
+                .extracting(RawMaterialType::getId)
+                .containsExactly(raw.getId());
+        assertThat(materialRepository.countActiveByFactoryIdAndClassificationSegmentId(factory.getId(), l3.getId()))
+                .isEqualTo(1);
         assertThat(hierarchyRepository).isNotNull();
         assertThat(materialPackagingSpecRepository
                 .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
@@ -174,5 +221,17 @@ class ProductMasterDataRepositoryQueryValidationTest {
         product.setProductCategory(productCategory);
         product.setIsActive(true);
         return product;
+    }
+
+    private MaterialCodeSegment taxonomy(String factoryId, short level, Long parentId, String label) {
+        return MaterialCodeSegment.builder()
+                .factoryId(factoryId)
+                .level(level)
+                .parentId(parentId)
+                .segmentLabel(label)
+                .normalizedLabel(label)
+                .sortOrder(0)
+                .isActive(true)
+                .build();
     }
 }

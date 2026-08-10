@@ -594,7 +594,11 @@ async function submitDecide() {
               {{ transferItemName(row) }}
             </template>
           </el-table-column>
-          <el-table-column label="调拨数量" width="150" align="right">
+          <!-- 客户 2026-08-09 反馈: 数量列全是裸数字, 单位孤零零挂在三列之外的「单位」列 ——
+               看「1000 / 1,000 / 0」要横跨半个表格才知道是 kg 还是箱。新建表单一直是
+               「300 kg」这样自带单位的 (list.vue 现有库存列), 详情页反而不是。
+               改法: 每个数量各自带单位, 删掉那个只用来配单位的独立列 (它现在纯属重复)。 -->
+          <el-table-column label="调拨数量" width="170" align="right">
             <template #default="{ row }">
               <el-input-number
                 v-if="transfer.status === 'DRAFT' && isOutbound && canWrite"
@@ -605,9 +609,10 @@ async function submitDecide() {
                 size="small"
                 @change="(quantity: number | undefined) => updateItemQuantity(row.id, quantity)" />
               <span v-else>{{ row.quantity }}</span>
+              <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="现有库存" width="130" align="right">
+          <el-table-column label="现有库存" width="150" align="right">
             <template #header>
               <el-tooltip content="调出方当前可用库存 (实时查询)" placement="top">
                 <span>现有库存 <el-icon style="vertical-align: -2px"><InfoFilled /></el-icon></span>
@@ -617,13 +622,13 @@ async function submitDecide() {
               <span :class="{ 'stock-shortage': isStockShortage(row) }">
                 {{ formatStock(row.currentStock) }}
               </span>
+              <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="已收数量" width="120" align="right">
-            <template #default="{ row }">{{ row.receivedQuantity || 0 }}</template>
-          </el-table-column>
-          <el-table-column label="单位" width="80" align="center">
-            <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+          <el-table-column label="已收数量" width="140" align="right">
+            <template #default="{ row }">
+              {{ row.receivedQuantity || 0 }}<span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
+            </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
             <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
@@ -837,6 +842,8 @@ async function submitDecide() {
 }
 // PR #289 §B4 — stock shortage marker for "现有库存" column
 .stock-shortage { color: #f56c6c; font-weight: 600; }
+// 数量后缀的单位: 比数字弱一档, 不跟数字抢注意力, 但保证数字永远不是裸的。
+.unit-suffix { margin-left: 4px; color: #909399; font-size: 12px; }
 // 调拨差异量红色高亮（少收警示）
 .diff-qty { color: #f56c6c; font-weight: 600; }
 .text-muted { color: #909399; font-size: 12px; }

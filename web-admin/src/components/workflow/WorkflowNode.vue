@@ -18,96 +18,126 @@ const emit = defineEmits<{
 
 const palette = computed(() => getWorkflowPalette(props.node.status));
 const displayCount = computed(() => formatWorkflowCount(props.node.count));
-const circlePx = computed(() => (props.size === 'sm' ? 48 : 64));
 
 let pressTimer: number | undefined;
+let longPressTriggered = false;
 
 function startPress() {
   if (pressTimer) window.clearTimeout(pressTimer);
+  longPressTriggered = false;
   pressTimer = window.setTimeout(() => {
+    longPressTriggered = true;
     emit('long-press', props.node.id);
     pressTimer = undefined;
   }, 500);
 }
 
-function endPress(triggerClick: boolean) {
+function cancelPress() {
   if (pressTimer) {
     window.clearTimeout(pressTimer);
     pressTimer = undefined;
-    if (triggerClick) emit('click', props.node.id);
   }
+}
+
+function handleClick() {
+  if (longPressTriggered) {
+    longPressTriggered = false;
+    return;
+  }
+  emit('click', props.node.id);
 }
 </script>
 
 <template>
-  <div class="workflow-node" :aria-label="`${node.label}, ${node.count} 项`">
+  <div class="workflow-node">
     <button
       type="button"
-      class="circle"
+      class="status-summary-item"
+      :class="`status-summary-item--${size}`"
       :style="{
-        width: circlePx + 'px',
-        height: circlePx + 'px',
-        backgroundColor: palette.bg,
-        borderColor: palette.border,
-        color: palette.text,
+        '--status-summary-bg': palette.bg,
+        '--status-summary-border': palette.border,
+        '--status-summary-text': palette.text,
       }"
-      :aria-label="node.label"
+      :aria-label="`${node.label}, ${node.count} 项`"
       @mousedown="startPress"
-      @mouseup="endPress(true)"
-      @mouseleave="endPress(false)"
+      @mouseup="cancelPress"
+      @mouseleave="cancelPress"
       @touchstart.passive="startPress"
-      @touchend="endPress(true)"
-      @touchcancel="endPress(false)"
+      @touchend="cancelPress"
+      @touchcancel="cancelPress"
+      @click="handleClick"
     >
+      <span class="label">{{ node.label }}</span>
       <span class="count">{{ displayCount }}</span>
     </button>
-    <span class="label">{{ node.label }}</span>
   </div>
 </template>
 
 <style scoped>
 .workflow-node {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 64px;
+  min-width: 0;
 }
 
-.circle {
-  border-radius: 50%;
-  border-width: 1px;
-  border-style: solid;
-  display: flex;
+.status-summary-item {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--el-border-color-lighter, #edf2f7);
+  border-left: 3px solid var(--status-summary-border);
+  border-radius: 8px;
+  background: var(--el-bg-color, #fff);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
+  gap: 12px;
   cursor: pointer;
-  padding: 0;
-  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+  padding: 9px 11px;
+  text-align: left;
+  transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
   user-select: none;
 }
 
-.circle:active {
-  opacity: 0.75;
-  transform: scale(0.97);
+.status-summary-item--sm {
+  min-height: 46px;
+  padding: 7px 9px;
 }
 
-.circle:focus-visible {
+.status-summary-item:hover {
+  border-color: var(--status-summary-border);
+  background: var(--status-summary-bg);
+  transform: translateY(-1px);
+}
+
+.status-summary-item:active {
+  transform: translateY(0);
+}
+
+.status-summary-item:focus-visible {
   outline: 2px solid var(--el-color-primary, #1890ff);
   outline-offset: 2px;
 }
 
 .count {
-  font-size: 16px;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--status-summary-border);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--status-summary-bg);
+  color: var(--status-summary-text);
+  font-size: 15px;
   font-weight: 700;
   line-height: 1;
 }
 
 .label {
-  margin-top: 4px;
-  max-width: 88px;
-  text-align: center;
-  font-size: 12px;
-  color: #1f2937;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary, #1a2332);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

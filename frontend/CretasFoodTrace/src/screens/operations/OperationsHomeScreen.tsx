@@ -20,13 +20,15 @@ import {
 } from '../../services/api/operationsApiClient';
 import { getErrorMsg } from '../../utils/errorHandler';
 
-type Filter = 'open' | 'all';
+type Filter = 'pending' | 'all';
 
 const STATUS_LABELS: Record<CustomerMaterialArrivalNotice['status'], string> = {
-  OPEN: '待收货',
-  PARTIALLY_RECEIVED: '部分收货',
-  RECEIVED: '已完成',
-  CANCELLED: '已取消',
+  PENDING_APPROVAL: '待审批',
+  OPEN: '审批通过',
+  PARTIALLY_RECEIVED: '入库任务处理中',
+  RECEIVED: '入库任务已完成',
+  REJECTED: '已驳回',
+  CANCELLED: '已撤回',
 };
 
 const EMPTY_FORM = {
@@ -47,7 +49,7 @@ function toApiDateTime(value: string): string | undefined | null {
 
 export default function OperationsHomeScreen() {
   const [notices, setNotices] = useState<CustomerMaterialArrivalNotice[]>([]);
-  const [filter, setFilter] = useState<Filter>('open');
+  const [filter, setFilter] = useState<Filter>('pending');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -58,9 +60,9 @@ export default function OperationsHomeScreen() {
   const loadNotices = useCallback(async (refresh = false) => {
     refresh ? setRefreshing(true) : setLoading(true);
     try {
-      const response = await operationsApiClient.listCustomerMaterialArrivals(filter === 'open');
+      const response = await operationsApiClient.listCustomerMaterialArrivals(false);
       if (!response.success) {
-        throw new Error(response.message || '来料预告加载失败');
+        throw new Error(response.message || '无订单入库申请加载失败');
       }
       setNotices(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
@@ -69,7 +71,11 @@ export default function OperationsHomeScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filter]);
+  }, []);
+
+  const visibleNotices = filter === 'pending'
+    ? notices.filter((notice) => notice.status === 'PENDING_APPROVAL')
+    : notices;
 
   useEffect(() => {
     loadNotices();
@@ -104,7 +110,7 @@ export default function OperationsHomeScreen() {
         throw new Error(response.message || '发送失败');
       }
       setModalVisible(false);
-      Alert.alert('已发送给仓储', '这是一条到货通知，不会直接增加库存。');
+      Alert.alert('申请已提交', '审批通过前不会进入入库任务，也不会增加库存。');
       await loadNotices(true);
     } catch (error) {
       Alert.alert('发送失败', getErrorMsg(error) || '已保留填写内容，请重试');
@@ -115,23 +121,23 @@ export default function OperationsHomeScreen() {
 
   const confirmCancel = (notice: CustomerMaterialArrivalNotice) => {
     Alert.alert(
-      '取消来料预告',
-      `确认取消 ${notice.noticeNumber}？已有收货记录的预告不能取消。`,
+      '撤回入库申请',
+      `确认撤回 ${notice.noticeNumber}？审批通过后将改由“入库任务与批次”处理。`,
       [
         { text: '返回', style: 'cancel' },
         {
-          text: '确认取消',
+          text: '确认撤回',
           style: 'destructive',
           onPress: async () => {
             setCancellingNoticeId(notice.id);
             try {
               const response = await operationsApiClient.cancelCustomerMaterialArrival(notice.id);
               if (!response.success) {
-                throw new Error(response.message || '取消失败');
+                throw new Error(response.message || '撤回失败');
               }
               await loadNotices(true);
             } catch (error) {
-              Alert.alert('取消失败', getErrorMsg(error) || '请刷新状态后重试');
+              Alert.alert('撤回失败', getErrorMsg(error) || '请刷新状态后重试');
             } finally {
               setCancellingNoticeId(null);
             }
@@ -142,7 +148,7 @@ export default function OperationsHomeScreen() {
   };
 
   const renderNotice = ({ item }: { item: CustomerMaterialArrivalNotice }) => {
-    const canCancel = item.status === 'OPEN' && !item.receiptCount;
+    const canCancel = item.status === 'PENDING_APPROVAL';
     return (
       <Card style={styles.noticeCard} testID={`operations-arrival-${item.id}`}>
         <Card.Content>
@@ -154,7 +160,9 @@ export default function OperationsHomeScreen() {
             <Chip compact>{STATUS_LABELS[item.status] || item.status}</Chip>
           </View>
           <Text style={styles.meta}>预计到达：{item.expectedArrivalAt || '未填写'}</Text>
-          <Text style={styles.meta}>仓储已收：{item.receiptCount || 0} 批</Text>
+          <Text style={styles.meta}>
+            任务交接：{item.status === 'PENDING_APPROVAL' ? '审批通过后生成' : item.status === 'OPEN' ? '已进入入库任务与批次' : '请查看当前状态'}
+          </Text>
           {(item.contactName || item.contactPhone) && (
             <Text style={styles.meta}>
               联系人：{[item.contactName, item.contactPhone].filter(Boolean).join(' ')}
@@ -171,7 +179,7 @@ export default function OperationsHomeScreen() {
               loading={cancellingNoticeId === item.id}
               disabled={cancellingNoticeId !== null}
             >
-              取消预告
+              撤回申请
             </Button>
           )}
         </Card.Content>
@@ -182,15 +190,15 @@ export default function OperationsHomeScreen() {
   return (
     <View style={styles.container}>
       <Appbar.Header>
-        <Appbar.Content title="运营协调" subtitle="客户来料预告" />
+        <Appbar.Content title="运营协调" subtitle="无订单入库申请" />
         <Appbar.Action icon="refresh" onPress={() => loadNotices(true)} />
       </Appbar.Header>
 
       <Card style={styles.boundaryCard}>
         <Card.Content>
-          <Text style={styles.boundaryTitle}>通知仓储，不直接入库</Text>
+          <Text style={styles.boundaryTitle}>这里只申请，不处理入库</Text>
           <Text style={styles.boundaryText}>
-            只登记哪个客户预计来料。物料、数量和批次由仓管看到实物后按实际收货。
+            提交后先等审批。通过后才会出现在“入库任务与批次”，申请页不填实物数量。
           </Text>
         </Card.Content>
       </Card>
@@ -199,7 +207,7 @@ export default function OperationsHomeScreen() {
         value={filter}
         onValueChange={(value) => setFilter(value as Filter)}
         buttons={[
-          { value: 'open', label: '待收货' },
+          { value: 'pending', label: '待审批' },
           { value: 'all', label: '全部' },
         ]}
         style={styles.filter}
@@ -208,20 +216,20 @@ export default function OperationsHomeScreen() {
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" />
-          <Text style={styles.loadingText}>正在加载来料预告</Text>
+          <Text style={styles.loadingText}>正在加载无订单入库申请</Text>
         </View>
       ) : (
         <FlatList
-          data={notices}
+          data={visibleNotices}
           keyExtractor={(item) => item.id}
           renderItem={renderNotice}
           refreshing={refreshing}
           onRefresh={() => loadNotices(true)}
-          contentContainerStyle={notices.length ? styles.list : styles.emptyList}
+          contentContainerStyle={visibleNotices.length ? styles.list : styles.emptyList}
           ListEmptyComponent={(
             <View style={styles.center}>
-              <Text variant="titleMedium">暂无来料预告</Text>
-              <Text style={styles.emptyHint}>客户确认送货后，再新建一条预告发给仓储。</Text>
+              <Text variant="titleMedium">{filter === 'pending' ? '暂无待审批申请' : '暂无无订单入库申请'}</Text>
+              <Text style={styles.emptyHint}>需要登记无订单到货时，点击右下角发起申请。</Text>
             </View>
           )}
         />
@@ -229,7 +237,7 @@ export default function OperationsHomeScreen() {
 
       <FAB
         icon="plus"
-        label="新建预告"
+        label="发起申请"
         style={styles.fab}
         onPress={openCreate}
         testID="operations-arrival-create"
@@ -247,8 +255,8 @@ export default function OperationsHomeScreen() {
             keyboardShouldPersistTaps="handled"
             renderItem={() => (
               <View>
-                <Text variant="headlineSmall" style={styles.modalTitle}>新建客户来料预告</Text>
-                <Text style={styles.modalHint}>不用猜物料和数量，仓管按到场实物收货。</Text>
+                <Text variant="headlineSmall" style={styles.modalTitle}>发起无订单入库申请</Text>
+                <Text style={styles.modalHint}>这里只提交客户和预计到达；审批通过后再由仓管核对实物。</Text>
                 <CustomerSelector
                   value={form.customerName}
                   onSelect={(customerId, customerName) => setForm((current) => ({
@@ -298,7 +306,7 @@ export default function OperationsHomeScreen() {
                     返回
                   </Button>
                   <Button mode="contained" onPress={submit} loading={submitting} disabled={submitting}>
-                    发送给仓储
+                    提交审批
                   </Button>
                 </View>
               </View>

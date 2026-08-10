@@ -47,6 +47,16 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # Stub out common.llm_router so corpus_judge can be imported without real creds
 
 
+# ⚠️ 2026-08-10: 这段桩曾**污染整个 pytest 会话** —— 同一份代码在 test_corpus_judge /
+#    test_corpus_p2loop / test_crossfamily_judge 里复制了三份, 每份都有两个问题:
+#      1. `sys.modules[...].X = stub` 是**无条件赋值**, 真模块已加载时会**就地覆写它**;
+#      2. 塞进 sys.modules 的桩**从不还原**, 之后任何 test import 真模块拿到的都是桩。
+#    实测: 把 smartbi/tests 并进全套跑, **7 个原本绿的别处用例被带红**, 而症状离原因
+#    极远(看起来像 llm_router 自己坏了)。
+#    判据: **测试给 sys.modules 打桩必须 (a) 不碰已真实加载的模块 (b) 用完还原。**
+_STUBBED: list[str] = []
+
+
 def _ensure_stub(module_name: str) -> None:
     if module_name not in sys.modules:
         parts = module_name.split(".")
@@ -54,6 +64,7 @@ def _ensure_stub(module_name: str) -> None:
             name = ".".join(parts[:i])
             if name not in sys.modules:
                 sys.modules[name] = types.ModuleType(name)
+                _STUBBED.append(name)
 
 
 _ensure_stub("common")
@@ -74,8 +85,10 @@ async def _stub_call_chain(slot, payload, chain=None, timeout=30.0):
     return {}
 
 
-sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
-sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
+if "common.llm_router" in _STUBBED:
+    sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
+if "common.llm_router" in _STUBBED:
+    sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
 
 # Now import the modules under test
 from scripts.corpus_judge import (  # noqa: E402,F401
@@ -91,6 +104,11 @@ from scripts.corpus_judge import (  # noqa: E402,F401
     parse_judge_scores,
     decide_quality,
 )
+
+# ⛔ 用完立刻摘掉桩 —— 只在被测模块自己的 import 期需要它们。
+for _n in reversed(_STUBBED):
+    sys.modules.pop(_n, None)
+_STUBBED.clear()
 from scripts.corpus_g3_sample import (  # noqa: E402,F401
     fetch_sample_rows,
     group_rows_by_bucket,

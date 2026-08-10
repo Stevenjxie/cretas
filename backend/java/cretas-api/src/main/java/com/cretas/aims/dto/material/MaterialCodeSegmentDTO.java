@@ -7,9 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-/**
- * SP8: 物料分段编码字典 DTO (单节点 + 可选子节点列表用于树形返回).
- */
+/** 物料分类节点 DTO（单节点 + 可选子节点列表）。 */
 @Data
 @Builder
 @NoArgsConstructor
@@ -19,9 +17,8 @@ public class MaterialCodeSegmentDTO {
     private Long id;
     private String factoryId;
     private Short level;
-    private String segmentCode;
     private String segmentLabel;
-    private String parentCode;
+    private Long parentId;
     private Integer sortOrder;
     private Boolean isActive;
 

@@ -111,7 +111,7 @@ describe('SeasoningBindingDialog', () => {
       quantity: 1, fromUnit: '斤', toUnit: 'g',
     }));
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(2);
-    expect(wrapper.text()).toContain('每投入 1 kg 原料');
+    expect(wrapper.text()).toContain('本工序每投入 1 kg');
     expect(wrapper.get('[data-testid="seasoning-dosage-unit"]').text()).toBe('斤');
     wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 1);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
@@ -128,7 +128,7 @@ describe('SeasoningBindingDialog', () => {
     await fillRequiredFields(wrapper, 1.5);
 
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
-      .toContain('每投入 1 kg 原料（本工序投料量）需要投入');
+      .toContain('投入量基准本工序每投入 1 kg需要投入');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
 
@@ -309,6 +309,6 @@ describe('SeasoningBindingDialog', () => {
       },
     });
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
-      .toContain('每投入 1 kg 原料');
+      .toContain('本工序每投入 1 kg');
   });
 });

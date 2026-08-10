@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
+import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { get } from '@/api/request';
 import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
@@ -19,6 +20,7 @@ const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const taskBadges = useTaskBadgeStore();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
@@ -240,6 +242,44 @@ function titleForItem(item: MenuItem): string {
   return item.title;
 }
 
+function badgeForItem(item: MenuItem): number | null {
+  return taskBadges.badge(item.badgeKey);
+}
+
+let badgeTimer: ReturnType<typeof setInterval> | undefined;
+let badgeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleBadgeRefresh(): void {
+  if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
+  badgeRefreshTimer = setTimeout(() => { void taskBadges.loadAll(); }, 350);
+}
+function refreshBadgesWhenVisible(): void {
+  if (document.visibilityState === 'visible') scheduleBadgeRefresh();
+}
+
+watch(
+  () => authStore.factoryId,
+  (factoryId) => {
+    taskBadges.setFactory(factoryId || '');
+    scheduleBadgeRefresh();
+  },
+  { immediate: true },
+);
+
+watch(() => route.path, () => scheduleBadgeRefresh());
+
+onMounted(() => {
+  badgeTimer = setInterval(() => { void taskBadges.loadAll(); }, 60_000);
+  window.addEventListener('cretas:task-badges-refresh', scheduleBadgeRefresh);
+  document.addEventListener('visibilitychange', refreshBadgesWhenVisible);
+});
+
+onBeforeUnmount(() => {
+  if (badgeTimer) clearInterval(badgeTimer);
+  if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
+  window.removeEventListener('cretas:task-badges-refresh', scheduleBadgeRefresh);
+  document.removeEventListener('visibilitychange', refreshBadgesWhenVisible);
+});
+
 // 当前激活的菜单
 const activeMenu = computed(() => route.path);
 
@@ -311,6 +351,7 @@ function handleSelect(path: string) {
           :collapsed="isCollapsedSidebar"
           :icon-map="iconMap"
           :title-for-item="titleForItem"
+          :badge-for-item="badgeForItem"
           :level="1"
         />
       </el-menu>

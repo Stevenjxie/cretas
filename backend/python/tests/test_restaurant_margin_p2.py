@@ -211,7 +211,10 @@ def test_margin_forecast_core_subtracts_cogs():
     # cogs flat 800/day → margin flat 1200
     cogs = {d: Decimal("800") for d, _ in rev}
     res = compute_margin_forecast_core(rev, cogs, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    # 毛利序列和营收序列共用 target_forecast.compute_rolling_forecast, 2026-08-10
+    # 起带周内项。30 天连续 → 七个星期几各 4 次以上, 因子生效; 序列全平 → 因子
+    # 都是 1.0, 预测值不变。
+    assert res["model_type"] == "linear_trend_dow"
     assert all(abs(p["forecast_amount"] - 1200.0) < 0.01 for p in res["points"])
 
 
@@ -220,6 +223,9 @@ def test_margin_forecast_core_missing_cogs_day_treated_zero():
     rev = _rev_series([1000] * 20)
     cogs = {}  # no cogs at all → margin == revenue
     res = compute_margin_forecast_core(rev, cogs, anchor=date(2026, 1, 20), horizon_days=5)
+    # 20 天连续 → 20÷7=2.86, 有星期几只有 2 次 < _MIN_OBS_PER_DOW(3) → 守卫生效,
+    # 退回纯趋势。⚠️ 我一开始按「20 天够了」改成了 _dow, 被实跑打脸 —— 天数够不够
+    # 要按**最少的那个星期几**算, 不是按总天数除以 7。
     assert res["model_type"] == "linear_trend"
     assert all(abs(p["forecast_amount"] - 1000.0) < 0.01 for p in res["points"])
 
@@ -465,7 +471,8 @@ async def test_compute_margin_forecast_sufficient_produces_trend():
         _FakePool(smartbi_conn), _FakePool(cretas_conn), "RES_T", horizon_days=7
     )
     assert res["cost_data_sufficient"] is True
-    assert res["model_type"] == "linear_trend"
+    # 这条夹具的历史窗够长, 七个星期几各 ≥3 次 → 周内项生效(2026-08-10 起)。
+    assert res["model_type"] == "linear_trend_dow"
     assert len(res["points"]) == 7
     # margin per day = 2000 - (10*18 + 8*9 + 6*12 + 20*1) = 2000 - 344 = 1656
     assert all(abs(p["forecast_amount"] - 1656.0) < 1.0 for p in res["points"])

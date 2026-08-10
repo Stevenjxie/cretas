@@ -96,7 +96,7 @@ const businessRoutes: RouteRecordRaw[] = [
       {
         path: 'operations/customer-material-arrivals',
         name: 'CustomerMaterialArrivals',
-        redirect: () => ({ path: '/warehouse/materials', query: { view: 'receiving', action: 'unordered-inbound' } }),
+        redirect: '/warehouse/unordered-inbound-applications',
         meta: {
           requiresAuth: true,
           title: '无订单入库申请',
@@ -368,13 +368,19 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'material-segments',
             name: 'WarehouseMaterialSegments',
             component: () => import('@/views/warehouse/material-segments/index.vue'),
-            meta: { requiresAuth: true, title: '物料分段字典', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '物料分类字典', module: 'warehouse' }
+          },
+          {
+            path: 'unordered-inbound-applications',
+            name: 'WarehouseUnorderedInboundApplications',
+            component: () => import('@/views/warehouse/unordered-inbound-applications/index.vue'),
+            meta: { requiresAuth: true, title: '无订单入库申请', module: 'warehouse' }
           },
           {
             path: 'materials',
             name: 'WarehouseMaterials',
             component: () => import('@/views/warehouse/materials/list.vue'),
-            meta: { requiresAuth: true, title: '原材料批次', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '入库任务与批次', module: 'warehouse' }
           },
           // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
           {
@@ -492,6 +498,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'TransferList',
             component: () => import('@/views/transfer/list.vue'),
             meta: { requiresAuth: true, title: '调拨单列表', module: 'warehouse' }
+          },
+          {
+            path: 'new',
+            name: 'TransferCreate',
+            component: () => import('@/views/transfer/list.vue'),
+            meta: { requiresAuth: true, title: '新建调拨单', module: 'warehouse', hidden: true }
           },
           {
             path: ':id',

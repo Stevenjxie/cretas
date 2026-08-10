@@ -5,11 +5,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.jpa.repository.Lock;
-import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -22,14 +19,17 @@ import java.util.Optional;
  */
 @Repository
 public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType, String> {
+    interface CodeConflictView {
+        String getId();
+        String getName();
+        java.time.LocalDateTime getDeletedAt();
+    }
     /**
      * 根据工厂ID和代码查找
      */
     Optional<RawMaterialType> findByFactoryIdAndCode(String factoryId, String code);
 
     /** Find by the new human-readable code without changing legacy code resolution. */
-    Optional<RawMaterialType> findByFactoryIdAndBusinessCodeIgnoreCase(String factoryId, String businessCode);
-
     /** 按主键取, 但保留工厂隔离 —— 跨租户读原料主数据一律走这条而不是裸 findById。 */
     Optional<RawMaterialType> findByIdAndFactoryId(String id, String factoryId);
 
@@ -45,27 +45,6 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
       */
     List<RawMaterialType> findByFactoryId(String factoryId);
 
-    /** Serializes a factory-scoped historical business-code backfill. */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
-           "ORDER BY r.code ASC, r.id ASC")
-    List<RawMaterialType> lockByFactoryIdForBusinessCodeBackfill(
-            @Param("factoryId") String factoryId);
-
-    /**
-     * Explicit one-way assignment for historical rows. The entity field remains immutable for
-     * ordinary JPA updates; this guarded statement is the only supported backfill write boundary.
-     */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query(value = "UPDATE raw_material_types SET business_code = :businessCode, " +
-                   "updated_at = CURRENT_TIMESTAMP " +
-                   "WHERE factory_id = :factoryId AND id = :materialId " +
-                   "AND business_code IS NULL AND deleted_at IS NULL",
-           nativeQuery = true)
-    int assignBusinessCodeIfMissing(
-            @Param("factoryId") String factoryId,
-            @Param("materialId") String materialId,
-            @Param("businessCode") String businessCode);
      /**
      * 查找工厂的激活原材料类型
       */
@@ -77,16 +56,19 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
       */
     Page<RawMaterialType> findByFactoryId(String factoryId, Pageable pageable);
 
-    /** Server-side L1/L2/L3 prefix + keyword filtering for the material dictionary. */
+    /** Server-side taxonomy subtree + keyword filtering for the material dictionary. */
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
-           "AND (CAST(:codePrefix AS string) IS NULL OR r.code LIKE CONCAT(:codePrefix, '%')) " +
+           "AND (CAST(:classificationId AS long) IS NULL " +
+           "OR r.classificationSegmentId = :classificationId " +
+           "OR r.classificationSegmentId IN (SELECT c.id FROM MaterialCodeSegment c WHERE c.parentId = :classificationId) " +
+           "OR r.classificationSegmentId IN (SELECT leaf.id FROM MaterialCodeSegment leaf " +
+           "    WHERE leaf.parentId IN (SELECT child.id FROM MaterialCodeSegment child WHERE child.parentId = :classificationId))) " +
            "AND (CAST(:keyword AS string) IS NULL OR LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "OR LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) " +
-           "OR LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) " +
            "OR LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%'))) ")
     Page<RawMaterialType> filterBySegmentPrefixAndKeyword(
             @Param("factoryId") String factoryId,
-            @Param("codePrefix") String codePrefix,
+            @Param("classificationId") Long classificationId,
             @Param("keyword") String keyword,
             Pageable pageable);
      /**
@@ -109,7 +91,6 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
-           "LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
     Page<RawMaterialType> searchMaterialTypes(@Param("factoryId") String factoryId,
                                               @Param("keyword") String keyword,
@@ -121,7 +102,6 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND r.isActive = true AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
-           "LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
     Page<RawMaterialType> searchActiveMaterialTypes(@Param("factoryId") String factoryId,
                                                     @Param("keyword") String keyword,
@@ -130,8 +110,6 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 检查代码是否存在
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
-
-    boolean existsByFactoryIdAndBusinessCodeIgnoreCase(String factoryId, String businessCode);
 
     @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RawMaterialType r " +
            "WHERE r.factoryId = :factoryId AND LOWER(TRIM(r.name)) = LOWER(TRIM(:name))")
@@ -186,33 +164,31 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * T159-B-codegen: 按编码前缀查找该工厂的原料编码列表 (用于生成序列号).
      * 仅取 code 字段减少传输量; 前缀区分大小写(编码全大写).
      */
-    @Query("SELECT r.code FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
-           "AND r.code LIKE CONCAT(:prefix, '%') ESCAPE '\\'")
+    @Query(value = "SELECT code FROM raw_material_types " +
+           "WHERE factory_id = :factoryId " +
+           "AND UPPER(code) LIKE UPPER(CONCAT(CAST(:prefix AS VARCHAR), '%')) " +
+           "ORDER BY code", nativeQuery = true)
     List<String> findCodesByFactoryIdAndCodePrefix(@Param("factoryId") String factoryId,
                                                    @Param("prefix") String prefix);
 
-    /**
-     * SP8: 按16位分段编码前10位前缀检索所有已用编码 (用于生成后6位序号).
-     * prefix 为10位 segmentCode, 返回所有匹配的16位 code.
-     */
-    @Query("SELECT r.code FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
-           "AND LENGTH(r.code) = 16 AND r.code LIKE CONCAT(:segmentPrefix, '%') ESCAPE '\\'")
-    List<String> findCodesByFactoryIdAndSegmentPrefix(@Param("factoryId") String factoryId,
-                                                      @Param("segmentPrefix") String segmentPrefix);
+    /** Includes soft-deleted rows because the database uniqueness constraint includes them. */
+    @Query(value = "SELECT id, name, deleted_at AS \"deletedAt\" FROM raw_material_types " +
+           "WHERE factory_id = :factoryId AND UPPER(code) = UPPER(:code) " +
+           "ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, id LIMIT 1",
+           nativeQuery = true)
+    Optional<CodeConflictView> findCodeConflictIncludingDeleted(
+            @Param("factoryId") String factoryId,
+            @Param("code") String code);
 
-    /**
-     * 删除编码分类前的守卫: 还有多少**在用**物料的编码挂在这个分类段下。
-     *
-     * <p>前缀长度不定 —— L1 3位 / L2 6位 / L3 10位, 所以不能像
-     * {@link #findCodesByFactoryIdAndSegmentPrefix} 那样固定 16 位。</p>
-     */
+    /** 删除分类前的守卫：还有多少在用物料直接引用这个分类节点。 */
     @Query("SELECT COUNT(r) FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
-           "AND r.isActive = true AND r.code LIKE CONCAT(:segmentPrefix, '%') ESCAPE '\\'")
-    long countActiveByFactoryIdAndSegmentPrefix(@Param("factoryId") String factoryId,
-                                                @Param("segmentPrefix") String segmentPrefix);
+           "AND r.isActive = true AND r.classificationSegmentId = :classificationId")
+    long countActiveByFactoryIdAndClassificationSegmentId(
+            @Param("factoryId") String factoryId,
+            @Param("classificationId") Long classificationId);
 
     /**
-     * SP8: 按编码前缀搜索物料 (前端级联选择用).
+     * 按简短料号前缀搜索物料.
      * 最多返回 50 条.
      */
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +

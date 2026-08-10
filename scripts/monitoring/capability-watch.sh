@@ -144,6 +144,32 @@ if [ "$ERR_COUNT" -gt 5 ]; then
 fi
 SUMMARY="${SUMMARY}errs=${ERR_COUNT}/${ERROR_WINDOW_MIN}min "
 
+# ==================== Probe 5: 真值对账 (数算得对不对) ====================
+# 🔴 别的探针全在问「服务活着吗、答得出来吗」—— 没有一个在问「**算得对不对**」。
+#    2026-08-09 的扇出缺陷(米饭营收 ¥34,839 → ¥2,001,255, 毛利率 99.5%)
+#    在所有现有探针上都是绿的: 服务 200、答得出来、耗时正常、日志干净。
+#    它把聚合结果还原成生成器的源码参数逐条比 —— 那个 bug 会让米饭单价
+#    从 ¥3.00 变成 ¥160.55, 当场红。
+#
+# ⚠️ 每 15 分钟跑一次的代价: 约 40 条 SQL, **零模型调用**, 几秒完成。
+# ⚠️ 锚在**上个完整月份**上, 不是当月 —— 当月还没走完时样本少, 比值会抖。
+TRUTH_MONTH=$(date -d "last month" +%-m 2>/dev/null || echo 7)
+TRUTH_YEAR=$(date -d "last month" +%Y 2>/dev/null || echo 2026)
+TRUTH_OUT=$(cd /www/wwwroot/cretas/code/backend/python 2>/dev/null     && set -a && . /www/wwwroot/cretas/.env.prod 2>/dev/null && set +a     && ./venv-current/bin/python -m smartbi.scripts.registry_truth_check          --year "$TRUTH_YEAR" --month "$TRUTH_MONTH" 2>&1 | tail -20)
+TRUTH_LINE=$(printf '%s' "$TRUTH_OUT" | grep -E "^TRUTH_CHECK" | head -1)
+if [ -z "$TRUTH_LINE" ]; then
+    emit "ALERT truth: 对账脚本没有产出结论行 —— ⛔ 这是「闸没跑」不是「闸过了」"
+    ALERT=1
+    SUMMARY="${SUMMARY}truth=NORUN "
+elif printf '%s' "$TRUTH_LINE" | grep -q "FAIL"; then
+    emit "ALERT truth: $TRUTH_LINE"
+    printf '%s' "$TRUTH_OUT" | grep "❌" | head -5 | while IFS= read -r l; do emit "  $l"; done
+    ALERT=1
+    SUMMARY="${SUMMARY}truth=FAIL "
+else
+    SUMMARY="${SUMMARY}truth=OK "
+fi
+
 # ==================== Final emit ====================
 STATUS="OK"
 [ "$ALERT" -eq 1 ] && STATUS="ALERT"

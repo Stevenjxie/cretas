@@ -175,19 +175,50 @@ public class VoucherServiceImpl implements VoucherService {
         return voucherRepo.save(voucher);
     }
 
+    /**
+     * 批量补凭证 —— <b>每单独立事务</b>, 一单失败不拖垮整批。
+     *
+     * <p><b>缺陷</b> (2026-08-09 prod 实测, F006): 原实现是<b>整批一个 {@code @Transactional}</b> +
+     * 逐单 try/catch。看着像"一单失败不影响其余", 实际完全不是 —— 逐单 catch 挡得住 Java 异常,
+     * 挡不住<b>PostgreSQL 已经把整个事务标记为 aborted</b>: 第一单插入违反约束后, 同一事务里
+     * 后续每一条语句都直接返回 {@code current transaction is aborted, commands ignored until
+     * end of transaction block}, 连 {@code updateVflag(FAILED)} 都写不进去; 最后 proxy commit
+     * 看到 rollback-only → {@code UnexpectedRollbackException} → 调用方收到一个语焉不详的 409,
+     * 而<b>一张凭证都没生成</b>。实测 F006 一次批量补: 第一单是零金额调拨触发
+     * {@code chk_ve_single_side}, 后面 7 单全部陪葬, 日志里是同一条失败 SQL 重复 8 次。
+     *
+     * <p>修法照 {@link #batchPost} —— 那边 2026-07-04 已经踩过同一个坑并落地了正解:
+     * 每单 {@code PROPAGATION_REQUIRES_NEW} 独立事务, 失败的单独回滚, 成功的照常提交。
+     * 批量补凭证同样不是"全有全无"语义: 财务要的是"补上了几张、哪几张没补上、为什么"。
+     */
     @Override
-    @Transactional
     public int batchCreateForFactory(String factoryId, String businessType) {
         List<String> ids = findUncreatedIds(factoryId, businessType);
+        // 每单独立事务: 一单违反约束只回滚它自己, 不会把整批的 DB 会话弄脏。
+        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
         int count = 0;
         for (String id : ids) {
             try {
-                createFromBusiness(factoryId, businessType, id);
-                updateVflag(businessType, id, VoucherFlag.CREATED);
+                tt.execute(status -> {
+                    createFromBusiness(factoryId, businessType, id);
+                    updateVflag(businessType, id, VoucherFlag.CREATED);
+                    return null;
+                });
                 count++;
             } catch (Exception e) {
                 log.warn("Batch generate failed: {}/{} — {}", businessType, id, e.getMessage());
-                updateVflag(businessType, id, VoucherFlag.FAILED);
+                // 标 FAILED 也必须在【干净的新事务】里做 —— 上面那个事务已经回滚,
+                // 沿用它写不进去 (这正是旧实现连 FAILED 都标不上的原因)。
+                try {
+                    tt.execute(status -> {
+                        updateVflag(businessType, id, VoucherFlag.FAILED);
+                        return null;
+                    });
+                } catch (Exception ignored) {
+                    log.warn("Batch generate: 标记 FAILED 也失败 {}/{}", businessType, id);
+                }
             }
         }
         return count;
@@ -567,35 +598,152 @@ public class VoucherServiceImpl implements VoucherService {
         }
     }
 
+    /**
+     * 批量补凭证的取数 —— <b>每一支的范围必须与该类型 listener 的生成条件一致</b>。
+     *
+     * <p><b>为什么必须一致</b> (2026-08-09 prod 审计): 原实现<b>只按 vflag 过滤, 完全不看业务
+     * 状态</b>。而各类型的凭证都是在某个业务节点由 listener 生成的 —— 没走到那个节点的单据
+     * 自然一直停在 {@code UNCREATED}。于是"批量补凭证"会把这些<b>本来就不该有凭证</b>的单据
+     * 一并补上, 制造幽灵凭证。实测各支的误捞量:
+     *
+     * <pre>
+     *   INTERNAL_TRANSFER  47 张   (已修)
+     *   PURCHASE_ORDER      8 张   9 张里只有 1 张该补
+     *   SALES_ORDER         6 张
+     *   WASTAGE_RECORD      5 张
+     * </pre>
+     *
+     * <p>下面每一支的判据都<b>直接抄自该类型 listener 的触发事件</b>, 不是我另定的会计口径:
+     * <ul>
+     *   <li>SALES_ORDER ← {@code SalesOrderFinanceApprovedEvent} (财务审批通过后生成)</li>
+     *   <li>PURCHASE_ORDER ← {@code PurchaseReceiveConfirmedEvent} (收货确认后生成)</li>
+     *   <li>RETURN_ORDER ← {@code ReturnOrderCreatedEvent} (创建即生成; 驳回时另有作废 listener)</li>
+     *   <li>INTERNAL_TRANSFER ← {@code TransferConfirmedEvent} (确认入库后生成)</li>
+     *   <li>WASTAGE_RECORD / PAYROLL_RECORD: <b>没有 listener</b>, 批量补是唯一生成路径</li>
+     * </ul>
+     */
+    /**
+     * 可以尝试补凭证的 vflag —— {@code UNCREATED} / {@code FAILED} / {@code PENDING}。
+     *
+     * <p><b>为什么 FAILED 和 PENDING 都要收</b> (2026-08-10 prod 审计): 这两个都是<b>死胡同</b>,
+     * 没有任何路径会把它们捡回来 —— listener 只在事件到来时跑一次, 批量补原先只扫 UNCREATED。
+     * <ul>
+     *   <li>{@code FAILED}: 生成时抛异常。一次瞬时失败 = 该单永久没有凭证, 且静默无告警。</li>
+     *   <li>{@code PENDING}: listener 写了"开始生成"之后、还没写"成功/失败"就中断 (进程重启等)。
+     *       实测 27 张 PENDING 里 26 张<b>其实已经有凭证</b>, 只是 flag 没写回 CREATED;
+     *       剩 1 张 (六膳门 PO-20260717-0001, 已完成的采购单) 是真漏账。</li>
+     * </ul>
+     *
+     * <p>收 PENDING 是安全的: {@link #createFromBusiness} 第一步就是幂等 —— 同业务单已有凭证
+     * 直接返回既有的, 不会重复生成。所以对那 26 张是"把 flag 纠正成 CREATED", 对那 1 张才是
+     * 真的补一张。
+     */
+    // package-private: 同包单测直调真方法
+    boolean isRetryableFlag(VoucherFlag flag) {
+        return flag == VoucherFlag.UNCREATED || flag == VoucherFlag.FAILED || flag == VoucherFlag.PENDING;
+    }
+
     private List<String> findUncreatedIds(String factoryId, String businessType) {
         switch (businessType) {
             case "SALES_ORDER":
+                // listener 在【财务审批通过】后才生成 → 补的范围同样必须是已过财审的。
+                // DRAFT / CONFIRMED / PENDING_FINANCE_REVIEW / FINANCE_REJECTED / CANCELLED
+                // 都不该有凭证 (实测误捞 6 张, 含 4 张 CANCELLED)。
                 return salesOrderRepo.findAll().stream()
-                        .filter(o -> factoryId.equals(o.getFactoryId()) && o.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && isBookableSalesStatus(o.getStatus()))
                         .map(SalesOrder::getId).toList();
             case "PURCHASE_ORDER":
+                // listener 在【收货确认】后才生成 → 没收货的一律不补。
+                // 实测 9 张 UNCREATED 里只有 1 张真的收过货, 其余 8 张是 DRAFT/SUBMITTED/
+                // APPROVED/CANCELLED —— 货都没到, 补出来就是幽灵应付。
                 return purchaseOrderRepo.findAll().stream()
-                        .filter(o -> factoryId.equals(o.getFactoryId()) && o.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && isBookablePurchaseStatus(o.getStatus()))
                         .map(PurchaseOrder::getId).toList();
             case "RETURN_ORDER":
+                // listener 是【创建即生成】, 所以这一支不加"必须审批过"的门槛 —— 那会与已上线
+                // 行为不一致。只排除 REJECTED (被驳回的退货由 ReturnOrderRejectedEvent 作废凭证,
+                // 补一张回来等于跟那条 listener 对着干)。
                 return returnOrderRepo.findAll().stream()
-                        .filter(o -> factoryId.equals(o.getFactoryId()) && o.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && o.getStatus() != com.cretas.aims.entity.enums.ReturnOrderStatus.REJECTED)
                         .map(ReturnOrder::getId).toList();
             case "INTERNAL_TRANSFER":
+                // ⚠️ 除 vflag 外还必须判业务状态。2026-08-09 起 INVENTORY_TRANSFER 凭证只在
+                // 【确认入库】时生成, 于是草稿/待审/已取消/已驳回的调拨会长期停在 UNCREATED ——
+                // 只按 vflag 扫的话, "批量补凭证" 会给这些【库存一分没动】的单子补出凭证,
+                // 正是刚修掉的那种幽灵凭证, 从另一个入口原样长回来。
+                // 只有 CONFIRMED (库存真正搬完) 才允许补。
+                //
+                // 🔴 FAILED 也要收 (2026-08-09 prod 审计): 生成失败后 vflag 置 FAILED, 而
+                // 【没有任何路径会重试 FAILED】—— listener 只在事件到来时跑一次, 批量补凭证
+                // 又只扫 UNCREATED。于是一次瞬时失败 = 该单永久没有凭证, 且静默无告警。
+                // prod 实测 F006 有 4 张已确认、有金额、vflag=FAILED、至今无凭证的调拨
+                // (最早 2026-07-30), 其中两张是"创建后 40~70ms 就确认"、老逻辑的异步生成
+                // 与确认事务撞车所致。把 FAILED 纳入可补范围, 让这类漏账可恢复。
+                //
+                // 已有凭证的一律排除 —— FAILED 不保证"一定没生成", 重复生成会撞唯一约束、
+                // 再把 vflag 打回 FAILED, 制造"越补越失败"的假象。
+                // 🔴 零金额必须跳过 (2026-08-09 prod 实测): TransferVoucherListener 一直有这道
+                // 守卫 (totalAmount<=0 → 无会计影响, 不生成), 而这里【没有】—— 口径不一致。
+                // 后果不是"多生成一张废凭证"那么轻: 0 值调拨会造出 debit=0/credit=0 的分录,
+                // 违反 chk_ve_single_side, 把整个 DB 事务打成 aborted。实测 F006 一次批量补
+                // 就是被一张零金额调拨 (TRF-20260703-5801) 带崩全批。
                 return internalTransferRepo.findAll().stream()
-                        .filter(t -> factoryId.equals(t.getSourceFactoryId()) && t.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(t -> factoryId.equals(t.getSourceFactoryId())
+                                && isRetryableFlag(t.getVflag())
+                                && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED
+                                && t.getTotalAmount() != null && t.getTotalAmount().signum() > 0
+                                && findBySourceBusiness("INTERNAL_TRANSFER", t.getId()).isEmpty())
                         .map(InternalTransfer::getId).toList();
             case "WASTAGE_RECORD":
+                // 报损【没有 listener】, 批量补是唯一生成路径 —— 没有已上线逻辑可抄, 但
+                // DRAFT / SUBMITTED / REJECTED 显然不该入账 (草稿和被驳回的损耗不是损失)。
+                // 实测 67 张 UNCREATED 里 5 张属于这三种状态。
                 return wastageRecordRepo.findAll().stream()
-                        .filter(w -> factoryId.equals(w.getFactoryId()) && w.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(w -> factoryId.equals(w.getFactoryId())
+                                && isRetryableFlag(w.getVflag())
+                                && w.getStatus() == com.cretas.aims.entity.restaurant.WastageRecord.Status.APPROVED)
                         .map(WastageRecord::getId).toList();
             case "PAYROLL_RECORD":
                 return payrollRecordRepo.findAll().stream()
-                        .filter(p -> factoryId.equals(p.getFactoryId()) && p.getVflag() == VoucherFlag.UNCREATED)
+                        .filter(p -> factoryId.equals(p.getFactoryId()) && isRetryableFlag(p.getVflag()))
                         .map(p -> p.getId().toString()).toList();
             default:
                 return List.of();
         }
+    }
+
+    /**
+     * 销售单可入账的状态 —— 对齐 {@code SalesFinanceApproveVoucherListener}: 财务审批通过
+     * 之后的各阶段都算已入账区间; 财审之前 (DRAFT/CONFIRMED/PENDING_FINANCE_REVIEW)、
+     * 被财审驳回 (FINANCE_REJECTED)、以及已取消 (CANCELLED) 都不该有凭证。
+     */
+    // package-private: 让同包单测直接调真方法断言判定表 (测试里再抄一份表就是恒真式)
+    boolean isBookableSalesStatus(com.cretas.aims.entity.enums.SalesOrderStatus status) {
+        if (status == null) return false;
+        return switch (status) {
+            case FINANCE_APPROVED, PROCESSING, PARTIAL_DELIVERED, COMPLETED -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * 采购单可入账的状态 —— 对齐 {@code PurchaseOrderVoucherListener}: 凭证挂在
+     * {@code PurchaseReceiveConfirmedEvent} (收货确认) 上, 所以只有<b>确实收过货</b>的单据
+     * 才在补的范围内。下单/审批完但货没到, 补出来就是幽灵应付。
+     */
+    // package-private: 让同包单测直接调真方法断言判定表 (测试里再抄一份表就是恒真式)
+    boolean isBookablePurchaseStatus(com.cretas.aims.entity.enums.PurchaseOrderStatus status) {
+        if (status == null) return false;
+        return switch (status) {
+            case PARTIAL_RECEIVED, COMPLETED, CLOSED -> true;
+            default -> false;
+        };
     }
 
     private void updateVflag(String businessType, String businessId, VoucherFlag newFlag) {

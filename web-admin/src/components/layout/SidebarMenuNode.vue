@@ -9,6 +9,7 @@ defineProps<{
   collapsed: boolean;
   iconMap: Record<string, Component>;
   titleForItem: (item: MenuItem) => string;
+  badgeForItem: (item: MenuItem) => number | null;
   level: number;
 }>();
 </script>
@@ -27,7 +28,8 @@ defineProps<{
       <el-icon v-if="item.icon && iconMap[item.icon]">
         <component :is="iconMap[item.icon]" />
       </el-icon>
-      <span>{{ titleForItem(item) }}</span>
+      <span class="menu-title-copy">{{ titleForItem(item) }}</span>
+      <span v-if="badgeForItem(item) !== null" class="menu-task-badge">{{ Math.min(badgeForItem(item) || 0, 99) }}<template v-if="(badgeForItem(item) || 0) > 99">+</template></span>
     </template>
 
     <SidebarMenuNode
@@ -37,6 +39,7 @@ defineProps<{
       :collapsed="collapsed"
       :icon-map="iconMap"
       :title-for-item="titleForItem"
+      :badge-for-item="badgeForItem"
       :level="level + 1"
     />
   </el-sub-menu>
@@ -45,8 +48,10 @@ defineProps<{
     <el-icon v-if="item.icon && iconMap[item.icon]">
       <component :is="iconMap[item.icon]" />
     </el-icon>
-    <template v-if="item.icon" #title>{{ titleForItem(item) }}</template>
-    <span v-if="!item.icon">{{ titleForItem(item) }}</span>
+    <template #title>
+      <span class="menu-title-copy">{{ titleForItem(item) }}</span>
+      <span v-if="badgeForItem(item) !== null" class="menu-task-badge">{{ Math.min(badgeForItem(item) || 0, 99) }}<template v-if="(badgeForItem(item) || 0) > 99">+</template></span>
+    </template>
   </el-menu-item>
 </template>
 
@@ -67,5 +72,23 @@ defineProps<{
   margin-top: 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   padding-top: 10px;
+}
+
+.menu-title-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-task-badge {
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e75555;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(231, 85, 85, 0.14);
 }
 </style>

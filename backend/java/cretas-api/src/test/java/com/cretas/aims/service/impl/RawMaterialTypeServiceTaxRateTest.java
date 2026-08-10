@@ -22,7 +22,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,9 +69,9 @@ class RawMaterialTypeServiceTaxRateTest {
 
     private static final String FACTORY_ID = "F006";
     private static final String MATERIAL_ID = "RMT_TEST_001";
-    private static final String L1_CODE = "001";
-    private static final String L2_CODE = "001001";
-    private static final String L3_CODE = "0010010001";
+    private static final Long L1_CODE = 1L;
+    private static final Long L2_CODE = 2L;
+    private static final Long L3_CODE = 3L;
 
     @BeforeEach
     void setUp() {
@@ -87,12 +86,6 @@ class RawMaterialTypeServiceTaxRateTest {
      */
     private void stubForCreate() {
         stubValidSegmentChain();
-        when(materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(FACTORY_ID, L3_CODE))
-                .thenReturn(Optional.of(segment((short) 3, L3_CODE, L2_CODE, "测试品类")));
-        when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, L3_CODE))
-                .thenReturn(List.of());
-        when(materialTypeRepository.existsByFactoryIdAndCode(anyString(), anyString()))
-                .thenReturn(false);
         lenient().when(materialTypeRepository.save(any(RawMaterialType.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -107,27 +100,24 @@ class RawMaterialTypeServiceTaxRateTest {
     }
 
     private void stubValidSegmentChain() {
-        // 2026-08-07: createMaterialType 现在按「该工厂有没有配分段字典」分流。
-        // 本类用例断言的是**有字典**时的旧行为(生成16位码), 故显式翻成有字典。
-        lenient().when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                .thenReturn(3L);
-        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, L3_CODE))
+        when(materialCodeSegmentRepository.findByIdAndFactoryId(L3_CODE, FACTORY_ID))
                 .thenReturn(Optional.of(segment((short) 3, L3_CODE, L2_CODE, "测试品类")));
-        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, L2_CODE))
+        when(materialCodeSegmentRepository.findByIdAndFactoryId(L2_CODE, FACTORY_ID))
                 .thenReturn(Optional.of(segment((short) 2, L2_CODE, L1_CODE, "测试部位")));
-        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, L1_CODE))
+        when(materialCodeSegmentRepository.findByIdAndFactoryId(L1_CODE, FACTORY_ID))
                 .thenReturn(Optional.of(segment((short) 1, L1_CODE, null, "原料")));
     }
 
-    private MaterialCodeSegment segment(short level, String code, String parentCode, String label) {
-        return MaterialCodeSegment.builder()
+    private MaterialCodeSegment segment(short level, Long id, Long parentId, String label) {
+        MaterialCodeSegment segment = MaterialCodeSegment.builder()
                 .factoryId(FACTORY_ID)
                 .level(level)
-                .segmentCode(code)
                 .segmentLabel(label)
-                .parentCode(parentCode)
+                .parentId(parentId)
                 .isActive(true)
                 .build();
+        segment.setId(id);
+        return segment;
     }
 
     // =========================================================================
@@ -239,7 +229,7 @@ class RawMaterialTypeServiceTaxRateTest {
                 .thenReturn(Optional.of(existingEntity));
 
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
-        dto.setSegmentCode(L3_CODE);
+        dto.setClassificationId(L3_CODE);
         dto.setTaxRate(TaxRate.TAX_9);
         dto.setTaxIncludedUnitPrice(new BigDecimal("113.00"));
 
@@ -265,7 +255,7 @@ class RawMaterialTypeServiceTaxRateTest {
                 .thenReturn(Optional.of(existingEntity));
 
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
-        dto.setSegmentCode(L3_CODE);
+        dto.setClassificationId(L3_CODE);
         dto.setTaxIncludedUnitPrice(new BigDecimal("226.00"));
         // dto.taxRate NOT set (null) → service reuses existingEntity.taxRate = TAX_13
 
@@ -292,7 +282,7 @@ class RawMaterialTypeServiceTaxRateTest {
                 .thenReturn(Optional.of(existingEntity));
 
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
-        dto.setSegmentCode(L3_CODE);
+        dto.setClassificationId(L3_CODE);
         dto.setNotes("test update");
         // No taxRate, no taxIncludedUnitPrice in dto
 
@@ -360,8 +350,9 @@ class RawMaterialTypeServiceTaxRateTest {
         dto.setCode("TEST");
         dto.setName("测试原料");
         dto.setUnit("kg");
+        dto.setCategory("原料");
         dto.setCreatedBy(1L);
-        dto.setSegmentCode(L3_CODE);
+        dto.setClassificationId(L3_CODE);
         dto.setTaxRate(taxRate);
         dto.setTaxIncludedUnitPrice(taxIncludedUnitPrice);
         return dto;
@@ -372,8 +363,10 @@ class RawMaterialTypeServiceTaxRateTest {
         RawMaterialType entity = new RawMaterialType();
         entity.setId(MATERIAL_ID);
         entity.setFactoryId(FACTORY_ID);
-        entity.setCode(L3_CODE + "000001");
+        entity.setCode("YL001");
+        entity.setClassificationSegmentId(L3_CODE);
         entity.setName("测试原料");
+        entity.setCategory("原料");
         entity.setUnit("kg");
         entity.setIsActive(true);
         entity.setCreatedBy(1L);

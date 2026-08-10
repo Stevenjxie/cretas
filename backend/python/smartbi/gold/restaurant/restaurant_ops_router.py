@@ -8454,6 +8454,27 @@ async def resolve_by_code(
     """
     resolver = _RESOLVERS.get(code)
     if resolver is None:
+        # ── 通用执行器并行路径 (2026-08-09) ──────────────────────────────
+        # ⛔ **只在没有手写 resolver 时**才走这里 —— 现有 20 个格子行为逐字不变。
+        #    20 个函数 = 20 个格子, 而「指标×维度×聚合」有 200+ 种组合;
+        #    落在没写过的格子上原本直接 return None(答不出来), 现在交给登记表拼。
+        # ⚠️ 它自己坏了返回 None, 与改动前逐字同义 —— 并行路径不该扩大失败面。
+        spec = kwargs.get("spec")
+        if spec is not None:
+            try:
+                from smartbi.gold.restaurant.generic_answer import try_generic_answer
+                generic = await try_generic_answer(
+                    spec, smartbi_pool, factory_id,
+                    window_label=getattr(spec, "window_label", "") or "")
+            except Exception:  # noqa: BLE001
+                logger.exception("[resolve_by_code] 通用执行器异常, 按未知码处理")
+                generic = None
+            if generic and generic.get("served"):
+                return OpsAnswer(
+                    code=generic["code"], title=generic["title"],
+                    answer_text=generic["answer_text"], charts=[], kpis=[],
+                    meta={"generic_cell": list(generic["cell"])},
+                )
         return None
     # 涉钱答案的角色闸 —— 必须在**取数之前**短路。放到查完再擦文本有两个问题:
     # 数据已经被取出来了, 而且擦文本随时会漏掉一种新的金额写法。

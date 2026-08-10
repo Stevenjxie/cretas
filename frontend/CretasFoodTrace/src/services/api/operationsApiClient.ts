@@ -2,9 +2,11 @@ import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 
 export type CustomerMaterialArrivalStatus =
+  | 'PENDING_APPROVAL'
   | 'OPEN'
   | 'PARTIALLY_RECEIVED'
   | 'RECEIVED'
+  | 'REJECTED'
   | 'CANCELLED';
 
 export interface CustomerMaterialArrivalNotice {
@@ -18,6 +20,9 @@ export interface CustomerMaterialArrivalNotice {
   contactPhone?: string;
   remark?: string;
   status: CustomerMaterialArrivalStatus;
+  reviewedBy?: number;
+  reviewedAt?: string;
+  reviewRemark?: string;
   receiptCount: number;
   lastReceivedAt?: string;
   createdAt?: string;

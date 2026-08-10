@@ -363,7 +363,8 @@ def test_forecast_fewer_than_14_mean_fallback():
 def test_forecast_flat_series_slope_zero():
     series = _series([2000] * 30)
     res = compute_rolling_forecast(series, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    # 2026-08-10 起带周内项。完全平的序列 → 七个因子都是 1.0, 预测值不变。
+    assert res["model_type"] == "linear_trend_dow"
     # flat → projection stays ~2000, zero-width CI (std 0)
     assert all(abs(p["forecast_amount"] - 2000.0) < 0.01 for p in res["points"])
     assert all(p["lower_bound"] == p["forecast_amount"] for p in res["points"])
@@ -373,12 +374,268 @@ def test_forecast_upward_trend_projects_higher():
     # strictly increasing: 100, 200, ..., 3000 over 30 days
     series = _series([100 * (i + 1) for i in range(30)])
     res = compute_rolling_forecast(series, anchor=date(2026, 1, 30), horizon_days=10)
-    assert res["model_type"] == "linear_trend"
+    assert res["model_type"] == "linear_trend_dow"
     first = res["points"][0]["forecast_amount"]
     last = res["points"][-1]["forecast_amount"]
     # projection continues upward beyond last observed (3000)
     assert first > 3000
     assert last > first
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "已知未修的隐患, 且**试过的修法都更差**, 故留成会说话的红灯而不是删掉。\n"
+        "缺陷: 拿原值判 IQR, 在周内规律干净的序列上会把整个最忙的那天全删光 ——\n"
+        "「工作日 1000 / 周六 3000」连续 8 周, 40 个 1000 把 Q1=Q3=1000 顶成\n"
+        "IQR=0, fence 收成一个点, 8 个周六一个不剩。而那正是模型最该学的信号。\n"
+        "为什么先不修(2026-08-10 实测, scripts/forecast_backtest.py):\n"
+        "  · 旧清洗器在真实租户上剔除 **0/120 天** —— 它在真实数据上根本没开火,\n"
+        "    所以这个缺陷只在合成的干净序列上咬人, 是隐患不是正在发生的故障。\n"
+        "  · 「先按星期几拉平再判离群」这个直觉修法实测更差:\n"
+        "        RES_3101_009 h=30   16.75% → 21.02%(OK 翻 FAIL)\n"
+        "        DEMO_REST    h=30   18.41% → 23.03%(OK 翻 FAIL)\n"
+        "    把围栏从 1.5 放宽到 3.0(剔除 15→7 天)**没有救回来**(21.26%), 说明\n"
+        "    机制不是「剔太狠」。两个假设连续被证伪, 没有继续猜下去。\n"
+        "修它的前提: 先能解释清楚为什么剔掉 7/120 天会让 h=30 差 4.5 个百分点。\n"
+        "strict=True —— 谁真修好了这里会 xpass 报错, 提醒把这段说明一并改掉。"
+    ),
+)
+def test_clean_outliers_does_not_eat_the_busiest_weekday():
+    """干净的周内规律不该被当成离群点删掉。"""
+    from datetime import timedelta
+
+    series = []
+    for i in range(56):
+        d = date(2026, 1, 5) + timedelta(days=i)
+        series.append((d, 3000.0 if d.weekday() == 5 else 1000.0))
+
+    cleaned = _clean_outliers(series)
+    sat_kept = sum(1 for d, _ in cleaned if d.weekday() == 5)
+    assert sat_kept == 8, f"8 个周六应全部保留, 实际只剩 {sat_kept}"
+    assert len(cleaned) == 56
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "同上一条的同一个隐患的另一面: 真异常会被剔除(这一半是对的), 但同一星期几\n"
+        "的其它 7 个正常观测**也被连坐删光**。修法与上一条绑定, 一起做或一起不做。"
+    ),
+)
+def test_clean_outliers_still_catches_a_genuinely_anomalous_day():
+    """真异常要剔除, 但不该连累同一星期几的正常观测。"""
+    from datetime import timedelta
+
+    series = []
+    for i in range(56):
+        d = date(2026, 1, 5) + timedelta(days=i)
+        series.append((d, 3000.0 if d.weekday() == 5 else 1000.0))
+    # 第 4 个周六炸成 30000(该星期几正常值的 10 倍)
+    spike_at = [i for i, (d, _) in enumerate(series) if d.weekday() == 5][3]
+    spike_date = series[spike_at][0]
+    series[spike_at] = (spike_date, 30000.0)
+
+    cleaned = _clean_outliers(series)
+    kept = {d for d, _ in cleaned}
+    assert spike_date not in kept, "真正的异常日应被剔除"
+    sat_kept = sum(1 for d, _ in cleaned if d.weekday() == 5)
+    assert sat_kept == 7, f"其余 7 个周六应保留(尖峰不该连累同侪), 实际 {sat_kept}"
+
+
+def test_break_detected_and_only_current_regime_used():
+    """跨体制的窗口 → 截到最后一个断层之后, 并如实报出断层日期。
+
+    形状取自 prod 实测: RES_3101_009 的 90 日窗内有 3.0× 与 5.9× 两处突变(灌数据
+    留下的), 而改动前的代码照算不误, 给出一个像模像样的数。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _trim_to_current_regime
+
+    # 前 40 天在 10000, 后 40 天在 30000 (3× 台阶)
+    series = [
+        (date(2026, 1, 1) + timedelta(days=i), 10000.0 if i < 40 else 30000.0)
+        for i in range(80)
+    ]
+    trimmed, break_at = _trim_to_current_regime(series)
+    assert break_at == date(2026, 2, 10), f"断层日期不对: {break_at}"
+    assert len(trimmed) == 40
+    assert all(v == 30000.0 for _, v in trimmed), "截后应只剩当前体制"
+
+    res = compute_rolling_forecast(series, anchor=series[-1][0], horizon_days=7)
+    assert res["data_break_at"] == "2026-02-10"
+    assert res["points_after_break"] == 40
+    # 预测值应贴着 30000 那一段, 而不是被断层前的 10000 拉低
+    assert all(p["forecast_amount"] > 25000 for p in res["points"]), (
+        f"预测被断层前的数据拉低了: {[p['forecast_amount'] for p in res['points']][:3]}")
+
+
+def test_steady_growth_is_not_a_break():
+    """⛔ 平稳高增长不是断层 —— 否则真实门店只要长得快就被告知「数据有断层」。
+
+    这是 2026-08-10 实装时当场踩到的假阳性: 只看「相邻 7 日窗比值 >= 2×」, 一条
+    30 天从 100 涨到 3000 的干净趋势每一对窗都超标, 被砍成碎片。断层的本质是
+    **突变**不是陡峭, 所以还要求它在所有相邻窗比值里显著离群。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _trim_to_current_regime
+
+    series = [
+        (date(2026, 1, 1) + timedelta(days=i), 100.0 * (i + 1)) for i in range(60)
+    ]
+    trimmed, break_at = _trim_to_current_regime(series)
+    assert break_at is None, f"平稳增长被误判成断层于 {break_at}"
+    assert len(trimmed) == 60
+
+
+def test_forecast_reports_its_own_backtest_error():
+    """每个预测都要带上**它自己**的历史回测误差, 算不出就是 None(不填默认值)。
+
+    ⛔ 一个光秃秃的「预计 42.3 万」看起来同样确定, 无论背后是 1.6% 还是 22% 的
+       历史误差 —— 而用户没有别的途径能分辨。prod 实测: MOCK_REST 1.6% /
+       DEMO_REST 4.1% / RES_3101_009 22.1%, 差了一个数量级。
+    """
+    from datetime import timedelta
+
+    # 干净的周内规律 + 轻微趋势 → 误差应该很小
+    series = [
+        (date(2026, 1, 5) + timedelta(days=i),
+         (2000.0 if (date(2026, 1, 5) + timedelta(days=i)).weekday() >= 5 else 1000.0)
+         + i * 5)
+        for i in range(60)
+    ]
+    res = compute_rolling_forecast(series, anchor=series[-1][0], horizon_days=7)
+    mape = res["backtest_mape"]
+    assert mape is not None, "样本够却没算出误差"
+    assert 0.0 <= mape < 0.15, f"这条序列很规律, 误差不该有 {mape:.1%}"
+
+    # ⛔ 算不出就是 None, 不许退化成 0.0 之类「看起来很准」的默认值。这有**两条**
+    #    独立路径, 都要验 —— 只验一条时, 把另一条改成 return 0.0 的变异不会变红
+    #    (2026-08-10 实测漏过一次)。
+    # 路径 a: 样本长度不足 训练窗 + horizon
+    short = series[:18]
+    res2 = compute_rolling_forecast(short, anchor=short[-1][0], horizon_days=30)
+    assert res2["backtest_mape"] is None
+
+    # 路径 b: 长度够, 但每个起点都算不出误差(实际值全为 0, 相对误差无定义)
+    zeros = [(date(2026, 1, 5) + timedelta(days=i), 0.0) for i in range(60)]
+    res3 = compute_rolling_forecast(zeros, anchor=zeros[-1][0], horizon_days=7)
+    assert res3["backtest_mape"] is None
+
+
+def test_backtest_measures_the_same_model_that_answers():
+    """回测走的拟合必须与出数走的是同一个 —— 否则报的误差描述的是另一个模型。
+
+    ⛔ 这条不去比对源码文本(那太脆), 而是**行为等价**: 拿全序列拟合出的下一天
+       点估计, 必须逐字等于 _fit_and_project 在同一序列上给出的那个数。
+    """
+    from datetime import timedelta
+    from smartbi.services.target_forecast import _clean_outliers, _fit_and_project
+
+    series = [
+        (date(2026, 1, 5) + timedelta(days=i),
+         (2000.0 if (date(2026, 1, 5) + timedelta(days=i)).weekday() >= 5 else 1000.0)
+         + i * 5)
+        for i in range(60)
+    ]
+    anchor = series[-1][0]
+    nxt = anchor + timedelta(days=1)
+
+    answered = compute_rolling_forecast(series, anchor=anchor, horizon_days=1)
+    backtested = _fit_and_project(series, [nxt])
+    assert backtested is not None
+    assert abs(answered["points"][0]["forecast_amount"] - backtested[0]) < 0.01, (
+        f"出数 {answered['points'][0]['forecast_amount']} vs "
+        f"回测 {backtested[0]} —— 两条路走的不是同一个模型")
+    assert len(_clean_outliers(series)) == 60
+
+
+def test_break_threshold_matches_the_gate():
+    """生产的断层阈值必须和回测闸的一致 —— 两边硬编, 由这条逐字比对。
+
+    ⛔ 不许改成「一边 import 另一边」: 生产不该依赖 scripts/, 而让脚本 import
+       生产会让这个断言变成恒真式(自己等于自己)。要的就是两份独立字面量 + 一条
+       会红的比对。
+    """
+    import re
+    from pathlib import Path
+
+    from smartbi.services import target_forecast as tf
+
+    gate = (
+        Path(tf.__file__).parent.parent / "scripts" / "forecast_backtest.py"
+    ).read_text(encoding="utf-8")
+    m = re.search(r"^BREAK_RATIO\s*=\s*([\d.]+)", gate, re.M)
+    assert m, "回测闸里找不到 BREAK_RATIO —— 常量改名了, 先修这条断言"
+    assert float(m.group(1)) == tf._BREAK_RATIO, (
+        f"闸 {m.group(1)} vs 生产 {tf._BREAK_RATIO} —— 两边漂移了")
+
+
+def test_target_forecast_model_labels_cover_every_model_type():
+    """预测端能吐出的每一种 model_type, 渲染端都要有说法。
+
+    ⛔ 这个断言**不许**去读 `_MODEL_LABELS` 的 key 再和自己比 —— 那是恒真式。
+       右边从 `target_forecast.py` 的**源码**里数出实际会被返回的字面量。
+
+    背景: 2026-08-10 给预测加周内项, model_type 从 linear_trend 变成
+    linear_trend_dow。渲染端当时是个三元式, 会**静默落到 else**, 把变强的模型
+    对用户说成「近期均值（数据较少）」—— 模型对了, 话说反了。
+    """
+    import re
+    from pathlib import Path
+
+    from smartbi.gold.restaurant.restaurant_target_tool import _MODEL_LABELS
+    from smartbi.services import target_forecast
+
+    src = Path(target_forecast.__file__).read_text(encoding="utf-8")
+    emitted = set(re.findall(r'model_type"?\s*[:=]\s*"([a-z_]+)"', src))
+    assert emitted, "一个 model_type 都没数出来 —— 正则跟源码写法脱节了, 先修正则"
+
+    missing = emitted - set(_MODEL_LABELS)
+    assert not missing, (
+        f"预测端会返回 {sorted(missing)}, 但 _MODEL_LABELS 里没有 —— "
+        f"用户会看到 fallback 文案「近期均值（数据较少）」")
+
+
+def test_forecast_dow_factors_engage_on_weekly_seasonality():
+    """有周内规律 → 启用周内项, 且预测能分出周末和工作日。"""
+    from datetime import timedelta
+
+    # 周六/周日 2 倍, 连续 8 周
+    vals = []
+    for i in range(56):
+        dow = (date(2026, 1, 1) + timedelta(days=i)).weekday()
+        vals.append(2000.0 if dow >= 5 else 1000.0)
+    res = compute_rolling_forecast(
+        _series(vals), anchor=date(2026, 2, 25), horizon_days=7)
+    assert res["model_type"] == "linear_trend_dow"
+
+    by_dow = {
+        date.fromisoformat(p["date"]).weekday(): p["forecast_amount"]
+        for p in res["points"]
+    }
+    weekend = [by_dow[w] for w in (5, 6)]
+    weekday = [by_dow[w] for w in range(5)]
+    assert min(weekend) > max(weekday) * 1.5, (
+        f"周末应显著高于工作日, 实际 周末={weekend} 工作日={weekday}")
+
+
+def test_forecast_dow_skipped_when_a_weekday_is_underrepresented():
+    """某个星期几观测不足 → 退回一元线性趋势, 不拿噪声当因子。"""
+    from datetime import timedelta
+
+    # 21 天连续(每个星期几各 3 次) → 够; 去掉全部周三 → 周三 0 次
+    vals, days = [], []
+    for i in range(21):
+        d = date(2026, 1, 5) + timedelta(days=i)   # 2026-01-05 是周一
+        if d.weekday() == 2:
+            continue
+        days.append(d)
+        vals.append(1000.0 + i)
+    series = list(zip(days, vals))
+    res = compute_rolling_forecast(series, anchor=days[-1], horizon_days=7)
+    assert res["model_type"] == "linear_trend", (
+        f"缺一个星期几就不该启用周内项, 实际 {res['model_type']}")
 
 
 def test_forecast_outlier_removed():

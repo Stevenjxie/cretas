@@ -35,9 +35,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.util.Set;
 import java.util.Optional;
+import java.util.EnumSet;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,7 +97,7 @@ class CustomerMaterialArrivalNoticeServiceTest {
 
         assertEquals("CUSTOMER-1", notice.getCustomerId());
         assertEquals(UnorderedInboundReason.CUSTOMER_MATERIAL, notice.getReason());
-        assertEquals(CustomerMaterialArrivalStatus.OPEN, notice.getStatus());
+        assertEquals(CustomerMaterialArrivalStatus.PENDING_APPROVAL, notice.getStatus());
         assertEquals(0, notice.getReceiptCount());
         assertNull(notice.getExpectedArrivalAt());
         verify(materialBatchRepository, never()).saveAndFlush(any());
@@ -198,6 +201,114 @@ class CustomerMaterialArrivalNoticeServiceTest {
         assertNull(notice.getCustomerId());
         verify(customerRepository, never()).findByIdAndFactoryId(any(), any());
         verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("待审批申请通过后才转为仓储待收货任务")
+    void approvalHandsRequestToWarehouseTaskQueue() {
+        CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
+        notice.setId("NOTICE-PENDING");
+        notice.setFactoryId("F006");
+        notice.setStatus(CustomerMaterialArrivalStatus.PENDING_APPROVAL);
+        when(noticeRepository.findByIdAndFactoryIdForUpdate("NOTICE-PENDING", "F006"))
+                .thenReturn(Optional.of(notice));
+        when(noticeRepository.save(any(CustomerMaterialArrivalNotice.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        CustomerMaterialArrivalNotice approved = service.approve(
+                "F006", "NOTICE-PENDING", 88L, "实物来源清楚");
+
+        assertEquals(CustomerMaterialArrivalStatus.OPEN, approved.getStatus());
+        assertEquals(88L, approved.getReviewedBy());
+        assertEquals("实物来源清楚", approved.getReviewRemark());
+        assertNotNull(approved.getReviewedAt());
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("审批驳回只改申请状态且不生成仓储任务或库存")
+    void rejectionStaysInApplicationDomain() {
+        CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
+        notice.setId("NOTICE-PENDING");
+        notice.setFactoryId("F006");
+        notice.setStatus(CustomerMaterialArrivalStatus.PENDING_APPROVAL);
+        when(noticeRepository.findByIdAndFactoryIdForUpdate("NOTICE-PENDING", "F006"))
+                .thenReturn(Optional.of(notice));
+        when(noticeRepository.save(any(CustomerMaterialArrivalNotice.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        CustomerMaterialArrivalNotice rejected = service.reject(
+                "F006", "NOTICE-PENDING", 89L, "来源信息不完整");
+
+        assertEquals(CustomerMaterialArrivalStatus.REJECTED, rejected.getStatus());
+        assertEquals(89L, rejected.getReviewedBy());
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("驳回必须有可追溯原因")
+    void rejectionRequiresReasonBeforeLoadingOrWritingRequest() {
+        var error = assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.reject("F006", "NOTICE-PENDING", 89L, "  "));
+
+        assertEquals(400, error.getCode());
+        verify(noticeRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        verify(noticeRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("待审批申请不能绕过审批直接收货")
+    void pendingApprovalCannotReceive() {
+        CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
+        notice.setId("NOTICE-PENDING");
+        notice.setFactoryId("F006");
+        notice.setStatus(CustomerMaterialArrivalStatus.PENDING_APPROVAL);
+        when(materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceEventKey(
+                "F006", CustomerMaterialArrivalNoticeService.SOURCE_TYPE, "pending-key"))
+                .thenReturn(Optional.empty());
+        when(noticeRepository.findByIdAndFactoryIdForUpdate("NOTICE-PENDING", "F006"))
+                .thenReturn(Optional.of(notice));
+        CustomerMaterialArrivalReceiptRequest request = new CustomerMaterialArrivalReceiptRequest();
+        request.setIdempotencyKey("pending-key");
+
+        var error = assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.receive("F006", "NOTICE-PENDING", request, 17L));
+
+        assertEquals("UNORDERED_INBOUND_NOT_RECEIVABLE", error.getErrorCode());
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+        verify(rawMaterialTypeRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("仓储待收货列表只包含已审批通过的未完成任务")
+    void receivingQueueExcludesApplicationOnlyStatuses() {
+        when(noticeRepository.findByFactoryIdAndStatusInOrderByExpectedArrivalAtAscCreatedAtAsc(
+                "F006", EnumSet.of(CustomerMaterialArrivalStatus.OPEN,
+                        CustomerMaterialArrivalStatus.PARTIALLY_RECEIVED)))
+                .thenReturn(List.of());
+
+        service.list("F006", true);
+
+        verify(noticeRepository).findByFactoryIdAndStatusInOrderByExpectedArrivalAtAscCreatedAtAsc(
+                "F006", EnumSet.of(CustomerMaterialArrivalStatus.OPEN,
+                        CustomerMaterialArrivalStatus.PARTIALLY_RECEIVED));
+    }
+
+    @Test
+    @DisplayName("已审批交接的任务不能再从申请域撤回")
+    void approvedTaskCannotBeWithdrawnFromApplicationDomain() {
+        CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
+        notice.setId("NOTICE-OPEN");
+        notice.setFactoryId("F006");
+        notice.setStatus(CustomerMaterialArrivalStatus.OPEN);
+        when(noticeRepository.findByIdAndFactoryIdForUpdate("NOTICE-OPEN", "F006"))
+                .thenReturn(Optional.of(notice));
+
+        var error = assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.cancel("F006", "NOTICE-OPEN"));
+
+        assertEquals("UNORDERED_INBOUND_WITHDRAW_NOT_ALLOWED", error.getErrorCode());
+        verify(noticeRepository, never()).save(any());
     }
 
     @Test

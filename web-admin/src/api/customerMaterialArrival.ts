@@ -1,9 +1,11 @@
 import { get, post } from './request';
 
 export type CustomerMaterialArrivalStatus =
+  | 'PENDING_APPROVAL'
   | 'OPEN'
   | 'PARTIALLY_RECEIVED'
   | 'RECEIVED'
+  | 'REJECTED'
   | 'CANCELLED';
 
 export type UnorderedInboundReason = 'CUSTOMER_MATERIAL' | 'GIFT' | 'OTHER';
@@ -20,6 +22,9 @@ export interface CustomerMaterialArrivalNotice {
   contactPhone?: string;
   remark?: string;
   status: CustomerMaterialArrivalStatus;
+  reviewedBy?: number;
+  reviewedAt?: string;
+  reviewRemark?: string;
   receiptCount: number;
   lastReceivedAt?: string;
   createdAt?: string;
@@ -55,5 +60,27 @@ export async function cancelCustomerMaterialArrival(factoryId: string, noticeId:
   return post<CustomerMaterialArrivalNotice>(
     `/${factoryId}/operations/customer-material-arrivals/${noticeId}/cancel`,
     {},
+  );
+}
+
+export async function approveCustomerMaterialArrival(
+  factoryId: string,
+  noticeId: string,
+  remark?: string,
+) {
+  return post<CustomerMaterialArrivalNotice>(
+    `/${factoryId}/operations/customer-material-arrivals/${noticeId}/approve`,
+    { remark: remark?.trim() || undefined },
+  );
+}
+
+export async function rejectCustomerMaterialArrival(
+  factoryId: string,
+  noticeId: string,
+  remark?: string,
+) {
+  return post<CustomerMaterialArrivalNotice>(
+    `/${factoryId}/operations/customer-material-arrivals/${noticeId}/reject`,
+    { remark: remark?.trim() || undefined },
   );
 }

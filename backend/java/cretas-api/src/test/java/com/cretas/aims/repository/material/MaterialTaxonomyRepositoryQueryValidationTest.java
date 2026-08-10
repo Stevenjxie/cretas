@@ -27,7 +27,6 @@ class MaterialTaxonomyRepositoryQueryValidationTest {
         MaterialCodeSegment segment = MaterialCodeSegment.builder()
                 .factoryId("F-TAXONOMY-JPA")
                 .level((short) 1)
-                .segmentCode("901")
                 .segmentLabel("测试分类")
                 .normalizedLabel("测试分类")
                 .sortOrder(0)
@@ -35,9 +34,9 @@ class MaterialTaxonomyRepositoryQueryValidationTest {
                 .build();
         segment = repository.saveAndFlush(segment);
 
-        assertTrue(repository.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+        assertTrue(repository.existsSiblingWithNormalizedLabel(
                 "F-TAXONOMY-JPA", (short) 1, null, "测试分类", -1L));
-        assertFalse(repository.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+        assertFalse(repository.existsSiblingWithNormalizedLabel(
                 "F-TAXONOMY-JPA", (short) 1, null, "测试分类", segment.getId()));
     }
 }
