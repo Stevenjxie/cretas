@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import importlib.util
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ DEFAULT_ANNOTATOR = Path(
 )
 
 
-def apply_precision_box_style(page: str) -> str:
+def apply_precision_box_style(page: str, queue_name: str = "tray-queue") -> str:
     """Keep box borders visible without covering the tray edge underneath."""
     replacements = {
         "function handleRadius(){const r=cv.getBoundingClientRect();return Math.max(13,24*cv.width/Math.max(r.width,1))}":
@@ -49,7 +50,26 @@ def apply_precision_box_style(page: str) -> str:
         if old not in page:
             raise RuntimeError("legacy annotator UI changed; refusing an unverified precision-style patch")
         page = page.replace(old, new, 1)
-    return page.replace("<script>", '<script>\nconst precisionBoxStyle="thin-dashed-v1";', 1)
+    old_save = """  await fetch('/api/ann/'+it.id, {method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({boxes})});"""
+    new_save = """  const response = await fetch('/api/ann/'+it.id, {method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({boxes})});
+  if(!response.ok){ throw new Error('保存失败 HTTP '+response.status+'；请刷新页面后重试'); }"""
+    old_confirm = """async function confirmOk(){
+  await save();                       // marks reviewed=true server-side
+  items[cur].confirmed = true;"""
+    new_confirm = """async function confirmOk(){
+  try { await save(); } catch(error) { alert(error.message || '保存失败；请刷新页面后重试'); return; }
+  items[cur].confirmed = true;"""
+    if old_save not in page or old_confirm not in page or "<header>" not in page:
+        raise RuntimeError("legacy annotator save flow changed; refusing an unsafe compatibility patch")
+    page = page.replace(old_save, new_save, 1).replace(old_confirm, new_confirm, 1)
+    page = page.replace(
+        "<header>",
+        f'<header>\n  <span class="badge" id="queue-id">队列 {html.escape(queue_name)}</span>',
+        1,
+    )
+    return page.replace("<script>", '<script>\nconst precisionBoxStyle="thin-dashed-v2";', 1)
 
 
 def load_module(path: Path):
@@ -85,7 +105,7 @@ def main() -> None:
     app.DISPLAY_W = 1600
     app.SEED = bridge.initialise_queue()
     app.ITEMS = app.build_cache()
-    app.PAGE = apply_precision_box_style(app.PAGE)
+    app.PAGE = apply_precision_box_style(app.PAGE, queue.name)
     handler = bridge.build_public_handler(app)
     server = app.ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     print(f"tray annotator: http://127.0.0.1:{args.port}")

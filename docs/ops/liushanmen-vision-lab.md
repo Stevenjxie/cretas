@@ -23,7 +23,8 @@ B:\anaconda3\python.exe tools\vision-lab\tray_annotator_local.py `
 
 每张修正完成后必须点“这张没问题”或按空格；只有页面显示 `已确认 24/24`，对应
 `annotations-human/*.json` 才会写入 `reviewed=true, source=human`。仅翻到下一张不会被
-流水线当作人工真值。
+流水线当作人工真值。连续轮次必须核对页面顶部的完整队列名；服务端保存返回非 200 时
+页面会直接弹错并停止“确认”，不得用浏览器内存里的旧页面计数代替服务端 `/api/stats`。
 
 人工确认完成后运行 tray 候选闭环：
 
