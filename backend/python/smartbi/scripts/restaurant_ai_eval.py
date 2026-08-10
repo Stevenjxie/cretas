@@ -470,6 +470,61 @@ def invariant_problems(flat: str, invariant: Dict[str, Any]) -> List[str]:
     return problems
 
 
+_TABLE_SEP_RE = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
+
+
+def _table_cells(line: str) -> int:
+    """一行里未转义的 `|` 个数 —— 菜名里带 `|` 必须已被转义, 否则列数会被冲乱。"""
+    return len(re.findall(r"(?<!\\)\|", line))
+
+
+def markdown_table_problems(message: str) -> List[str]:
+    """答案里若出现表格, 它必须是**结构合法**的表格。
+
+    🔴 2026-08-11: 08-10 起上线的 8 张表, 到用户手里全都少了表头前的空行 ——
+       markdown-it 需要空行才把表格当成一个块, 少了它整张表被并进上一段渲染成
+       普通文字。四个 PR、两轮 85/85 电池、CI 全绿, 没有一条断言看得见。
+
+    **为什么既有断言全都看不见**:
+      · 子串检查 `"销量" in answer` —— 字还在, 只是排版没了
+      · 源码检查 `"_markdown_table(" in <该函数源码>` —— 调用还在, 只是下游改了结果
+    两种在结构上就不可能覆盖「排版塌了」这个属性。
+
+    ⛔ **必须喂未压平的原文**。电池里到处在用的
+       `flat = " ".join(message.split())` 把所有空白压平 ——
+       基于 flat 的检查**不可能**发现排版问题, 那等于给自己发一张永远绿的通行证。
+
+    判据: 改渲染就必须看渲染; 而看过一次不够, 要有一道每轮都跑的闸。
+    """
+    problems: List[str] = []
+    lines = message.split("\n")
+    for i, line in enumerate(lines):
+        if not _TABLE_SEP_RE.match(line):
+            continue
+        if i == 0:
+            problems.append("表格分隔行前面没有表头")
+            continue
+        header = lines[i - 1]
+        if _table_cells(header) != _table_cells(line):
+            problems.append(
+                f"表格列数对不上: 表头 {_table_cells(header)} 竖线 / "
+                f"分隔行 {_table_cells(line)} 竖线")
+        # 🔴 这一条就是 8 张表全中的那个: 表头**之前**必须是空行(或整段开头),
+        #    否则 markdown-it 把表格并进上一段。
+        if i >= 2 and lines[i - 2].strip() != "":
+            problems.append(
+                f"表格前缺空行(会被并进上一段渲染成一坨): "
+                f"上一行是 {lines[i - 2].strip()[:30]!r}")
+        for row in lines[i + 1:]:
+            if not row.strip().startswith("|"):
+                break
+            if _table_cells(row) != _table_cells(line):
+                problems.append(
+                    f"表格数据行列数对不上: {row.strip()[:40]!r}")
+                break
+    return problems
+
+
 def _run_case(base: str, auth: Dict[str, str], sid: str,
               case: Dict[str, Any]) -> Dict[str, Any]:
     """跑一条用例, 返回 {problems, flat, followups, elapsed}。不做重试。"""
@@ -535,6 +590,9 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
     #    补上第三位 require_any(至少命中一个)。⛔ 用 any 不用 all —— 相邻周期
     #    有好几种合法说法(最近7天/上周/上个月), 要求全都出现等于要求答案啰嗦。
     problems += invariant_problems(flat, case.get("invariant", {}))
+    # ⛔ 喂 `message` 不是 `flat` —— flat 已经把空白压平, 拿它查排版等于自发通行证。
+    #    这条对**每一题**都跑, 不用逐题登记: 表格是哪一题给的不重要, 给了就必须合法。
+    problems += markdown_table_problems(message)
     return {
         "problems": problems, "flat": flat,
         "followups": flat_followups, "elapsed": time.time() - started,
