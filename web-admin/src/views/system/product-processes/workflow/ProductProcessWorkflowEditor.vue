@@ -15,6 +15,20 @@
           <el-tag data-testid="workflow-system-classification" type="info">
             系统研判：{{ workflowClassificationLabel }}
           </el-tag>
+          <!-- 「本图产出」才是这张图真正做出来的东西, 由画布研判驱动。
+               归属对象(index.vue 顶部那个下拉)只是这张图的存放位置, 已降为次要信息 ——
+               用户 2026-08-11 真机看到的正是这两个数在同一屏打架(研判说原料分流,
+               归属对象却写着某一个成品)。 -->
+          <el-tag
+            v-if="terminalOutputNames.length"
+            data-testid="workflow-terminal-outputs"
+            type="success"
+          >
+            本图产出：{{ terminalOutputNames.join('、') }}
+          </el-tag>
+          <el-tag v-else data-testid="workflow-terminal-outputs" type="warning">
+            本图产出：尚未画出终端产出
+          </el-tag>
           <span v-if="dirty" class="dirty-status">● 有未保存改动</span>
           <span v-else-if="definition" class="saved-status">✓ 已保存</span>
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
@@ -789,7 +803,7 @@ import {
 import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
 import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
-import { classifyWorkflowTopology } from './workflowClassification';
+import { classifyCanvasTopology, terminalOutputLabels } from './workflowClassification';
 import {
   deriveBomOverlay,
   isDerivedBomOverlayConnection,
@@ -1360,25 +1374,21 @@ let activationMutationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
-const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
+const derivedWorkflowClassification = computed(() => classifyCanvasTopology(
   // ⛔ 浮层节点(辅料/包材 cell)不是画布拓扑的一部分, 混进去会把
   // rootInputCount/terminalOutputCount 算错, 让「系统研判」标签失真。
-  // ⛔ isByproduct / substituteOfNodeId 必须一起传下去 —— 分类器认得它们不等于它收得到。
-  // 漏传的话「副产不计终端」「替代组合并」两条规则在真实画布上一次都不会生效, 而
-  // workflowClassification.spec.ts 直接构造入参, 照样全绿(闸在找错地方)。
-  stripBomOverlay(flowNodes.value).map((node) => ({
-    id: node.id,
-    kind: nodeKind(node),
-    skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
-    isByproduct: (node.data as MaterialNodeData)?.isByproduct === true,
-    substituteOfNodeId: typeof node.data?.substituteOfNodeId === 'string'
-      ? node.data.substituteOfNodeId
-      : undefined,
-  })),
+  stripBomOverlay(flowNodes.value),
   // 边也要剥。包材浮层边是「真实产出 → bom-overlay:pack:x」, 不剥的话那个真实产出
   // 会被算进 outgoing, classifyWorkflowTopology 的 !outgoing.has(id) 就把它排除出
   // 终端产出计数 —— 结构完整的工艺会被研判成 INCOMPLETE。只剥节点不剥边等于没剥。
-  stripBomOverlayEdges(flowEdges.value).map((edge) => ({ source: edge.source, target: edge.target })),
+  // ⛔ node.data → 拓扑入参的映射搬进了 classifyCanvasTopology, 那里有吃真实 node.data
+  // 的用例。留在这里的话「分类器认得字段 / 画布传不到字段」这种断层没有任何测试照得出。
+  stripBomOverlayEdges(flowEdges.value),
+));
+/** 顶部「本图产出：A、B」—— 研判结论驱动, 归属对象(存放位置)不参与。 */
+const terminalOutputNames = computed(() => terminalOutputLabels(
+  stripBomOverlay(flowNodes.value),
+  derivedWorkflowClassification.value,
 ));
 const activationWorkflowTypeLabel = computed(() => {
   switch (activation.value?.workflowType) {

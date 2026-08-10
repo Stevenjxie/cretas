@@ -21,6 +21,10 @@ import {
   type ProcessSheetCustomFieldDef
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
+import {
+  findWorkflowsProducing,
+  type WorkflowOutputDirectoryEntry
+} from '@/api/productionPlan';
 import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
 import { usePinyinFilter } from './workflow/pinyinInitials';
 import { isRawMaterialOption } from './workflow/rawMaterialCatalog';
@@ -352,6 +356,8 @@ onMounted(async () => {
   if (selectedProductId.value && !selectedOwnerIsRaw.value) {
     await loadLinkedProcesses();
   }
+  // 首屏也要反查 —— 直接带 query 进来的用户不会触发 watch。
+  void loadProducingWorkflows(selectedProductId.value);
   await applyRouteRecommendationDraft();
 });
 
@@ -370,6 +376,8 @@ let suppressNextWatch = false;
 watch(selectedProductId, async (newVal, oldVal) => {
   if (newVal === oldVal) return;
   if (suppressNextWatch) { suppressNextWatch = false; return; }
+  // 反查与工序加载并行, 且不能让反查失败拖垮主路径。
+  void loadProducingWorkflows(newVal);
   if (newVal && !selectedOwnerIsRaw.value) {
     await loadLinkedProcesses();
   } else {
@@ -562,6 +570,62 @@ const filteredAvailableProcesses = computed(() => {
 const selectedProductName = computed(() => {
   return workflowOwnerOptions.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
+
+// ─────────────────────────────────────────────
+// 按产出反查 —— 「谁产出这个成品」
+//
+// 归属对象只是**存放位置**。用户 2026-08-11 真机撞到的就是这两个数在同一屏打架:
+// 画布顶部研判「原料分流」, 归属对象却写着「成品 · 拓扑成品C」。选中一个成品之后,
+// 这里去问后端「有哪些已启用的图产出它」, 让用户能从产出走到图, 而不是只能从锚点走。
+//
+// ⛔ 用的是配置侧独立接口 findWorkflowsProducing(包含语义), 不是计划侧
+// resolveWorkflowByOutputs(精确语义 + 只留最高优先层) —— 后者会把超集图丢掉,
+// 而配置界面丢掉任何一张就等于用户找不到它。
+// ─────────────────────────────────────────────
+
+const producingWorkflows = ref<WorkflowOutputDirectoryEntry[]>([]);
+const producingLoading = ref(false);
+const producingCheckedProductId = ref('');
+let producingGeneration = 0;
+
+/** 产出它、但存放在**别的**锚点下的图 —— 这些是光看归属对象绝对找不到的。 */
+const producingElsewhere = computed(() => producingWorkflows.value
+  .filter(entry => entry.ownerProductTypeId !== producingCheckedProductId.value));
+
+/** 已经查过、确认「一张都没有」—— 用来给明确空态, 而不是一张看不出所以然的空白画布。 */
+const noWorkflowProducesSelection = computed(() =>
+  producingCheckedProductId.value !== ''
+  && !producingLoading.value
+  && producingWorkflows.value.length === 0);
+
+async function loadProducingWorkflows(productTypeId: string) {
+  producingWorkflows.value = [];
+  producingCheckedProductId.value = '';
+  if (!factoryId.value || !productTypeId || selectedOwnerIsRaw.value) return;
+  const generation = ++producingGeneration;
+  producingLoading.value = true;
+  try {
+    const res = await findWorkflowsProducing(factoryId.value, productTypeId);
+    if (generation !== producingGeneration) return;
+    producingWorkflows.value = res.data?.workflows || [];
+    producingCheckedProductId.value = productTypeId;
+  } catch (e) {
+    if (generation !== producingGeneration) return;
+    // 反查失败不能伪装成「没有图产出它」—— 那是假数据。留空 checked 标记, 空态不显示。
+    handleCatchError(e, '反查产出该成品的工艺图失败');
+  } finally {
+    if (generation === producingGeneration) producingLoading.value = false;
+  }
+}
+
+/** 跳到那张图真正存放的锚点上打开它。 */
+function openProducingWorkflow(entry: WorkflowOutputDirectoryEntry) {
+  selectedProductId.value = entry.ownerProductTypeId;
+}
+
+function producingOutputSummary(entry: WorkflowOutputDirectoryEntry): string {
+  return entry.terminalOutputs.map(output => output.productName).join('、');
+}
 
 // ─────────────────────────────────────────────
 // C3 — 责任人下拉搜索 filter method
@@ -1145,11 +1209,24 @@ async function saveCustomFieldConfig() {
           <el-tag type="info">{{ factoryId }}</el-tag>
           <!-- SOP 全程称这个下拉框为「归属对象」(成品归属主路线 / 原料归属分流路线), 但界面上原本
                只有 placeholder 没有标签, 照 SOP 操作的人根本找不到它 (客户 2026-07-28 反馈
-               「找不到成品归属」). 补一个与 SOP 同词的可见标签, 让文档和界面对得上. -->
-          <span class="toolbar-field-label">归属对象</span>
+               「找不到成品归属」). 补一个与 SOP 同词的可见标签, 让文档和界面对得上.
+
+               2026-08-11: 降为**次要信息**。它只决定这张图存放在哪个对象下, 不代表这张图
+               只产出它 —— 一张原料分流图的归属对象照样只能填一个成品, 于是画布顶部的
+               「系统研判：原料分流」与这里的「成品 · 拓扑成品C」在同一屏上打架。
+               真正说明这张图做什么的是画布顶部的「本图产出：…」。 -->
+          <span class="toolbar-field-label toolbar-field-label--secondary">
+            存放位置（归属对象）
+            <el-tooltip
+              placement="bottom"
+              content="只决定这张工艺图存放在哪个成品/原料下面。一张图可以产出多个成品，实际产出以画布顶部「本图产出」为准。"
+            >
+              <el-icon class="toolbar-field-hint-icon"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
           <el-select
             v-model="selectedProductId"
-            placeholder="选择本条工艺属于哪个成品或原料（支持拼音首字母搜索）"
+            placeholder="选择本条工艺存放在哪个成品或原料下（支持拼音首字母搜索）"
             filterable
             style="width: 360px"
             :loading="productsLoading"
@@ -1170,6 +1247,46 @@ async function saveCustomFieldConfig() {
           <el-button :icon="Refresh" @click="handleRefresh" />
         </div>
       </div>
+
+      <!-- 按产出反查: 这个成品还被别的图产出。光看「存放位置」这些图是找不到的 —— 它们
+           存放在别的锚点下(通常是那条分流路线的原料)。 -->
+      <el-alert
+        v-if="producingElsewhere.length"
+        data-testid="produced-by-other-workflows"
+        class="produced-by-alert"
+        type="info"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          还有 {{ producingElsewhere.length }} 张已启用的工艺图会产出「{{ selectedProductName }}」
+        </template>
+        <div
+          v-for="entry in producingElsewhere"
+          :key="entry.workflowId"
+          class="produced-by-row"
+        >
+          <span class="produced-by-outputs">产出：{{ producingOutputSummary(entry) }}</span>
+          <span class="produced-by-anchor">存放在「{{ entry.ownerProductName }}」下</span>
+          <el-button link type="primary" @click="openProducingWorkflow(entry)">打开这张图</el-button>
+        </div>
+      </el-alert>
+
+      <!-- ⛔ 明确空态, 不是一张看不出所以然的空白画布。只有真的查过并且确实一张都没有时才显示
+           (反查失败时 producingCheckedProductId 保持空, 这里不会误报成「没有」)。 -->
+      <el-alert
+        v-else-if="noWorkflowProducesSelection"
+        data-testid="no-workflow-produces-selection"
+        class="produced-by-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="目前没有任何已启用的工艺图产出这个成品"
+      >
+        <div class="produced-by-row">
+          在下面的画布里画出它的工序与产出并发布，就会有图产出它。
+        </div>
+      </el-alert>
     </el-card>
 
     <section class="workflow-viewport">
@@ -1579,6 +1696,13 @@ async function saveCustomFieldConfig() {
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-field-label { color: #606266; font-size: 14px; white-space: nowrap; }
+/* 归属对象已降为次要信息 —— 真正说明这张图做什么的是画布顶部的「本图产出」。 */
+.toolbar-field-label--secondary { color: #909399; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+.toolbar-field-hint-icon { color: #909399; font-size: 14px; }
+.produced-by-alert { margin-top: 10px; }
+.produced-by-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; line-height: 1.9; }
+.produced-by-outputs { font-weight: 600; }
+.produced-by-anchor { color: #909399; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .workflow-mode-hint { margin: 0 6px 0 4px; color: #909399; cursor: pointer; vertical-align: middle; }
 .workflow-mode-hint:hover, .workflow-mode-hint:focus { color: #409eff; outline: none; }
