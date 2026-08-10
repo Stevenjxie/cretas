@@ -21,6 +21,22 @@ B:\anaconda3\python.exe tools\vision-lab\tray_annotator_local.py `
   --port 8765
 ```
 
+每张修正完成后必须点“这张没问题”或按空格；只有页面显示 `已确认 24/24`，对应
+`annotations-human/*.json` 才会写入 `reviewed=true, source=human`。仅翻到下一张不会被
+流水线当作人工真值。
+
+人工确认完成后运行 tray 候选闭环：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
+  --config D:\CretasVisionLab\config.json
+```
+
+该入口先重验源图、打包图、人工标注与保护集哈希，再按任务拆分训练/验证集，训练轻量
+YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺陷与 20 张正常图。候选必须
+同时满足：缺陷召回不回退、新盲测 2/2、根因样本 tray 覆盖且命中、正常图误报改善、延迟
+合格、PT/ONNX 一致性不差于生产模型。任一项失败都只写淘汰回执，不修改生产模型。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
