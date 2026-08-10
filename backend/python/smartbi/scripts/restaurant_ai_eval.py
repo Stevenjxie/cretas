@@ -162,8 +162,12 @@ _THIS_WEEK_EMPTY_PERIOD_CASE: Dict[str, Any] = {
         "本次结果没有可靠覆盖",
     ],
     "invariant": {
-        # 说了没数据 → 必须已经给出相邻周期, 否则就是把用户撂在原地
-        "空周期必须给相邻周期": (["没有可用的经营数据"], []),
+        # 说了没数据 → 必须已经给出相邻周期, 否则就是把用户撂在原地。
+        # 第三位 require_any 是 2026-08-10 补的: 原先只写了前两位(forbid 为空表),
+        # 那条断言一次都不可能红 —— 见 _run_case 里 invariant 循环的注释。
+        "空周期必须给相邻周期": (
+            ["没有可用的经营数据"], [], ["最近7天", "上周", "上个月", "最近30天"],
+        ),
         # 给了分析 → 不许同时说没数据(自相矛盾)
         "有分析就不许谎称没数据": (["优化建议"], ["没有可用的经营数据"]),
     },
@@ -428,6 +432,35 @@ def _looks_transient(flat: str) -> bool:
     ))
 
 
+def invariant_problems(flat: str, invariant: Dict[str, Any]) -> List[str]:
+    """判一条答案是否违反自洽不变式。纯函数, 可单测 —— 见 `_run_case` 的调用点。
+
+    每项写成 `(need, forbid)` 或 `(need, forbid, require_any)`:
+      · need       —— 全部出现才触发这条规则(不触发就跳过, 不算通过也不算失败)
+      · forbid     —— 触发后**不许**出现的词, 出现即违反
+      · require_any—— 触发后**至少要出现一个**的词, 一个都没有即违反
+
+    ⚠️ 第三位是 2026-08-10 补的。在那之前本结构只有前两位, 于是「说了没数据就
+       必须给相邻周期」这条只能写成 `(需求, [])` —— forbid 为空表, 内层循环
+       一次都不执行, **那条断言永远不会红**, 而它旁边的注释声称它在检查相邻周期。
+       判据: **写完一条断言先问「它靠什么变红」** —— 答不上来就是没有断言。
+    """
+    problems: List[str] = []
+    for name, spec in invariant.items():
+        need, forbid = spec[0], spec[1]
+        require_any = spec[2] if len(spec) > 2 else ()
+        if not all(t in flat for t in need):
+            continue
+        for t in forbid:
+            if t in flat:
+                problems.append(f"[{name}] 既然说了「{need[0]}」就不该出现「{t}」")
+        if require_any and not any(t in flat for t in require_any):
+            problems.append(
+                f"[{name}] 说了「{need[0]}」却没有给出 {list(require_any)} 中的任何一个"
+            )
+    return problems
+
+
 def _run_case(base: str, auth: Dict[str, str], sid: str,
               case: Dict[str, Any]) -> Dict[str, Any]:
     """跑一条用例, 返回 {problems, flat, followups, elapsed}。不做重试。"""
@@ -474,6 +507,8 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
         if marker in flat_followups:
             problems.append(f"按钮不应出现「{marker}」")
     # ── invariant: 断言**行为自洽**, 而不是猜今天该走哪个分支 ──────────────
+    # (判定逻辑抽成 `invariant_problems` —— 内联在这个要发 HTTP 的函数里时,
+    #  它没有任何办法被单测覆盖, 而"永远不会红的断言"正是它自己犯过的错。)
     # 有些用例的正确答案取决于环境(本周有没有数据 / 某租户有没有某个实体)。把环境
     # 条件写进断言, 就要维护一份「今天该是什么样」的推断, 而那份推断会过期 ——
     # 2026-08-10 实测: 本用例按 `today.weekday()==0` 分支, 前提写着「demo 数据覆盖到
@@ -481,11 +516,16 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
     # ¥26.5万), 系统正确给出分析却被判失败。
     # 判据: **能断言不变式就别断言分支** —— 分支要靠一份会过期的环境推断,
     #       不变式只靠答案自己。
-    for name, (need, forbid) in case.get("invariant", {}).items():
-        if all(t in flat for t in need):
-            for t in forbid:
-                if t in flat:
-                    problems.append(f"[{name}] 既然说了「{need[0]}」就不该出现「{t}」")
+    #
+    # ⚠️ 2026-08-10 二次修正: 上面那条改写完成的当天, 本结构只支持
+    #    (need → forbid) 一个方向, 也就是**只能表达「说了 A 就不许说 B」**。
+    #    于是「说了没数据就必须给相邻周期」这条被写成 `(["没有可用的经营数据"], [])`
+    #    —— forbid 是空表, 内层循环一次都不执行, 那条不变式**永远不会红**,
+    #    而它旁边的注释信誓旦旦地说它在检查相邻周期。注释声称的检查不存在,
+    #    比不写更糟: 下一个人会把它当成已经守住的东西。
+    #    补上第三位 require_any(至少命中一个)。⛔ 用 any 不用 all —— 相邻周期
+    #    有好几种合法说法(最近7天/上周/上个月), 要求全都出现等于要求答案啰嗦。
+    problems += invariant_problems(flat, case.get("invariant", {}))
     return {
         "problems": problems, "flat": flat,
         "followups": flat_followups, "elapsed": time.time() - started,
