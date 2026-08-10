@@ -1250,7 +1250,20 @@ class RestaurantStaffingService:
             f"预订覆盖：{summary['reservation_coverage_pct']}%",
             f"- 峰值建议人数合计：{summary['recommended_staff']}；现有人数合计："
             f"{summary['current_staff']}；正向缺口：{summary['positive_gap']}",
+            # ⚠️ 2026-08-10: 「优化动作」这四个字是**给 Answer Contract 看的规范词**,
+            #    不是排版。契约用 `_contains_any(answer, ("优化目标","优化建议",
+            #    "优化动作","验证指标"))` 判 analysis_action=optimize 是否被满足。
+            #    本 FactBook 明明给了动作(峰值建议人数 / 兼职人数建议 / 缺口), 但用的是
+            #    自己的词汇 → 契约判 missing=["analysis_action"] → **把这份完整正确的
+            #    答案整个扔掉, 用户看到的是拒答**(prod 实测: [50]明天怎么排班 /
+            #    [52]下个月各店人效 / [66]本周营收怎么提高, 电池 3 题都栽在这)。
+            #    ⛔ 修法是让生产方说契约的规范词, **不是**往契约的短语表里再加几个词 ——
+            #    那张表每来一种新答案形态就得加一次, 而漏掉的那次表现为「能力正常但
+            #    答案被扔掉」, 症状离原因极远。
+            #    判据: **一套规范词汇, 不是 N 种方言 + 一张不断变长的手写表。**
             f"- 兼职人数建议：{summary['part_time_people']}；平均置信度：{summary['confidence_pct']}%",
+            "",
+            "**优化动作**（按缺口从大到小，先补峰值时段）：",
         ]
         for row in rows:
             deterministic.append(
