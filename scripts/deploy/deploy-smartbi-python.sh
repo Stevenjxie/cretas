@@ -349,10 +349,12 @@ ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
 run_rsync "Python 定时任务入口" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
     "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
+    "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/cron/"
 ssh "$SERVER" "chmod +x \
     /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
-    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh"
+    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh \
+    /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh"
 
 # 3c2. 闭合 3c/3d 的白名单缺口 (2026-08-01).
 #
@@ -373,7 +375,8 @@ log "INFO" "[3c2/5] 校验 cron 入口引用的 CLI 都已落到服务器..."
 # 因此要求 scripts/ 前面是行首/空白/引号/`=`, 或者显式的 $CODEDIR/。
 _cron_referenced_clis="$(
     cat "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
-        "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" 2>/dev/null \
+        "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
+        "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" 2>/dev/null \
     | grep -oE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
     | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
 )"
@@ -900,6 +903,8 @@ grep -Fq 'venv-current/bin/activate' \
     /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh
 grep -Fq 'venv-current/bin/activate' \
     /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh
+grep -Fq 'venv-current/bin/activate' \
+    /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh
 RUNTIME_VERIFY
 }
 

@@ -39,14 +39,18 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     monkeypatch.setattr(
         llm_router,
         "_today",
-        lambda: datetime.date(2026, 7, 23),
+        lambda: datetime.date(2026, 8, 9),
     )
+    # 2026-08-09: aliyun_c/qwen3.6-flash-2026-04-16 and aliyun_c/glm-5.2 were both
+    # retired from _SAFE_MODELS by the audit (see llm_router.py _SAFE_MODELS
+    # comment) — swapped for two pairs that ARE registered on aliyun_c today,
+    # keeping the same "slow head, healthy fallback" shape this test locks down.
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.MAPPER,
         [
-            ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-            ("aliyun_c", "glm-5.2"),
+            ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
+            ("aliyun_c", "glm-4.6"),
         ],
     )
     good = {"choices": [{"message": {"content": '{"intent":"ok"}'}}]}
@@ -58,7 +62,7 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
         async def post(self, _url, headers=None, json=None, timeout=None):
             model = json["model"]
             self.call_log.append(model)
-            if model == "qwen3.6-flash-2026-04-16":
+            if model == "qwen3-next-80b-a3b-instruct":
                 await asyncio.sleep(1)
                 raise AssertionError("wait_for must time out the slow head")
             await asyncio.sleep(0.06)
@@ -76,8 +80,8 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
 
     assert result == good
     assert client.call_log == [
-        "qwen3.6-flash-2026-04-16",
-        "glm-5.2",
+        "qwen3-next-80b-a3b-instruct",
+        "glm-4.6",
     ]
 
 
