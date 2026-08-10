@@ -34,6 +34,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
     unsupported_requirements_disclosure,
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
+    _SERVICE_DISPATCHED_WINDOW_AWARE,
     _resolve_sales_query_spec,
     demo_data_factory_for_code,
     dish_catalogue_scope,
@@ -1310,7 +1311,9 @@ async def tiered_answer(
                     )
                 ),
             )
-            if code == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION":
+            # ⛔ 判定走哪条路与「这个 intent 支不支持显式时间窗」必须同源 ——
+            #    两处各写一份字面量, 就是 2026-08-10 那个「按钮被误扣」的成因。
+            if code in _SERVICE_DISPATCHED_WINDOW_AWARE:
                 resolved = await _resolve_business_optimization(
                     pool,
                     code_factory,

@@ -8430,6 +8430,26 @@ def is_supported_restaurant_ops_code(code: Optional[str]) -> bool:
     return isinstance(code, str) and code in _RESOLVERS
 
 
+# 不经 `_RESOLVERS` 派发、但**确实按 spec.date_range 取数**的 intent。
+#
+# 🔴 2026-08-10: `RESTAURANT_OPS_BUSINESS_OPTIMIZATION` 走的是服务层
+#    `_resolve_business_optimization`(它把 spec.date_range 原样传给
+#    ComprehensiveSynthesisEngine), 压根不在 `_RESOLVERS` 里。于是
+#    `resolver_supports_explicit_window` 查不到它 → 返回 False → 「换时间范围」
+#    按钮被**误扣**。回归电池 [66]「这周全部门店营收怎么提高」因此长期红在
+#    「按钮缺少最近7天」, 而系统其实完全能按那个窗口取数。
+#
+# 🔑 判据: **这个闸的载体比它查的那张表多。** 只查一个派发表 = 对第二条派发路径
+#    完全沉默, 而沉默的方向是「误拒」—— 误拒不报错, 只是少给用户一个出口。
+#
+# ⛔ 这个集合必须**同时**驱动派发和窗口判定, 不能两处各写一份:
+#    `restaurant_intent_service._dispatch` 直接 import 它来决定走哪条路,
+#    所以「派发到服务层」与「承认它支持窗口」在源头上就是同一件事, 不可能漂。
+_SERVICE_DISPATCHED_WINDOW_AWARE: frozenset = frozenset({
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+})
+
+
 def resolver_supports_explicit_window(code: Optional[str]) -> bool:
     """这个 intent 的 resolver 会不会真正按**请求的时间窗**取数。
 
@@ -8447,6 +8467,10 @@ def resolver_supports_explicit_window(code: Optional[str]) -> bool:
     这是**必要条件而非充分条件**: 声明了不等于用对了。充分性由各 resolver 自己的
     测试保证(见 tests/test_restaurant_wastage_window.py)。
     """
+    if (code or "") in _SERVICE_DISPATCHED_WINDOW_AWARE:
+        # 服务层派发的那条路: 它拿的是整个 spec, 不是 date_range kwarg,
+        # 所以签名探测看不见它。见上方常量的注释。
+        return True
     resolver = _RESOLVERS.get(code or "")
     if resolver is None:
         return False
