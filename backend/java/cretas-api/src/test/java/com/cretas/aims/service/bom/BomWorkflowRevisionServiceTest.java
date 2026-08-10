@@ -30,11 +30,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -44,6 +46,10 @@ class BomWorkflowRevisionServiceTest {
 
     private static final String FACTORY = "F006";
     private static final String PRODUCT = "FG-001";
+    /** Terminal SKU of the second, disjoint output chain used by the target-slice tests. */
+    private static final String CHAIN_B_PRODUCT = "FG-B";
+    /** A workProcessId that does not exist in this factory's catalog. */
+    private static final String MISSING_WORK_PROCESS = "WP-NOT-IN-FACTORY";
 
     @Mock BomRecipeRepository recipeRepository;
     @Mock ProductProcessWorkflowRepository workflowRepository;
@@ -539,6 +545,91 @@ class BomWorkflowRevisionServiceTest {
         orphan.getNodes().add(material("orphan", "RAW_MATERIAL", "RM-ORPHAN", 900));
         assertThrows(BusinessException.class,
                 () -> service.resolvePinnedGraph(FACTORY, recipe(snapshot(orphan))));
+    }
+
+    @Test
+    void validatesOnlyTheTargetOutputSliceNotTheWholeGraph() throws Exception {
+        ProductProcessWorkflowDTO definition = twoDisjointOutputChains();
+        ProductProcessWorkflowRevision revision = revision(definition);
+        BomRecipe recipe = recipe(null);
+        rejectCatalogWhenSliceReferencesMissingWorkProcess();
+        when(recipeRepository.lockByIdAndFactoryId("BOM-1", FACTORY)).thenReturn(Optional.of(recipe));
+        when(revisionRepository.findByIdAndFactoryId(71L, FACTORY)).thenReturn(Optional.of(revision));
+        when(recipeRepository.saveAndFlush(recipe)).thenReturn(recipe);
+        BomWorkflowRevisionPinRequest request = new BomWorkflowRevisionPinRequest();
+        request.setRevisionId(71L);
+        request.setRevisionHash(revision.getRevisionHash());
+
+        BomRecipe pinned = assertDoesNotThrow(() -> service.pin(FACTORY, "BOM-1", request));
+
+        assertEquals("finished-a", pinned.getTargetTerminalNodeId());
+    }
+
+    @Test
+    void stillRejectsWhenTheTargetSliceItselfIsInvalid() throws Exception {
+        ProductProcessWorkflowDTO definition = twoDisjointOutputChains();
+        ProductProcessWorkflowRevision revision = revision(definition);
+        BomRecipe recipe = recipe(null);
+        recipe.setProductTypeId(CHAIN_B_PRODUCT);
+        rejectCatalogWhenSliceReferencesMissingWorkProcess();
+        when(recipeRepository.lockByIdAndFactoryId("BOM-1", FACTORY)).thenReturn(Optional.of(recipe));
+        when(revisionRepository.findByIdAndFactoryId(71L, FACTORY)).thenReturn(Optional.of(revision));
+        BomWorkflowRevisionPinRequest request = new BomWorkflowRevisionPinRequest();
+        request.setRevisionId(71L);
+        request.setRevisionHash(revision.getRevisionHash());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.pin(FACTORY, "BOM-1", request));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH", error.getErrorCode());
+        verify(recipeRepository, never()).saveAndFlush(recipe);
+    }
+
+    /**
+     * Two output chains that share no node and no edge.
+     * Chain A: raw-a -> process-a(WP-A) -> finished-a(PRODUCT), catalog-legal.
+     * Chain B: raw-b -> process-b(MISSING_WORK_PROCESS) -> finished-b(CHAIN_B_PRODUCT), catalog-illegal.
+     */
+    private ProductProcessWorkflowDTO twoDisjointOutputChains() {
+        List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>(List.of(
+                material("raw-a", "RAW_MATERIAL", "RM-A", 0),
+                process("process-a", "WP-A", List.of(
+                        port("in-a", "INPUT", "raw-a", "RAW_MATERIAL", 0, null, null),
+                        port("out-a", "OUTPUT", "finished-a", "FINISHED_GOOD", 0, "MAIN", "100")), 100),
+                material("finished-a", "FINISHED_GOOD", PRODUCT, 200),
+                material("raw-b", "RAW_MATERIAL", "RM-B", 0),
+                // BY_PRODUCT/0 because resolveTerminalOutputs enforces exactly one MAIN and a
+                // 100% total across *every* terminal of the whole graph, chains included.
+                process("process-b", MISSING_WORK_PROCESS, List.of(
+                        port("in-b", "INPUT", "raw-b", "RAW_MATERIAL", 0, null, null),
+                        port("out-b", "OUTPUT", "finished-b", "FINISHED_GOOD", 0, "BY_PRODUCT", "0")), 100),
+                material("finished-b", "FINISHED_GOOD", CHAIN_B_PRODUCT, 200)));
+        return definition(nodes, List.of(
+                edge("a1", "raw-a", "output", "process-a", "in-a"),
+                edge("a2", "process-a", "out-a", "finished-a", "input"),
+                edge("b1", "raw-b", "output", "process-b", "in-b"),
+                edge("b2", "process-b", "out-b", "finished-b", "input")));
+    }
+
+    /**
+     * Mirrors the real catalog validator: a PROCESS Cell bound to a workProcessId that is
+     * not in this factory's catalog raises PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH.
+     * The decision is made on the DTO the validator actually receives, so it tells apart
+     * "whole graph handed in" from "target slice handed in".
+     */
+    private void rejectCatalogWhenSliceReferencesMissingWorkProcess() {
+        doAnswer(invocation -> {
+            ProductProcessWorkflowDTO checked = invocation.getArgument(2);
+            boolean referencesMissingProcess = checked.getNodes().stream()
+                    .filter(node -> "PROCESS".equals(node.getKind()))
+                    .anyMatch(node -> MISSING_WORK_PROCESS.equals(node.getData().get("workProcessId")));
+            if (referencesMissingProcess) {
+                throw new BusinessException(400, "Cell「process-b」: 引用的工序不属于当前工厂或已不存在: "
+                        + MISSING_WORK_PROCESS)
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH");
+            }
+            return null;
+        }).when(catalogValidator).validateForBomConfiguration(any(), any(), any());
     }
 
     private ProductProcessWorkflowDTO oneToOne() {
