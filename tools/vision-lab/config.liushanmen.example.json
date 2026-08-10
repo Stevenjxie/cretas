@@ -1,0 +1,68 @@
+{
+  "version": "vision-lab-v1",
+  "runtime_root": "D:\\CretasVisionLab",
+  "source": {
+    "factory_id": "LIUSHANMEN",
+    "ssh_host": "root@47.100.235.168",
+    "database": "cretas_prod_db",
+    "initial_watermark": "2026-08-05T09:36:36.441482",
+    "max_records_per_run": 500
+  },
+  "queue_roots": [
+    "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\targeted-v3-20260803\\label-v10-newsku-annotation-v1"
+  ],
+  "queue_globs": [
+    "D:\\CretasVisionLab\\queues\\*"
+  ],
+  "annotator_url": "http://127.0.0.1:8792",
+  "mining": {
+    "enabled": true,
+    "max_queue": 120,
+    "max_photos_scanned": 300,
+    "max_per_sku": 30,
+    "max_per_photo": 2
+  },
+  "training": {
+    "base_model": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\phase2-label-detector\\runs\\label-detector-v1\\weights\\best.pt",
+    "min_reviewed_images": 100,
+    "validation_percent": 20,
+    "epochs": 80,
+    "patience": 20,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 0,
+    "device": 0,
+    "seed": 20260810,
+    "export_floor": 0.05
+  },
+  "evaluation": {
+    "repo_root": "%CRETAS_REPO_ROOT%",
+    "tray_model": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\export\\tray-tray-detector-v4.onnx",
+    "production_label_model": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\export\\label-v1-lowfloor.onnx",
+    "threshold": 0.2,
+    "manifests": [
+      "D:\\CretasVisionLab\\evaluation\\protected-holdout.json"
+    ]
+  },
+  "promotion_gates": {
+    "min_independent_defects": 7,
+    "min_defect_hits": 4,
+    "required_full_recall_groups": ["new_blind_defect"],
+    "min_false_flag_improvement": 0.05,
+    "max_p95_latency_ms": 8000,
+    "max_latency_regression": 0.15
+  },
+  "deployment": {
+    "auto_deploy": true,
+    "confirm_token": "YES-PROD",
+    "ssh_host": "root@47.100.235.168",
+    "remote_model_path": "/www/wwwroot/cretas/models/label-qc/label.onnx",
+    "service": "cretas-python",
+    "health_url": "http://127.0.0.1:8083/health"
+  },
+  "cloud_vl": {
+    "enabled": false,
+    "max_calls_per_run": 0,
+    "monthly_budget_cny": 0
+  }
+}
