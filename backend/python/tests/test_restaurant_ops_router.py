@@ -3088,12 +3088,18 @@ def test_dish_ranking_preserves_fractional_quantity_and_markdown_emphasis():
     assert result.answer_text.startswith(
         "**2026-07-01 至 2026-07-25菜品销量排行（卖得最差前 5）：**"
     )
-    assert (
-        "1. **享库1.8斤波龙套餐399** — 销量 不足 1 份、营收 ¥190.76"
-        in result.answer_text
-    )
-    assert "2. 非整数销量菜 — 销量 1.5 份、营收 ¥88.00" in result.answer_text
-    assert "销量 0 份、营收 ¥190.76" not in result.answer_text
+    # 2026-08-10: 排行改 markdown 表格。本条真正守的是**小数销量的显示口径**
+    # (0.4 份要显示成「不足 1 份」而不是「0 份」), 不是那一行的排版。
+    # ⛔ 断言改成按单元格判, 与列表/表格无关 —— 挂在排版上的断言, 换个排版
+    #    就是静默失效(同一天在 restaurant_ai_eval 的排除项上刚踩过)。
+    text = result.answer_text
+    # 「份」在表头(销量（份）)里, 单元格只放数值/短语
+    assert "| 1 | 享库1.8斤波龙套餐399 | 不足 1 | ¥190.76 |" in text, text
+    assert "| 2 | 非整数销量菜 | 1.5 | ¥88.00 |" in text, text
+    # 承重: 0.4 份必须显示成「不足 1」, 绝不能被截成 0 —— 那会让一道真卖过的菜
+    # 看起来一份没卖。老版本这条写的是 "销量 0 份" not in text, 同一个判据。
+    assert "| 享库1.8斤波龙套餐399 | 0 |" not in text, "0.4 份被截成了 0"
+    assert "销量 0 份" not in text
     assert _r._format_sales_quantity(0) == "0"
     assert _r._format_sales_quantity(13827) == "13,827"
 
@@ -4103,11 +4109,18 @@ def test_worst_list_is_ascending_and_does_not_overlap_best_list():
             _gross_margin_pool(rows), "RES_TEST",
             role="restaurant_manager", query=query,
         ))
-        return [
-            line.split("—")[0].split(".", 1)[1].strip().replace("*", "")
+        # 2026-08-10: 排行改 markdown 表格, 解析跟着改(判据不变: 顺序 + 不重叠)。
+        names = [
+            [c.strip() for c in line.strip().strip("|").split("|")][1]
             for line in result.answer_text.splitlines()
-            if re.match(r"^\d+\.\s", line)
+            if re.match(r"^\|\s*\d+\s*\|", line)
         ]
+        # ⚠️ 解析不到就抛, 不返回空列表 —— 空列表会让「两榜不重叠」恒真,
+        #    那条断言就静默失效了(这次是靠下面的顺序断言才没漏掉)。
+        assert names, (
+            "没从答案里解析出任何排名行, 格式可能又变了:\n"
+            + result.answer_text)
+        return names
 
     worst = ranked_names("本月哪道菜卖得最差")
     best = ranked_names("本月哪道菜卖得最好")
