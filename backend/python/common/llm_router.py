@@ -248,6 +248,83 @@ def _expiry_of(account: str, model: str) -> datetime.date:
     return exp if exp is not None else _FAR_FUTURE
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 实测能力表 —— `_build_chain` 的**主**排序键 (owner 2026-08-10 拍板「按能力排」)
+#
+# 产出方式: `python -m smartbi.scripts.llm_capability_rank --slot review --emit-table`
+#   · prompt 同源: 生产自己的 `_build_t3_prompt`
+#   · 判据同源: 生产自己的 `_t3_contract_violation` (call_chain 真正用来接受/
+#     拒绝一次应答的那个函数), ⛔ 没有手写答案表
+#   · 题目同源: 回归电池 CASES 里每条链的首问 + 无上下文依赖的单问, 选法算出来
+#
+# ⚠️ **这张表能区分什么, 不能区分什么 —— 先读这段再用它下结论。**
+#    2026-08-10 首次实测 19 个 REVIEW 候选: **18 个 6/6 满分**。也就是说
+#    「契约合格」是一道**地板题**, 不是能力题 —— 它区分不出模型强弱, 只能区分
+#    「能不能用」。所以本表实际排出来的是: 达标 → 快 → 快到期先用。
+#    ⛔ 不要因为某个模型在这里 6/6 就说它"能力强"; 它只说明它没被链拒绝。
+#    要真正区分强弱, 需要一道会让好模型和更好的模型分开的题 —— 现在没有,
+#    这是**已知缺口**, 写在这里以免下一个人把满分读成能力证明。
+#
+# 🔴 那次实测唯一真正被区分出来的事: `aliyun_c/deepseek-v3.2` **0/6 全 403 quota**,
+#    而按旧的纯到期日排序它正好是 REVIEW 链的**链头** —— 每次 REVIEW 调用都先
+#    在一个已耗尽的模型上撞一跳。这就是"按到期日排"最贵的失败形状: 排序键
+#    对"这个模型今天还活着吗"完全沉默。
+#
+# 值 = (契约通过率, 中位延迟秒)。REVIEW/MAPPER 两槽分别测过, 同一 (账号,模型)
+# 跨槽 p50 差 ≤0.1s, 故合成一张表; 未在此表中的条目 = 没测过, 见 `_capability_tier`。
+_CAPABILITY_MEASURED_AT = datetime.date(2026, 8, 10)
+_CAPABILITY_MAX_AGE_DAYS = 21   # 超龄 → 忽略本表, 退回纯到期日排序(旧行为)
+_CAPABILITY_PASS_FLOOR = 0.5
+
+_CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
+    ("aliyun_c", "qwen3-next-80b-a3b-instruct"): (1.0, 1.1),
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"): (1.0, 1.6),
+    ("aliyun_a", "qwen3.7-flash"): (1.0, 1.7),
+    ("aliyun_b", "deepseek-v4-flash-0731"): (1.0, 1.9),
+    ("aliyun_a", "deepseek-v4-flash-0731"): (1.0, 1.9),
+    ("aliyun_c", "qwen3.7-max-2026-05-20"): (1.0, 2.7),
+    ("aliyun_a", "qwen3.8-max"): (1.0, 2.8),
+    ("aliyun_c", "qwen3.8-max"): (1.0, 2.8),
+    ("aliyun_b", "qwen3.8-max"): (1.0, 2.9),
+    ("aliyun_c", "qwen3.5-plus-2026-02-15"): (1.0, 3.8),
+    ("aliyun_c", "glm-4.6"): (1.0, 4.0),
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"): (1.0, 4.1),
+    ("aliyun_c", "deepseek-v3.2-exp"): (1.0, 4.7),
+    ("aliyun_b", "qwen3.7-max-2026-05-17"): (1.0, 9.7),
+    ("aliyun_c", "qwen3.7-max-2026-05-17"): (1.0, 10.7),
+    ("aliyun_a", "qwen3.7-max-2026-05-17"): (1.0, 12.4),
+    ("aliyun_a", "kimi-k2.7-code"): (1.0, 12.9),
+    ("aliyun_b", "kimi-k2.7-code"): (1.0, 16.1),
+    ("aliyun_c", "kimi-k2.7-code"): (1.0, 19.2),
+    ("aliyun_c", "deepseek-v3.2"): (0.0, 0.1),   # 🔴 全 403 quota, 旧排序下是链头
+}
+
+
+def _capability_stale(today: Optional[datetime.date] = None) -> bool:
+    """能力表超龄 → 排序退回纯到期日(旧行为), 而不是拿一份陈旧读数硬排。"""
+    today = today or _today()
+    return (today - _CAPABILITY_MEASURED_AT).days > _CAPABILITY_MAX_AGE_DAYS
+
+
+def _capability_tier(account: str, model: str) -> int:
+    """0 = 实测达标, 1 = **没测过**, 2 = 实测不达标。
+
+    没测过的排在达标之后、不达标之前 —— 它既没有证据支持提前, 也没有证据
+    支持沉底。⛔ 不要把"没测过"折叠进任何一边: 那正是"缺席的证据被当成证据"
+    (memory: feedback_omission_disguises_ambiguity_as_certainty)。
+    """
+    measured = _CAPABILITY.get((account, model))
+    if measured is None:
+        return 1
+    return 0 if measured[0] >= _CAPABILITY_PASS_FLOOR else 2
+
+
+def _capability_latency(account: str, model: str) -> float:
+    """中位延迟; 没测过 → inf, 于是同 tier 内它靠到期日决定先后而不是靠延迟。"""
+    measured = _CAPABILITY.get((account, model))
+    return measured[1] if measured else float("inf")
+
+
 def _today() -> datetime.date:
     """可注入时钟缝: 生产 = 真实今天; 测试 monkeypatch 此函数冻结日期,
     避免 call_chain 类测试随真实日期漂移碎裂 (2026-07-23 修)。"""
@@ -963,22 +1040,42 @@ _NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL})
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
-    """按免费额度到期日升序拼链 —— use-it-or-lose-it。
+    """按**实测能力**拼链, 到期日退为末位平手键 (owner 2026-08-10 拍板「按能力排」)。
 
-    ⚠️ 这里**推翻**了旧注释 "Runtime order is authoritative (no re-sort)"。
-    旧契约要求人手写最终顺序, 而 _SAFE_MODELS 的 docstring 与 _expiry_of()
-    从一开始就写着 "soonest-expiry-first" —— 意图在注释里, 约束不存在, 于是
-    每个到期日都要人改一次, 漏一次链就腐烂一次。2026-08-09 实测后果: 三个
-    aliyun 账号约 1800 万 token 可用额度 router 一个都够不着, 而链里 5 个
-    aliyun_a/b 条目实测 5/5 全 403 在空转。改成代码算, 到期日一到自动重排。
+    排序键 = (能力档, 中位延迟, 到期日):
+      1. 能力档 —— 实测达标 → 没测过 → 实测不达标 (见 `_capability_tier`)
+      2. 中位延迟升序 —— 慢模型自然沉底, 不需要另设一个"预算"常量;
+         13.4s 满分的模型放链头只会把「答不出来」换成「等到超时」, 把
+         call_chain 的总预算吃光, 后面健康的模型一个都轮不上。
+      3. 到期日升序 —— 原策略 use-it-or-lose-it 的合理内核**保留**: 同能力
+         同速度时依旧优先榨干快到期的免费额度。它只是不再能把一个已经耗尽
+         的模型顶到链头。
 
-    稳定排序: 同一到期日保持 _SLOT_POOLS 里人写的顺序(= 质量优先级),
-    只有跨到期日才重排。到期日为 None 的地板 → _FAR_FUTURE → 必然沉底。
+    ⚠️ 这条改动**推翻**了 2026-08-09 的纯到期日排序。那版的失败形状很具体:
+       `aliyun_c/deepseek-v3.2` 08-13 到期(最早) → 排链头 → 而它实测 0/6
+       全 403 quota。排序键对「这个模型今天还活着吗」完全沉默。
+       ⚠️ 同时它也修好了 `_expiry_of` docstring 里一直写着、代码里一直没有的
+       那句 "soonest-expiry-first **WITHIN a quality tier**" —— 现在真有 tier 了。
+
+    能力表超龄(>21 天) → 忽略能力档, 退回纯到期日排序(即旧行为)。陈旧读数
+    不比没有读数好, 但**默默用陈旧读数**比两者都坏。
+
+    稳定排序: 三个键全平手时保持 _SLOT_POOLS 里人写的顺序。
     """
     entries = list(_SLOT_POOLS[slot])
     if slot not in _NO_TEXT_TAIL_SLOTS:
         entries += _TEXT_TAIL
-    return _dedup_chain(sorted(entries, key=lambda p: _expiry_of(*p)))
+    if _capability_stale():
+        return _dedup_chain(sorted(entries, key=lambda p: _expiry_of(*p)))
+    tail_set = frozenset(_TEXT_TAIL)
+    return _dedup_chain(sorted(entries, key=lambda p: (
+        # 地板置底**先于**能力档 —— 这一位不是排序偏好, 是结构契约:
+        # test_every_text_slot_has_a_floor 要求 chain[-1] 永远是地板, 否则
+        # aliyun 全部过期那天该槽会变空。旧版靠地板的 _FAR_FUTURE 到期日
+        # 隐式实现同一件事; 能力档一旦能把某个 aliyun 条目沉到底(实测不达标
+        # 的 deepseek-v3.2 就是), 那个隐式保证当场失效 —— 所以显式写出来。
+        1 if p in tail_set else 0,
+        _capability_tier(*p), _capability_latency(*p), _expiry_of(*p))))
 
 
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}
