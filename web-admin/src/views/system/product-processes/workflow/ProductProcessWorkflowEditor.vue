@@ -640,6 +640,88 @@
       @saved="onPackagingDialogSaved"
     />
 
+    <!--
+      新增原料 Cell 的关系弹窗 (2026-08-10)。
+
+      ⚠️ 刻意用**原生 div + v-if**, 不用 el-dialog:
+      ① el-dialog 在 shallowMount 下是 stub, 槽内容压根不渲染 —— 测试就只能断言状态变量,
+         而本轮已经栽过一次「CSS display 盖过 hidden 属性: 状态改了、弹窗关不掉,
+         只看状态的测试全绿」。v-if 让「不存在」就是真的不在 DOM 里, 断言得到的是渲染结果。
+      ② 确定/取消用原生 <button class="el-button">: 未解析组件上的 :disabled="false"
+         会渲染成 disabled="false"(字符串, JS 里是真值), 原生按钮才会真的把属性摘掉。
+      样式类沿用 el-button, 视觉与其余弹窗一致。
+
+      ⛔ 不问换算系数 —— 生产用原料统一 kg, 几只一箱属于原料字典建档时的基本规格。
+    -->
+    <div
+      v-if="rawInputDialog.visible"
+      class="raw-input-mask"
+      data-testid="raw-input-modal"
+      @click.self="closeRawInputDialog"
+    >
+      <div class="raw-input-panel">
+        <h3 class="raw-input-title">新增原料 Cell · {{ rawInputDialog.processName }}</h3>
+
+        <div class="raw-input-field">
+          <label class="raw-input-label">选择原料 SKU</label>
+          <el-select
+            v-model="rawInputDialog.skuId"
+            filterable
+            placeholder="从工厂原料档案选择"
+            style="width: 100%"
+            data-testid="raw-input-sku"
+          >
+            <el-option
+              v-for="option in rawMaterialOptions"
+              :key="option.id"
+              :label="option.name"
+              :value="option.id"
+            />
+          </el-select>
+        </div>
+
+        <div class="raw-input-field">
+          <label class="raw-input-label">
+            它和「{{ rawInputDialog.mainMaterialName }}」是什么关系
+          </label>
+          <div class="raw-input-relations">
+            <label
+              v-for="option in RAW_INPUT_RELATIONS"
+              :key="option.value"
+              class="raw-input-relation"
+              :class="{ 'is-active': rawInputDialog.relation === option.value }"
+            >
+              <input
+                v-model="rawInputDialog.relation"
+                type="radio"
+                name="raw-input-relation"
+                :value="option.value"
+                :data-testid="`raw-input-relation-${option.value}`"
+              />
+              <span class="raw-input-relation-title">{{ option.title }}</span>
+              <span class="raw-input-relation-hint">{{ option.hint }}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="raw-input-actions">
+          <button
+            type="button"
+            class="el-button"
+            data-testid="raw-input-cancel"
+            @click="closeRawInputDialog"
+          >取消</button>
+          <button
+            type="button"
+            class="el-button el-button--primary"
+            :disabled="!rawInputDialogReady"
+            data-testid="raw-input-confirm"
+            @click="confirmAddRawInput"
+          >确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
     <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
       <div v-loading="versionLoading" class="version-list">
@@ -661,7 +743,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
@@ -936,6 +1018,40 @@ const workProcessCategories = ref<string[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialPickerOption[]>([]);
 const rawMaterialSegments = ref<MaterialSegmentNode[]>([]);
+/**
+ * 新增原料 Cell 的关系弹窗 (2026-08-10)。
+ *
+ * 两个选项对下游的算法完全不同, 所以必须问清:
+ * - 替代料 · 投其一 → 顶替主料, 两者只投一个。合成一个逻辑投入, 不重复计入需求与成本。
+ * - 另一种投入 · 都要投 → 各自是独立需求。逻辑投入 +1。
+ *
+ * ⛔ 不问换算系数 —— 生产用原料统一 kg (spec D8)。
+ */
+const RAW_INPUT_RELATIONS = [
+  {
+    value: 'SUBSTITUTE',
+    title: '替代料 · 投其一',
+    hint: '顶替主料，两者只投一个。合成一个逻辑投入，不重复计入需求与成本。',
+  },
+  {
+    value: 'PARALLEL',
+    title: '另一种投入 · 都要投',
+    hint: '各自是独立需求。逻辑投入 +1。',
+  },
+] as const;
+const rawInputDialog = reactive({
+  visible: false,
+  processId: '',
+  processName: '',
+  mainMaterialNodeId: '',
+  mainMaterialName: '',
+  skuId: '',
+  relation: '' as '' | 'SUBSTITUTE' | 'PARALLEL',
+});
+/** 两项都选齐才能确定 —— 关系选项没有默认值, 默认值等于替用户做了决定。 */
+const rawInputDialogReady = computed(
+  () => Boolean(rawInputDialog.skuId) && Boolean(rawInputDialog.relation),
+);
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
@@ -3120,27 +3236,126 @@ function confirmAddProcess(): void {
   processDialogVisible.value = false;
 }
 
+/**
+ * 加原料 Cell 的入口。
+ *
+ * 这道工序**已经有原料**时先问清关系(替代料 / 并列投入), 因为这两件事对需求与成本
+ * 的算法完全不同: 替代料是二选一, 合成一个逻辑投入; 并列投入各自是独立需求。
+ * 系统以前不问, 于是两种情况长得一模一样, `logicalRootCount()` 只能一律按 +1 算。
+ *
+ * ⚠️ 这道工序**还没有任何原料**时不弹窗 —— 没有可替代的对象, 问了也只有一个答案。
+ *
+ * ⛔ 弹窗只是录入体验, **不是约束**: AI 画布工具是第二个写图入口, 完全绕过这里。
+ *    合法性(自引用/悬空/指向非原料/成链)由后端 ProductProcessWorkflowValidator 保证。
+ */
 function addInputToProcess(processId: string): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
+  const mainMaterial = primaryRawInputOf(process);
+  if (!mainMaterial) {
+    createRawInputCell(processId, { skuId: '', substituteOfNodeId: '' });
+    return;
+  }
+  Object.assign(rawInputDialog, {
+    visible: true,
+    processId,
+    processName: String((process.data as ProcessNodeData).processName || '工序'),
+    mainMaterialNodeId: mainMaterial.id,
+    mainMaterialName: String(mainMaterial.data?.name || '主料'),
+    skuId: '',
+    relation: '',
+  });
+}
+
+/**
+ * 这道工序上「可以被替代」的那个原料 —— 按投入端口顺序取第一个真原料 Cell。
+ * 已经是别人替代料的 Cell 不能当主料: 替代关系只允许一层(后端同样拒绝成链)。
+ */
+function primaryRawInputOf(process: Node): Node | null {
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  const inputs = (data.ports || [])
+    .filter((port) => port.direction === 'INPUT')
+    .sort((left, right) => left.ordinal - right.ordinal);
+  for (const port of inputs) {
+    const material = flowNodes.value.find((node) => node.id === port.materialNodeId);
+    if (!material || material.data?.kind !== 'RAW_MATERIAL') continue;
+    const substituteOf = String((material.data as MaterialNodeData)?.substituteOfNodeId || '');
+    if (substituteOf) continue;
+    return material;
+  }
+  return null;
+}
+
+function closeRawInputDialog(): void {
+  rawInputDialog.visible = false;
+}
+
+function confirmAddRawInput(): void {
+  if (!rawInputDialogReady.value) return;
+  const option = rawMaterialOptions.value.find((item) => item.id === rawInputDialog.skuId);
+  if (!option) {
+    ElMessage.warning('请选择一个原料 SKU');
+    return;
+  }
+  const duplicate = flowNodes.value.some((node) => (
+    node.data?.kind === 'RAW_MATERIAL'
+    && String(node.data?.skuId || '') === option.id
+  ));
+  if (duplicate) {
+    ElMessage.warning('该原料已在当前 Workflow 中使用');
+    return;
+  }
+  createRawInputCell(rawInputDialog.processId, {
+    skuId: option.id,
+    substituteOfNodeId: rawInputDialog.relation === 'SUBSTITUTE'
+      ? rawInputDialog.mainMaterialNodeId
+      : '',
+  });
+  closeRawInputDialog();
+}
+
+/**
+ * 真正落图的那一步。弹窗与「无原料直接建」两条路都走它, 避免第二条路悄悄长出别的行为。
+ */
+function createRawInputCell(
+  processId: string,
+  options: { skuId: string; substituteOfNodeId: string },
+): void {
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process) return;
+  const option = options.skuId
+    ? rawMaterialOptions.value.find((item) => item.id === options.skuId)
+    : undefined;
   mutate(() => {
     const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
     const inputCount = data.ports.filter((port) => port.direction === 'INPUT').length;
     const timestamp = nextGraphIdSeed();
     const materialId = `material:input:${timestamp}`;
     const portId = `input:${timestamp}`;
+    const unit = option
+      ? workflowReportingUnit('RAW_MATERIAL', option.unit || 'kg')
+      : 'kg';
+    const materialData: MaterialNodeData & { kind: 'RAW_MATERIAL' } = option
+      ? {
+        kind: 'RAW_MATERIAL', name: option.name, skuId: option.id,
+        skuCode: option.code || option.id, bound: true, baseUnit: unit,
+      }
+      : {
+        kind: 'RAW_MATERIAL', name: `追加投入 ${inputCount + 1}`, skuId: '',
+        skuCode: '待绑定原料 SKU', bound: false, baseUnit: unit,
+      };
+    if (options.substituteOfNodeId) {
+      materialData.substituteOfNodeId = options.substituteOfNodeId;
+    }
     flowNodes.value.push({
       id: materialId,
       type: 'material',
       position: snapPosition({ x: process.position.x - 240, y: process.position.y + inputCount * 160 }),
-      data: {
-        kind: 'RAW_MATERIAL', name: `追加投入 ${inputCount + 1}`, skuId: '',
-        skuCode: '待绑定原料 SKU', bound: false, baseUnit: 'kg',
-      },
+      data: materialData,
     });
     data.ports = [
       ...data.ports,
-      { id: portId, direction: 'INPUT', materialNodeId: materialId, unit: 'kg', ordinal: inputCount },
+      { id: portId, direction: 'INPUT', materialNodeId: materialId, unit, ordinal: inputCount },
     ];
     flowEdges.value.push(flowEdge(materialId, 'output', processId, portId));
   });
@@ -4821,4 +5036,54 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 :deep(.vue-flow__edge-path) { stroke-linecap: round; }
 :deep(.vue-flow__node) { border: 0; background: transparent; }
+
+/* 新增原料 Cell 的关系弹窗 (原生 div, 见模板处的注释) */
+.raw-input-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.raw-input-panel {
+  width: min(520px, calc(100vw - 32px));
+  padding: 20px 24px 16px;
+  border-radius: 8px;
+  background: var(--el-bg-color, #fff);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.raw-input-title { margin: 0 0 16px; font-size: 16px; font-weight: 600; }
+.raw-input-field { margin-bottom: 16px; }
+.raw-input-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #606266);
+}
+.raw-input-relations { display: grid; gap: 8px; }
+.raw-input-relation {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'radio title' '. hint';
+  gap: 2px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.raw-input-relation.is-active {
+  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+}
+.raw-input-relation input { grid-area: radio; margin-top: 3px; }
+.raw-input-relation-title { grid-area: title; font-size: 14px; font-weight: 500; }
+.raw-input-relation-hint {
+  grid-area: hint;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary, #909399);
+}
+.raw-input-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 </style>

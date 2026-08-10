@@ -107,6 +107,15 @@ interface EditorVm {
   confirmCreateAndAddProcess: () => Promise<void>;
   addOutputToProcess: (processId: string) => void;
   addInputToProcess: (processId: string) => void;
+  rawInputDialog: {
+    visible: boolean;
+    processId: string;
+    mainMaterialNodeId: string;
+    mainMaterialName: string;
+    skuId: string;
+    relation: '' | 'SUBSTITUTE' | 'PARALLEL';
+  };
+  confirmAddRawInput: () => void;
   updateProcessData: (processId: string, patch: Record<string, unknown>) => void;
   addStandaloneRaw: () => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => Promise<void>;
@@ -224,6 +233,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         return Promise.resolve({ success: true, data: [
           { id: 'RM-PIG', name: '猪蹄原料', unit: 'kg', category: '原料' },
           { id: 'RM-CHICKEN', name: '鸡肉原料', unit: 'kg', category: '原料' },
+          { id: 'RM-DUCK', name: '鸭肉原料', unit: 'kg', category: '原料' },
         ] });
       }
       return Promise.resolve({ success: true, data: [] });
@@ -638,7 +648,11 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.confirmAddProcess();
     const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
     if (!process) throw new Error('Expected process node');
+    // 2026-08-10: 这道工序已经有原料, 加第二个原料先问关系 —— 走完弹窗才落图
     vm.addInputToProcess(process.id);
+    vm.rawInputDialog.skuId = 'RM-CHICKEN';
+    vm.rawInputDialog.relation = 'PARALLEL';
+    vm.confirmAddRawInput();
 
     expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
   });
@@ -925,6 +939,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     if (!process) throw new Error('Expected process node');
 
     vm.addInputToProcess(process.id);
+    vm.rawInputDialog.skuId = 'RM-CHICKEN';
+    vm.rawInputDialog.relation = 'PARALLEL';
+    vm.confirmAddRawInput();
     const firstTwoInputIds = process.data.ports
       ?.filter((port) => port.direction === 'INPUT')
       .map((port) => port.id) ?? [];
@@ -933,6 +950,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       minSelections: 1, maxSelections: 1, portIds: firstTwoInputIds,
     }];
     vm.addInputToProcess(process.id);
+    vm.rawInputDialog.skuId = 'RM-DUCK';
+    vm.rawInputDialog.relation = 'PARALLEL';
+    vm.confirmAddRawInput();
 
     expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(3);
     expect(process.data.portGroups?.filter((group) => group.direction === 'INPUT')).toEqual([{
@@ -1128,9 +1148,122 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.removeSelectedElements();
     expect(vm.flowNodes.some((node) => node.id === auxCell.id)).toBe(true);
   });
+
+  // ── 新增原料 Cell 的关系弹窗 (2026-08-10) ──────────────────────────────────
+  //
+  // ⚠️ 这一组用例**断言渲染结果**, 不断言 `vm.rawInputDialog.visible`。
+  //    本轮已经栽过一次: 弹窗的 CSS `display` 盖过 `hidden` 属性 —— 状态改了、
+  //    弹窗关不掉, 而只看状态变量的测试全绿。所以一律 `wrapper.find(...).exists()`。
+
+  it('已有原料时点「加原料」先弹关系弹窗, 不直接建节点', async () => {
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const process = addProcessOffRaw(vm);
+    const inputsBefore = process.data.ports?.filter((port) => port.direction === 'INPUT').length ?? 0;
+
+    vm.addInputToProcess(process.id);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(true);
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT'))
+      .toHaveLength(inputsBefore);
+    // 生产用原料统一 kg, 几只一箱属于原料建档时的基本规格 —— 这里不该问换算系数
+    expect(wrapper.find('[data-testid="raw-input-modal"]').text()).not.toContain('换算');
+  });
+
+  it('两项没选齐时「确定」是禁用的', async () => {
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const process = addProcessOffRaw(vm);
+
+    // ⚠️ 原生 button 的 disabled 渲染成**空字符串**, `toBeTruthy()` 会永远失败 ——
+    //    只能断言属性在不在。用 el-button 更糟: 未解析组件上 :disabled="false"
+    //    会渲染成 disabled="false"(字符串, JS 真值), 断言两个方向都分不出来。
+    vm.addInputToProcess(process.id);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="raw-input-confirm"]').attributes())
+      .toHaveProperty('disabled');
+
+    vm.rawInputDialog.skuId = 'RM-CHICKEN';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="raw-input-confirm"]').attributes())
+      .toHaveProperty('disabled');
+
+    vm.rawInputDialog.relation = 'SUBSTITUTE';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="raw-input-confirm"]').attributes())
+      .not.toHaveProperty('disabled');
+  });
+
+  it('选「替代料」确定后, 新原料 Cell 带 substituteOfNodeId 指向主料', async () => {
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const process = addProcessOffRaw(vm);
+
+    vm.addInputToProcess(process.id);
+    vm.rawInputDialog.skuId = 'RM-CHICKEN';
+    vm.rawInputDialog.relation = 'SUBSTITUTE';
+    vm.confirmAddRawInput();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+    const created = newestRawMaterial(vm);
+    expect(created.data.substituteOfNodeId).toBe('raw');
+    expect(created.data).toMatchObject({ skuId: 'RM-CHICKEN', name: '鸡肉原料', bound: true });
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
+  });
+
+  it('选「另一种投入」确定后, 新原料 Cell 不带 substituteOfNodeId', async () => {
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const process = addProcessOffRaw(vm);
+
+    vm.addInputToProcess(process.id);
+    vm.rawInputDialog.skuId = 'RM-CHICKEN';
+    vm.rawInputDialog.relation = 'PARALLEL';
+    vm.confirmAddRawInput();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+    const created = newestRawMaterial(vm);
+    expect(created.data.substituteOfNodeId).toBeUndefined();
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
+  });
+
+  it('该工序还没有任何原料时不弹窗, 直接建独立投入', async () => {
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const process = addProcessOffRaw(vm);
+    // 把唯一的上游物料改成半成品 —— 这道工序于是没有任何原料 Cell 可供替代
+    const upstream = vm.flowNodes.find((node) => node.id === 'raw');
+    if (!upstream) throw new Error('Expected the raw anchor Cell');
+    upstream.data.kind = 'SEMI_FINISHED';
+
+    vm.addInputToProcess(process.id);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
+  });
 });
 
-async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
+function addProcessOffRaw(vm: EditorVm): EditorNode {
+  vm.openAddProcess('raw');
+  vm.selectedWorkProcessId = 'WP-PACK';
+  vm.confirmAddProcess();
+  const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+  if (!process) throw new Error('Expected process node');
+  return process;
+}
+
+function newestRawMaterial(vm: EditorVm): EditorNode {
+  const raws = vm.flowNodes.filter((node) => node.data.kind === 'RAW_MATERIAL');
+  const created = raws.at(-1);
+  if (!created) throw new Error('Expected a newly created raw material Cell');
+  return created;
+}
+
+async function mountEditorWrapper(rawOwnerMode = false): Promise<VueWrapper> {
   const wrapper: VueWrapper = shallowMount(ProductProcessWorkflowEditor, {
     props: {
       factoryId: 'F006',
@@ -1142,6 +1275,11 @@ async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
   });
   mountedWrappers.push(wrapper);
   await flushPromises();
+  return wrapper;
+}
+
+async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
+  const wrapper = await mountEditorWrapper(rawOwnerMode);
   return wrapper.vm as unknown as EditorVm;
 }
 
