@@ -254,6 +254,34 @@ public class AIIntentConfigController {
     // via aiIntentService.hasPermission(intentCode, userRole) → returns FORBIDDEN
     // response when role not in intent's required_roles JSON array; intents with
     // sensitivity_level=LOW + empty required_roles allow all authenticated users).
+
+    /**
+     * 日志用的安全截断。
+     *
+     * <p>🔴 2026-08-10 prod: 原来这里是
+     * {@code request.getUserInput().length() > 30 ? ... : ...} 直接写在 log.info
+     * 的参数里。请求体缺 {@code userInput} 时 NPE → GlobalExceptionHandler 兜成
+     * <b>500「系统处理异常」</b>，而**下游全是 null 安全的**
+     * ({@code isRestaurantDerivedDishSelectionWrite} /
+     * {@code extractExplicitRestaurantDishDeleteTarget} 都以
+     * {@code userInput == null || isBlank()} 开头) —— 也就是说这个 500 完全来自
+     * 一行日志。
+     *
+     * <p>🔑 判据: <b>日志语句永远不该有能力让请求失败。</b> 它在旁路上，
+     * 崩了不但没记成日志，还把一个本来能正常处理的请求变成 500 —— 而 500 会
+     * 污染错误监控、掩盖真正的故障。
+     *
+     * <p>⚠️ 这个缺陷是我自己的探针踩出来的(把字段名写成了 question)，不是用户
+     * 报的。判据: <b>探针报异常时先怀疑探针，但修完探针要回头看被探的东西
+     * 是不是也有问题</b> —— 这次探针确实写错了，而它顺带暴露了一个真的缺陷。
+     */
+    static String truncateForLog(String userInput) {
+        if (userInput == null) {
+            return "<null>";
+        }
+        return userInput.length() > 30 ? userInput.substring(0, 30) + "..." : userInput;
+    }
+
     @PostMapping("/execute")
     @Operation(summary = "执行AI意图", description = "识别用户输入的意图并执行对应操作")
     @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
@@ -271,10 +299,7 @@ public class AIIntentConfigController {
         applyRestaurantReportIntentShortcut(factoryId, request);
 
         log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
-                factoryId,
-                request.getUserInput().length() > 30 ?
-                        request.getUserInput().substring(0, 30) + "..." : request.getUserInput(),
-                userId, userRole);
+                factoryId, truncateForLog(request.getUserInput()), userId, userRole);
 
         IntentExecuteResponse response = intentExecutorService.execute(factoryId, request, userId, userRole);
         com.cretas.aims.service.execution.CustomerTextSanitizer.sanitize(response);
