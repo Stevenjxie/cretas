@@ -130,6 +130,26 @@ cd web-admin && npm install --prefer-offline --legacy-peer-deps
 
 `--prefer-offline` 让 npm 优先用本地 cache (主 repo 装过的包会有 cache hit), 实际下载量很小 → 接近 junction 速度,无连坐风险.
 
+**⚙️ 机制化 (2026-08-10 新增 —— 规则写了五天后照犯, 决心不构成约束力)**:
+
+```bash
+# 扫描: 找出所有指向【仓库工作区】的 junction (排除 node_modules 内部的包级 symlink)
+pwsh -File scripts/check-worktree-junctions.ps1          # 只报告, 有危险项 exit 1
+pwsh -File scripts/check-worktree-junctions.ps1 -Fix     # 摘掉链接本身, 不动 target
+
+# 移除 worktree: 先摘 junction 再删, 别直接 git worktree remove --force
+./scripts/safe-worktree-remove.sh ../cretas-my-task
+./scripts/safe-worktree-remove.sh --all-merged           # 批量清理已合并+干净+未锁定的
+```
+
+⛔ 摘链接**只能**用非递归删除 (`[IO.Directory]::Delete(path, $false)`)。
+用 `rmdir /S` / `Remove-Item -Recurse` 会穿透过去把 target 删空 —— 那就是事故本身。
+
+**2026-08-10 首次全盘扫描的实测结果** (说明这不是理论风险): 共 11 个 junction, 其中
+**5 个指向仓库工作区** —— 3 个在主仓库自己的 `scripts/` 下 (两个直指
+`web-admin/node_modules`, 任何人 `rm -rf` 那两个旧 E2E 目录就会清空主仓依赖),
+另有 worktree 侧指向主仓和指向未合并活跃 worktree 的。已全部摘除。
+
 **Mvn/Python 不受影响**: maven `.m2` cache 在 `~/.m2`,跨 worktree 天然共享. Python `venv` 不共享但每个 worktree 独立装也快.
 
 **适用范围**:
