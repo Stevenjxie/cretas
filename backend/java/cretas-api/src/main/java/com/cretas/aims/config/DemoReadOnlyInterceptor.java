@@ -39,7 +39,7 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
     // 该 fallback 仅在 property key 从所有配置源消失时才生效 (properties 打进 jar, 实际
     // 概率极低), 但陈旧值会误导读者, 且与编排器同源配置的 fallback 不一致。
     // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
-    @Value("${cretas.demo.factory-ids:DEMO_FACTORY2,F_DEMO}")
+    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2,F_DEMO}")
     private String demoFactoryIdsCsv;
 
     // POST 路径含以下任一片段 = 读取 / 分析 / AI, 放行 (否则演示自身的查询会被误拦).

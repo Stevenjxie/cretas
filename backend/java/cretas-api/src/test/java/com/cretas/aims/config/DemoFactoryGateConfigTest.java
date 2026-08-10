@@ -24,8 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>本测试锁住"两个 demo 租户都在名单内"这一事实，防止后续有人重排/精简
  * 这行配置时把 F_DEMO 悄悄漏掉（写闸失效是静默的，线上不会报错）。
  *
- * <p>2026-08-05 租户收敛: DEMO_REST 已停用并从本名单移除 —— 见
- * {@code DemoIdentityDisabledTest}。本类不再断言 DEMO_REST 在名单内。
+ * <p>2026-08-05 租户收敛: DEMO_REST 停用并从本名单移除。
+ * <p><b>2026-08-10 重开</b> (owner 拍板「只需要做餐饮的」): 实测该租户有
+ * 523,113 笔交易、数据到昨天, 停用理由已不成立。本类的断言方向随之翻回
+ * 「必须在名单内」—— 见 {@code DemoIdentityDisabledTest} 里那条更通用的不变式。
  *
  * <p>注意 DEMO_LOGISTICS 是**有意**不在名单内的（排线调度演示需要真实写操作），
  * 一并断言，防止有人"顺手补全"把它加进去锁死物流演示。
@@ -65,10 +67,23 @@ class DemoFactoryGateConfigTest {
     }
 
     @Test
-    @DisplayName("已停用的 DEMO_REST 不再在名单内 — 2026-08-05 租户收敛")
-    void demoRestNoLongerGated() throws Exception {
-        assertTrue(!demoFactoryIdsValue().contains("DEMO_REST"),
-                "DEMO_REST 已随租户收敛停用, 不应再出现在 " + DEMO_FACTORY_IDS_KEY);
+    @DisplayName("重开的 DEMO_REST 必须在名单内 — 2026-08-10 owner 拍板重开餐饮演示")
+    void demoRestIsGatedAgain() throws Exception {
+        // 2026-08-05 停用时这条断言的方向是反的(断言它**不在**名单内)。
+        // 2026-08-10 owner 拍板重开餐饮演示 —— 实测 DEMO_REST 有 523,113 笔交易、
+        // 数据到昨天, 停用时「收敛后不可演示」的理由已不成立。
+        //
+        // 🔴 重开时真正危险的不是「没开」, 是「只开一半」: 只把
+        //    cretas.demo.rest.factory-id 指向 DEMO_REST 而不上写闸, 公开扫码演示
+        //    会拿到 demo_rest(factory_super_admin) 的完整写权限。
+        //    所以这条断言的方向必须跟着身份配置一起翻。
+        // ⛔ 更通用的守卫见 DemoIdentityDisabledTest 的
+        //    everyConfiguredDemoIdentityIsReadOnlyLocked —— 那条对未来任何一个
+        //    新增的演示身份都成立, 不需要有人记得来改这里。
+        assertTrue(demoFactoryIdsValue().contains("DEMO_REST"),
+                "餐饮演示身份已启用(cretas.demo.rest.factory-id=DEMO_REST), "
+                        + "但 DEMO_REST 不在 " + DEMO_FACTORY_IDS_KEY
+                        + " 只读名单内 —— 演示账号会带着完整写权限上线");
     }
 
     @Test
