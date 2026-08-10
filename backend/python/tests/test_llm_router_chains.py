@@ -202,3 +202,44 @@ def test_stale_capability_table_falls_back_to_expiry_order():
     with mock.patch.object(llm_router, "_today",
                            lambda: llm_router._CAPABILITY_MEASURED_AT):
         assert llm_router._capability_stale() is False
+
+
+def test_schema_violators_never_precede_schema_clean_models(monkeypatch):
+    """实测会**编造枚举值**的模型不许排在实测零越界的模型前面。
+
+    golden 快照也能抓到顺序变化, 但它会被「重新生成一下」抹掉 —— 这条会指名
+    道姓说出改坏了什么。
+
+    2026-08-10 的具体后果: `qwen3.5-plus` 在「下周需要多少兼职」上编
+    `time_range named="next_week"`(提示词只允许 today|this_week|this_month)。
+    它当 REVIEW 链头的三轮电池里 [51] **三轮全挂**, 而上一版链头(glm-4.6)的
+    三轮**一次没挂**。下游确定性代码只认枚举内的值, 编出来的那个到了下游要么
+    被丢弃要么走错分支。
+    """
+    tail = set(llm_router._TEXT_TAIL)
+    violators = {p for p, n in llm_router._PLAN_SCHEMA_VIOLATIONS.items() if n}
+    clean = {p for p, n in llm_router._PLAN_SCHEMA_VIOLATIONS.items() if n == 0}
+    assert violators and clean, (
+        "越界表里缺了其中一档, 这条断言无法失败 —— 重测后若全员零越界, "
+        "改成 monkeypatch 造一个合成越界条目再断言(见上一条的做法)。")
+
+    with mock.patch.object(llm_router, "_today",
+                           lambda: llm_router._PLAN_SCHEMA_MEASURED_AT):
+        chains = {slot: llm_router._build_chain(slot) for slot in SLOT}
+
+    for slot, chain in chains.items():
+        body = [p for p in chain if p not in tail]
+        # 只在**同存活档**的条目之间比 —— 存活档优先级更高。延迟档排在合法档
+        # 之后, 所以不参与这里的分组: 一个零越界但慢的模型排在越界模型之后是
+        # **错的**(合法性优先于快慢), 这条正是要抓它。
+        def rank(pair):
+            return (llm_router._capability_tier(*pair),)
+        for i, bad in enumerate(body):
+            if bad not in violators:
+                continue
+            for j, good in enumerate(body):
+                if good in clean and j > i and rank(good) == rank(bad):
+                    raise AssertionError(
+                        f"{slot.value}: 实测越界的 {bad} 排在位置 {i}, "
+                        f"而同档位、实测零越界的 {good} 却排在 {j} —— "
+                        f"排序对「这个模型会不会编枚举值」失聪了")

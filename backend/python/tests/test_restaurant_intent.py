@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from smartbi.gold.restaurant import answer_contract as contract
+from smartbi.gold.restaurant import restaurant_intent
 from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     STORE_SCOPE_CLARIFICATION_QUESTION,
@@ -498,8 +499,14 @@ async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
     from common.llm_router import SLOT
     args, kwargs = mock_chain.call_args
     assert args[0] == SLOT.REVIEW
-    assert kwargs["timeout"] == 10.0
-    assert kwargs["total_timeout"] == 25.0
+    # ⛔ 不写死秒数: 本条守的是「语义前门走 REVIEW 且用**语义预算**」这条接线,
+    #    不是那个数值本身(2026-08-10 owner 把它从 10s 放宽到 20s, 写死的当场变红
+    #    —— 红得正确却与接线无关, 这是同一天第三次交这笔维护税)。
+    #    预算数值本身的合理性由 test_semantic_planner_budget 的不变式承担。
+    assert kwargs["timeout"] == restaurant_intent._SEMANTIC_PROVIDER_TIMEOUT_SECONDS
+    assert kwargs["timeout"] != restaurant_intent._T3_PROVIDER_TIMEOUT_SECONDS, (
+        "语义前门用成了旧 T3 的预算 —— 那条路的候选大多跑不完")
+    assert kwargs["total_timeout"] == restaurant_intent._SEMANTIC_TOTAL_TIMEOUT_SECONDS
     assert args[1]["max_tokens"] == 1000
 
 

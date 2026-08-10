@@ -153,3 +153,59 @@ def test_dispatch_and_window_answer_share_one_definition():
             f"_SERVICE_DISPATCHED_WINDOW_AWARE, 否则它和窗口判定会各走各的")
     assert "_SERVICE_DISPATCHED_WINDOW_AWARE" in src, (
         "tiered_answer 不再引用那个集合 —— 派发换回硬编码了")
+
+
+# ── 2026-08-10: 时间按钮的**文案**与**选项**，都是上面那次修复暴露出来的 ──
+
+def _time_buttons(seed: str, window_label: str = ""):
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _time_window_switch_followups,
+    )
+    return _time_window_switch_followups({
+        "intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        "question_seed": seed, "window_label": window_label, "store_options": [],
+    })
+
+
+def test_button_question_never_contains_two_time_words():
+    """按钮问句里不许出现两个时间词。
+
+    🔴 原表有「本周」却没有「这周」, 用户说「这周…」时前缀剥不掉, 按钮问句拼成
+       「**本月这周**全部门店营收怎么提高」—— 读不通。这个文案在
+       BUSINESS_OPTIMIZATION 拿到时间按钮之前不存在, 是那次修复暴露的。
+
+    📌 判据: **同义说法要成对进表**(本周/这周、本月/这个月)。漏一个的症状不是
+       报错, 是拼出一句读不通的话 —— 没有任何测试会自然发现它。
+    """
+    others = ("这周", "本周", "这个月", "本月", "上周", "上个月", "今天", "昨天")
+    for seed in ("这周全部门店营收怎么提高", "本周全部门店营收怎么提高",
+                 "这个月全部门店营收怎么提高", "今天全部门店营收怎么提高"):
+        for button in _time_buttons(seed):
+            q = button["question"]
+            hits = [w for w in others if w in q]
+            # 换进去的那个窗口自己算一个, 超过一个就是没剥干净。
+            assert len(hits) <= 1, (
+                f"seed={seed!r} 生成的按钮问句 {q!r} 里有多个时间词 {hits} —— "
+                f"时间前缀没剥掉, 拼出来读不通")
+
+
+def test_week_scale_question_gets_week_scale_alternatives():
+    """问「这周」时给的替代窗口要是**同一尺度**的。
+
+    原来固定顺序取前二, 于是「这周…」拿到「本月 / 上个月」—— 跨了一个数量级,
+    而最贴近的「最近7天」在第 3 位, 永远排不进来。只给 2 个是刻意的(按钮区还要
+    放门店切换), 所以**顺序**决定了给不给对。
+    """
+    labels = [b["label"] for b in _time_buttons("这周全部门店营收怎么提高")]
+    assert any("天" in l for l in labels), (
+        f"周尺度问句拿到的替代窗口是 {labels} —— 一个天/周尺度的都没有")
+
+
+def test_month_scale_question_still_gets_a_month_alternative():
+    """阴性对照: 别为了修周尺度把月尺度改坏。
+
+    没有这条, 把候选表整个反排也能让上面那条通过。
+    """
+    labels = [b["label"] for b in _time_buttons("本月全部门店营收怎么提高", "本月")]
+    assert any("月" in l for l in labels), (
+        f"月尺度问句拿到的替代窗口是 {labels} —— 一个月尺度的都没有")

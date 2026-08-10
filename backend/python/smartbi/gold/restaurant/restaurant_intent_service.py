@@ -545,8 +545,15 @@ _SWITCHABLE_WINDOWS: Tuple[str, ...] = ("本月", "上个月", "最近7天", "�
 # 用户会写「这个月」「上周」, 而按钮只回给规范说法。长的排前面, 免得
 # 「最近7天」被「最近7」之类的短前缀截半 (排序在下面统一做)。
 _STRIPPABLE_TIME_PREFIXES: Tuple[str, ...] = _SWITCHABLE_WINDOWS + (
-    "这个月", "本周", "上周", "本季度", "上季度", "今天", "昨天", "前天",
-    "今年", "去年", "最近三十天", "最近七天", "最近30日", "最近7日",
+    # ⚠️ 2026-08-10: 原表有「本周」却没有「这周」。用户说「这周…」时前缀剥不掉,
+    #    按钮问句就拼成「**本月这周**全部门店营收怎么提高」—— 两个时间词打架。
+    #    这个文案在 BUSINESS_OPTIMIZATION 拿到时间按钮之前不存在, 是那次修复
+    #    (换时间按钮被误扣)把它暴露出来的。
+    #    📌 判据: 同义说法要成对进表 —— 本周/这周、本月/这个月、下周/下个月。
+    #       漏一个的症状不是报错, 是拼出一句读不通的话。
+    "这个月", "本周", "这周", "上周", "本季度", "上季度",
+    "今天", "昨天", "前天", "今年", "去年",
+    "最近三十天", "最近七天", "最近30日", "最近7日",
 )
 
 # 绝对月份/日期写法: 「2026年6月」「2026年6月份」。
@@ -604,13 +611,23 @@ def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
         str(context.get("window_label") or "").strip(),
         current_window.strip(),
     }
+    # 按**与当前窗口的尺度接近程度**排, 不是固定顺序取前二。
+    # ⚠️ 2026-08-10: 原来固定 ("本月","上个月","最近7天","最近30天") 取前二,
+    #    于是用户问「这周…」拿到的两个建议是「本月 / 上个月」—— 跨了一个数量级,
+    #    而最贴近的「最近7天」永远排不进来(它在第 3 位)。
+    #    只给 2 个是刻意的(按钮区还要放门店切换), 所以**顺序**决定了给不给对。
+    week_scale = any(tok in (current_window or "")
+                     or tok in str(context.get("window_label") or "")
+                     for tok in ("周", "7天", "七天", "今天", "昨天"))
+    candidates = [w for w in _SWITCHABLE_WINDOWS if w not in already]
+    if week_scale:
+        candidates.sort(key=lambda w: 0 if ("天" in w) else 1)
     return [
         {
             "label": f"看{window}",
             "question": f"{store_prefix}{window}{body}",
         }
-        for window in _SWITCHABLE_WINDOWS
-        if window not in already
+        for window in candidates
     ][:2]
 
 
