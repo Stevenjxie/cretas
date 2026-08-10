@@ -16,9 +16,18 @@ from .base import ComputeBackend
 logger = logging.getLogger(__name__)
 
 # Meta-row labels that pollute aggregates (合计/总计/Total etc). Task W2.0.
+#
+# ⚠️ 2026-08-10: 这份是**唯一定义**。此前 4 个模板各抄了一份, 且抄漏了 ——
+#     business_overview          少 总数/总额/Total 系列
+#     member_deep / monthly_anomaly / period_comparison   只有 4 个词
+#   后果: 认不出的汇总行会被当成一条明细算进去, **数偏大且没人会发现**。
+#   由 tests/test_no_drifted_duplicate_constants.py 盯着, 再抄一份就红。
+#   判据: **「哪些行要剔掉」这种判据只能有一处定义**, 抄一次就多一处会漂的地方。
 _META_LABELS = {
     '合计', '总计', '小计', '汇总', '总额', '总数',
     'Total', 'TOTAL', 'total', 'Sum', 'SUM', 'sum',
+    # ⬇ 收口时从 business_overview_summary 并进来的两个 —— 不能丢词
+    "平均", "小结",
 }
 
 

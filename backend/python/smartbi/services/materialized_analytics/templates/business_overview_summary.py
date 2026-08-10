@@ -45,9 +45,10 @@ _TOP_N_STORES = 10
 # Summary-row labels that aggregate POS exports embed inline. These will
 # double-count against the day-level totals if included, so filter at start
 # of compute(). Same pattern as PolarsBackend._META_LABELS.
-_META_LABELS = ("合计", "总计", "小计", "汇总", "平均", "小结", "总和")
-
-
+# _META_LABELS 从 polars_backend 导入 —— 这里曾经各抄一份且抄漏了
+# (2026-08-10 实测: 本文件当时只有 7 个词, 权威有 12 个),
+# 认不出的汇总行会被当成明细算进去。判据: 这种判据只能有一处定义。
+from smartbi.services.materialized_analytics.compute.polars_backend import _META_LABELS  # noqa: E402
 @register
 class BusinessOverviewSummary(AnalysisTemplate):
 
