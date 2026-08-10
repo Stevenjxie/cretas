@@ -89,7 +89,14 @@ vi.mock('@vue-flow/controls', async () => {
 
 interface EditorVm {
   flowNodes: EditorNode[];
-  flowEdges: Array<{ id: string; source: string; target: string; selected?: boolean }>;
+  flowEdges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    selected?: boolean;
+    markerEnd?: string;
+    style?: Record<string, unknown>;
+  }>;
   history: unknown[];
   outputSkuOptions: SkuOption[];
   selectedWorkProcessId: string;
@@ -314,7 +321,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.confirmAddProcess();
 
     // must-fix #7: mutate() 现在会重新派生 BOM 浮层 —— 新加的 PROCESS/FINISHED_GOOD
-    // 节点各带一个 bomAuxiliary/bomPackaging cell 与一条虚线边, 这份用例只关心"真实
+    // 节点各带一个 bomAuxiliary/bomPackaging cell 与一条投影边, 这份用例只关心"真实
     // 工艺图"的增删, 用 stripBomOverlay(Edges) 滤掉浮层, 同 line ~456 已有的写法。
     expect(stripBomOverlay(vm.flowNodes)).toHaveLength(3);
     expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
@@ -329,6 +336,40 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       expect.objectContaining({ source: 'raw' }),
       expect.objectContaining({ target: expect.stringContaining('material:finished:') }),
     ]));
+  });
+
+  it('projects a unique raw material name into the same Cell identity without autosaving on page load', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValueOnce({
+      success: true,
+      data: {
+        id: 1,
+        productTypeId: 'PT-PIG-400',
+        schemaVersion: 1,
+        status: 'DRAFT',
+        version: 1,
+        lockVersion: 0,
+        nodes: [{
+          id: 'raw',
+          kind: 'RAW_MATERIAL',
+          position: { x: 16, y: 32 },
+          data: { name: '猪蹄原料', skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: '' },
+        }],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+    });
+
+    const vm = await mountEditor();
+
+    expect(vm.flowNodes.find((node) => node.id === 'raw')?.data).toMatchObject({
+      name: '猪蹄原料',
+      skuId: 'RM-PIG',
+      skuCode: 'RM-PIG',
+      baseUnit: 'kg',
+      bound: true,
+    });
+    expect(vm.dirty).toBe(false);
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
   });
 
   it('serializes multi-output role and allocation fields in the real editor save payload', async () => {
@@ -1053,6 +1094,8 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(auxEdge).toMatchObject({
       sourceHandle: 'bom-aux-out',
       targetHandle: 'bom-aux-in',
+      markerEnd: 'arrow-closed',
+      style: { stroke: '#1b65a8', strokeWidth: 2 },
       selectable: false,
       deletable: false,
       updatable: false,

@@ -159,14 +159,36 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
   });
 
-  it('removes raw materials already used by another Cell while preserving the current Cell selection', () => {
+  it('removes raw materials already used by another Cell while preserving the current Cell selection', async () => {
     const wrapper = mountNode({
       excludedRawMaterialIds: ['RM-PIG'],
       data: { ...RAW_DATA, skuId: 'RM-CHICKEN', name: '鸡胸肉', bound: true },
     });
 
+    await wrapper.get('[data-testid="change-raw-material"]').trigger('click');
+
     expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
       .toEqual(['RM-CHICKEN']);
+  });
+
+  it('shows one bound identity by default and reveals the picker only after explicit replacement', async () => {
+    const wrapper = mountNode({
+      data: { ...RAW_DATA, skuId: 'RM-PIG', skuCode: 'YL001', name: '猪蹄', bound: true },
+    });
+
+    expect(wrapper.text()).toContain('猪蹄');
+    expect(wrapper.text()).toContain('已绑定');
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'ElCascader' }).exists()).toBe(false);
+
+    await wrapper.get('[data-testid="change-raw-material"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'ElCascader' }).exists()).toBe(true);
+
+    wrapper.getComponent({ name: 'ElSelect' }).vm.$emit('change', 'RM-CHICKEN');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted('selectRawSku')).toEqual([['RM-CHICKEN']]);
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
   });
 
   it('never offers seasoning or packaging entries in a raw Cell', () => {
@@ -249,7 +271,7 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
 });
 
 // must-fix #2 (final whole-branch review of Phase 3-1): 这个分支给 FINISHED_GOOD 新增了
-// 一个 source handle(PACK_OVERLAY_SOURCE_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂虚线
+// 一个 source handle(PACK_OVERLAY_SOURCE_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂投影连线
 // 用的视觉锚点。在这个分支之前, 成品 Cell 没有任何 output handle(它是链的终端) ——
 // evaluateWorkflowConnection 把"非 PROCESS 源 → PROCESS 目标"一律判合法, 如果这个新
 // handle 可以真的发起连线, 用户就能从"成品"拖一条线到任意工序, onConnect/

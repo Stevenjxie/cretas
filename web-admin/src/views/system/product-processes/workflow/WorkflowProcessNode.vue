@@ -4,7 +4,7 @@
     :class="{ selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }"
     :style="processNodeStyle"
   >
-    <!-- BOM 辅料投影的专用视觉锚点，只承载派生虚线，不创建真实工艺连线。 -->
+    <!-- BOM 辅料投影的专用视觉锚点，只承载派生投影连线，不创建真实工艺连线。 -->
     <Handle
       type="target"
       :position="Position.Top"

@@ -171,7 +171,7 @@ describe('从 BOM 派生浮层', () => {
     expect(pack!.type === 'bomPackaging' && pack!.data.outputName).toBe('酱鸭腿');
   });
 
-  it('派生的连线是虚线且两端正确, handle id 与 cell 组件的 <Handle> 一致', () => {
+  it('派生连线与普通 Workflow 连线使用同一实线样式且两端 handle 正确', () => {
     const { edges } = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 400), outputNode('o1', 900, 200)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
@@ -182,13 +182,14 @@ describe('从 BOM 派生浮层', () => {
     expect(auxEdge!.sourceHandle).toBe('bom-aux-out');
     expect(auxEdge!.targetHandle).toBe('bom-aux-in');
     expect(auxEdge!.type).toBe('smoothstep');
-    expect(auxEdge!.style.strokeWidth).toBe(2);
-    expect(auxEdge!.animated || auxEdge!.style?.strokeDasharray).toBeTruthy();
+    expect(auxEdge!.style).toEqual({ stroke: '#1b65a8', strokeWidth: 2 });
+    expect(auxEdge!.style).not.toHaveProperty('strokeDasharray');
     const packEdge = edges.find((e) => e.target === `${BOM_OVERLAY_PREFIX}pack:o1`);
     expect(packEdge!.source).toBe('o1');
     expect(packEdge!.sourceHandle).toBe('bom-pack-out');
     expect(packEdge!.targetHandle).toBe('bom-pack-in');
     expect(packEdge!.type).toBe('smoothstep');
+    expect(packEdge!.style).toEqual({ stroke: '#1b65a8', strokeWidth: 2 });
   });
 
   it('原料与半成品节点不派生任何浮层', () => {
