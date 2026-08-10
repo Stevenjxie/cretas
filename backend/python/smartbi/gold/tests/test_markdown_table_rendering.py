@@ -1,0 +1,98 @@
+"""排行类答案用 markdown 表格输出，且全站只有一处表格拼装。
+
+## 为什么改
+
+排行本来就是表格数据（名次 / 名称 / 销量 / 营收），过去输出成编号列表：
+
+    1. **招牌青花椒味(单人份)** — 销量 5,605.87 份、营收 ¥322,920.53
+    2. 招牌青花椒鱼可乐单人套餐 — 销量 3,050.3 份、营收 ¥194,995.79
+
+列表形态让人**没法竖着比数**。前端 `MarkdownRenderer` 用的是
+react-native-markdown-display（markdown-it），GFM 表格开箱即用，
+`table/thead/th/tr/td` 样式早就写好了——缺口一直在后端。
+
+## 为什么是一个函数而不是各写一遍
+
+排行/对比类答案有十几处。各写一遍就是十几份格式：改一次要改十几处，
+而漏掉的那处**不报错**，只是长得跟别处不一样。
+
+⛔ 本文件的承重断言就是「只有一处拼装」——它防的不是渲染错，是**格式分叉**。
+
+## 两个静默失效点
+
+1. 单元格里的 `|` 不转义，一个菜名就能把整张表的列数冲乱——而 markdown 表格
+   错列**不报错**，只是渲染成一坨。
+2. 表格前没有空行，markdown-it 会把它并进上一段当普通文字——**同样不报错**。
+"""
+from __future__ import annotations
+
+import inspect
+import re
+
+from smartbi.gold.restaurant.restaurant_ops_router import _markdown_table
+
+
+def test_renders_a_well_formed_gfm_table():
+    out = _markdown_table(["#", "菜品", "销量（份）"], [[1, "娃娃菜", "1,541.88"]])
+    assert out[0] == "", "表格前必须有空行, 否则会被并进上一段当普通文字"
+    assert out[1] == "| # | 菜品 | 销量（份） |"
+    assert re.fullmatch(r"\|( -{3}:? \|)+", out[2]), f"分隔行不合法: {out[2]!r}"
+    assert out[3] == "| 1 | 娃娃菜 | 1,541.88 |"
+
+
+def test_right_align_marks_the_numeric_columns():
+    """金额/数量列右对齐 —— 数字左对齐读起来对不齐, 表格就白做了。"""
+    out = _markdown_table(["名", "额"], [["a", "1"]], right_align={1})
+    assert out[2] == "| --- | ---: |"
+
+
+def test_pipe_in_a_cell_cannot_break_the_columns():
+    """菜名里带 `|` 时必须转义 —— 错列不报错, 只是渲染成一坨。"""
+    out = _markdown_table(["菜品"], [["带|竖线的菜名"]])
+    row = out[-1]
+    assert row == "| 带\\|竖线的菜名 |"
+    # 阴性对照: 转义后, 这一行的未转义竖线数必须与表头一致(各 2 个)
+    unescaped = len(re.findall(r"(?<!\\)\|", row))
+    assert unescaped == len(re.findall(r"(?<!\\)\|", out[1])), "列数被内容冲乱了"
+
+
+def test_newline_in_a_cell_is_flattened():
+    """单元格里的换行会把表格截断成两半, 必须压成空格。"""
+    out = _markdown_table(["备注"], [["第一行\n第二行"]])
+    assert "\n" not in out[-1]
+    assert out[-1] == "| 第一行 第二行 |"
+
+
+def test_empty_rows_still_produce_a_valid_header():
+    """没有数据行时也得是一张合法的空表, 不能吐半张。"""
+    out = _markdown_table(["#", "菜品"], [])
+    assert len(out) == 3 and out[2].count("---") == 2
+
+
+def test_only_one_place_builds_tables_in_the_router():
+    """🔴 承重: 全站只有 `_markdown_table` 一处拼表格。
+
+    十几处排行/对比答案各写一遍格式, 改一次要改十几处, 漏掉的那处不报错 ——
+    这正是本仓反复出现的「同一件事多个载体」。
+
+    判据: 源码里出现 `"| "` 开头的表格行字面量, 除了这个函数自身, 都算分叉。
+    """
+    import smartbi.gold.restaurant.restaurant_ops_router as router
+
+    src = inspect.getsource(router)
+    helper_src = inspect.getsource(_markdown_table)
+    outside = src.replace(helper_src, "")
+    # 表格分隔行(`| --- |`)是最不会误伤的特征: 正常文案不会写这个
+    strays = re.findall(r'"\|\s*-{3,}', outside)
+    assert not strays, (
+        f"除 _markdown_table 外还有 {len(strays)} 处在手写表格分隔行 —— "
+        f"格式会分叉。改成调用 _markdown_table。")
+
+
+def test_dish_ranking_answer_uses_the_table_helper():
+    """排行答案确实调了它 —— 测了函数不等于测了它被调用。"""
+    import smartbi.gold.restaurant.restaurant_ops_router as router
+
+    src = inspect.getsource(router)
+    assert "_markdown_table(" in src.replace(
+        inspect.getsource(_markdown_table), ""), "没有任何地方调用表格渲染函数"

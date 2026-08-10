@@ -1724,6 +1724,34 @@ def extract_store_mention(query: Optional[str]) -> Optional[str]:
     return mentions[0] if mentions else None
 
 
+def _markdown_table(headers, rows, right_align=()):
+    """把数据行渲染成 GFM 表格, 返回可直接 extend 进 lines 的列表。
+
+    RN 端 `MarkdownRenderer` 用的是 react-native-markdown-display(markdown-it),
+    GFM 表格开箱即用, table/thead/th/tr/td 样式都已就位 —— 后端只要吐标准表格。
+
+    ⛔ **全站唯一一处表格拼装**。排行/对比类答案有十几处, 各写一遍就是十几份
+       格式: 改一次要改十几处, 而漏掉的那处不报错, 只是长得跟别处不一样。
+
+    ⚠️ 单元格里的 `|` 必须转义, 否则一个菜名就能把整张表的列数冲乱 ——
+       而 markdown 表格错列**不会报错**, 只是渲染成一坨。
+    ⚠️ 表格前必须有空行, 否则 markdown-it 会把它并进上一段当普通文字。
+
+    right_align: 需要右对齐的列下标(金额/数量列) —— 数字左对齐读起来对不齐。
+    """
+    def cell(v):
+        return str(v).replace("|", "\\|").replace("\n", " ")
+
+    sep = []
+    for i in range(len(headers)):
+        sep.append("---:" if i in right_align else "---")
+    out = ["", "| " + " | ".join(cell(h) for h in headers) + " |",
+           "| " + " | ".join(sep) + " |"]
+    for row in rows:
+        out.append("| " + " | ".join(cell(c) for c in row) + " |")
+    return out
+
+
 async def _canonicalize_store_mention(
     smartbi_pool, factory_id: str, mention: str,
 ) -> List[str]:
@@ -3947,15 +3975,18 @@ async def resolve_gross_margin(
             f"**{window_label}菜品销量排行（{rank_label}前 {requested_rank_limit}）：**",
             "",
         ]
+        # 2026-08-10: 编号列表改 markdown 表格 —— 排行本来就是表格数据, 列表形态
+        # 让人没法竖着比数。前端 MarkdownRenderer 早已支持 GFM 表格。
+        headers = ["#", "菜品", "销量（份）"] + (["营收"] if can_view_prices else [])
+        table_rows = []
         for idx, r in enumerate(ranked[:requested_rank_limit], 1):
-            dish_label = f"**{r['dish_name']}**" if idx == 1 else r["dish_name"]
-            line = (
-                f"{idx}. {dish_label} — 销量 "
-                f"{_format_sales_quantity(r['total_qty'])} 份"
-            )
+            row = [idx, r["dish_name"], _format_sales_quantity(r["total_qty"])]
             if can_view_prices:
-                line += f"、营收 ¥{float(r['total_revenue'] or 0):,.2f}"
-            lines.append(line)
+                row.append(f"¥{float(r['total_revenue'] or 0):,.2f}")
+            table_rows.append(row)
+        lines.extend(_markdown_table(
+            headers, table_rows,
+            right_align={2, 3} if can_view_prices else {2}))
         note = (
             f"，已剔除 {excluded} 个附属/基础项（米饭、包装、餐具、纸巾等）"
             if excluded > 0 else ""
