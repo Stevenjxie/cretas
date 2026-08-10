@@ -38,7 +38,8 @@ describe('shared UnitSelect contract', () => {
   });
 
   it('never emits the historic display label as part of the canonical unit code', () => {
-    expect(apiSource).toContain("{ unitCode: 'pcs', unitName: '只'");
+    expect(apiSource).toContain("{ unitCode: '个', unitName: '个'");
+    expect(apiSource).toContain("{ unitCode: '只', unitName: '只'");
     expect(apiSource).not.toContain("unitCode: 'pcs:只'");
     expect(source).toContain('canonicalSystemUnitCode(current?.unitCode || props.modelValue)');
     expect(source).toContain('canonicalSystemUnitCode(findDuplicateUnit(activeUnits.value, [value])?.unitCode || value)');

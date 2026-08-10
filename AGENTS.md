@@ -1,14 +1,10 @@
-**最高优先级模型与 Effort 门禁：执行任何新任务前，必须先调用 `model-effort-router` skill，根据任务的实际复杂度、风险和范围向用户推荐具体模型与 effort；当前设置匹配时告知后直接执行，不匹配或无法确认时等待用户切换并明确确认。**
-
 # AGENTS.md
 
-## Mandatory Model and Effort Gate
+## Optional Model and Effort Advice
 
-- 每个新任务必须按 `.agents/skills/model-effort-router/SKILL.md` 单独判断；不能沿用上一个任务的设置，也不能把仓库默认值视为已确认。
-- 当前设置匹配时要明确说明“无需切换”，随后直接开始执行，不再要求用户重复确认；设置不匹配或无法观察时必须要求用户完成切换并确认。
-- 当前设置不匹配或无法确认时，开始编辑、测试、长时间研究、状态变更或部署前必须取得确认；确认前只允许路由所需的最小只读检查。
-- 任务范围、风险或工作类型发生实质变化时，必须暂停并重新路由。
-- 如推荐外部 Claude Fable 5，必须在同一回复直接附上针对当前任务写好的、可完整粘贴到 Claude Code 的 Prompt 与回交要求；禁止只给出模型/effort 建议、Prompt 大纲或要求用户另行索取 Prompt。
+- 模型与 effort 建议仅供参考；普通任务可以直接执行，无需先调用 `model-effort-router`。
+- 不得因当前模型/effort 不匹配、不可观察或用户未确认切换而暂停已授权的编辑、测试、提交、部署或其他工作。
+- 只有当模型选择会实质影响结果时，才可按 `.agents/skills/model-effort-router/SKILL.md` 给出一次非阻塞建议，并在同一轮继续执行。
 
 This file provides guidance to Codex when working with this repository.
 
@@ -225,7 +221,7 @@ frontend/CretasFoodTrace/src/
 1. **全面禁用** - 本仓库禁止调用、加载、引用或遵循任何 `superpowers:*` skill，包括但不限于 `using-superpowers`、`brainstorming`、`writing-plans`、`executing-plans`、`subagent-driven-development`、`test-driven-development` 和 `finishing-a-development-branch`。
 2. **禁止生成其制品** - 不得创建或更新 `docs/superpowers/**`、`.superpowers/**`，不得把现有 Superpowers 文档、计划或进度台账作为当前任务的执行依据。
 3. **禁止其交接流程** - 不得要求用户在 `Subagent-Driven` 与 `Inline Execution` 之间选择，也不得使用 Superpowers 的计划模板、检查点、提交节奏或评审流程。
-4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 `model-effort-router`、`docs/dispatch/ACTIVE.md` 和下述项目规范。
+4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 `docs/dispatch/ACTIVE.md` 和下述项目规范。
 5. **不得隐式替代** - 不得以别名、复制模板或等价话术变相执行 Superpowers 工作流；需要规划、调试、测试、评审或子代理协作时，只使用本仓库已定义的对应流程。
 
 ### 核心原则

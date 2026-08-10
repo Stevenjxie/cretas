@@ -323,8 +323,8 @@ async function refreshSelectedMaterialPrice() {
              那套口径与真实算式不一致, 属产品决策, 未动 —— 见交接。)
           -->
           <div class="dosage-contract__basis">
-            <span class="dosage-contract__eyebrow">用量基准</span>
-            <strong>每投入 1 kg 原料（本工序投料量）</strong>
+            <span class="dosage-contract__eyebrow">投入量基准</span>
+            <strong>本工序每投入 1 kg</strong>
           </div>
           <span class="dosage-contract__arrow">需要投入</span>
           <div class="dosage-contract__input">

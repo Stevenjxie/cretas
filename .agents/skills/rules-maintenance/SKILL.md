@@ -11,7 +11,7 @@ description: 检查和更新 Codex Rules 内容。包括格式检查、统计数
 
 - 不要把 Claude 的 Thin-Opus Organizer 编排复制到 Codex。
 - `.claude/skills/organizer/`、`.claude/rules/organizer-protocol.md` 和 `.claude/rules/multi-model-dispatch.md` 只由 Claude 使用；Codex 侧不得创建对应的 `.agents/skills/organizer/` 或 `.codex/rules/` 镜像。
-- Codex 的模型与 effort 路由唯一入口是 `.agents/skills/model-effort-router/SKILL.md`。
+- 如确有必要给出 Codex 模型与 effort 建议，可使用 `.agents/skills/model-effort-router/SKILL.md`；建议仅供参考，不得作为执行门禁或要求用户确认切换。
 
 ## Rules 目录
 
