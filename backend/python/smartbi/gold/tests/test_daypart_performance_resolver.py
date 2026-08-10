@@ -70,7 +70,12 @@ async def test_non_price_role_gets_counts_not_money():
     got = await R.resolve_daypart_performance(_Pool(conn), "MOCK_REST", role="restaurant_chef")
 
     assert "¥" not in got.answer_text, got.answer_text
-    assert "109,772 单" in got.answer_text
+    # 2026-08-11 改表格: 原断言写的是 `"109,772 单"` —— 那个 `单` 后缀是**编号列表
+    # 的排版**(表格里它是列头「单量」)。判据「非价格角色拿到的是单量」没变, 变的是
+    # 包裹, 所以只改包裹。
+    # 顺带改强: 按**表格行**判, 锁住「这个时段与这个数相邻」, 而不只是「这个数出现
+    # 在答案某处」—— 后者在时段错位时照样绿。
+    assert "| 晚市 | 109,772 |" in got.answer_text, got.answer_text
     # 🔴 排序也要跟着换: 否则非价格角色看到的「最好」是按一个他看不见的量排的。
     assert got.meta["top_daypart"] == "晚市"
 
