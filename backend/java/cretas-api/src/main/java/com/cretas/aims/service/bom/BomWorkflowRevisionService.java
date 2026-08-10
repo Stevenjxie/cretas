@@ -365,9 +365,18 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "BOM 尚未选择已保存的 Workflow 修订", "BOM_WORKFLOW_REVISION_REQUIRED");
         }
         ProductProcessWorkflowDTO definition = definitionFromRecipe(recipe);
-        validateStructureForBom(definition);
-        catalogValidator.validateForBomConfiguration(factoryId, recipe.getProductTypeId(), definition);
-        return resolveTargetGraph(recipe.getWorkflowRevisionId(), definition, recipe.getProductTypeId());
+        // 🔴 2026-08-10: 与 requireCompatible 同形状 —— 先切片, 再校验。
+        //
+        // 这条路是**辅料工作台**进门就走的那条(BomSeasoningWorkspaceServiceImpl#getWorkspace),
+        // 只做 requireCompatible 修不好那块屏: 打开辅料编辑器仍会跑一次全图目录检查, 画布上
+        // 不相干的工序照样把配置入口关掉。入参是单个 BomRecipe、校验 recipe.getProductTypeId(),
+        // 构造上就是单目标, 没有全图调用方。
+        PinnedWorkflowGraph graph = resolveTargetGraph(
+                recipe.getWorkflowRevisionId(), definition, recipe.getProductTypeId());
+        ProductProcessWorkflowDTO slice = sliceOf(definition, graph);
+        validateStructureForBom(slice);
+        catalogValidator.validateForBomConfiguration(factoryId, recipe.getProductTypeId(), slice);
+        return graph;
     }
 
     @Transactional(readOnly = true)

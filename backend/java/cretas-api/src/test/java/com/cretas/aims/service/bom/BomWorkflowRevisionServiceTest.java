@@ -529,7 +529,7 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
-    void rejectsNoRootCycleAndOrphanGraphsFailClosed() throws Exception {
+    void rejectsNoRootAndCycleGraphsFailClosed() throws Exception {
         ProductProcessWorkflowDTO noRoot = oneToOne();
         noRoot.getNodes().removeIf(node -> "raw-a".equals(node.getId()));
         noRoot.getEdges().removeIf(edge -> "raw-a".equals(edge.getSource()));
@@ -540,11 +540,32 @@ class BomWorkflowRevisionServiceTest {
         cycle.getEdges().add(edge("cycle", "finished", "output", "process-1", "in-a"));
         assertThrows(BusinessException.class,
                 () -> service.resolvePinnedGraph(FACTORY, recipe(snapshot(cycle))));
+    }
 
+    /**
+     * 🔴 2026-08-10 行为变更(本轮收窄的直接效果, 原先与 noRoot/cycle 合在
+     * rejectsNoRootCycleAndOrphanGraphsFailClosed 里一起断言必抛)。
+     *
+     * <p>画布上一个谁也没连的孤立 Cell, 现在**不再**挡住一个与它不相干的目标建 BOM ——
+     * 这正是本计划 Goal 那句「不再因为画布上别的东西有问题而把全图的 BOM 配置入口一起关掉」。
+     * noRoot / cycle 仍然 fail closed, 因为那两种残缺就在目标切片自己身上。
+     *
+     * <p>⛔ 孤立 Cell 并没有从此没人管: 下面四处仍然拿**整张** definition 校验, 本计划一处未动 ——
+     * ProductProcessWorkflowServiceImpl:371(发布) / ProductProcessWorkflowActivationServiceImpl:59(激活)
+     * / WorkflowRevisionSnapshotService:162(修订快照) / ProductConfigurationReadinessService:71,:122(就绪度)。
+     * 也就是说带孤立 Cell 的图**仍然发布不了**, 只是不再连坐 BOM 配置。
+     */
+    @Test
+    void unrelatedOrphanCellNoLongerBlocksAnUnrelatedTargetsBom() throws Exception {
         ProductProcessWorkflowDTO orphan = oneToOne();
         orphan.getNodes().add(material("orphan", "RAW_MATERIAL", "RM-ORPHAN", 900));
-        assertThrows(BusinessException.class,
+
+        PinnedWorkflowGraph graph = assertDoesNotThrow(
                 () -> service.resolvePinnedGraph(FACTORY, recipe(snapshot(orphan))));
+
+        assertEquals(PRODUCT, graph.targetProductTypeId());
+        assertFalse(graph.nodes().stream().anyMatch(node -> "orphan".equals(node.getId())),
+                "the orphan cell must not be pulled into the target slice either");
     }
 
     @Test
@@ -583,6 +604,31 @@ class BomWorkflowRevisionServiceTest {
 
         assertEquals("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH", error.getErrorCode());
         verify(recipeRepository, never()).saveAndFlush(recipe);
+    }
+
+    @Test
+    void pinnedGraphValidatesOnlyTheTargetOutputSliceNotTheWholeGraph() throws Exception {
+        BomRecipe recipe = recipe(snapshot(twoDisjointOutputChains()));
+        rejectCatalogWhenSliceReferencesMissingWorkProcess();
+
+        PinnedWorkflowGraph graph = assertDoesNotThrow(
+                () -> service.resolvePinnedGraph(FACTORY, recipe));
+
+        assertEquals(PRODUCT, graph.targetProductTypeId());
+        assertEquals(List.of("process-a"), graph.processes().stream()
+                .map(PinnedWorkflowGraph.ProcessStep::processNodeId).toList());
+    }
+
+    @Test
+    void pinnedGraphStillRejectsWhenTheTargetSliceItselfIsInvalid() throws Exception {
+        BomRecipe recipe = recipe(snapshot(twoDisjointOutputChains()));
+        recipe.setProductTypeId(CHAIN_B_PRODUCT);
+        rejectCatalogWhenSliceReferencesMissingWorkProcess();
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.resolvePinnedGraph(FACTORY, recipe));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH", error.getErrorCode());
     }
 
     /**
