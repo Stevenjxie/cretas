@@ -3152,11 +3152,20 @@ async def resolve_stock_shortage(
             factory_id, days, window_start, window_end,
         )
 
-    top_text = "\n".join([
-        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): "
-        f"盘亏 ¥{r['shortage_cost'] or 0:.2f}({r['shortage_qty'] or 0:.2f} {r['unit'] or ''})"
-        for i, r in enumerate(rows)
-    ]) or f"({window_text}无盘亏记录)"
+    # 2026-08-11: 编号列表改 markdown 表格(全站唯一拼装点 `_markdown_table`)。
+    # ⚠️ 原来把金额与数量揉进一个单元格「¥123.00（4.50 kg）」, 拆成两列;
+    #    定序轴(金额, 标题里写着「按金额」)排前一列。
+    top_lines = _markdown_table(
+        ["#", "食材", "分类", "盘亏金额", "盘亏量"],
+        [[i, r["name"], r["category"] or "—",
+          f"¥{r['shortage_cost'] or 0:,.2f}",
+          f"{r['shortage_qty'] or 0:.2f} {r['unit'] or ''}".strip()]
+         for i, r in enumerate(rows, 1)],
+        right_align={3, 4},
+    ) if rows else ["", f"({window_text}无盘亏记录)"]
+    # `_markdown_table` 首元素是空串 —— join 后恰好在标题与表格间留出必需的空行。
+    top_block = "\n".join(
+        [f"盘亏食材前 {len(rows)} 名(按金额):"] + top_lines)
 
     # 金额是唯一能跨食材相加的维度 —— 数量总计会把 kg 和 L 加到一起(实测
     # DEMO_REST 41.45kg + 45.00L), 所以总计只给金额, 数量只逐项给且必带单位。
@@ -3164,7 +3173,7 @@ async def resolve_stock_shortage(
         f"{window_text}盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏金额 **¥{total['shortage_cost']:.2f}**, "
         f"盘盈金额 ¥{total['surplus_cost']:.2f}\n\n"
-        f"盘亏食材前 {len(rows)} 名(按金额):\n\n{top_text}\n\n"
+        f"{top_block}\n\n"
         f"建议动作:\n"
         f"1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
         f"2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
@@ -3387,13 +3396,19 @@ async def resolve_recipe_cost(
         name_map,
     )
 
-    top_text = "\n".join([
-        f"{i+1}. {'**' + name_map.get(r['product_source_pk'], '#' + r['product_source_pk']) + '**' if i == 0 else name_map.get(r['product_source_pk'], '#' + r['product_source_pk'])}: ¥{r['food_cost']:.2f} ({r['ingredient_count']} 种食材)"  # noqa: E501
-        for i, r in enumerate(rows)
-    ]) or "(尚未录入配方数据或食材单价为空)"
+    # 2026-08-11: 编号列表改 markdown 表格。「(N 种食材)」原本挤在括号里,
+    # 表格里它是独立一列 —— 成本高是因为用料贵还是用料多, 这两列并排才看得出来。
+    top_lines = _markdown_table(
+        ["#", "菜品", "食材成本", "食材种数"],
+        [[i, name_map.get(r["product_source_pk"], "#" + r["product_source_pk"]),
+          f"¥{r['food_cost']:,.2f}", r["ingredient_count"]]
+         for i, r in enumerate(rows, 1)],
+        right_align={2, 3},
+    ) if rows else ["", "(尚未录入配方数据或食材单价为空)"]
+    top_block = "\n".join([f"菜品食材成本前 {len(rows)} 名:"] + top_lines)
 
     answer = (
-        f"菜品食材成本前 {len(rows)} 名:\n\n{top_text}\n\n"
+        f"{top_block}\n\n"
         "> 注：成本按标准用量乘以食材单价计算；补齐销售金额后即可计算毛利。"
     )
     charts = []
@@ -3467,15 +3482,22 @@ async def resolve_requisition_trend(
 
     total_qty = sum(r["qty"] or 0 for r in trend)
     total_cost = sum(r["cost"] or 0 for r in trend)
-    top_text = "\n".join([
-        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
-        for i, r in enumerate(top)
-    ]) or f"({window_text}无领料记录)"
+    # 2026-08-11: 编号列表改 markdown 表格。
+    # ⛔ 只给领用量一列: `top` 这几行没有逐项成本(成本只在上面的总计里, 来自 `trend`),
+    #    不能为了让表好看就编一列出来 —— 那是拿相邻指标顶替。
+    top_lines = _markdown_table(
+        ["#", "食材", "分类", "领用量"],
+        [[i, r["name"], r["category"] or "—",
+          f"{r['qty']:.2f} {r['unit'] or ''}".strip()]
+         for i, r in enumerate(top, 1)],
+        right_align={3},
+    ) if top else ["", f"({window_text}无领料记录)"]
+    top_block = "\n".join([f"领用食材前 {len(top)} 名:"] + top_lines)
 
     answer = (
         f"{window_text}领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 **¥{total_cost:.2f}**, {len(trend)} 天有活动\n\n"
-        f"领用食材前 {len(top)} 名:\n\n{top_text}\n\n"
+        f"{top_block}\n\n"
         f"建议动作:\n"
         f"1. 把领用靠前的食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
         f"2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"

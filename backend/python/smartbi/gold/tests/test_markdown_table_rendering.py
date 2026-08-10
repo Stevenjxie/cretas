@@ -115,14 +115,17 @@ _MUST_RENDER_A_TABLE = {
     "resolve_inventory_warning": "库存预警清单",
     "resolve_discount_summary": "折扣构成(不含上方的单条汇总事实)",
     "resolve_daypart_performance": "各时段表现",
+    "resolve_stock_shortage": "盘亏食材排行",
+    "resolve_recipe_cost": "菜品食材成本排行",
+    "resolve_requisition_trend": "领用食材排行",
 }
 
 # 同形状但**还没转**的 —— 登记在案, 不是漏掉。转一个就从这里挪进上面那张表。
-_PENDING_TABLE = {
-    "resolve_stock_shortage": "缺货清单",
-    "resolve_recipe_cost": "配方成本构成",
-    "resolve_requisition_trend": "领料趋势",
-}
+# 2026-08-11: 已清空(盘亏/配方成本/领料三个都转完了)。
+# ⛔ 别因为空了就删掉这张表: 它是「下一个写排行的人该在哪表态」的落点,
+#    删了之后新增的漏网之鱼就没有登记处, `test_no_resolver_silently_ships_
+#    a_numbered_ranking` 只能报错而给不出去处。
+_PENDING_TABLE: dict = {}
 
 # ⛔ 刻意不转: 表格化反而更差。
 _EXEMPT_FROM_TABLE = {
