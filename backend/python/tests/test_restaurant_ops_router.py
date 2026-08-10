@@ -1872,7 +1872,8 @@ def test_store_dish_ranking_honors_llm_direction_for_colloquial_typo(monkeypatch
     assert result.meta["dish_ranking"] == "best"
     assert result.meta["ranking_limit"] == 1
     assert result.meta["focus_entity"]["name"] == "招牌藤椒鸡"
-    assert "销量 120 份" in result.answer_text
+    # 排行改表格: 断言「菜名与销量在同一行且相邻」, 不再挂在 "销量 N 份" 这个排版上
+    assert "| 招牌藤椒鸡 | 120 |" in result.answer_text, result.answer_text
     assert "卤炸牛肉串" not in result.answer_text
 
 
@@ -2525,10 +2526,14 @@ def test_selected_stores_get_per_store_dish_rankings(monkeypatch):
     assert result.meta["compare_stores"] is True
     assert result.meta["excluded_item_count"] == 1
     assert "人民路店" in result.answer_text
-    assert "招牌菜 — 销量 100 份" in result.answer_text
+    assert "| 招牌菜 | 100 |" in result.answer_text, result.answer_text
     assert "湖滨路店" in result.answer_text
-    assert "藤椒鱼 — 销量 200 份" in result.answer_text
-    assert "米饭 —" not in result.answer_text
+    assert "| 藤椒鱼 | 200 |" in result.answer_text, result.answer_text
+    # 米饭是附属项, 不许进榜 —— 原来靠 "米饭 —" 这个列表排版判, 表格里不存在
+    # 那个形状, 断言会恒真。改成裸名字(口径说明里写的是「米饭、餐具、纸巾等」,
+    # 需要排除掉那句才不误伤)。
+    body = result.answer_text.split("\n>")[0]
+    assert "米饭" not in body, body
 
 
 def test_single_selected_store_uses_ranking_wording_not_comparison(monkeypatch):
