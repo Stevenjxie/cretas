@@ -852,16 +852,23 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "点击“开工”时" in current_sop
     assert "PROGRESS" in current_sop
     assert "PENDING_WAREHOUSE_RECEIPT" in current_sop
+    assert "基本类型是必填业务属性" in current_sop
+    assert "L1/L2/L3 分类是可选辅助信息" in current_sop
+    assert "不再生成或要求 16 位分类业务编码" in current_sop
+    assert "已删除料号也不能回收复用" in current_sop
     assert "翻页过程中已见类别只增不减" in current_sop
-    assert "历史类别不能因字典被清空而显示空白" in current_sop
-    assert "新建物料必须由用户填写料号" in current_sop
-    assert "保存请求要保留该料号" in current_sop
-    assert "编辑既有物料也不能借此改号" in current_sop
+    assert "生产批次只允许 `WORKFLOW` 路线" in current_sop
+    assert "申请、审批和仓库实收是三个独立动作" in current_sop
+    assert "客户来料必须选择有效客户" in current_sop
+    assert "汇总量严格等于批次数量之和" in current_sop
+    assert "`BY_STOCK` 小结形成的成品已经是有效、可用库存批次" in current_sop
+    assert "调拨凭证只在收货确认后生成" in current_sop
+    assert "归属读取失败时保持缺失并阻止" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-07" in html
+    assert "origin/main · SOP sync 2026-08-10" in html
     assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
     assert "配置格不改变 Workflow 节点或连线" in html
     assert "① 投入" in html
@@ -894,10 +901,12 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "[{batchNo, qty}]" in html
     assert "开工”必须同步建立生产批次" in html
     assert "PENDING_WAREHOUSE_RECEIPT" in html
-    assert "无分段字典时保留类别与手填料号" in html
-    assert "原料”等历史类别不会因字典被清空而显示空白" in html
-    assert "无字典新建请求保留用户填写的料号并成功保存" in html
-    assert "没有分类码的类别不显示空括号" in html
+    assert "使用短料号并保持不可复用" in html
+    assert "L1 → L2 → L3 分类为可选辅助信息" in html
+    assert "不再生成或要求 16 位分类业务编码" in html
+    assert "已删除料号也不回收复用" in html
+    assert "无采购订单入库与仓库任务工作台" in html
+    assert "申请、审批和仓库实收是三个独立动作" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -989,6 +998,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 工作台",
             "营销员提成",
             "当前页面只确认发现卡可见",
+            "登记表是通用查询的单一真值",
+            "是否答到所问只影响学习",
+            "营收预测的历史回测误差",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -1017,6 +1029,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 工作台",
             "营销员提成",
             "当前前端只确认发现卡可见",
+            "登记表驱动的通用问答",
+            "营收预测与历史回测误差",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -1038,6 +1052,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 工作台",
             "营销员月度累计复购阶梯提成",
             "客户端未接入动作前不得宣称页面已能生成策划案",
+            "历史回测误差约 ±X%",
+            "经营断点",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -1083,7 +1099,10 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "<strong>五部门驾驶舱：</strong>" in ai_assist
     assert "AI 工作台" in ai_assist
     assert "营销员提成" in ai_assist
-    assert "无字典模式的类别与料号" in ai_assist
+    assert "基本类型、可选分类与短料号" in ai_assist
+    assert "无订单入库与库存归属" in ai_assist
+    assert "登记表与通用问答边界" in ai_assist
+    assert "营收预测与历史回测误差" in ai_assist
     assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 

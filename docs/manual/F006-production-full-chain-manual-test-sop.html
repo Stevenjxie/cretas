@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-          <span class="stamp code">origin/main · SOP sync 2026-08-07</span>
+        <span class="stamp code">origin/main · SOP sync 2026-08-10</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -461,9 +461,9 @@
         <div class="section-head"><span class="section-no">02</span><div class="section-title"><h3>创建投入物料档案</h3><p>原料、辅料、包材都在“原料类型字典”，不在 SKU 管理里创建</p></div></div>
         <div class="path">仓储管理 <b>›</b> 原料类型字典 <b>›</b> 新增</div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="raw-1"><span></span></span><span><h4>建立本轮测试投入物料</h4><p>创建 4 个可供批次选择的原料 A/B/C/D；另建“黄油调味料、香辛料”作为按工序辅料，以及“成品盒、封膜、外箱”作为包材。名称都加同一测试前缀，避免选错历史数据。</p><span class="expect">各名称在对应类别列表只出现一条；编码由系统自动生成；辅料和包材之后能在 BOM 的对应页签被筛选到。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、类别。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>按页面要求选择 L1 大类 → L2 中类 → L3 小类；没有 L3 时可“＋ 快捷创建新品类”。</li></ul><span class="expect">单位显示为 kg，L1/L2/L3 均已选，保存后可搜索到。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="raw-category-fallback"><span></span></span><span><h4>无分段字典时保留类别与手填料号</h4><p>工厂没有 L1/L2/L3 分段字典时，类别下拉使用平台类别枚举，并合并当前列表已出现和正在编辑物料自身的真实类别；翻页过程中已见类别只增不减。新建物料时手工填写料号并保存；有分段字典时仍由后端生成，编辑既有物料不允许改号。</p><span class="expect">“原料”等历史类别不会因字典被清空而显示空白，仍可回显和筛选；无字典新建请求保留用户填写的料号并成功保存。没有分类码的类别不显示空括号，系统不替用户改写已有类别或料号。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-1"><span></span></span><span><h4>建立本轮测试投入物料</h4><p>创建 4 个可供批次选择的原料 A/B/C/D；另建“黄油调味料、香辛料”作为按工序辅料，以及“成品盒、封膜、外箱”作为包材。名称都加同一测试前缀，避免选错历史数据。</p><span class="expect">各名称在对应类别列表只出现一条；短料号由用户填写或采用系统建议值；辅料和包材之后能在 BOM 的对应页签被筛选到。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、基本类型；基本类型是必填业务属性。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>L1 → L2 → L3 分类为可选辅助信息；选择时必须是有效链路，并与基本类型一致。</li></ul><span class="expect">单位显示为 kg，未选分类也能保存；选择分类时链路有效且基本类型一致。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-code-governance"><span></span></span><span><h4>使用短料号并保持不可复用</h4><p>新建物料时填写简短、可读的料号，或采用页面按基本类型给出的建议前缀（如 <code>YL</code>/<code>WL</code>/<code>BC</code>）后再确认。系统不再生成或要求 16 位分类业务编码；分类与料号彼此独立。</p><span class="expect">保存后的料号不可修改；与现存或已删除记录冲突时明确阻止，已删除料号也不回收复用。列表继续回显历史类别，但系统不替用户改写既有类型、分类或料号。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-packaging"><span></span></span><span><h4>原料多包装与基本单位库存</h4><p>在同一原料类型、紧邻库存基本单位维护有效包装规格，例如 <code>1箱=10kg</code>、<code>1袋=2.5kg</code>。它表达“采购包装单位 → 库存基本单位”，不在成品 SKU 管理里配置。采购、收货和跨仓调拨可按箱/袋录入，系统保存包装身份、数量、系数与折合基本量快照。</p><span class="expect">多规格必须显式选择；收货确认后的库存批次、余额、BOM 可用量和生产领料仍只使用 kg。超收按折合基本量比较；抄码/称重原料按现场实际称重，不套固定箱重。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-byproduct"><span></span></span><span><h4>建立可盘点副产 SKU</h4><p>肥油、碎骨等可回收或可再投入副产也在原料类型字典建档，并打开“副产”标记。副产是物料标记，不是新的材质大类；名称、库存单位和真实原料/其它材质分类仍分别维护。</p><span class="expect">采购和普通 BOM 投入选择器排除副产标记项；BOM“副产”页签只列出已标记物料。同一副产只有一个库存身份，之后可被另一条工艺当原料投入。</span></span></label>
         </div>
@@ -498,7 +498,7 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>在 Workflow 画布配置并激活 BOM / 配方</h3><p>辅料、包材和副产是画布派生的配置叠层，不是新的 Workflow 拓扑节点</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择目标 SKU</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。旧“BOM/配方维护”菜单已退出日常入口；保留的深链接只用于诊断或历史兼容。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役，不得作为新计划的替代路径。旧“BOM/配方维护”菜单已退出日常入口；保留的深链接只用于诊断或历史兼容。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>当前画布中目标 SKU 的 Workflow 草稿修订</td><td>无；画布只读展示</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
@@ -643,13 +643,24 @@
         </div>
       </section>
 
+      <section id="unordered-inbound">
+        <div class="section-head"><span class="section-no">W1</span><div class="section-title"><h3>无采购订单入库与仓库任务工作台</h3><p>申请、审批和仓库实收是三个独立动作；申请成功绝不等于库存已增加</p></div></div>
+        <div class="path">仓储管理 <b>›</b> 无订单入库申请　＋　仓储管理 <b>›</b> 入库任务与批次</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="unordered-inbound-1"><span></span></span><span><h4>按真实原因创建申请</h4><p>原因只能选客户来料、赠品或其他。客户来料必须选择有效客户，未来形成客户所有库存；赠品和其他形成公司所有库存。填写物料、预计数量、单位和备注后只提交申请。</p><span class="expect">创建申请不写库存、不生成可用批次；客户来料缺客户时阻止，所有权口径可在审批前回读。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="unordered-inbound-2"><span></span></span><span><h4>审批后生成仓库任务</h4><p>审批人核对原因、客户、物料与预计数量后同意或驳回；驳回必须填写原因。只有审批通过才生成仓库待收任务。</p><span class="expect">驳回不留库存或待收批次；审批通过也仍未增加库存，仓库任务与原申请、OA 实例互相可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="unordered-inbound-3"><span></span></span><span><h4>仓库按实物部分或最终收货</h4><p>仓管在“入库任务与批次”按生命周期页签定位任务，录入实收批次、数量和日期；允许部分收货，最后一次明确完成。重复提交使用同一幂等键。</p><span class="expect">只有仓库确认的实收量写库存；部分收货后任务仍开放，最终收货后关闭，重试不重复入账。任务计数失败时角标隐藏而不是伪装成 0。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-workspace"><span></span></span><span><h4>核对多任务工作台与小屏边界</h4><p>入库任务、出库/发货、调拨等按任务页签切换并保留筛选状态；右侧参考信息只读。手机或窄屏上的抽屉、弹窗正文可滚动，操作栏保持可达。</p><span class="expect">切换任务不丢当前上下文；只读参考区没有业务写按钮；小屏不再因弹窗超高遮住确认或取消。</span></span></label>
+        </div>
+      </section>
+
       <section id="stock" class="stock-only">
         <div class="section-head"><span class="section-no">A</span><div class="section-title"><h3>路线 A：存货生产</h3><p>不依赖销售订单，可多次小结，最后手动停产</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产计划 <b>›</b> 新建生产计划</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-1"><span></span></span><span><h4>来源类型选“存货生产”</h4><p>“生产成品”可多选。选择一个成品时应匹配其 Workflow；选择多个时，系统优先完全匹配，没有完全匹配才选最小联产超集。</p><span class="expect">页面显示“本计划已固定工序路线”、拓扑类型、版本和终端产出。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-2"><span></span></span><span><h4>处理路线歧义</h4><p>同一匹配层存在多个 Workflow，或所选产品会带出额外联产品时，点“选择生产工序路线”；鼠标悬停“悬浮查看 Cell 图”确认中间工序和连接方式。</p><span class="expect">不能仅靠 Workflow 名字判断；必须确认工序 Cell 图和完整产出集合。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并验证幂等创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。点击创建后不要反复操作；可用网络重试或重复提交同一请求验证幂等。</p><span class="expect">按钮处理中禁用；重复请求只返回同一张计划、一个计划号。列表“生产类型”显示“库存生产”，计划数量展示“按实际报工”；可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划、库存归属并验证幂等创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。客户为可选：留空表示公司所有库存，选择有效客户表示该客户所有库存。填写计划日期、预计完成日、人员/主管和备注。点击创建后不要反复操作；可用网络重试或重复提交同一请求验证幂等。</p><span class="expect">无效或停用客户会被清除/阻止；客户所有计划的投入和产出必须保持同一客户归属。按钮处理中禁用；重复请求只返回同一张计划、一个计划号。列表“生产类型”显示“库存生产”，计划数量展示“按实际报工”；可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
         </div>
       </section>
 
@@ -774,7 +785,7 @@
         <div class="section-head"><span class="section-no">09</span><div class="section-title"><h3>完成库存结算</h3><p>报工记录完成后，还要执行对应路线的库存结算动作</p></div></div>
         <div class="steps stock-only">
           <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-1"><span></span></span><span><h4>执行第一次“小结”</h4><p>确认弹窗中的计划号和当前已录入数量。小结会按本轮正式报工增量结算投入，并把本轮半成品/成品写入对应入库状态；计划保持开放。</p><span class="expect">提示“已小结，计划继续挂起”；本轮消耗标记已结算，入库状态、批次与库存流水一致；重复请求只返回既有结果。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-2"><span></span></span><span><h4>验证第二轮增量小结</h4><p>再报一轮并再次小结，核对只增加第二轮产出、只结算第二轮投入，第一轮不得重复扣减或重复入库。</p><span class="expect">两次小结的增量可分别解释，总库存等于期初 ± 两轮变动；第一轮历史行只读。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-2"><span></span></span><span><h4>验证第二轮增量与多批次桥接</h4><p>再报一轮并再次小结，核对只增加第二轮产出、只结算第二轮投入。相同 SKU、单位和库存归属可以由多个中间批次汇总进入本轮结算，但必须逐批保留真实数量，不得挑一个代表批次伪装全部来源。</p><span class="expect">两次小结的增量可分别解释；本轮汇总数量严格等于各批次数量之和，归属不混用。<code>BY_STOCK</code> 小结形成的成品已经是有效可用批次，不再要求第二次“仓库确认完工入库”；第一轮历史行只读。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-3"><span></span></span><span><h4>生产完成后“停产”</h4><p>确认所有轮次都已小结后点“停产”，填写停产原因并确认。另在未开工、已取消、已停产等不允许状态尝试停产。</p><span class="expect">只有允许的运行状态可以停产；成功后计划关闭且不能继续小结，操作人、时间和原因可回读；历史报工和小结仍可查看。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-cancel"><span></span></span><span><h4>验证计划取消边界</h4><p>对尚未形成正式报工/结算事实的计划执行取消，填写原因；再对已开工或已有正式事实的计划尝试取消。</p><span class="expect">仅允许状态可以取消并记录操作人、时间、原因；已开工计划被明确阻止并引导使用停产/结算，重复取消不产生第二次状态变化。</span></span></label>
         </div>
@@ -802,11 +813,11 @@
 
       <section id="warehouse-output">
         <div class="section-head"><span class="section-no">W2</span><div class="section-title"><h3>生产后仓储交接：生产仓 → 主仓/外仓</h3><p>完工入账和跨仓移动是两件事；必须先有真实成品批次，再做仓间调拨</p></div></div>
-        <div class="path">生产小结/结单 <b>›</b> 生产仓成品批次 <b>›</b> 仓储管理 → 调拨单 <b>›</b> 目标主仓/外仓确认入库</div>
+        <div class="path">生产小结/结单 <b>›</b> 生产仓成品批次 <b>›</b> 仓储管理 → 调拨单 → 手工新建（<code>/transfer/new</code>） <b>›</b> 目标主仓/外仓确认入库</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-1"><span></span></span><span><h4>确认仓库收货后产出进入正确生产仓</h4><p>完成生产结算及仓库确认入库后，在分仓库存查询按成品 SKU、生产批次和生产日期检索，记录生产仓数量、单位和质量状态。</p><span class="expect">仓库确认的正式产出与生产仓新增批次一一对应；未确认、草稿、副产物和未选联产品不会误入可用成品库存。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-2"><span></span></span><span><h4>创建生产仓到主仓/外仓调拨</h4><p>新建仓库间调拨，源仓选生产仓，目标仓选实际存货或发货仓；添加成品 SKU、数量、单位，并指定或接受 FEFO 批次。</p><span class="expect">调拨数量不能超过生产仓可用量；源/目标仓不能相同；成品盒数和批次身份不被换算成 kg。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-3"><span></span></span><span><h4>走完审批、发运、签收和入库</h4><p>依次提交申请、主管审批、生产仓确认发运、目标仓确认签收、确认入库。每一步对照纸面/实物清点数量。</p><span class="expect">CONFIRMED 后源仓减少、目标仓增加、同厂总库存不变；审批人及各操作时间可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-2"><span></span></span><span><h4>在独立工作区创建生产仓到主仓/外仓调拨</h4><p>从调拨列表进入独立“手工新建”工作区 <code>/transfer/new</code>，源仓选生产仓，目标仓选实际存货或发货仓；添加成品 SKU、数量、单位，并指定或接受 FEFO 批次。先保存草稿，再提交 OA。</p><span class="expect">调拨数量不能超过生产仓可用量；源/目标仓不能相同；成品盒数和批次身份不被换算成 kg。同一物料重复成行时在确认前阻止，不得留下重复扣减风险。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-3"><span></span></span><span><h4>走完审批、发运、签收、入库与凭证</h4><p>依次提交申请、主管审批、生产仓确认发运、目标仓确认签收、确认入库。调拨凭证只在收货确认后生成；取消或驳回要作废既有凭证，<code>FAILED</code>/<code>PENDING</code> 允许在隔离批次中重试，零金额调拨跳过凭证。</p><span class="expect"><code>CONFIRMED</code> 后源仓减少、目标仓增加、同厂总库存不变；审批人及各操作时间可追溯。失败重试不重复记账，作废单不保留有效凭证。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-4"><span></span></span><span><h4>处理调拨差异</h4><p>故意做一次少收测试，签收数量与发运数量不同；打开“调拨差异找单”记录原因并按页面流程处理。</p><span class="expect">差异可见且未处理前不静默平账；不能把少收数量同时计入两个仓库。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-5"><span></span></span><span><h4>完成生产与仓库双方交接签字式复核</h4><p>生产方确认产出批次/数量，仓管确认实收批次/数量；记录生产计划号、报工号、调拨号、源仓、目标仓和差异单号。</p><span class="expect">生产、仓库和库存查询三处可用同一批次链串起来，不依赖口头交接。</span></span></label>
         </div>
@@ -848,10 +859,10 @@
 
       <section id="sales-close" class="sales-only">
         <div class="section-head"><span class="section-no">B2</span><div class="section-title"><h3>销售管理完工后的交付与财务闭环</h3><p>销售创建任务，仓库确认扣库存；发货、开票、收款、退货分别留痕</p></div></div>
-        <div class="path">销售管理 <b>›</b> 销售订单详情 <b>›</b> 创建发货单　＋　仓库角色 <b>›</b> 待确认发货</div>
+        <div class="path">销售管理 <b>›</b> 销售订单全生命周期工作台 <b>›</b> 创建发货单　＋　仓库角色 <b>›</b> 待确认发货</div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-1"><span></span></span><span><h4>销售创建发货单</h4><p>在销售订单选择已入主仓/外仓的成品，填写计划发货日期、地址和各行计划数量，创建发货单。</p><span class="expect">只生成待仓库确认的任务单，不立即扣库存；产品、客户和订单号自动关联。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-2"><span></span></span><span><h4>仓库角色分配批次并确认发货</h4><p>从销售订单详情创建的待确认发货任务进入仓库确认页，核对实际数量、来源仓和 FEFO 批次；每行批次分配合计必须等于实发量，再确认发货。</p><span class="expect">确认后才扣成品库存并生成送货单；库存不足、仓库不符或分配合计不等时阻止。“仓储管理 → 出货记录”只用于历史查询，不是正式写入口。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-1"><span></span></span><span><h4>在统一生命周期工作台创建发货单</h4><p>按草稿、审批、生产、待发货、部分发货和已完成等生命周期筛选订单；选择已入主仓/外仓的成品，填写计划发货日期、地址和各行计划数量，创建发货单。</p><span class="expect">只生成待仓库确认的任务单，不立即扣库存；产品、客户和订单号自动关联，列表状态与详情、仓库任务一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-2"><span></span></span><span><h4>仓库角色核对库存归属并确认发货</h4><p>从销售订单详情创建的待确认发货任务进入仓库确认页，核对实际数量、来源仓、FEFO 批次和库存归属。公司所有显示“公司库存”；客户所有必须显示客户名称/编码，归属读取失败时显示缺失并阻止，不得默认成公司库存。每行批次分配合计必须等于实发量，再确认发货。</p><span class="expect">确认后才扣成品库存并生成送货单；客户订单不得误用其他客户或公司所有批次。库存不足、仓库不符、归属不符或分配合计不等时阻止。“仓储管理 → 出货记录”只用于历史查询，不是正式写入口。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-3"><span></span></span><span><h4>核对部分发货和订单状态</h4><p>先只发部分数量，再发剩余数量；每次回看销售订单详情、发货记录和库存。</p><span class="expect">状态依次为部分发货/已发货；累计实发不超过订单量，每个发货单只扣一次。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-4"><span></span></span><span><h4>开票与收款/应收核对</h4><p>按权限从销售订单发起开票申请，由财务审核；在收款管理登记回款，再到应收应付和客户详情的发票/付款页签核对。</p><span class="expect">订单金额、已开票、已收款和应收余额可计算闭合；销售人员不能越权完成财务审核。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-5"><span></span></span><span><h4>销售退货与退款分支</h4><p>对已发货行发起销售退货，数量不得超过累计已发货量；提交审批后分别核对退货入库、退款/销售付款申请和应收变化。</p><span class="expect">DRAFT 退货不直接改库存或资金；审批后动作可追溯，重复审批不重复入库/退款。</span></span></label>

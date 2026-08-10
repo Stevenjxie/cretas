@@ -1122,7 +1122,9 @@
 <button class="suggestion" type="button" data-question="逐道报工怎样查看服务端短缺明细，并从生产计划追踪销售、采购或调拨原单？"><span class="suggestion-index">12</span><span>投入来源、缺料与单据追踪</span></button>
 <button class="suggestion" type="button" data-question="只、个、件和自定义单位怎样保存？clerk 逐道录入为什么按批次库存单位填数量？标签证据与 BOM 有哪些门禁？"><span class="suggestion-index">13</span><span>单位、标签证据与 BOM 新门禁</span></button>
 <button class="suggestion" type="button" data-question="旧 BOM 菜单不见后，怎样在 Workflow 画布从零建首版配方？BOM 成本为什么不能直接和实际完整成本比？"><span class="suggestion-index">14</span><span>画布 BOM 与成本边界</span></button>
-<button class="suggestion" type="button" data-question="工厂没有分段字典时，物料类别和新建料号分别怎么保存，为什么不能把用户填写的料号删掉？"><span class="suggestion-index">15</span><span>无字典模式的类别与料号</span></button>
+	<button class="suggestion" type="button" data-question="原料基本类型、可选 L1/L2/L3 分类和短料号分别怎么填？料号为什么保存后不能修改或复用？"><span class="suggestion-index">15</span><span>基本类型、可选分类与短料号</span></button>
+	<button class="suggestion" type="button" data-question="无采购订单入库时，申请、审批和仓库部分/最终收货怎样分开？客户来料和公司库存的归属怎么判断？"><span class="suggestion-index">16</span><span>无订单入库与库存归属</span></button>
+	<button class="suggestion" type="button" data-question="入库任务与批次工作台怎样切换任务？手工调拨为什么从独立工作区创建，凭证什么时候生成或作废？"><span class="suggestion-index">17</span><span>仓库任务、调拨与凭证</span></button>
               </div>
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
@@ -1148,7 +1150,9 @@
 <button class="suggestion" type="button" data-question="餐饮预测排班会根据什么数据，支持哪些时间范围和门店范围，一键调整怎样安全确认？"><span class="suggestion-index">13</span><span>预测排班的范围与调整边界</span></button>
 <button class="suggestion" type="button" data-question="餐饮 AI 实时经营指挥屏展示哪些事实，传输状态、模拟来源和大模型解释的边界是什么？"><span class="suggestion-index">14</span><span>实时经营指挥屏与来源边界</span></button>
 <button class="suggestion" type="button" data-question="今日营运台的主动发现、谜题菜、损耗提示、几点最忙和行动建议分别怎么理解？"><span class="suggestion-index">15</span><span>主动发现与接地行动建议</span></button>
-<button class="suggestion" type="button" data-question="AI 工作台和营销员提成分别从哪里进入，菜单、路由与权限有哪些边界？"><span class="suggestion-index">16</span><span>AI 工作台与营销员提成入口</span></button>
+	<button class="suggestion" type="button" data-question="AI 工作台和营销员提成分别从哪里进入，菜单、路由与权限有哪些边界？"><span class="suggestion-index">16</span><span>AI 工作台与营销员提成入口</span></button>
+	<button class="suggestion" type="button" data-question="餐饮问答的指标、维度和聚合怎样由登记表驱动？通用执行器为什么不能执行任意 SQL，也不接管诊断优化？"><span class="suggestion-index">17</span><span>登记表与通用问答边界</span></button>
+	<button class="suggestion" type="button" data-question="营收预测现在用什么历史模型？经营断点怎样用本店回测选择，为什么误差不能固定写成 ±15-20%？"><span class="suggestion-index">18</span><span>营收预测与历史回测误差</span></button>
               </div>
 
               <button class="learn-launch" id="learn-launch" type="button">
@@ -1311,7 +1315,9 @@
             '<p><strong>计划预警：</strong>定时把租户配置的相对时间查询计划重编译为与问答相同的 sealed QuerySpec，再应用阈值；当前 P1 只支持销售汇总环比。无数据、覆盖不一致或执行失败都是“无法判定”，不能当正常或自动关闭既有告警。</p>' +
 '<p><strong>平台同步：</strong>当前已实现客如云风格服务端 connector，订单生产按 60 秒拉取，当天营收/渠道 Gold 每轮刷新，菜品月聚合默认 600 秒刷新。菜品、食材和配方主数据启动时先同步一次、默认每 6 小时刷新；整批校验和替换，失败保留上一版菜单且不影响订单增量同步。瞬时故障保留重试；达到卡死条件的永久坏单据进入死信隔离，让游标继续推进并保留人工复核线索。它不是门店自助填密钥的设置页；mock 平台只用于测试，未开通正式直连时仍走 SmartBI → Excel 上传。</p>' +
 '<p><strong>预测排班：</strong>支持明天、下周、下个月，按门店及午市/下午茶/晚市/夜宵展示。确定性预测 FactBook 读取当前预订、过去 7/30/365 天 POS 与客流趋势、岗位技能、工时和目标人效；历史实际人效只作证据，大模型只解释、不补数字。预订来源标注模拟或平台；看板只读，一键调整必须预览后按相同计划指纹精确确认，保留幂等回执与审计，过期计划拒绝提交。</p>' +
-'<p><strong>实时经营指挥屏：</strong>Dashboard 分别传输 Java 经营汇总和 Python 预测 FactBook，展示今日请领、待审批、当前预订、近 15 分钟客流事件、明日预测客数、建议/当前人数、正向缺口与置信度。等待、连接中、刷新中、实时、部分可用和失败必须如实显示；平台、内部与模拟来源分别标注，模拟数据不能冒充实单。大模型只在提问时读取事实并解释，不生成数字；排班页内 AI 也只用 FactBook 数字，历史实际人效仅作证据。</p>',
+	'<p><strong>登记表与通用问答：</strong>planner 词汇、允许的指标/维度/聚合和通用执行器共享同一登记表；只有登记且当前真实表结构存在的组合才执行，缺字段明确为缺失，不补 0、不执行任意 SQL。通用兜底只处理查询、排行和对比，诊断/优化仍交给专用能力。扩展闸说“已有”还要实际跑通；答案相关性裁判只决定是否学习或晋升，裁判不可用时关闭学习但本轮回答照常返回。</p>' +
+	'<p><strong>营收预测回测：</strong>当前按日净营收历史过滤异常值；历史不足 14 天时用均值兜底，足够时用线性趋势并在样本充分时叠加星期因子。经营断点通过本店滚动回测 MAPE 比较全历史与断点后历史；缺失日期不补 0，预测从最新业务数据日后开始。页面展示实际模型的历史回测误差和上下界，不固定写 ±15–20%，也不宣称已使用 Prophet、节假日、天气或竞品事实。</p>' +
+	'<p><strong>实时经营指挥屏：</strong>Dashboard 分别传输 Java 经营汇总和 Python 预测 FactBook，展示今日请领、待审批、当前预订、近 15 分钟客流事件、明日预测客数、建议/当前人数、正向缺口与置信度。等待、连接中、刷新中、实时、部分可用和失败必须如实显示；平台、内部与模拟来源分别标注，模拟数据不能冒充实单。大模型只在提问时读取事实并解释，不生成数字；排班页内 AI 也只用 FactBook 数字，历史实际人效仅作证据。</p>',
           note: '导览助手只解释目录、证据等级和提问方法，不替用户计算或分析实际业务数据；真实分析进入 SmartBI 餐饮 AI。',
           asks: [
             { label: '16 项诊断都有什么？', question: '系统的餐饮诊断引擎都检查哪些指标？超标了会怎样？' },
