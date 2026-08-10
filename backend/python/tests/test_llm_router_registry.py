@@ -49,7 +49,6 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_b", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
     ("aliyun_b", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
-    ("aliyun_b", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
 
     ("aliyun_c", "qwen3.8-max"): datetime.date(2026, 11, 1),
     ("aliyun_c", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
@@ -57,19 +56,25 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_c", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max-2026-05-20"): datetime.date(2026, 8, 20),
-    ("aliyun_c", "qwen3-next-80b-a3b-instruct"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-v3.2-exp"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "glm-4.6"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "deepseek-v3.2"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.5-plus-2026-02-15"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"): datetime.date(2026, 8, 13),
     ("aliyun_c", "kimi-k2-thinking"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-r1-0528"): datetime.date(2026, 8, 13),
     ("aliyun_c", "MiniMax-M2.5"): datetime.date(2026, 8, 13),
 }
+
+
+# ── 2026-08-10 探针淘汰 5 条 (全部 403 AllocationQuota.FreeTierOnly) ──────
+#   aliyun_b/qwen3.7-max-preview
+#   aliyun_c/deepseek-v3.2            ← 当天曾是 REVIEW/CHAT/MAPPER 三槽链头
+#   aliyun_c/glm-4.6                  ← 淘汰前是 REVIEW 链头
+#   aliyun_c/qwen3-next-80b-a3b-instruct
+#   aliyun_c/qwen3-vl-flash-2026-01-22 ← 唯一 VL, 移除后 SLOT.VL 变空链(§9.1 已拍板)
+# 移除只需探针证据(准入才要控制台余量 ∩ 探针双证) —— 移除永远不制造计费风险。
+# 08-13 那批 aliyun_c 免费额度正在成批烧完, 未来几天还会有。
 
 
 def test_aliyun_registry_matches_frozen_probe_result():

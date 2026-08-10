@@ -152,7 +152,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_b", "qwen3.5-ocr"): _d(2026, 9, 14),
     ("aliyun_b", "kimi-k2.7-code"): _d(2026, 9, 14),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
-    ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
 
     # ── aliyun_c 长期 (> 08-13) ──
     ("aliyun_c", "qwen3.8-max"): _d(2026, 11, 1),
@@ -164,14 +163,10 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
 
     # ── aliyun_c 08-13 到期 (优先榨干; _build_chain 会把它们排在最前) ──
-    ("aliyun_c", "qwen3-next-80b-a3b-instruct"): _d(2026, 8, 13),
     ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-4.6"): _d(2026, 8, 13),
-    ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.5-plus-2026-02-15"): _d(2026, 8, 13),
     # ("aliyun_c", "qwen3-max-2025-09-23") 移除 08-10: 见下方段落。
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"): _d(2026, 8, 13),
     # ("aliyun_c", "qwen3-vl-32b-instruct") 移除 08-10: 见下方段落。
     ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): _d(2026, 8, 13),
@@ -277,7 +272,6 @@ _CAPABILITY_MAX_AGE_DAYS = 21   # 超龄 → 忽略本表, 退回纯到期日排
 _CAPABILITY_PASS_FLOOR = 0.5
 
 _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
-    ("aliyun_c", "qwen3-next-80b-a3b-instruct"): (1.0, 1.1),
     ("aliyun_a", "qwen3.7-flash-2026-07-15"): (1.0, 1.6),
     ("aliyun_a", "qwen3.7-flash"): (1.0, 1.7),
     ("aliyun_b", "deepseek-v4-flash-0731"): (1.0, 1.9),
@@ -287,7 +281,6 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("aliyun_c", "qwen3.8-max"): (1.0, 2.8),
     ("aliyun_b", "qwen3.8-max"): (1.0, 2.9),
     ("aliyun_c", "qwen3.5-plus-2026-02-15"): (1.0, 3.8),
-    ("aliyun_c", "glm-4.6"): (1.0, 4.0),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): (1.0, 4.1),
     ("aliyun_c", "deepseek-v3.2-exp"): (1.0, 4.7),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): (1.0, 9.7),
@@ -296,7 +289,6 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("aliyun_a", "kimi-k2.7-code"): (1.0, 12.9),
     ("aliyun_b", "kimi-k2.7-code"): (1.0, 16.1),
     ("aliyun_c", "kimi-k2.7-code"): (1.0, 19.2),
-    ("aliyun_c", "deepseek-v3.2"): (0.0, 0.1),   # 🔴 全 403 quota, 旧排序下是链头
 }
 
 
@@ -901,12 +893,9 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 # ≤4s), 各写一份 21 行迟早漂移成两张不一致的表。将来若真分化(例如 REVIEW 需要
 # 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
-    ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
-    ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
     # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
     ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
     ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
-    ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
     ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
     # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
     ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
@@ -930,10 +919,7 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
 _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
     SLOT.CHAT: [
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),   # 08-13  0.8s
         ("aliyun_c", "deepseek-v3.2-exp"),             # 08-13  0.9s
-        ("aliyun_c", "glm-4.6"),                       # 08-13  0.9s
-        ("aliyun_c", "deepseek-v3.2"),                 # 08-13  1.1s
         ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
         ("aliyun_c", "qwen3.5-plus-2026-02-15"),       # 08-13  1.2s
         # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
@@ -949,10 +935,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     ],
     # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
     SLOT.CHART: [
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
         ("aliyun_c", "deepseek-v3.2-exp"),
-        ("aliyun_c", "glm-4.6"),
-        ("aliyun_c", "deepseek-v3.2"),
         # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
         ("aliyun_c", "qwen3.7-max-2026-05-20"),
         # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
@@ -986,10 +969,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #    (该闸 2026-08-09 从「模型名不含 max/deepseek/kimi」改成按实测属性判 ——
     #     名字代理会误伤 minimax-m2.7 里的 "max", 也拦不住一个叫得好听的慢模型。)
     SLOT.MAPPER: [
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
         ("aliyun_c", "deepseek-v3.2-exp"),
-        ("aliyun_c", "glm-4.6"),
-        ("aliyun_c", "deepseek-v3.2"),
         ("aliyun_a", "qwen3.7-flash"),
         ("aliyun_a", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "deepseek-v4-flash-0731"),
@@ -1000,9 +980,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.REVIEW: list(_QUALITY_TIER_POOL),
     # REASONING — 允许慢, profile 为 {} (不设 enable_thinking)。
     SLOT.REASONING: [
-        ("aliyun_c", "deepseek-v3.2"),
         ("aliyun_c", "deepseek-v3.2-exp"),
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
         ("aliyun_c", "MiniMax-M2.5"),                  # 仅此槽可用(关思考会 400)
         ("aliyun_c", "kimi-k2-thinking"),
         ("aliyun_c", "deepseek-r1"),
@@ -1013,7 +991,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_b", "qwen3.7-max-2026-05-17"),
         ("aliyun_c", "qwen3.7-max-preview"),
         ("aliyun_a", "qwen3.7-max-preview"),
-        ("aliyun_b", "qwen3.7-max-preview"),
         ("aliyun_c", "kimi-k2.7-code"),
         ("aliyun_b", "kimi-k2.7-code"),
         ("aliyun_a", "kimi-k2.7-code"),
@@ -1031,7 +1008,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #      死亡。明确报错优于把图片请求静默降级给文本模型瞎猜 —— CLAUDE.md
     #      核心原则 1。不为它补新 VL 候选。
     SLOT.VL: [
-        ("aliyun_c", "qwen3-vl-flash-2026-01-22"),     # 08-13  0.7s
     ],
 }
 

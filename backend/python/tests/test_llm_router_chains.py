@@ -123,7 +123,7 @@ def _failing_pairs() -> set:
     }
 
 
-def test_measured_failures_never_precede_measured_passes():
+def test_measured_failures_never_precede_measured_passes(monkeypatch):
     """实测不达标的模型不许排在任何实测达标的模型前面。
 
     2026-08-10 实测的具体后果: aliyun_c/deepseek-v3.2 契约 0/6 全 403 quota,
@@ -133,11 +133,22 @@ def test_measured_failures_never_precede_measured_passes():
     ⛔ 地板(_TEXT_TAIL)豁免: 它必须留在结构性末位(见
        test_every_text_slot_has_a_floor), 那条约束优先于能力档。
     """
+    # 2026-08-10: 实测不达标的那条(aliyun_c/deepseek-v3.2, 0/6 全 403)当天就被
+    # 探针淘汰出 _SAFE_MODELS 了 —— 于是 _CAPABILITY 里一个不达标条目都不剩,
+    # 这条断言变得**无法失败**。这正是本文件开头警告过的情形, 按当时写下的处置
+    # 办: **造一个合成的不达标条目**, 让规则重新有东西可判。
+    # ⛔ 合成条目必须真的进 _CAPABILITY(monkeypatch), 不能只在测试里假设它存在 ——
+    #    否则测的是我脑子里的排序, 不是 _build_chain 的排序。
+    real_pool = [p for p in llm_router._SLOT_POOLS[SLOT.REVIEW]
+                 if p in llm_router._CAPABILITY]
+    assert real_pool, "REVIEW 池里没有任何被测过的条目, 无法构造本用例"
+    victim = real_pool[0]
+    synthetic = dict(llm_router._CAPABILITY)
+    synthetic[victim] = (0.0, 0.1)      # 合成: 判它不达标
+    monkeypatch.setattr(llm_router, "_CAPABILITY", synthetic)
+
     failing = _failing_pairs()
-    assert failing, (
-        "能力表里一个不达标条目都没有 —— 这条断言当前无法失败。"
-        "重测后若确实全员达标, 请改成从 _CAPABILITY 造一个合成不达标条目再断言。"
-    )
+    assert victim in failing, "合成的不达标条目没有被 _failing_pairs 识别"
     tail = set(llm_router._TEXT_TAIL)
     # ⚠️ 把"今天"钉在测量当天再重建链, **不读 import 期算好的 SLOT_MODELS**。
     #    否则这条闸会在 2026-08-31(测量日 + 21 天)那天因为能力表超龄、排序
