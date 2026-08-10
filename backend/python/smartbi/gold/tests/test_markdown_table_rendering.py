@@ -29,6 +29,8 @@ from __future__ import annotations
 import inspect
 import re
 
+import pytest
+
 from smartbi.gold.restaurant.restaurant_ops_router import _markdown_table
 
 
@@ -89,10 +91,88 @@ def test_only_one_place_builds_tables_in_the_router():
         f"格式会分叉。改成调用 _markdown_table。")
 
 
-def test_dish_ranking_answer_uses_the_table_helper():
-    """排行答案确实调了它 —— 测了函数不等于测了它被调用。"""
+def _resolver_source(fn_name: str) -> str:
+    """按函数粒度取源码 —— 整文件 grep 分不出「哪个 resolver」。"""
+    import ast
+
     import smartbi.gold.restaurant.restaurant_ops_router as router
 
     src = inspect.getsource(router)
-    assert "_markdown_table(" in src.replace(
-        inspect.getsource(_markdown_table), ""), "没有任何地方调用表格渲染函数"
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == fn_name:
+            return ast.get_source_segment(src, node) or ""
+    raise AssertionError(f"{fn_name} 不在 restaurant_ops_router 里了 —— 改名了就更新这张表")
+
+
+# 🔴 断言的**主语**: 每个 resolver 一行, 表格在答什么。
+# ⛔ 不许改成「从源码里现算有哪些函数调了 _markdown_table」—— 那是左右同源的
+#    恒真式, 永远等于当前实现, 一条都红不了(本仓 08-09 为此栽过)。
+_MUST_RENDER_A_TABLE = {
+    "resolve_gross_margin": "菜品销量排行",
+    "resolve_store_margin": "某菜的门店排行 / 各店菜品排行",
+    "resolve_channel_mix": "渠道构成",
+    "resolve_wastage_top": "损耗排行",
+    "resolve_inventory_warning": "库存预警清单",
+    "resolve_discount_summary": "折扣构成(不含上方的单条汇总事实)",
+    "resolve_daypart_performance": "各时段表现",
+}
+
+# 同形状但**还没转**的 —— 登记在案, 不是漏掉。转一个就从这里挪进上面那张表。
+_PENDING_TABLE = {
+    "resolve_stock_shortage": "缺货清单",
+    "resolve_recipe_cost": "配方成本构成",
+    "resolve_requisition_trend": "领料趋势",
+}
+
+# ⛔ 刻意不转: 表格化反而更差。
+_EXEMPT_FROM_TABLE = {
+    "resolve_store_directory": "门店名单是单列, 表格只会多两条竖线",
+}
+
+
+@pytest.mark.parametrize("fn_name", sorted(_MUST_RENDER_A_TABLE))
+def test_each_listed_resolver_builds_its_own_table(fn_name):
+    """🔴 承重: **这个** resolver 自己调了表格渲染。
+
+    旧断言是 `"_markdown_table(" in 整个文件`: 只要文件里还剩一个调用点就永远为真。
+    实测(2026-08-11): 把菜品排行那一处退回编号列表、另外 3 处保留, 7 条断言**全绿** ——
+    它名义上测「菜品排行用了表格」, 实际测的是「全站至少有过一次调用」。
+
+    判据: 一条断言先问「它靠什么变红」—— 这条靠**被点名的那个函数**自己的源码变红。
+    """
+    seg = _resolver_source(fn_name)
+    assert "_markdown_table(" in seg, (
+        f"{fn_name}（{_MUST_RENDER_A_TABLE[fn_name]}）没有调用 _markdown_table —— "
+        f"这段答案退回了纯文本/编号列表形态。")
+
+
+def test_no_resolver_silently_ships_a_numbered_ranking():
+    """新写的排行必须显式表态: 转表格 / 待转 / 豁免, 三者取一。
+
+    ⚠️ 这条挂在排版特征(`enumerate` + `{i+1}.` 编号行)上, 所以它**不是承重断言** ——
+       换个拼法就绕过去了。它只负责「新增的漏网之鱼」这一个方向, 承重的是上面那条。
+    """
+    import ast
+
+    import smartbi.gold.restaurant.restaurant_ops_router as router
+
+    src = inspect.getsource(router)
+    known = set(_MUST_RENDER_A_TABLE) | set(_PENDING_TABLE) | set(_EXEMPT_FROM_TABLE)
+    numbered = re.compile(r'f"\{i\s*\+\s*1\}\.|f"\{idx\}\.')
+    strays = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        seg = ast.get_source_segment(src, node) or ""
+        if "enumerate(" in seg and numbered.search(seg) and node.name not in known:
+            strays.append(node.name)
+    assert not strays, (
+        f"这些 resolver 在拼编号排行但三张表里都没登记: {strays} —— "
+        f"要么转成 _markdown_table, 要么写进 _PENDING_TABLE/_EXEMPT_FROM_TABLE 说明理由。")
+
+
+def test_the_three_registries_do_not_overlap():
+    """同一个 resolver 不能既「已转」又「待转」—— 重叠说明有人只改了一半。"""
+    assert not (set(_MUST_RENDER_A_TABLE) & set(_PENDING_TABLE))
+    assert not (set(_MUST_RENDER_A_TABLE) & set(_EXEMPT_FROM_TABLE))
+    assert not (set(_PENDING_TABLE) & set(_EXEMPT_FROM_TABLE))

@@ -2973,19 +2973,28 @@ async def resolve_wastage_top(
         and float(total["total_cost"] or 0.0) > 0
     )
 
-    def _row_metrics(row) -> str:
-        """Both axes on every line, leading with the one that set the order."""
-        money = f"¥{row['cost']:,.2f}"
-        amount = f"{row['qty']:.2f} {row['unit'] or ''}".strip()
-        if axis_is_money:
-            return f"{money}（{amount}）"
-        return f"{amount}（{money}）"
-
-    top_list_text = "\n".join([
-        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} "
-        f"({r['category'] or '—'}): {_row_metrics(r)}"
-        for i, r in enumerate(top_rows)
-    ]) or f"({window_text}无损耗记录)"
+    # 2026-08-11: 编号列表改 markdown 表格 —— 排行本来就是表格数据, 列表形态
+    # 让人没法竖着比数。全站唯一拼装点 `_markdown_table`。
+    # ⚠️ 原 `_row_metrics` 把两个轴揉进**一个**单元格(「¥123（4.5 kg）」), 表格里
+    #    必须拆成两列, 否则右对齐和竖着比数都白做。定序的那个轴排在前一列 ——
+    #    原实现「leading with the one that set the order」保的就是这个, 换成表格
+    #    后由列序承担。
+    qty_col, cost_col = "损耗量", "损耗金额"
+    top_headers = ["#", "食材", "分类"] + (
+        [cost_col, qty_col] if axis_is_money else [qty_col, cost_col]
+    )
+    top_table_rows = []
+    for i, r in enumerate(top_rows, 1):
+        qty_cell = f"{r['qty']:.2f} {r['unit'] or ''}".strip()
+        cost_cell = f"¥{r['cost']:,.2f}"
+        top_table_rows.append(
+            [i, r["name"], r["category"] or "—"]
+            + ([cost_cell, qty_cell] if axis_is_money else [qty_cell, cost_cell])
+        )
+    top_list_lines = (
+        _markdown_table(top_headers, top_table_rows, right_align={3, 4})
+        if top_rows else ["", f"({window_text}无损耗记录)"]
+    )
 
     type_summary = "、".join([
         f"{type_name_map.get(r['type'], r['type'])} ¥{r['cost']:.2f}"
@@ -3015,7 +3024,9 @@ async def resolve_wastage_top(
             "上面的损耗总成本与类型分布来自完整台账，可以直接用。"
         )
     else:
-        top_block = f"{top_heading}:\n\n{top_list_text}"
+        # `_markdown_table` 首元素是空串 —— join 之后恰好在标题与表格之间留出
+        # 必需的空行(没有它 markdown-it 会把表格并进上一段当普通文字)。
+        top_block = "\n".join([f"{top_heading}:"] + top_list_lines)
 
     answer = (
         f"{window_text}损耗总览:\n"
@@ -7693,20 +7704,37 @@ async def resolve_inventory_warning(
     high.sort(key=lambda e: (e["stock"] - e["safe"]))
     medium.sort(key=lambda e: (e["stock"] - e["safe"]))
 
-    high_text = "\n".join([
-        f"{i+1}. {'**' + e['name'] + '**' if i == 0 else e['name']} ({e['category'] or '—'}): 剩 {e['stock']:.1f} {e['unit']}，"
-        f"低于安全库存 {e['safe']:.1f} {e['unit']}，需立即补货"
-        for i, e in enumerate(high[:top_n])
-    ]) or "(无)"
-    medium_text = "、".join([
-        f"{e['name']} 剩 {e['stock']:.1f} {e['unit']}" for e in medium[:top_n]
-    ]) or "无"
+    # 2026-08-11: 编号列表 + 顿号串改 markdown 表格。
+    # ⚠️ 两个循环(需补货 / 关注)合成**一张**表, 用「状态」列区分, 缺口列对「关注」
+    #    档留「—」—— 另起一张会让人以为是两批不同口径的数(同渠道构成那次的判据)。
+    # ⛔ 「需立即补货」这几个字必须留在表内: 分档口径逐字沿用 Java 侧
+    #    getLowStockWarnings, 措辞是用户认得的那个动作, 不是排版装饰。
+    alert_rows = []
+    for e in high[:top_n]:
+        alert_rows.append([
+            "需立即补货", e["name"], e["category"] or "—",
+            f"{e['stock']:.1f} {e['unit']}".strip(),
+            f"{e['safe']:.1f} {e['unit']}".strip(),
+            f"{e['safe'] - e['stock']:.1f} {e['unit']}".strip(),
+        ])
+    for e in medium[:top_n]:
+        alert_rows.append([
+            "关注", e["name"], e["category"] or "—",
+            f"{e['stock']:.1f} {e['unit']}".strip(),
+            f"{e['safe']:.1f} {e['unit']}".strip(),
+            "—",
+        ])
+    alert_lines = (
+        _markdown_table(
+            ["状态", "食材", "分类", "剩余", "安全库存", "缺口"],
+            alert_rows, right_align={3, 4, 5})
+        if alert_rows else ["", "(无需补货或需关注的食材)"]
+    )
 
     answer = (
         f"**库存预警（{_date_text(max_date)}）:**\n"
-        f"- 需要立即补货 **{len(high)} 项**, 关注 {len(medium)} 项, 正常 {len(ok)} 项\n\n"
-        f"需立即补货:\n\n{high_text}\n\n"
-        f"接近安全库存需关注: {medium_text}\n\n"
+        f"- 需要立即补货 **{len(high)} 项**, 关注 {len(medium)} 项, 正常 {len(ok)} 项\n"
+        + "\n".join(alert_lines) + "\n\n"
         f"建议动作:\n"
         f"1. 需立即补货的食材今天下单，优先安排高频用量的食材避免断货影响出品。\n"
         f"2. 接近安全库存的食材纳入未来三天的进货计划，避免临时缺货。\n"
@@ -8175,15 +8203,23 @@ async def resolve_discount_summary(
     if items:
         lines.append("")
         lines.append("**构成：**")
-        for it in items:
-            name = it.get("discount_name") or "未命名"
-            if can_see_money:
-                lines.append(
-                    f"- {name}：¥{float(it.get('amount') or 0):,.0f}"
-                    f"（占折扣 {float(it.get('share_pct') or 0):.1f}%）"
-                )
-            else:
-                lines.append(f"- {name}：占折扣 {float(it.get('share_pct') or 0):.1f}%")
+        # 2026-08-11: 项目符号改 markdown 表格 —— 构成本来就是「类型 / 金额 / 占比」
+        # 三列。⛔ 只转**构成**这一段: 上面「折扣占营收」「折扣总额」是两条单条事实,
+        # 表格化反而更差(两行一列的表比一句话难读)。
+        # 金额是价格权限数据 —— 非价格角色整列不出现, 而不是留空: 留空等于告诉他
+        # 「这里有个数但不给你看」, 而契约是他**看不到金额口径**, 不是被遮挡。
+        lines.extend(_markdown_table(
+            ["折扣类型", "金额", "占折扣"] if can_see_money else ["折扣类型", "占折扣"],
+            [
+                ([it.get("discount_name") or "未命名",
+                  f"¥{float(it.get('amount') or 0):,.0f}",
+                  f"{float(it.get('share_pct') or 0):.1f}%"]
+                 if can_see_money else
+                 [it.get("discount_name") or "未命名",
+                  f"{float(it.get('share_pct') or 0):.1f}%"])
+                for it in items
+            ],
+            right_align={1, 2} if can_see_money else {1}))
     else:
         lines.append("")
         lines.append(
@@ -8310,6 +8346,13 @@ async def resolve_daypart_performance(
 
     lines = [f"**各时段表现（{window_label}）：**", ""]
     kpis = []
+    # 2026-08-11: 项目符号改 markdown 表格 —— 时段对比本来就是竖着比的数。
+    # ⚠️ 这个循环同时在建 kpis, 表格只接管**文本**那一半, kpis 原样留在循环里:
+    #    一起重写最容易漏掉后者, 而漏了不会报错, 只是 KPI 卡片空了。
+    # ⚠️ 有金额 / 无金额两个分支合成**一张**表(列数不同, 由权限决定整列在不在),
+    #    不是两张。顺带把单量占比补进有金额那一版 —— 原来只有无金额分支给它,
+    #    同一张表里缺一列会被读成「这个时段没有占比」。
+    daypart_rows = []
     for r in ordered:
         name = r["daypart"]
         bills = int(r["bills"])
@@ -8318,13 +8361,18 @@ async def resolve_daypart_performance(
         if can_see_money:
             rev_pct = rev / total_rev * 100 if total_rev else 0.0
             avg = rev / bills if bills else 0.0
-            lines.append(
-                f"- {name}：¥{rev:,.0f}（营收占 **{rev_pct:.1f}%**），"
-                f"{bills:,} 单，客单价 ¥{avg:,.1f}"
-            )
+            daypart_rows.append([
+                name, f"¥{rev:,.0f}", f"{rev_pct:.1f}%",
+                f"{bills:,}", f"{bill_pct:.1f}%", f"¥{avg:,.1f}",
+            ])
         else:
-            lines.append(f"- {name}：{bills:,} 单（单量占 **{bill_pct:.1f}%**）")
+            daypart_rows.append([name, f"{bills:,}", f"{bill_pct:.1f}%"])
         kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
+    lines.extend(_markdown_table(
+        (["时段", "营收", "营收占比", "单量", "单量占比", "客单价"] if can_see_money
+         else ["时段", "单量", "单量占比"]),
+        daypart_rows,
+        right_align={1, 2, 3, 4, 5} if can_see_money else {1, 2}))
 
     top = ordered[0]["daypart"]
     if untimed_bills:

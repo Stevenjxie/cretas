@@ -351,12 +351,14 @@ def _drop_planner_invented_metrics(spec, query):
     判「用户提没提」与判「答案答没答」必须用同一份词, 两份迟早会打架
     (本轮已经栽过一次「喂 LLM 的文本与校验事实集不是同一份」)。
     """
+    from dataclasses import fields as _fields, is_dataclass as _is_dataclass
     from dataclasses import replace as _replace
     from smartbi.gold.restaurant.answer_contract import _REQUEST_TEXT_TOKENS
 
-    requested = tuple(getattr(spec, "requested_metrics", ()) or ())
-    if not requested or not query:
+    if not query:
         return spec
+
+    requested = tuple(getattr(spec, "requested_metrics", ()) or ())
 
     # 🔴 2026-08-10 prod: 澄清延续轮里 `query` 只是**用户这一轮的半句话**, 不是他
     #    问的那个问题。菜品链第 3 轮实测:
@@ -380,20 +382,59 @@ def _drop_planner_invented_metrics(spec, query):
     if getattr(spec, "is_clarification_continuation", False):
         return spec
 
-    kept = tuple(
-        m for m in requested
-        # 没登记词表的指标一律保留 —— 判不了就别动(同维度那条的处理)。
-        if not _REQUEST_TEXT_TOKENS.get(m)
-        or any(tok in query for tok in _REQUEST_TEXT_TOKENS[m])
-    )
-    if kept == requested:
-        return spec
+    changes = {}
 
-    logger.info(
-        "[restaurant-contract] 去掉 planner 自造的指标要求: %s -> %s query=%r",
-        requested, kept, query[:60],
-    )
-    return _replace(spec, requested_metrics=kept)
+    if requested:
+        kept = tuple(
+            m for m in requested
+            # 没登记词表的指标一律保留 —— 判不了就别动(同维度那条的处理)。
+            if not _REQUEST_TEXT_TOKENS.get(m)
+            or any(tok in query for tok in _REQUEST_TEXT_TOKENS[m])
+        )
+        if kept != requested:
+            changes["requested_metrics"] = kept
+            logger.info(
+                "[restaurant-contract] 去掉 planner 自造的指标要求: %s -> %s query=%r",
+                requested, kept, query[:60],
+            )
+
+    # 🔴 2026-08-11 prod 落库实证([27]): 同一把尺子必须也量 `wants_margin`,
+    #    否则算出来的正确答案会被一份用户没要过的毛利校验整份扔掉。
+    #
+    #      query='本月模拟·打浦桥日月光店的米饭卖得怎么样'
+    #      contract_missing=["margin_integrity"]
+    #      rejected_answer='「模拟·打浦桥日月光店」的「米饭」在本月销量 **1,345 份**、
+    #                       营收 **¥4,035.00**。'
+    #
+    #    用户问销量, 系统查出了销量和营收, 答案自己还写着「如需毛利计算方法可问…」,
+    #    然后因为交不出毛利口径校验被拒 —— 用户收到「请补充具体范围后重试」。
+    #    本函数开头那条判据对 `wants_margin` 一字不差地成立: **用户从没提过的东西
+    #    不可能让答案变成答非所问, 只能造成假拒。**
+    #
+    # ⛔ `asks_profitability` 为真时【不剥】: 「赚钱吗」「有没有店在亏损」没有「毛利」
+    #    二字, 但它们**就是**在问毛利, wants_margin 是从它推出来的不是编的。
+    #    只按「有没有毛利词」判会把电池 [13]/[22] 一起剥掉 —— 拿一条假拒换另一条。
+    #
+    # ⚠️ 这题不是回归: 同代码同模型下 21:16 通过、21:25 失败(落库有据)。planner 对
+    #    「卖得怎么样」在毛利/销量之间摇摆, 计划缓存把某一次冻住 6 小时才显得稳定。
+    #    所以修的是「摇摆时不该把好答案扔掉」, 不是去让 planner 不摇摆。
+    if (
+        _is_dataclass(spec)
+        and any(f.name == "wants_margin" for f in _fields(spec))
+        and getattr(spec, "wants_margin", False)
+        and not getattr(spec, "asks_profitability", False)
+        and not any(
+            tok in query for tok in _REQUEST_TEXT_TOKENS["gross_margin"]
+        )
+    ):
+        changes["wants_margin"] = False
+        logger.info(
+            "[restaurant-contract] 去掉 planner 自造的毛利要求: query=%r", query[:60],
+        )
+
+    if not changes:
+        return spec
+    return _replace(spec, **changes)
 
 
 def _drop_unanswerable_mislabeled_dimensions(spec, plan, query):

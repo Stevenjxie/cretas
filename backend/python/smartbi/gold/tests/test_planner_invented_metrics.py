@@ -151,3 +151,120 @@ def test_continuation_flag_absent_behaves_like_false():
     """没有这个字段的 spec(旧调用方/测试替身)必须仍走原逻辑, 不能因 getattr 失败
     而静默全部保留。"""
     assert drop(_Spec(ALL_THREE), "最近30天各门店对比如何").requested_metrics == ()
+
+
+# ── 2026-08-11: 同一把尺子也要量 wants_margin ────────────────────────────
+@dataclass
+class _MarginSpec:
+    requested_metrics: Tuple[str, ...] = field(default=())
+    wants_margin: bool = False
+    asks_profitability: bool = False
+    is_clarification_continuation: bool = False
+
+
+def test_sales_question_does_not_get_a_margin_contract():
+    """🔴 prod 落库实证([27] 回归电池): 算出了正确答案, 然后把它丢了。
+
+        query='本月模拟·打浦桥日月光店的米饭卖得怎么样'
+        contract_pass=false   contract_missing=["margin_integrity"]
+        rejected_answer='「模拟·打浦桥日月光店」的「米饭」在本月销量 **1,345 份**、
+                         营收 **¥4,035.00**。'
+
+    用户问销量, 系统查出了销量和营收, 答案里还写着「如需毛利计算方法, 可问…」——
+    然后因为交不出一份**毛利口径校验**被整份扔掉, 用户收到「请补充具体范围后重试」。
+
+    `wants_margin` 是 planner 编的: 原句「卖得怎么样」一个毛利词都没沾。而本文件
+    开头那条判据对它同样成立 —— **用户从没提过的指标不可能让答案变成答非所问,
+    只能造成假拒**。既有实现只把这把尺子用在 `requested_metrics` 上, 漏了这半边。
+
+    ⚠️ 这题不是「回归」: 同一份代码、同一个模型下, 21:16 通过而 21:25 失败
+       (落库有据)。是 planner 对「卖得怎么样」在毛利/销量之间摇摆, 计划缓存把
+       某一次结果冻住 6 小时, 于是看起来稳定 —— 每次部署重启都在重掷。
+    """
+    spec = _MarginSpec(("sales_volume",), wants_margin=True)
+    assert drop(spec, "本月模拟·打浦桥日月光店的米饭卖得怎么样").wants_margin is False
+
+
+def test_named_margin_question_keeps_the_margin_contract():
+    """🔴 阴性对照: 用户真说了毛利, 契约必须照旧要 —— 否则这个修法就是把闸拆了。
+
+    [28]「本月模拟·打浦桥日月光店的毛利率」当前是通过的, 必须保持。
+    """
+    spec = _MarginSpec((), wants_margin=True)
+    assert drop(spec, "本月模拟·打浦桥日月光店的毛利率").wants_margin is True
+
+
+@pytest.mark.parametrize("query", ["本月毛利怎么样", "这个月利润高吗", "毛利率是多少"])
+def test_any_margin_word_keeps_it(query):
+    assert drop(_MarginSpec((), wants_margin=True), query).wants_margin is True
+
+
+def test_profitability_question_keeps_margin_without_the_word():
+    """🔴「赚钱吗」没有「毛利」二字, 但它**就是**在问毛利 —— 不能剥。
+
+    电池 [13]「本月全部门店米饭赚钱吗」/[22]「有没有店在亏损」走的都是这条:
+    `wants_margin` 由 `asks_profitability` 推出来, 不是 planner 凭空编的。
+    只按「有没有毛利词」判会把它们一起剥掉, 那是拿一条假拒换另一条。
+    """
+    spec = _MarginSpec((), wants_margin=True, asks_profitability=True)
+    assert drop(spec, "本月全部门店米饭赚钱吗").wants_margin is True
+
+
+def test_margin_intent_is_kept_on_a_clarification_continuation():
+    """延续轮的 query 只是半句话 —— 与指标那条同样的理由, 同样不剥。"""
+    spec = _MarginSpec(("gross_margin",), wants_margin=True,
+                       is_clarification_continuation=True)
+    assert drop(spec, "全部门店").wants_margin is True
+
+
+def test_spec_without_wants_margin_field_is_untouched():
+    """旧调用方/测试替身没有这个字段时不能炸 —— dataclasses.replace 会拒绝未知字段。"""
+    spec = _Spec(ALL_THREE)
+    assert drop(spec, "最近30天各门店对比如何").requested_metrics == ()
+
+
+def test_dropping_it_actually_removes_the_contract_element():
+    """🔴 接缝: 剥掉 `wants_margin` 必须真的让契约不再要 margin_integrity。
+
+    只测「这个字段被改成 False」等于没测 —— 缺陷在接缝上。prod 落库记录里
+    [27] 的 `contract_missing` **只有** ["margin_integrity"] 这一项, 所以让它
+    不再被要求就是让那个正确答案被送出去。这条把两端钉在一起。
+    """
+    from smartbi.gold.restaurant.answer_contract import (
+        MARGIN_CAPABLE_INTENTS, required_elements,
+    )
+    from smartbi.gold.restaurant.restaurant_intent import RestaurantQuerySpec
+
+    # ⛔ 用真类造替身, 不手抄字段清单 —— 手抄表会漂, 且失败长成 AttributeError,
+    #    看不出是替身过期(同 test_ambiguous_store_gets_candidates 的做法)。
+    def _real_spec():
+        return RestaurantQuerySpec(
+            intent="RESTAURANT_OPS_STORE_MARGIN", domain="restaurant",
+            date_range=(None, None), window_label="本月", relative_window=None,
+            metrics=(), wants_margin=True, asks_profitability=False,
+            dimensions=("dish", "store"), comparison=None, confidence=1.0,
+            source_tier="test", requested_metrics=("sales_volume",),
+        )
+
+    assert "RESTAURANT_OPS_STORE_MARGIN" in MARGIN_CAPABLE_INTENTS, (
+        "阴性对照: 这个 intent 不在毛利契约范围内的话, 下面两条都等于空转")
+
+    q = "本月模拟·打浦桥日月光店的米饭卖得怎么样"
+    before = required_elements(_real_spec())
+    assert "margin_integrity" in before, "改之前就不要它, 那这题从来不是这么挂的"
+
+    after = required_elements(drop(_real_spec(), q))
+    assert "margin_integrity" not in after
+    assert "margin_value" not in after
+
+
+def test_margin_drop_reuses_the_same_token_table():
+    """⛔ 与指标那条同一份词表, 不许另建 —— 两份迟早打架。"""
+    import inspect
+
+    import smartbi.gold.restaurant.restaurant_intent_service as svc
+
+    src = inspect.getsource(svc._drop_planner_invented_metrics)
+    assert "gross_margin" in src, "毛利词表必须从 _REQUEST_TEXT_TOKENS['gross_margin'] 取"
+    # 阴性对照: 该键真的非空, 否则上面那条断言等于空转
+    assert _REQUEST_TEXT_TOKENS.get("gross_margin")
