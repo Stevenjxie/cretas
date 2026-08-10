@@ -9,7 +9,6 @@ import { Search, Refresh, DataAnalysis, Edit, View, Download, Warning, ChatDotRo
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
-import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
@@ -393,23 +392,10 @@ function getStatusText(status: string) {
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
       :loading="workflowLoading"
-      title="库存状态"
+      title="库存批次状态"
       :ai-trigger-enabled="true"
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="handleWorkflowAITrigger"
-    />
-    <!--
-      ⚠️ 这个消歧组件本身曾经标错: here-name 写的是「盘点管理」, 而本页路由标题是
-      「库存批次查询」、调的接口是 /material-batches —— 一个专门用来防止用户混淆
-      相似功能的提示, 自己把自己说成了另一个功能。真正的盘点页在
-      /warehouse/stocktakes「盘点与期初库存」, 那才是本页最容易被混淆的兄弟。
-    -->
-    <ConceptDisambiguationAlert
-      here-name="库存批次查询"
-      here="按批次查看当前库存：每个批次剩多少、在哪个仓、状态与效期（只看不动料）"
-      other-name="仓储管理 → 盘点与期初库存"
-      other="清点仓库实物与系统数对比，处理盘盈 / 盘亏，或录入期初库存"
-      other-path="/warehouse/stocktakes"
     />
     <!-- 统计卡片 -->
     <div class="statistics-row">

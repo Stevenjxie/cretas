@@ -8,7 +8,6 @@ import { get, post, put } from '@/api/request';
 import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
-import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
@@ -45,12 +44,6 @@ const receivingFilter = computed<ReceivingTaskFilter>(() =>
 const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
   ? `${pagination.value.total} 个批次`
   : `${receivingCounts.value[receivingFilter.value]} 项任务`);
-const receivingOverview = computed(() => [
-  { key: 'WAITING_RECEIVE' as const, label: '待收货', count: receivingCounts.value.WAITING_RECEIVE, tone: 'pending' },
-  { key: 'RECEIVING' as const, label: '收货中', count: receivingCounts.value.RECEIVING, tone: 'processing' },
-  { key: 'PARTIAL' as const, label: '部分入库', count: receivingCounts.value.PARTIAL, tone: 'partial' },
-]);
-
 function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
   receivingCounts.value = counts;
 }
@@ -493,13 +486,6 @@ async function handleGenerateLabel(row: TableRow) {
 <template>
   <CanvasAwareWrapper module-code="material_batch">
   <div class="page-wrapper">
-    <ConceptDisambiguationAlert
-      here-name="原料 / 物料批次"
-      here="由采购收货、客供料、调拨、退货或受控调整形成的原材料、包材、辅料批次"
-      other-name="生产管理 → 成品 / SKU (本厂生产)"
-      other="本厂生产的成品 / SKU（如「叮咚好食光卤猪蹄 200g」）"
-      other-path="/system/products"
-    />
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
@@ -525,28 +511,6 @@ async function handleGenerateLabel(row: TableRow) {
           </div>
         </div>
       </template>
-
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        class="source-only-hint"
-        title="先按任务状态处理实物收货；确认入库后，批次会自动进入“已入库批次”。本页不会因打开或刷新而创建库存；批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入。"
-      />
-
-      <div class="receiving-workflow-overview" aria-label="入库任务概览">
-        <button
-          v-for="item in receivingOverview"
-          :key="item.key"
-          type="button"
-          class="workflow-step"
-          :class="[item.tone, { active: activeInboundTab === item.key }]"
-          @click="activeInboundTab = item.key"
-        >
-          <span class="workflow-circle">{{ item.count }}</span>
-          <span>{{ item.label }}</span>
-        </button>
-      </div>
 
       <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
         <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
@@ -933,46 +897,7 @@ async function handleGenerateLabel(row: TableRow) {
   align-items: center;
 }
 
-.receiving-workflow-overview {
-  display: flex;
-  align-items: center;
-  gap: 32px;
-  padding: 18px 8px 14px;
-  border-bottom: 1px solid #edf2f7;
-}
-
-.workflow-step {
-  min-width: 88px;
-  border: 0;
-  background: transparent;
-  color: #596a7f;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  cursor: pointer;
-}
-
-.workflow-circle {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-  color: #29384a;
-  border: 1px solid transparent;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
-}
-
-.workflow-step.pending .workflow-circle { background: #fff1c7; border-color: #f2d383; }
-.workflow-step.processing .workflow-circle { background: #dff1ff; border-color: #a9d8f6; }
-.workflow-step.partial .workflow-circle { background: #dff3e8; border-color: #acd9bd; }
-.workflow-step:hover .workflow-circle,
-.workflow-step.active .workflow-circle { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(31, 66, 103, 0.12); }
-.workflow-step.active { color: #1b65a8; font-weight: 700; }
-.inbound-status-tabs { margin-top: 8px; }
+.inbound-status-tabs { margin-top: 0; }
 .batch-toolbar { margin-top: 4px; }
 
 .summary-hint {

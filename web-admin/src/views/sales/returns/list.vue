@@ -211,10 +211,6 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
         </div>
       </template>
 
-      <el-alert type="info" show-icon :closable="false" style="margin-bottom: 12px"
-                title="如何创建退货单"
-                description="进入「销售订单」详情 → 点击「申请退货」按钮选择要退货的行项目。本页只列出历史退货单。" />
-
       <el-table :data="tableData" v-loading="loading" empty-text="暂无退货单" stripe border style="width: 100%">
         <el-table-column prop="returnNumber" label="退货单号" width="200" />
         <el-table-column label="客户" min-width="160" show-overflow-tooltip>

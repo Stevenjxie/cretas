@@ -12,7 +12,6 @@ import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound,
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import { confirmDiscardIfDirty } from '@/utils/confirmDiscardChanges';
-import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import {
   downloadImportTemplate,
   importProductionPlans,
@@ -3725,44 +3724,11 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
       :loading="workflowLoading"
-      title="生产工作流"
+      title="生产计划状态"
       :ai-trigger-enabled="true"
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="aiEntryVisible = true"
     />
-    <ConceptDisambiguationAlert
-      here-name="生产计划"
-      here="未完成生产任务（PENDING / IN_PROGRESS，文员核对实际产量、领用和工时后结单）"
-      other-name="生产管理 → 生产批次"
-      other="已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗）"
-      other-path="/production/batches"
-      consequence="需要 APP 逐道报工时再转批次；PC 文员在未完成列表核对结单"
-    />
-    <!-- #747 + #748: 生产/锁定/调拨 业务流程引导 banner (基于 May10 六扇门会议) -->
-    <el-alert
-      title="生产计划操作指引"
-      type="info"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 12px"
-    >
-      <template #default>
-        <div style="font-size: 13px; line-height: 1.7;">
-          <strong>计划确认后，先进入未完成列表；原料库存不足只做预警，不阻断开工或结单：</strong>
-          <ul style="margin: 4px 0 4px 18px; padding: 0;">
-            <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。<em>仅适用于有明确计划量的计划（销售订单/手工/预测）；存货生产不预排数量，请直接用「逐道录入/小结」备料。</em></li>
-            <li><strong>核对结单</strong>：PC 文员逐单核对实际产量、原料/半成品领用和工时；缺料信息会在列表和弹窗里作为参考值显示。</li>
-            <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
-            <li><strong>PC 结单</strong>：不需要逐道报工的计划，也必须由文员在「核对结单」里录入实际产量、实际领用和人效后，才算完成。</li>
-            <li><strong>补录时效</strong>：今天/昨天可补，前天为极限，大前天及更早禁止补录；超出窗口请走审批或联系管理员处理。</li>
-          </ul>
-          <strong>下一步</strong>：现场用 APP 逐工序上报；文员用「核对结单」把实际数量、领用和工时闭环。
-          <span style="color: var(--text-color-secondary, #909399);">
-            进行中的计划支持"锁定"——锁定后该计划不再允许修改数量/日期，避免在生产过程中被误改。
-          </span>
-        </div>
-      </template>
-    </el-alert>
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
