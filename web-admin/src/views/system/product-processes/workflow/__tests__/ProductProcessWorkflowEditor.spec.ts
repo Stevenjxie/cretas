@@ -740,6 +740,103 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(downstream?.data.ports?.[1]).not.toHaveProperty('standardQuantity');
   });
 
+  it('changes the current Workflow output snapshot when a process output selects a finished SKU', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const vm = await mountEditor();
+    const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
+    if (!workProcess) throw new Error('Expected work process option');
+    workProcess.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
+    const material = vm.flowNodes.find((node) => node.id === port?.materialNodeId);
+    if (!process || !port || !material) throw new Error('Expected primary process output');
+
+    await vm.selectOutputSku(process.id, port.id, 'SKU-FINISHED');
+    await flushPromises();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('将这个产出 Cell 改为成品并绑定所选 SKU'),
+      '产出类型不一致',
+      expect.any(Object),
+    );
+    expect(port).toMatchObject({
+      materialKind: 'FINISHED_GOOD', skuId: 'SKU-FINISHED', unit: 'kg',
+    });
+    expect(material.data).toMatchObject({
+      kind: 'FINISHED_GOOD', skuId: 'SKU-FINISHED', name: 'Finished output', bound: true,
+    });
+    expect(workProcess.defaultOutputMaterialKind).toBe('SEMI_FINISHED');
+    expect(apiMocks.updateWorkProcess).not.toHaveBeenCalled();
+  });
+
+  it('reads a legacy output Cell snapshot before the process catalog default', async () => {
+    const vm = await mountEditor();
+    const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
+    if (!workProcess) throw new Error('Expected work process option');
+    workProcess.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
+    if (!process || !port) throw new Error('Expected primary process output');
+    delete port.materialKind;
+    workProcess.defaultOutputMaterialKind = 'FINISHED_GOOD';
+
+    vm.openQuickEditProcess(process.id);
+
+    expect(vm.processEditForm.defaultOutputMaterialKind).toBe('SEMI_FINISHED');
+  });
+
+  it('changes the same Workflow snapshot when a semi-finished Cell selects a finished SKU', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const vm = await mountEditor();
+    const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
+    if (!workProcess) throw new Error('Expected work process option');
+    workProcess.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
+    const material = vm.flowNodes.find((node) => node.id === port?.materialNodeId);
+    if (!port || !material) throw new Error('Expected semi-finished output Cell');
+
+    await vm.selectMaterialSku(material.id, 'SKU-FINISHED');
+    await flushPromises();
+
+    expect(port).toMatchObject({ materialKind: 'FINISHED_GOOD', skuId: 'SKU-FINISHED' });
+    expect(material.data).toMatchObject({ kind: 'FINISHED_GOOD', skuId: 'SKU-FINISHED', bound: true });
+    expect(workProcess.defaultOutputMaterialKind).toBe('SEMI_FINISHED');
+    expect(apiMocks.updateWorkProcess).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Workflow unchanged when an output-kind selection is cancelled', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel');
+    const vm = await mountEditor();
+    const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
+    if (!workProcess) throw new Error('Expected work process option');
+    workProcess.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
+    const material = vm.flowNodes.find((node) => node.id === port?.materialNodeId);
+    if (!process || !port || !material) throw new Error('Expected primary process output');
+
+    await vm.selectOutputSku(process.id, port.id, 'SKU-FINISHED');
+    await flushPromises();
+
+    expect(port).toMatchObject({ materialKind: 'SEMI_FINISHED' });
+    expect(port.skuId).toBe('');
+    expect(material.data).toMatchObject({ kind: 'SEMI_FINISHED', skuId: '', bound: false });
+    expect(apiMocks.updateWorkProcess).not.toHaveBeenCalled();
+  });
+
   it('does not retain a stale fixed ratio after switching the output SKU', async () => {
     const vm = await mountEditor();
     const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
@@ -808,7 +905,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }]);
   });
 
-  it('updates real process master data and refreshes the Cell without losing graph links', async () => {
+  it('updates process master fields and refreshes the Cell without losing graph links', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
@@ -829,6 +926,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }));
     expect(apiMocks.updateWorkProcess.mock.calls.at(-1)?.[2]).not.toHaveProperty('unit');
     expect(apiMocks.updateWorkProcess.mock.calls.at(-1)?.[2]).not.toHaveProperty('outputUnit');
+    expect(apiMocks.updateWorkProcess.mock.calls.at(-1)?.[2]).not.toHaveProperty('defaultOutputMaterialKind');
     expect(process.data.processName).toBe('定量包装');
     expect(vm.flowEdges).toEqual(edgesBefore);
   });
@@ -855,9 +953,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       '确认修改产出类型',
       expect.any(Object),
     );
-    expect(apiMocks.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-PACK', expect.objectContaining({
-      defaultOutputMaterialKind: 'SEMI_FINISHED',
-    }));
+    expect(apiMocks.updateWorkProcess).not.toHaveBeenCalled();
+    expect(vm.workProcessOptions.find((option) => option.id === 'WP-PACK')?.defaultOutputMaterialKind)
+      .toBe('FINISHED_GOOD');
     expect(outputPort).toMatchObject({ materialKind: 'SEMI_FINISHED', unit: '' });
     expect(outputPort.skuId).toBeUndefined();
     expect(outputPort).not.toHaveProperty('quantityMode');
