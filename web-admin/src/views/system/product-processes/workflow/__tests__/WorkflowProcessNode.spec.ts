@@ -37,6 +37,7 @@ const PositionedHandleStub = defineComponent({
     id: { type: String, required: true },
     type: { type: String, required: true },
     position: { type: String, required: true },
+    connectable: { type: Boolean, default: true },
     style: { type: Object, required: true },
   },
   setup(props) {
@@ -46,6 +47,7 @@ const PositionedHandleStub = defineComponent({
       'data-handle-id': props.id,
       'data-handle-type': props.type,
       'data-position': props.position,
+      'data-connectable': String(props.connectable),
       style: [props.style, { width: '10px', height: '10px' }],
     });
   },
@@ -155,6 +157,15 @@ describe('WorkflowProcessNode output gestures', () => {
 
     expect(sourceHandle.attributes('data-position')).toBe('right');
     expect(wrapper.find('[data-testid="add-output-edge"]').exists()).toBe(false);
+  });
+
+  it('provides a non-connectable top anchor for the auxiliary BOM projection line', () => {
+    const wrapper = mountNode();
+    const handle = wrapper.get('[data-handle-id="bom-aux-in"]');
+
+    expect(handle.attributes('data-handle-type')).toBe('target');
+    expect(handle.attributes('data-position')).toBe('top');
+    expect(handle.attributes('data-connectable')).toBe('false');
   });
 });
 

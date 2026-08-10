@@ -4,6 +4,13 @@
     :class="{ selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }"
     :style="processNodeStyle"
   >
+    <!-- BOM 辅料投影的专用视觉锚点，只承载派生虚线，不创建真实工艺连线。 -->
+    <Handle
+      type="target"
+      :position="Position.Top"
+      :id="AUX_OVERLAY_TARGET_HANDLE"
+      :connectable="false"
+    />
     <Handle
       v-for="(port, index) in inputPorts"
       :key="port.id"
@@ -169,6 +176,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowSkuSpecificationEquation } from './workflowUnits';
 import type { ProcessNodeData } from './types';

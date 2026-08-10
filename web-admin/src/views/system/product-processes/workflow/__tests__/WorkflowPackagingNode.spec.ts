@@ -11,8 +11,13 @@ const HandleStub = defineComponent({
   name: 'Handle',
   inheritAttrs: false,
   props: { id: String, type: String, position: String },
-  setup() {
-    return () => h('span', { 'data-testid': 'handle-stub' });
+  setup(props) {
+    return () => h('span', {
+      'data-testid': 'handle-stub',
+      'data-handle-id': props.id,
+      'data-handle-type': props.type,
+      'data-position': props.position,
+    });
   },
 });
 
@@ -27,6 +32,17 @@ const data: PackagingCellData = {
 };
 
 describe('包材 cell', () => {
+  it('renders the exact left target handle used by the derived edge', () => {
+    const w = mount(WorkflowPackagingNode, {
+      global: { stubs: { Handle: HandleStub } },
+      props: { id: 'x', canWrite: true, data },
+    });
+    const handle = w.get('[data-testid="handle-stub"]');
+    expect(handle.attributes('data-handle-id')).toBe('bom-pack-in');
+    expect(handle.attributes('data-handle-type')).toBe('target');
+    expect(handle.attributes('data-position')).toBe('left');
+  });
+
   it('副标题带出分母', () => {
     const w = mount(WorkflowPackagingNode, {
       global: { stubs: { Handle: HandleStub } },

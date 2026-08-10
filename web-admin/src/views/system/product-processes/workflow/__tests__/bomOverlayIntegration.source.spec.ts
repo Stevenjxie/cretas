@@ -45,4 +45,18 @@ describe('画布接入 BOM 浮层', () => {
     expect(source).not.toMatch(/sourceHandle:\s*'bom-aux-out'/);
     expect(source).not.toMatch(/targetHandle:\s*'bom-pack-in'/);
   });
+
+  it('首次创建草稿钉住当前 Workflow revision，并用返回草稿刷新而不要求手工刷新', () => {
+    expect(source).toContain('definition.value?.revisionId');
+    expect(source).toContain('loadBomOverlayData({ preferredDraft: draft })');
+    expect(source).toContain('versions.unshift(options.preferredDraft)');
+  });
+
+  it('浮层允许拖动但不会进入 Workflow dirty，派生刷新保留拖后位置', () => {
+    expect(source).toMatch(/existingOverlayPositions[\s\S]{0,1800}draggable:\s*true/);
+    const dragStopBody = source.slice(source.indexOf('function onNodeDragStop'), source.indexOf('function onNodeDragStop') + 900);
+    expect(dragStopBody).toContain('isBomOverlayNode(node)');
+    expect(dragStopBody).toContain('overlay.position');
+    expect(dragStopBody.indexOf('return;')).toBeLessThan(dragStopBody.indexOf('dirty.value = true'));
+  });
 });
