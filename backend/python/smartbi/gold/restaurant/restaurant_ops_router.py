@@ -2199,8 +2199,20 @@ def _scoped_dish_metric_answer(
             "成本口径来自配方标准用量 × 最近有效食材单价。"
         )
     if asks_margin and gross_profit is not None and margin_rate is not None and total_cost is not None:
+        # ⚠️ 2026-08-10: 上面三条分支都带 `not asks_margin`, 所以「销量、毛利率、
+        #    成本」这种**同时问三样**的问句会全部落到这一条。而这一条原先不含销量,
+        #    于是 Answer Contract 判 `missing=["request_coverage"]` —— 数算出来了
+        #    (qty_text 就在手边)、答案被整份扔掉, 用户看到「没有可靠覆盖问题中要求
+        #    的全部指标」。
+        #    飞轮 miss 台账里这条问句累计 **47 次**, 是当前被真实问到最多的答不出来。
+        #    判据: **互斥 if 链表达不了「多选」** —— 每加一个可问指标, 组合数翻倍,
+        #          而漏掉的组合表现为「答非所问被契约拦下」, 不是报错。
+        #          这里先把销量补进最完整的那条(它本来就算好了); 根治是走登记表
+        #          的多指标路径(spec_to_cells), 那是独立一件事。
+        sales_part = f"销量 **{qty_text} 份**、" if asks_sales else ""
         return (
-            f"「{name}」{window_label}营收 **¥{revenue:,.2f}**、成本 **¥{total_cost:,.2f}**、"
+            f"「{name}」{window_label}{sales_part}营收 **¥{revenue:,.2f}**、"
+            f"成本 **¥{total_cost:,.2f}**、"
             f"毛利 **¥{gross_profit:,.2f}**、毛利率 **{margin_rate * 100:.1f}%**。\n\n"
             f"计算过程：`毛利 ¥{gross_profit:,.2f} = 营收 ¥{revenue:,.2f}"
             f" − 成本 ¥{total_cost:,.2f}`。"

@@ -5,7 +5,9 @@ _build_chain 产出的闸。
    key 造出来的, 左右同源, 恒真式, 一次都红不了。承重的是下面这张人审冻结的
    golden 快照: 它的另一端是人, 不是代码。
 """
+import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -104,3 +106,88 @@ def test_param_profile_constraints_are_respected():
                 assert model not in llm_router._THINKING_OFF_ONLY, (
                     f"{slot.value} 不关思考, 但收了开思考会空/极慢的 {account}/{model}"
                 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-08-10「按能力排」(owner 拍板) 的两条不变式。
+#
+# golden 快照冻结的是**这一次**的具体顺序; 下面两条冻结的是**规则** ——
+# 有人把 _build_chain 改回纯到期日排序时, golden 会红(顺序变了)但只会被
+# "重新生成一下" 抹掉, 而这两条会指名道姓说出改坏了什么。
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _failing_pairs() -> set:
+    return {
+        pair for pair, (rate, _p50) in llm_router._CAPABILITY.items()
+        if rate < llm_router._CAPABILITY_PASS_FLOOR
+    }
+
+
+def test_measured_failures_never_precede_measured_passes():
+    """实测不达标的模型不许排在任何实测达标的模型前面。
+
+    2026-08-10 实测的具体后果: aliyun_c/deepseek-v3.2 契约 0/6 全 403 quota,
+    而按旧的纯到期日排序它(08-13, 最早到期)正好是 REVIEW/CHAT/MAPPER 三个槽
+    的**链头** —— 每次调用都先在一个已耗尽的模型上撞一跳。
+
+    ⛔ 地板(_TEXT_TAIL)豁免: 它必须留在结构性末位(见
+       test_every_text_slot_has_a_floor), 那条约束优先于能力档。
+    """
+    failing = _failing_pairs()
+    assert failing, (
+        "能力表里一个不达标条目都没有 —— 这条断言当前无法失败。"
+        "重测后若确实全员达标, 请改成从 _CAPABILITY 造一个合成不达标条目再断言。"
+    )
+    tail = set(llm_router._TEXT_TAIL)
+    # ⚠️ 把"今天"钉在测量当天再重建链, **不读 import 期算好的 SLOT_MODELS**。
+    #    否则这条闸会在 2026-08-31(测量日 + 21 天)那天因为能力表超龄、排序
+    #    退回纯到期日而变红 —— 红得完全正确却与"排序规则被改坏"无关, 就是
+    #    "天天炸=没人看"的又一个源头。它验的是**规则**, 规则只在能力档生效时
+    #    存在; 能力表该不该重测由 llm_pool_health 的超龄告警负责。
+    with mock.patch.object(llm_router, "_today",
+                           lambda: llm_router._CAPABILITY_MEASURED_AT):
+        chains = {slot: llm_router._build_chain(slot) for slot in SLOT}
+    for slot, chain in chains.items():
+        body = [p for p in chain if p not in tail]
+        worst_pass = max(
+            (i for i, p in enumerate(body)
+             if p in llm_router._CAPABILITY and p not in failing),
+            default=None,
+        )
+        if worst_pass is None:
+            continue
+        for i, pair in enumerate(body):
+            if pair in failing:
+                assert i > worst_pass, (
+                    f"{slot.value}: 实测不达标的 {pair} 排在位置 {i}, "
+                    f"而实测达标的模型最晚才排到 {worst_pass} —— "
+                    f"排序键对「这个模型今天还活着吗」失聪了"
+                )
+
+
+def test_stale_capability_table_falls_back_to_expiry_order():
+    """能力表超龄 → 退回纯到期日排序, 而不是默默拿陈旧读数硬排。
+
+    阴性对照: 冻结一个远未来的"今天", 让 _capability_stale() 为真, 链必须
+    与纯到期日排序逐条相等。若 _build_chain 忘了接这条分支, 两者会不等。
+    """
+    far = llm_router._CAPABILITY_MEASURED_AT + datetime.timedelta(
+        days=llm_router._CAPABILITY_MAX_AGE_DAYS + 1)
+
+    for slot in SLOT:
+        entries = list(llm_router._SLOT_POOLS[slot])
+        if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
+            entries += llm_router._TEXT_TAIL
+        expiry_only = llm_router._dedup_chain(
+            sorted(entries, key=lambda p: llm_router._expiry_of(*p)))
+
+        with mock.patch.object(llm_router, "_today", lambda: far):
+            assert llm_router._capability_stale() is True
+            assert llm_router._build_chain(slot) == expiry_only, (
+                f"{slot.value}: 能力表超龄后没有退回到期日排序"
+            )
+
+    # 反向: 测量当天不该是 stale (否则上面那条恒真, 什么都没验)
+    with mock.patch.object(llm_router, "_today",
+                           lambda: llm_router._CAPABILITY_MEASURED_AT):
+        assert llm_router._capability_stale() is False

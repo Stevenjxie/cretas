@@ -59,9 +59,22 @@ def main() -> int:
         else:
             usable.append(key)
 
-    state = "OK" if len(usable) >= args.min else "ALERT"
+    # 能力表超龄 → `_build_chain` 会**静默**退回纯到期日排序, 也就是把
+    # 2026-08-10 刚修掉的「链头是实测 0/6 的死模型」原样放回来。这个退化没有
+    # 任何自然症状(服务 200、答得出来), 不在这里说一声就没人会知道 ——
+    # 与飞轮日报静默坏 5 天是同一种死法。超龄单独翻转退出码。
+    stale = R._capability_stale()
+    state = "OK" if len(usable) >= args.min and not stale else "ALERT"
+    age = (R._today() - R._CAPABILITY_MEASURED_AT).days
     print(f"LLM_POOL {state} slot={args.slot} usable={len(usable)}/{len(chain)} "
-          f"min={args.min} usable_list={','.join(usable) or '-'}")
+          f"min={args.min} cap_age={age}d{'(STALE)' if stale else ''} "
+          f"usable_list={','.join(usable) or '-'}")
+    if stale:
+        print(f"LLM_POOL 能力表已 {age} 天未重测 (上限 "
+              f"{R._CAPABILITY_MAX_AGE_DAYS}d) —— 排序已退回纯到期日, "
+              f"链头可能是已耗尽的模型。重测: "
+              f"python -m smartbi.scripts.llm_capability_rank "
+              f"--slot review --emit-table")
     if state == "ALERT":
         # 把**为什么**一起打出来: 上一次这个状态持续了 6 天,
         # 只报「不健康」而不报「因为配额还是因为熔断」会让人再查一遍日志。

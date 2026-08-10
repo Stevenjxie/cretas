@@ -43,6 +43,18 @@ _LANDMINES = {
 }
 
 
+def _measured_failures() -> set:
+    """实测不达标的 (账号,模型) —— 从 `_CAPABILITY` 算, ⛔ 不在测试里另抄一份。
+
+    另抄一份就是第二张会漂移的表: 注册表更新后测试仍拿旧名单判, 于是
+    「链头是死模型」这件事在闸上永远不红。
+    """
+    return {
+        pair for pair, (rate, _p50) in llm_router._CAPABILITY.items()
+        if rate < llm_router._CAPABILITY_PASS_FLOOR
+    }
+
+
 @pytest.fixture(autouse=True)
 def _reset_caches():
     llm_router._CB_FAILURES.clear()
@@ -145,12 +157,14 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     exempt).
     """
     chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
-    assert chain[:4] == [
-        ("aliyun_c", "qwen3-next-80b-a3b-instruct"),
-        ("aliyun_c", "deepseek-v3.2-exp"),
-        ("aliyun_c", "glm-4.6"),
-        ("aliyun_c", "deepseek-v3.2"),
-    ]
+    # 2026-08-10「按能力排」后**删掉**了这里原有的 chain[:4] 字面量头部。
+    # 理由不是它太严, 是它**重复**: 每个槽的完整顺序已经被人审 golden
+    # (tests/golden/llm_router_chains.txt) 逐行冻结, 这里再抄一份就成了第二张
+    # 手写清单 —— 排序策略一改要人同时改两处, 漏一处就是本仓 32 处静默耦合
+    # 里的第 33 处。本函数保留的是它**独有**的那部分: 池的成分约束。
+    assert chain[0] not in _measured_failures(), (
+        f"MAPPER 链头 {chain[0]} 是实测不达标的模型 —— 每次调用都先撞一跳"
+    )
     assert ("tencent", "minimax-m2.7") in chain     # non-DashScope floor
     assert ("zhipu", "glm-4.5-air") in chain
     pool = llm_router._SLOT_POOLS[SLOT.MAPPER]      # pool only — floor excluded
@@ -176,11 +190,15 @@ def test_insights_and_review_share_the_quality_tier_pool():
     insights = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
     review = llm_router.SLOT_MODELS[SLOT.REVIEW]
     assert insights == review
-    assert insights == list(llm_router._QUALITY_TIER_POOL) + list(llm_router._TEXT_TAIL)
-    assert insights[:2] == [
-        ("aliyun_c", "deepseek-v3.2"),
-        ("aliyun_c", "glm-4.6"),
-    ]
+    # 2026-08-10「按能力排」: 比**成分**不比顺序。原断言 `insights == pool + tail`
+    # 是在拿链的顺序去比池的书写顺序 —— 它只在"链顺序恰好等于人写池的顺序"时
+    # 成立, 也就是说它其实是在断言**排序没生效**。旧的纯到期日排序下它偶然为真
+    # (池碰巧是按到期日写的), 于是这条闸看着在守"两个槽同源", 实际同时钉死了
+    # 排序策略, 而且钉在一个没人打算约束的地方。顺序由人审 golden 冻结。
+    assert set(insights) == set(llm_router._QUALITY_TIER_POOL) | set(llm_router._TEXT_TAIL)
+    assert insights[0] not in _measured_failures(), (
+        f"REVIEW/INSIGHTS 链头 {insights[0]} 是实测不达标的模型"
+    )
 
 
 def test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts():
