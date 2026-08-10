@@ -66,11 +66,13 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('{{ displayUnit(selectedWip.unit) }}');
   });
 
-  it('shows backfill time-window guidance on production plan entry', () => {
-    expect(source).toContain('补录时效');
-    expect(source).toContain('今天/昨天可补');
-    expect(source).toContain('前天为极限');
-    expect(source).toContain('大前天及更早禁止补录');
+  it('removes the static backfill tutorial while preserving live shortage warnings', () => {
+    expect(source).not.toContain('补录时效');
+    expect(source).not.toContain('今天/昨天可补');
+    expect(source).not.toContain('前天为极限');
+    expect(source).not.toContain('大前天及更早禁止补录');
+    expect(source).toContain('getPlanAdvisory(row)?.hasWarning');
+    expect(source).toContain('缺料预警');
   });
 
   it('allows a single product to use a smallest-superset joint Workflow and still fails closed when none covers it', () => {
