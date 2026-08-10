@@ -76,6 +76,33 @@ export const AUX_OVERLAY_TARGET_HANDLE = 'bom-aux-in';
 export const PACK_OVERLAY_SOURCE_HANDLE = 'bom-pack-out';
 export const PACK_OVERLAY_TARGET_HANDLE = 'bom-pack-in';
 
+export interface BomOverlayConnectionCandidate {
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+}
+
+/**
+ * Vue Flow 在接收 `v-model:edges` 时会把每一条边重新送进页面级
+ * `isValidConnection`。浮层边不是用户创建的工艺边，但如果仍按 MATERIAL / PROCESS
+ * 的工艺连线规则校验，两端的 `bom-overlay:*` 节点没有 kind，会被静默过滤，最终
+ * DOM 中一条线都没有。这里只放行 deriveBomOverlay 能生成的两种精确拓扑；任意
+ * handle、方向或节点归属不一致仍然拒绝，不能借此创建真实工艺连接。
+ */
+export function isDerivedBomOverlayConnection(
+  connection: BomOverlayConnectionCandidate,
+): boolean {
+  const isAuxiliary = connection.source === `${BOM_OVERLAY_PREFIX}aux:${connection.target}`
+    && connection.sourceHandle === AUX_OVERLAY_SOURCE_HANDLE
+    && connection.targetHandle === AUX_OVERLAY_TARGET_HANDLE;
+  if (isAuxiliary) return true;
+
+  return connection.target === `${BOM_OVERLAY_PREFIX}pack:${connection.source}`
+    && connection.sourceHandle === PACK_OVERLAY_SOURCE_HANDLE
+    && connection.targetHandle === PACK_OVERLAY_TARGET_HANDLE;
+}
+
 /**
  * deriveBomOverlay 只需要节点的 id/kind/position, 加一份【展示用】的最小数据子集
  * (工序名 / 产出名 / 基本单位) —— 不要求完整的 ProcessNodeData/MaterialNodeData
