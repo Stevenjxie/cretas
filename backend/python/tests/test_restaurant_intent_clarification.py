@@ -2057,22 +2057,33 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
             semantic_first=True,
         )
 
-    # 2026-08-07: **三轮链变两轮**。第一轮缺时间 -> 照旧反问(时间的默认值有实质
-    # 歧义); 第二轮补上时间后**唯一缺项只剩门店** -> 不再反问, 直接默认全部门店。
-    # 本条要保护的性质(原始指标 gross_margin 一路不丢)不变, 只是提前一轮达成。
+    # 2026-08-07: 第一轮缺时间 -> 照旧反问(时间的默认值有实质歧义)。
+    #
+    # ⚠️ 2026-08-11 改包裹, 不改主语: 第二轮从「直接默认全部门店」改回**给门店按钮**。
+    #    本条的主语是名字里那句 `keeps_original_metric` —— 原始指标 gross_margin
+    #    一路不丢 —— 它一个字没变(见下面 intent/requested_metrics/seed 三条)。
+    #
+    #    为什么改: 此前第二轮补不补默认取决于模型报的 `missing_fields`(报「只缺门店」
+    #    才补), 于是**同一句话的归宿随模型翻面** —— 08-11 电池 [02]/[11] 就是这么
+    #    挂的。现在延续轮恒定走按钮, 与另外 6 条按钮链契约一致
+    #    (`..._store_buttons_survive_t3_outage` 等), 而首轮的默认不受影响。
+    #    08-07 撤回记录的结论也在这里:「按钮链是产品的一部分, 不是待优化的摩擦」。
     assert first.clarification_needed is True
-    assert second.clarification_needed is False
-    assert second.store_scope == "all"
-    assert second.store_scope_defaulted is True
+    assert second.clarification_needed is True
+    # ⚠️ 不断言 `missing_slot == "store"`: 这一轮的反问来自**模型自己**
+    #    (「这次要看哪几家门店？」), guard 的 ask 分支没跑, 所以那个结构化字段
+    #    没被设。行为是对的(用户照样被问门店), 断言不该比行为更细。
+    assert second.store_scope_defaulted is False, "延续轮不该把门店提前定死"
+    assert second.store_scope in (None, ""), "延续轮不该把门店范围定死"
     assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
     assert second.requested_metrics == ("gross_margin",)
     assert second.window_label == "本月"
-    # 🔴 关键: 第二轮的 seed 必须仍然含**原始问句** —— 否则 resolver 拿到的只有
-    #    「本月」, 会去答一个别的问题。这条是「三轮变两轮」不能牺牲的东西。
+    # 🔴 关键(本条的主语): 第二轮的 seed 必须仍然含**原始问句** —— 否则 resolver
+    #    拿到的只有「本月」, 会去答一个别的问题。
     assert "整体毛利率是多少" in second.resolver_query_seed
     assert "本月" in second.resolver_query_seed
-    # 第二轮就结束 -> 没有待续的反问挂在会话上。
-    assert pool.pending == {}
+    # 还在问门店 -> 会话上挂着待续的反问, 下一句才能作为延续被消费。
+    assert pool.pending != {}
     # 两轮各调一次 T3(原来的第三轮已不需要, 调用已删)。
     assert planner.await_count == 2
 
@@ -2524,3 +2535,104 @@ async def test_a_defaulted_answer_registers_the_refinement_row():
     assert await _refinement_pop(pool, "DEMO_REST", "sess-w") == "本月米饭的销量是多少"
     assert await _refinement_pop(pool, "DEMO_REST", "sess-w") is None, (
         "消费即删没生效 —— 两个 worker 会同时去收窄")
+
+
+# ── 2026-08-11 门店默认单源化 ─────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_store_default_outcome_does_not_depend_on_what_the_model_reported():
+    """🔴🔴 承重: 同一句话, 模型报什么缺项都得到**同一个**归宿。
+
+    这是整件事的目的 —— 不是「少问一句」, 是把这个决定从模型手里拿回来。
+
+    此前: 模型报 `missing=['store_scope']` -> 走上游 `_AUTO_DEFAULTABLE` 块直接答;
+          报别的 -> 落到 `_apply_store_scope_guard` 的延续轮分支反问。
+          **同一句话的归宿随模型强弱翻面** —— 08-11 电池 [02]/[11] 就是这么挂的
+          (弱模型接管那一轮, 它们从「反问」翻成「直接答」, 电池判失败)。
+
+    ⛔ 这条不是断言「一定走默认」, 是断言**两种模型自述得到同一结果**。
+       就算将来产品把默认改回反问, 这条仍然该绿 —— 它守的是「不随模型摇摆」。
+    """
+    outcomes = []
+    for missing in (["store_scope"], ["store_scope", "aggregation"]):
+        pool = _FakeDbPool(is_restaurant=True,
+                           store_names=["模拟·静安嘉里中心店", "模拟·长宁龙之梦店"])
+        first = {
+            "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+            "time_range": None, "wants_margin": False, "asks_profitability": False,
+            "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
+            "dimensions": ["dish"], "dish": "米饭", "store": None, "stores": [],
+            "store_scope": None, "confidence": 0.98,
+            "clarification_needed": True, "missing_fields": ["time_range"],
+            "clarification_question": "想看哪个时间范围？",
+            "clarification_options": ["本月"],
+        }
+        second = {
+            **first,
+            "time_range": {"type": "named", "value": "this_month"},
+            "missing_fields": missing,
+            "clarification_question": "这次想看哪几家门店？",
+            "clarification_options": ["全部门店"],
+        }
+        planner = AsyncMock(side_effect=[first, second])
+        with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+            patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+                  return_value=None), \
+            patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+                  new=AsyncMock(return_value=(None, 0.0, None))):
+            await parse_restaurant_query(
+                "米饭的销量是多少", pool, factory_id="DEMO_REST",
+                session_key=f"src-{len(missing)}", semantic_first=True)
+            turn2 = await parse_restaurant_query(
+                "本月", pool, factory_id="DEMO_REST",
+                session_key=f"src-{len(missing)}", semantic_first=True)
+        outcomes.append((turn2.store_scope, turn2.store_scope_defaulted))
+
+    # ⚠️ 只比**门店这一维**, 不比 clarification_needed: 两种自述里「还缺什么别的」
+    #    本来就不同(第二种还缺 aggregation), 那一项该不该继续问不是本条的主语。
+    #    不变量是: **门店范围永远不构成反问理由, 也永远走同一个默认。**
+    assert outcomes[0] == outcomes[1], (
+        f"门店范围因模型自述不同得到了两种归宿: {outcomes[0]} vs {outcomes[1]} —— "
+        f"这个决定还在模型手里")
+    # 甲′: 链内恒定走按钮 —— 门店不被提前定死, 与模型报什么无关。
+    assert outcomes[0] == (None, False), f"延续轮把门店定死了: {outcomes[0]}"
+
+
+@pytest.mark.asyncio
+async def test_continuation_turn_keeps_the_store_button_chain():
+    """延续轮恒定给门店按钮(甲′), 首轮的默认(乙)不受影响。
+
+    ⚠️ 与上面那条分工: 这条断言**方向**, 上面那条断言**不随模型摇摆**。
+       只有上面那条时, 把两条路都改成「一律补默认」也能让它绿。
+
+    ⛔ 为什么链内不走乙: 用户已经在选择流程里,「时间 → 门店按钮 → 答案」整条是
+       **零 LLM** 的确定性链, 也是 T3 不可用时唯一还走得通的路径(另有 6 条契约
+       守着它)。08-07 撤回记录:「按钮链是产品的一部分, 不是待优化的摩擦」。
+    """
+    pool = _FakeDbPool(is_restaurant=True,
+                       store_names=["模拟·静安嘉里中心店", "模拟·长宁龙之梦店"])
+    first = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None, "wants_margin": False, "asks_profitability": False,
+        "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
+        "dimensions": ["dish"], "dish": "米饭", "store": None, "stores": [],
+        "store_scope": None, "confidence": 0.98,
+        "clarification_needed": True, "missing_fields": ["time_range"],
+        "clarification_question": "想看哪个时间范围？", "clarification_options": ["本月"],
+    }
+    second = {**first, "time_range": {"type": "named", "value": "this_month"},
+              "missing_fields": ["store_scope", "aggregation"],
+              "clarification_question": "这次想看哪几家门店？"}
+    planner = AsyncMock(side_effect=[first, second])
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        await parse_restaurant_query("米饭的销量是多少", pool,
+                                     factory_id="DEMO_REST", session_key="cont-b")
+        turn2 = await parse_restaurant_query("本月", pool,
+                                             factory_id="DEMO_REST", session_key="cont-b")
+
+    assert turn2.clarification_needed is True
+    assert turn2.missing_slot == "store"
+    assert turn2.store_scope_defaulted is False, "延续轮不该把门店提前定死"
