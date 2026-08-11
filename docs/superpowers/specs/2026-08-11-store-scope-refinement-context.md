@@ -17,7 +17,20 @@ Owner 的规则按账号范围分两半：
 | 账号范围 | 处置 | 现状 |
 |---|---|---|
 | 单店 | 范围唯一确定，直接用那家店 | ✅ **已实现**：`_apply_store_scope_guard` 里 `if len(names) == 1` 直接推断 |
-| 总部/多店 | 默认全部门店 + 显式声明 | ⛔ 现在是「反问」，且**是否反问由模型的 `missing_fields` 自述决定** |
+| 总部/多店 · **首轮** | 默认全部门店 + 显式声明 | ✅ **已实现**（PR #2368，未被撤回） |
+| 总部/多店 · **延续轮** | 同上 | ⚠️ **由模型的 `missing_fields` 自述决定**：报「只缺门店」就默认，否则反问 |
+
+⚠️ **本节 2026-08-11 更正**：初稿写的是「总部现在是反问」，**错**。首轮的默认
+（PR #2368）一直是活的，撤回的只是更彻底的那一版。真正不稳的只有**延续轮**那一格。
+
+⛔ 由此推翻一个看似更小的修法：给 `_semantic_spec_from_t3` 的默认块补
+`and not is_continuation`（与**时间**默认块对称）。它能让延续轮恒定反问、
+让电池 [02]/[11] 变绿 —— 但方向与 owner 拍板的乙**相反**，是把系统推回甲。
+既有测试 `test_semantic_first_three_turn_metric_time_store_chain_keeps_original_metric`
+当场拦下了它（它断言延续轮 `clarification_needed is False`）。
+
+📌 判据：**两处期望互相矛盾时，先确认哪一处代表已拍板的产品意图，再决定改哪边。**
+   这里电池是过期的那一边 —— 它编码的是甲。
 
 ⚠️ 查证（2026-08-11，prod）：
 - `users` 表**没有** store 绑定列（只有 `factory_id / department / position / role_code / level`）
@@ -89,13 +102,18 @@ factory_id, session_key, resolver_query_seed, created_at
 ⚠️ 「去掉范围词后为空」这一条不能省：「模拟·长宁龙之梦店的毛利率」是**新问题**
 （它自带指标），不是对上一问的收窄。少了它就退化成 pending 那种无条件拼接。
 
-### 4.4 默认翻转
+### 4.4 默认单源化（不是「翻转」——首轮本来就默认）
 
-`_apply_store_scope_guard` 的多店分支：反问 → `store_scope="all"` +
-`store_scope_defaulted=True`（披露走既有的 `_store_scope_disclosure`）。
+要改的是**决定权**，不是默认值本身：
 
-⛔ 延续轮（`is_clarification_continuation`）**不翻**：那一轮用户正在回答我们问的槽位，
-替他答就是抢答（撤回记录里 20 条红压到 8 条时验过这一点）。
+- 现在：延续轮默不默认，取决于 T3 报的 `missing_fields`（模型自述）
+- 改后：只要「多店租户 + 范围未知 + 非单店推断」就默认全部门店 + 披露，
+  **与模型报了什么无关**
+
+⛔ 这会让 `_apply_store_scope_guard` 的延续轮分支（现在会问门店）不再触发。
+   那条分支的理由是「在这里补默认会把门店提前定死，用户之后再说店名就要重走 T3」——
+   **而那正是 4.1~4.3 的 refinement context 要消除的代价**。所以两者必须
+   **同一次改**：先有 refinement context，再单源化默认。⛔ 只做后者 = 又一个半成品。
 
 ## 5. 闸（每条都要能变红）
 
