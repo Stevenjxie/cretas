@@ -139,6 +139,55 @@ class SseStreamingServiceTieredFirstTest {
         verify(semanticCacheService, never()).queryCache(anyString(), anyString());
     }
 
+    @Test
+    void writeClassifiedRestaurantQuestionResolvingToReadIntentFailsClosedOnStream() throws Exception {
+        setUp();
+        // 与 /execute 同一条判据: 写动词压掉了语义权威, 而识别层给的是个读意图 —— 不许猜。
+        // 两个入口对同一句话必须走出同一条路 (card4 立的规矩), 所以这条断言在 SSE 侧也要有。
+        com.cretas.aims.entity.config.AIIntentConfig readIntent =
+                com.cretas.aims.entity.config.AIIntentConfig.builder()
+                        .intentCode("RESTAURANT_DISH_SLOW")
+                        .intentName("慢销菜品")
+                        .intentCategory("SMARTBI")
+                        .toolName("restaurant_dish_slowseller_gold")
+                        .sensitivityLevel("LOW")
+                        .build();
+        IntentMatchResult match = IntentMatchResult.builder()
+                .bestMatch(readIntent)
+                .confidence(0.8d)
+                .matchMethod(IntentMatchResult.MatchMethod.LLM)
+                .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                .build();
+        when(aiIntentService.recognizeIntentWithConfidence(
+                anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
+                any(), anyString(), any(), any(), any()))
+                .thenReturn(match);
+        // 权限放行, 让「没答」只可能来自这道闸 —— 否则 NO_PERMISSION 会替它挡住,
+        // 变异时红的那句话就说不清是闸拦的还是权限拦的。
+        when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_SLOW"), anyString()))
+                .thenReturn(true);
+        com.cretas.aims.ai.tool.WriteGuardService writeGuardService =
+                mock(com.cretas.aims.ai.tool.WriteGuardService.class);
+        when(writeGuardService.isWriteIntent(any())).thenReturn(false);
+        ReflectionTestUtils.setField(service, "writeGuardService", writeGuardService);
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("上个月这些菜品下架之后营收变化多大")
+                .build();
+
+        ReflectionTestUtils.invokeMethod(
+                service, "executeStreamAsync", emitter, "DEMO_REST", request, 42L, "restaurant_owner");
+
+        org.mockito.ArgumentCaptor<Object> resultCaptor =
+                org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(service).sendSseEvent(eq(emitter), eq("result"), resultCaptor.capture());
+        IntentExecuteResponse response = (IntentExecuteResponse) resultCaptor.getValue();
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage()).contains("没有执行");
+        assertThat(response.getMessage()).doesNotContain("RESTAURANT_DISH_SLOW");
+        // 没有走到 intent_recognized 之后的执行链。
+        verify(service, never()).sendSseEvent(eq(emitter), eq("intent_recognized"), any());
+    }
+
     /**
      * Fix-round regression (2026-07-28): the SSE tiered-first gate now calls
      * {@link IntentExecutionOrchestrator#hasExplicitReadVeto(String)} directly instead of a

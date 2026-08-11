@@ -380,13 +380,18 @@ public class IntentExecutionOrchestrator {
             return executeWithExplicitIntent(
                     factoryId, dishDeleteRequest, userId, userRole, factoryPackRoute);
         }
-        boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
+        boolean restaurantSemanticPlanEligible = tieredFirstEnabled
                 && !factoryPackConstrained
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
                 && isRestaurantTenant(factoryId)
                 && userInput != null && !userInput.isEmpty()
-                && !hasExplicitReadVeto(userInput)
-                && !isRestaurantWriteRequest(userInput);
+                && !hasExplicitReadVeto(userInput);
+        // 写动词是唯一让语义权威被跳过的那个原因时记下来 —— 后面识别层要靠它判「闸说改、
+        // 解析器说看」的矛盾。两个布尔从同一个前提推导, 不各写一遍, 免得日后只改一处。
+        boolean restaurantWriteVerbSuppressedPlan = restaurantSemanticPlanEligible
+                && isRestaurantWriteRequest(userInput);
+        boolean requiresRestaurantSemanticPlan = restaurantSemanticPlanEligible
+                && !restaurantWriteVerbSuppressedPlan;
 
         // Restaurant READ natural language has one top-level semantic
         // authority. Run it before bounded-agent selectors, special report
@@ -628,6 +633,12 @@ public class IntentExecutionOrchestrator {
                 // R20c: 餐饮租户的 OUT_OF_DOMAIN 短语 ("今天天气怎么样") 不在此
                 // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;
                 // 此处执行会落到工厂措辞的通用助手回复。
+                IntentExecuteResponse phraseWriteReadAmbiguity =
+                        blockRestaurantWriteVerbReadFallback(
+                                restaurantWriteVerbSuppressedPlan, phraseIntent, request);
+                if (phraseWriteReadAmbiguity != null) {
+                    return phraseWriteReadAmbiguity;
+                }
                 if (isRestaurantTenant(factoryId)
                         && (
                             "OUT_OF_DOMAIN".equals(phraseIntent.getIntentCode())
@@ -744,6 +755,12 @@ public class IntentExecutionOrchestrator {
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
+
+        IntentExecuteResponse writeReadAmbiguity =
+                blockRestaurantWriteVerbReadFallback(restaurantWriteVerbSuppressedPlan, intent, request);
+        if (writeReadAmbiguity != null) {
+            return writeReadAmbiguity;
+        }
 
         if (factoryPackConstrained) {
             IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
@@ -2072,6 +2089,31 @@ public class IntentExecutionOrchestrator {
             java.util.regex.Pattern.compile(
                     "已下架|下架记录|下架情况|已停售|停售记录|调价记录|调价历史|价格调整记录");
 
+    /**
+     * 征询 / 假设语气 —— 优先级高于写动词。
+     *
+     * <p>2026-08-11 实测缺陷: 「有没有哪个菜是在亏钱卖的，<b>要不要下架</b>」命中写动词
+     * {@code 下架} → {@code requiresRestaurantSemanticPlan} 被压掉 → Python 语义权威
+     * (唯一挂着 request_coverage 契约的那条路) 整个被跳过 → 落到 Java 识别层, LLM 猜成
+     * {@code RESTAURANT_DISH_SLOW}, 用一份<b>销量</b>榜回答一个<b>毛利</b>问题。老板照这个
+     * 可能去下架一道赚钱的菜。
+     *
+     * <p>⛔ 修法不是往 {@link #RESTAURANT_HISTORICAL_WRITE_READ} 那张过去时豁免表里继续加
+     * 「要不要 / 该不该」—— 那还是逐条枚举说法, 漏一条就再犯一次同样的错。这里判的是<b>语气</b>:
+     * 出现征询 (要不要 / 该不该 / 是否要 / 建议) 或假设 (如果 / 假如) 时, 无论句子里提到什么
+     * 动词, 用户都是在<b>问</b>, 不是在<b>下令</b> —— 「提到」不等于「下令」。
+     *
+     * <p>安全方向: 判错成读只会让请求进入只读的语义规划器 (Python 没有写能力), 不会误改数据;
+     * 判错成写才会绕开契约去猜答案。真正的写入口 (显式 intentCode / 具名下架语法 /
+     * 排行批量操作澄清) 都排在本判据<b>之前</b>, 不受影响。
+     */
+    private static final java.util.regex.Pattern RESTAURANT_DELIBERATIVE_MOOD =
+            java.util.regex.Pattern.compile(
+                    "要不要|该不该|需不需要|用不用|应不应该|"
+                            + "是否(?:要|需要|应该|值得|可以|可行)|是不是(?:要|该|应该|需要)|"
+                            + "值不值得|值得吗|有没有必要|有必要吗|"
+                            + "应该|建议|考虑|如果|假如|要是|万一");
+
     static boolean isRestaurantWriteRequest(String userInput) {
         if (userInput == null || userInput.isBlank()) {
             return false;
@@ -2079,7 +2121,48 @@ public class IntentExecutionOrchestrator {
         if (RESTAURANT_HISTORICAL_WRITE_READ.matcher(userInput).find()) {
             return false;
         }
+        if (RESTAURANT_DELIBERATIVE_MOOD.matcher(userInput).find()) {
+            return false;
+        }
         return RESTAURANT_WRITE_VERB.matcher(userInput).find();
+    }
+
+    /**
+     * 写动词把这句话判成写 → Python 语义权威被跳过。此时若 Java 解析出来的是一个<b>读</b>意图,
+     * 两个判据互相矛盾: 闸说用户要改, 解析器说用户要看。
+     *
+     * <p>这条路上没有 Python 那套 {@code request_coverage} 契约 (答案必须覆盖用户问的指标),
+     * 继续执行等于让关键词 / 向量 / LLM 去猜用户到底问的是什么。2026-08-11 实测:
+     * 「有没有哪个菜是在亏钱卖的，要不要下架」被猜成慢销榜(按销量), 而用户问的是毛利。
+     *
+     * <p>所以: fail closed, 不猜 —— 与「禁止降级处理」是同一条纪律。
+     * 语气判据 ({@link #RESTAURANT_DELIBERATIVE_MOOD}) 已经把征询 / 假设那一族拨回读路径,
+     * 这里守的是它<b>覆盖不到</b>的剩余形态 (叙述式提及、名词化的写动词等)。
+     *
+     * @return 非 null 表示必须就地返回该澄清响应, null 表示放行
+     */
+    private IntentExecuteResponse blockRestaurantWriteVerbReadFallback(
+            boolean writeVerbSuppressedPlan, AIIntentConfig intent, IntentExecuteRequest request) {
+        if (!writeVerbSuppressedPlan || intent == null || isWriteIntentDeclarationAware(intent)) {
+            return null;
+        }
+        log.warn("[Branch:RestaurantWriteReadAmbiguity] 写判定与读意图矛盾, fail closed: "
+                        + "candidateIntent={}, input='{}'",
+                intent.getIntentCode(), request != null ? request.getUserInput() : null);
+        return buildRestaurantWriteReadAmbiguityResponse(request);
+    }
+
+    /** 面向店长的话术: 不出现意图码 / 置信度这类技术内容 (owner 2026-08-11 拍板)。 */
+    static final String RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE =
+            "这句话里既有要修改的动作，也像是在问数据，我不确定您是想改还是想看。"
+                    + "为避免改错，这次没有执行任何操作，也没有替您猜一个答案。\n"
+                    + "· 想让我改：请直接说清楚对象，例如「下架某道菜」，我会先给预览，您确认后才执行。\n"
+                    + "· 想看数据：请说要看的指标和范围，例如「最近30天各菜品的毛利排名」。";
+
+    private IntentExecuteResponse buildRestaurantWriteReadAmbiguityResponse(
+            IntentExecuteRequest request) {
+        return buildRestaurantDeterministicResponse(
+                request, "NEED_CLARIFICATION", true, RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE);
     }
 
     static Optional<String> extractExplicitRestaurantDishDeleteTarget(String userInput) {
@@ -2458,15 +2541,26 @@ public class IntentExecutionOrchestrator {
      * {@code getAccessMode()} 声明成为第一判据, 原启发式保留为第二判据 (任一判写即拦)。
      */
     private boolean isWriteIntentDeclarationAware(AIIntentConfig intent) {
-        if (intentAccessModeFilter != null) {
+        return isWriteIntentDeclarationAware(intent, intentAccessModeFilter, writeGuardService);
+    }
+
+    /**
+     * 同上, 但把两个判定器显式传进来 —— {@code SseStreamingService} 复用同一份实现。
+     * 两个入口对同一个意图的写判定必须一致, 否则同一句话在流式和非流式下会走出不同的路
+     * (card4 2026-07-28 已经踩过一次同形状的副本漂移, 见 {@link #hasExplicitReadVeto})。
+     */
+    static boolean isWriteIntentDeclarationAware(AIIntentConfig intent,
+                                                 IntentAccessModeFilter accessModeFilter,
+                                                 com.cretas.aims.ai.tool.WriteGuardService writeGuard) {
+        if (accessModeFilter != null) {
             try {
-                return intentAccessModeFilter.isWriteIntent(intent);
+                return accessModeFilter.isWriteIntent(intent);
             } catch (Exception e) {
                 log.warn("声明式写判定异常, 回落启发式: intentCode={}, err={}",
                         intent != null ? intent.getIntentCode() : null, e.getMessage());
             }
         }
-        return writeGuardService.isWriteIntent(intent);
+        return writeGuard.isWriteIntent(intent);
     }
 
     /**
