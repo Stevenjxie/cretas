@@ -126,6 +126,9 @@ describe('BOM 状态就近提示 (2026-08-11)', () => {
     expect(at).toBeGreaterThan(-1);
     const rule = NODE.slice(at, at + 700);
     expect(rule.includes('width: 180px')).toBe(true);
+    // 放在 Cell **正上方** —— 贴右侧会撞上包材 Cell (Steve 实测)。
+    expect(rule.includes('bottom: 100%')).toBe(true);
+    expect(rule.includes('left: 100%')).toBe(false);
   });
 
   it('气泡要能定位在 Cell 外侧 —— .material-node 必须是定位上下文', () => {

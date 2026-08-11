@@ -74,8 +74,16 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  * 正解: `auxY = 工序Y - (辅料自身高度 + AUX_GAP_Y)`, 让辅料底边正好落在工序上方 GAP 处。
  * 拿不到辅料实测高度时退回 AUX_FALLBACK_HEIGHT(辅料 Cell 的典型高度)。
  */
-const AUX_GAP_Y = 48;
-const AUX_FALLBACK_HEIGHT = 150;
+const AUX_GAP_Y = 72;
+/**
+ * 辅料 Cell 高度的**下限**, 不只是「拿不到测量值时的兜底」。
+ *
+ * ⚠️ 2026-08-11 第三版: 实测量到 85px, 而它渲染完是 123px —— 我们用的是**上一帧**的
+ * 测量值, 内容(辅料行/状态提示/加辅料按钮)展开后 Cell 会变高, 测早了就偏小,
+ * 留白被吃掉 (Steve 实测「辅料和工序靠得太近」, 实际只剩 ~10px)。
+ * 所以取 max(实测, 下限): 测量偏小时有地板, 真的更高时仍然跟着长。
+ */
+const AUX_MIN_HEIGHT = 200;
 // 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
 // 重叠，两个 handle 几乎落在同一点，视觉上像“没有线”。
 const PACK_OFFSET_X = 300;
@@ -229,8 +237,9 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         position: {
           x: node.position.x,
           // 用**辅料自己**的高度: 底边落在工序顶边上方 AUX_GAP_Y 处。
+          // max(实测, 下限) —— 实测来自上一帧, 内容展开后会变高, 只信实测会贴到工序上。
           y: node.position.y
-            - ((input.nodeHeights?.[auxId] ?? AUX_FALLBACK_HEIGHT) + AUX_GAP_Y),
+            - (Math.max(input.nodeHeights?.[auxId] ?? 0, AUX_MIN_HEIGHT) + AUX_GAP_Y),
         },
         data: {
           processName: node.data.processName ?? '未命名工序',
