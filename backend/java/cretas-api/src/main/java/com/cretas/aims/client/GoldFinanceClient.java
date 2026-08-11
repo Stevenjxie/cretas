@@ -1451,12 +1451,20 @@ public class GoldFinanceClient {
      * "Keep the whole cascade inside Java's independent 30 s deadline" ——
      * 注释说 30, 常量是 45, 两处口径打架且没有任何东西会红。
      *
-     * <p>现在: Python 总预算 12s(单跳 6s × 2), 这里给 15s 留 3s 网络与序列化余量。
-     * ⛔ 调这个数之前先去看 Python 那个常量, 两个数是一对, 不是各自独立的旋钮。
-     * 判据(owner 2026-08-12 拍板): 老板问一句话, 等到第 15 秒还没有就该诚实说
-     * 没算出来 —— 25 秒都嫌长, 45 秒里挣扎出来的「成功」和失败没区别。
+     * <p>2026-08-12 二次调整 (owner: 「前期不考虑这个, 后面再优化」): 15s → 60s,
+     * 与 nginx 默认 upstream 超时对齐 —— 也就是<b>这一侧实际上不再是瓶颈</b>。
+     *
+     * <p>⛔ 为什么不是真的去掉: 去掉 = 无限等, 而 Python 卡住时这个调用会
+     * <b>永久占住一个 Java 请求线程</b>; 并发一上来线程池耗尽, 挂的不是餐饮 AI
+     * 而是整个后端。而且真去掉也没有意义 —— 上游 nginx 60s 会先切, 前端 75~180s
+     * 也在等。所以「对齐 nginx」在行为上等于「Java 不设限」, 但不拿线程池冒险。
+     *
+     * <p>📌 Python 侧仍是 12s(单跳 6s × 2) —— 真正决定用户等多久的是那个数,
+     * 不是这个。这里只负责「别比它更早挂断」。要放宽用户等待时间, 改 Python 那个。
+     * ⛔ 两个数仍是一对, 由 tests/test_tiered_budget_alignment.py 守着
+     * (Java ≥ Python + 2s), 改任何一边都会红。
      */
-    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 15_000L;
+    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 60_000L;
 
     long tieredAnswerTimeoutMs() {
         return Math.max(
