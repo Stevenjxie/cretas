@@ -113,6 +113,16 @@ B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
 `reviewed=true, source=human` 才能进入后续 label 训练。不得因此覆盖 tray MARK、旧 label MARK、
 生产模型或原图。
 
+当新侧视正样本使白色纸张、包装边缘等非标签物体的 `white_label` 置信度上升时，不得继续机械追加
+同类缺标正样本。改用 `--selection-mode white-confuser-disagreement`，并用
+`--candidate-label/--candidate-label-sha256` 将已拒绝候选绑定为只读分歧排序器。该模式只选择候选新增或
+显著放大的白标框，回执必须单列候选照片、任务、SKU、精确 SHA/ID 与 pHash 排除结果；排序候选和
+预框都不是真值，仍需完整人工复核。保护 7+20 不参与相似度检索、排序或调参。
+
+更换骨干模型只能在同一 reviewed-only 数据、相同 task split、相同离线参数和完整 7+20 门禁下做
+公平 A/B；不得下载新权重，也不得用训练集表现选择生产模型。若 hard negative 尚未覆盖已知错误模式，
+先补数据再换模型，避免把同一错误学得更自信。
+
 当旧队列需要继续保留为安全阻塞、但新建的独立队列已完成人工确认时，使用显式队列白名单运行
 候选闭环；三个参数必须成组使用，避免扫描/清除旧 MARK 或再生成一轮队列：
 

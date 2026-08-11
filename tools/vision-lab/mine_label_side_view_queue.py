@@ -24,6 +24,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 PROTECTED_PHASH_DISTANCE = 10
 QUEUE_PHASH_DISTANCE = 4
 WHITE_MISSING_VERDICTS = {"MISSING_WHITE_LABEL", "BOTH_MISSING"}
+CLASS_WHITE_LABEL = 0
+SIDE_VIEW_MISSING = "side-view-missing"
+WHITE_CONFUSER_DISAGREEMENT = "white-confuser-disagreement"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -75,6 +78,60 @@ def overlap_fraction(left: Sequence[float], right: Sequence[float]) -> float:
         0.0, min(left[3], right[3]) - max(left[1], right[1])
     )
     return intersection / max(1e-9, min(box_area(left), box_area(right)))
+
+
+def intersection_over_union(left: Sequence[float], right: Sequence[float]) -> float:
+    intersection = max(0.0, min(left[2], right[2]) - max(left[0], right[0])) * max(
+        0.0, min(left[3], right[3]) - max(left[1], right[1])
+    )
+    return intersection / max(1e-9, box_area(left) + box_area(right) - intersection)
+
+
+def match_tray(target: Any, trays: Sequence[Any], minimum_iou: float) -> tuple[Any | None, float]:
+    matches = [(tray, intersection_over_union(target.box, tray.box)) for tray in trays]
+    if not matches:
+        return None, 0.0
+    tray, score = max(matches, key=lambda item: item[1])
+    return (tray, score) if score >= minimum_iou else (None, score)
+
+
+def white_confuser_features(
+    production_tray: Any,
+    candidate_tray: Any,
+    minimum_candidate_confidence: float,
+    minimum_confidence_delta: float,
+    minimum_label_iou: float,
+) -> dict[str, Any] | None:
+    production_white = [label for label in production_tray.labels if label.class_id == CLASS_WHITE_LABEL]
+    candidate_white = [label for label in candidate_tray.labels if label.class_id == CLASS_WHITE_LABEL]
+    ranked: list[tuple[float, float, Any, float]] = []
+    for candidate_label in candidate_white:
+        matches = [
+            (label, intersection_over_union(candidate_label.box, label.box))
+            for label in production_white
+        ]
+        matched_label, matched_iou = max(matches, key=lambda item: item[1], default=(None, 0.0))
+        production_confidence = (
+            float(matched_label.confidence) if matched_label is not None and matched_iou >= minimum_label_iou else 0.0
+        )
+        delta = float(candidate_label.confidence) - production_confidence
+        ranked.append((delta, float(candidate_label.confidence), candidate_label, matched_iou))
+    if not ranked:
+        return None
+    delta, candidate_confidence, label, matched_iou = max(ranked, key=lambda item: (item[0], item[1]))
+    if candidate_confidence < minimum_candidate_confidence or delta < minimum_confidence_delta:
+        return None
+    production_confidence = candidate_confidence - delta
+    is_new = production_confidence == 0.0
+    return {
+        "tags": ["candidate_white_new" if is_new else "candidate_white_amplified"],
+        "score": round(delta * 10.0 + candidate_confidence, 6),
+        "candidate_white_confidence": round(candidate_confidence, 6),
+        "production_white_confidence": round(production_confidence, 6),
+        "white_confidence_delta": round(delta, 6),
+        "matched_white_iou": round(matched_iou, 6),
+        "candidate_white_box": [round(float(value), 6) for value in label.box],
+    }
 
 
 def side_risk_features(tray: Any, trays: Sequence[Any], image_width: int, image_height: int) -> dict[str, Any]:
@@ -214,6 +271,11 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("production tray model hash drift")
     if sha256_file(args.label).lower() != args.label_sha256.lower():
         raise RuntimeError("production label model hash drift")
+    if args.selection_mode == WHITE_CONFUSER_DISAGREEMENT:
+        if args.candidate_label is None or not args.candidate_label_sha256:
+            raise RuntimeError("white-confuser disagreement requires a hash-bound candidate label")
+        if sha256_file(args.candidate_label).lower() != args.candidate_label_sha256.lower():
+            raise RuntimeError("candidate label model hash drift")
     holdout_ids, holdout_hashes, holdout_phashes = protected_records(args.protected_holdout)
     existing_ids = manifest_source_ids(args.existing_manifest)
     existing_hashes, existing_phashes = existing_source_fingerprints(args.database, existing_ids)
@@ -236,6 +298,15 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
         models = LabelQcYoloModels(model_dir=model_dir)
         if not models.available:
             raise RuntimeError(models.load_error or "production models unavailable")
+        candidate_models = None
+        if args.selection_mode == WHITE_CONFUSER_DISAGREEMENT:
+            candidate_dir = model_dir / "candidate"
+            candidate_dir.mkdir()
+            shutil.copy2(args.tray, candidate_dir / "tray.onnx")
+            shutil.copy2(args.candidate_label, candidate_dir / "label.onnx")
+            candidate_models = LabelQcYoloModels(model_dir=candidate_dir)
+            if not candidate_models.available:
+                raise RuntimeError(candidate_models.load_error or "candidate label model unavailable")
         params = ScreeningParams(tray_conf=args.tray_threshold, label_conf=args.label_threshold)
         for photo_number, record in enumerate(candidates, start=1):
             if photo_number == 1 or photo_number % 10 == 0:
@@ -270,14 +341,44 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
                 continue
             frame = np.array(source_image)
             screening = screen_image(frame, models, params)
+            ranked_trays: list[tuple[Any, list[str], float, dict[str, Any]]] = []
+            if args.selection_mode == SIDE_VIEW_MISSING:
+                for tray in screening.suspects:
+                    if tray.verdict not in WHITE_MISSING_VERDICTS:
+                        continue
+                    features = side_risk_features(tray, screening.trays, screening.image_width, screening.image_height)
+                    if not features["tags"]:
+                        exclusions["not_side_risk"] += 1
+                        continue
+                    ranked_trays.append((tray, features["tags"], features["score"], features))
+            else:
+                assert candidate_models is not None
+                candidate_screening = screen_image(frame, candidate_models, params)
+                for candidate_tray in candidate_screening.trays:
+                    production_tray, tray_iou = match_tray(
+                        candidate_tray, screening.trays, args.minimum_tray_iou
+                    )
+                    if production_tray is None:
+                        exclusions["candidate_tray_unmatched"] += 1
+                        continue
+                    features = white_confuser_features(
+                        production_tray,
+                        candidate_tray,
+                        args.minimum_candidate_white_confidence,
+                        args.minimum_white_confidence_delta,
+                        args.minimum_label_iou,
+                    )
+                    if features is None:
+                        exclusions["white_disagreement_below_floor"] += 1
+                        continue
+                    features["tray_match_iou"] = round(tray_iou, 6)
+                    features["production_verdict"] = production_tray.verdict
+                    features["candidate_verdict"] = candidate_tray.verdict
+                    ranked_trays.append((
+                        candidate_tray, features["tags"], features["score"], features
+                    ))
             photo_count = 0
-            for tray in screening.suspects:
-                if tray.verdict not in WHITE_MISSING_VERDICTS:
-                    continue
-                features = side_risk_features(tray, screening.trays, screening.image_width, screening.image_height)
-                if not features["tags"]:
-                    exclusions["not_side_risk"] += 1
-                    continue
+            for tray, selection_tags, selection_score, features in ranked_trays:
                 sku = str(record.get("sku_code") or "UNKNOWN")
                 if per_sku[sku] >= args.max_per_sku or photo_count >= args.max_per_photo:
                     continue
@@ -320,11 +421,10 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
                     "crop_sha256": hashlib.sha256(crop.tobytes()).hexdigest(),
                     "crop_perceptual_hash": crop_phash,
                     "crop_size": [crop.width, crop.height],
-                    "selection_tags": features["tags"],
-                    "selection_score": features["score"],
-                    "tray_aspect_ratio": features["tray_aspect_ratio"],
-                    "maximum_tray_overlap": features["maximum_tray_overlap"],
-                    "tray_area_fraction": features["tray_area_fraction"],
+                    "selection_mode": args.selection_mode,
+                    "selection_tags": selection_tags,
+                    "selection_score": selection_score,
+                    "selection_evidence": features,
                     "dropped_neighbour_labels": int(tray.dropped_neighbour_labels),
                     "prelabel_boxes": prelabels,
                     "human_source_truth": "NO_DEFECT",
@@ -336,6 +436,8 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
     selected.sort(key=lambda row: (-row["selection_score"], row["source_photo_id"], row["tray_index"]))
     selected = selected[:args.max_queue]
     per_sku = Counter(row["sku_code"] for row in selected)
+    selected_tasks = {row["source_task_id"] for row in selected}
+    selected_photos = {row["source_photo_id"] for row in selected}
     identity = plan_identity(selected)
     receipt = {
         "version": "vision-lab-label-side-view-preflight-v1",
@@ -345,12 +447,18 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
         "production_tray_sha256": args.tray_sha256.lower(),
         "production_label": str(args.label),
         "production_label_sha256": args.label_sha256.lower(),
+        "selection_mode": args.selection_mode,
+        "ranking_candidate_label": str(args.candidate_label) if args.candidate_label else None,
+        "ranking_candidate_label_sha256": args.candidate_label_sha256.lower() if args.candidate_label_sha256 else None,
+        "ranking_candidate_is_ground_truth": False,
         "database": str(args.database),
         "protected_holdout": str(args.protected_holdout),
         "existing_manifests": [str(path) for path in args.existing_manifest],
         "excluded_source_ids": len(excluded_ids),
         "photos_scanned": len(candidates),
         "queue_count": len(selected),
+        "candidate_photo_count": len(selected_photos),
+        "candidate_task_count": len(selected_tasks),
         "sku_counts": dict(per_sku),
         "exclusions": dict(exclusions),
         "candidate_digest": stable_digest(identity),
@@ -436,6 +544,9 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("label-side-view preflight candidate digest drift")
     if plan.get("protected_holdout_included") or plan.get("existing_label_sources_included"):
         raise RuntimeError("label-side-view preflight protection flags are unsafe")
+    selection_mode = plan.get("selection_mode") or SIDE_VIEW_MISSING
+    if selection_mode not in {SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT}:
+        raise RuntimeError(f"unsupported label queue selection mode: {selection_mode}")
     stamp = dt.datetime.fromisoformat(plan["created_at"]).strftime("%Y%m%dT%H%M%SZ")
     queue = args.output_root / f"label-side-view-active-{stamp}"
     if queue.exists():
@@ -457,7 +568,7 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
         prelabel_path = temporary / "prelabels" / f"{crop_id}.json"
         write_json(prelabel_path, {
             "crop_id": crop_id,
-            "source": "production_yolo_requires_full_human_review",
+            "source": "yolo_proposal_requires_full_human_review",
             "is_ground_truth": False,
             "boxes": source["prelabel_boxes"],
         })
@@ -471,9 +582,11 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
             "source_task_id": source["source_task_id"],
             "source_sha256": source["source_sha256"],
             "sku_code": source["sku_code"],
-            "angle": "side_view_or_stacked_risk",
+            "angle": "white_confuser_risk" if selection_mode == WHITE_CONFUSER_DISAGREEMENT else "side_view_or_stacked_risk",
+            "selection_mode": selection_mode,
             "selection_tags": source["selection_tags"],
             "selection_score": source["selection_score"],
+            "selection_evidence": source.get("selection_evidence") or {},
             "label_v1_verdict": source["label_v1_verdict"],
             "human_qc_verdict": "NO_DEFECT",
             "prelabel_boxes": len(source["prelabel_boxes"]),
@@ -485,11 +598,23 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
     manifest = {
         "version": f"liushanmen-label-side-view-{stamp}",
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "purpose": "human review of fresh side-view, oblique, or stacked white-label detector misses",
+        "purpose": (
+            "human review of white-like confusers amplified by a rejected ranking candidate"
+            if selection_mode == WHITE_CONFUSER_DISAGREEMENT
+            else "human review of fresh side-view, oblique, or stacked white-label detector misses"
+        ),
+        "selection_mode": selection_mode,
+        "ranking_candidate_label": plan.get("ranking_candidate_label"),
+        "ranking_candidate_label_sha256": plan.get("ranking_candidate_label_sha256"),
+        "ranking_candidate_is_ground_truth": False,
         "preflight": str(args.plan),
         "preflight_sha256": sha256_file(args.plan),
         "candidate_digest": plan["candidate_digest"],
         "queue_count": len(manifest_rows),
+        "candidate_photo_count": len({row["source_photo_id"] for row in manifest_rows}),
+        "candidate_task_count": len({row["source_task_id"] for row in manifest_rows}),
+        "sku_counts": dict(Counter(row["sku_code"] for row in manifest_rows)),
+        "human_review_required_count": len(manifest_rows),
         "rows": manifest_rows,
         "contact_sheets": [str(queue / "contact-sheets" / Path(path).name) for path in contact_sheets],
         "preannotations_are_not_ground_truth": True,
@@ -506,7 +631,8 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
     }
     write_json(temporary / "manifest.json", manifest)
     (temporary / "README.md").write_text(
-        "Review every crop completely. Production boxes are proposals, not truth.\n"
+        "Review every crop completely. YOLO boxes are proposals, not truth.\n"
+        "A rejected candidate may rank this queue but can never supply ground truth.\n"
         "This queue is label-only and must never be merged with a tray MARK.\n",
         encoding="utf-8",
     )
@@ -545,6 +671,13 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--tray-sha256", required=True)
     plan.add_argument("--label", required=True, type=Path)
     plan.add_argument("--label-sha256", required=True)
+    plan.add_argument(
+        "--selection-mode",
+        choices=(SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT),
+        default=SIDE_VIEW_MISSING,
+    )
+    plan.add_argument("--candidate-label", type=Path)
+    plan.add_argument("--candidate-label-sha256")
     plan.add_argument("--protected-holdout", required=True, type=Path)
     plan.add_argument("--existing-manifest", action="append", default=[], type=Path)
     plan.add_argument("--output", required=True, type=Path)
@@ -554,6 +687,10 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--max-per-photo", type=int, default=1)
     plan.add_argument("--tray-threshold", type=float, default=0.60)
     plan.add_argument("--label-threshold", type=float, default=0.20)
+    plan.add_argument("--minimum-tray-iou", type=float, default=0.90)
+    plan.add_argument("--minimum-label-iou", type=float, default=0.30)
+    plan.add_argument("--minimum-candidate-white-confidence", type=float, default=0.35)
+    plan.add_argument("--minimum-white-confidence-delta", type=float, default=0.05)
     build = subparsers.add_parser("build")
     build.add_argument("--plan", required=True, type=Path)
     build.add_argument("--output-root", required=True, type=Path)
