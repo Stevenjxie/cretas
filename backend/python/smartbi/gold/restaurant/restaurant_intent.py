@@ -168,6 +168,61 @@ _APPROVED_DIRECT_TIME_PHRASES = _APPROVED_TIME_ANSWERS + (
 )
 _APPROVED_ALL_STORE_ANSWERS = ("全部门店",)
 
+#: 「换成全部门店」的合法说法。⛔ 与上面那个常量分开: 那个是**给用户看的按钮文案**
+#: (只有一种说法才不会让按钮参差), 这个是**认用户输入**(说法本来就多)。
+_ALL_STORE_PHRASES = ("全部门店", "所有门店", "各门店", "全店", "整店", "全部")
+#: 收窄句里允许出现的粘着词 —— 去掉它们之后必须什么都不剩。
+_REFINEMENT_FILLER = ("看", "改成", "换成", "只看", "那", "呢", "的", "吧", "，", ",", "。", " ")
+
+
+def scope_only_refinement(
+    query: Optional[str], known_stores: Sequence[str],
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """这一句是不是**只是**在换门店范围? 是则返回 (scope, 门店名), 否则 None。
+
+    🔴 用途: 多店租户首轮会直接答全部门店并声明范围(PR #2368)。已知残余代价写在
+       `_apply_store_scope_guard` 的注释里 ——「拿到全店答案后再说店名收窄, 那是
+       一个新问句, 要重走一次 T3」, 而 goal 的 hard criterion 明写在确定性路径上
+       新增 LLM 调用是设计失败(2026-08-07 就是为此撤回的)。本函数消除那个代价:
+       判出「只是换范围」→ 拼回上一问的密封问句, 走既有显式槽位编译, **零 LLM**。
+
+    ⛔ 判据是「**去掉范围词之后什么都不剩**」, 不是「句子里出现了门店名」。
+       后者会把「模拟·长宁龙之梦店的毛利率」(自带指标 = 新问题)也认成收窄, 于是
+       退化成 `restaurant_pending_clarifications` 那种**无条件拼接** —— 撤回记录
+       写明的后果就是「下一个不相关的新问题被拼到旧问句后面」。
+
+    ⛔ 租户名单为空(dim_store 不可用)时一律返回 None: 拿一个验不了的名字去收窄,
+       会安静地算出一个空口径。
+    """
+    text = (query or "").strip()
+    if not text or not known_stores:
+        return None
+
+    matched: List[str] = []
+    residue = text
+    # 长名字先匹配 —— 「静安店」是「模拟·静安嘉里中心店」的子串时不能先吃掉短的。
+    for name in sorted(known_stores, key=len, reverse=True):
+        if name and name in residue:
+            matched.append(name)
+            residue = residue.replace(name, " ")
+
+    scope = "all" if not matched else ("single" if len(matched) == 1 else "multi")
+    if not matched:
+        # 没点名门店 -> 必须是一句「全部门店」类的话, 否则不是范围收窄。
+        if not any(phrase in residue for phrase in _ALL_STORE_PHRASES):
+            return None
+        for phrase in sorted(_ALL_STORE_PHRASES, key=len, reverse=True):
+            residue = residue.replace(phrase, " ")
+
+    for filler in _REFINEMENT_FILLER:
+        residue = residue.replace(filler, "")
+    if residue.strip():
+        # 还剩实质内容 -> 这是个新问题, 不是收窄。
+        return None
+
+    ordered = tuple(name for name in known_stores if name in matched)
+    return scope, ordered
+
 
 # ─── QuerySpec ────────────────────────────────────────────────────────────
 
@@ -4137,6 +4192,85 @@ def _trusted_named_dish_button_continuation(
 # degrades to "nothing registered" / "no continuation this time" -- never
 # raises into the caller's chain.
 _PENDING_TTL_SECONDS = 5 * 60  # ~5 minutes, per clarification-loop v1 design
+
+
+#: refinement 的 TTL 与 pending 一致 —— 用户拿到答案后想收窄, 也是同一个「还在
+#: 这轮对话里」的时间尺度。⛔ 不给它一个更长的窗口: 窗口越长, 一句无关的话被
+#: 误当成收窄的机会越多。
+_REFINEMENT_TTL_SECONDS = _PENDING_TTL_SECONDS
+
+
+async def _refinement_put(
+    pool, factory_id: str, session_key: str, *, resolver_query_seed: str,
+) -> None:
+    """记下「上一轮我用默认范围答了你」, 供下一句可能的收窄使用。
+
+    ⛔ 与 `_pending_put` 是**两张表**, 不是同一张加个 kind 列: 两者消费语义相反
+       (pending 无条件拼接 / refinement 有条件),同表会诱使下一个人写出
+       「顺手也 pop 一下另一种」。
+    ⚠️ fail-open: 写不进去只是这一轮失去收窄捷径(下一句仍能作为新问句被回答),
+       不该让答案发不出去。
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO restaurant_scope_refinements
+                    (factory_id, session_key, resolver_query_seed, created_at)
+                VALUES ($1, $2, $3, now())
+                ON CONFLICT (factory_id, session_key) DO UPDATE
+                   SET resolver_query_seed = EXCLUDED.resolver_query_seed,
+                       created_at = now()
+                """,
+                factory_id, session_key, resolver_query_seed,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[restaurant-intent] scope-refinement put failed "
+            "(fail-open, 本轮无收窄捷径): %s", exc,
+        )
+
+
+async def _refinement_pop(
+    pool, factory_id: str, session_key: str,
+) -> Optional[str]:
+    """取走上一轮的密封问句; 过期或取不到都返回 None(fail-open)。
+
+    与 pending 同样是**消费即删**的单语句 DELETE ... RETURNING —— 两个 worker
+    竞争同一句后续时只有一个能拿到, 不会双方都去收窄。
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                DELETE FROM restaurant_scope_refinements
+                 WHERE factory_id = $1 AND session_key = $2
+                 RETURNING resolver_query_seed, created_at
+                """,
+                factory_id, session_key,
+            )
+            try:
+                await conn.execute(
+                    "DELETE FROM restaurant_scope_refinements"
+                    " WHERE created_at < now() - interval '1 hour'"
+                )
+            except Exception:  # noqa: BLE001 — 清扫失败不影响本次
+                pass
+    except Exception as exc:
+        logger.warning(
+            "[restaurant-intent] scope-refinement pop failed (fail-open): %s", exc,
+        )
+        return None
+    if row is None:
+        return None
+    created = row["created_at"]
+    try:
+        age = (datetime.now(created.tzinfo) - created).total_seconds()
+    except Exception:  # noqa: BLE001 — 时区/类型异常一律当作过期
+        return None
+    if age > _REFINEMENT_TTL_SECONDS:
+        return None
+    return row["resolver_query_seed"] or None
 
 
 async def _pending_put(
