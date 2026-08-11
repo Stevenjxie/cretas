@@ -35,6 +35,14 @@ export interface WorkflowClassification {
    * 这里跟着排序, 两侧列出来的产出顺序才一致。顶部「本图产出：A、B」用它, 归属对象不参与。
    */
   terminalOutputSkuIds: string[];
+  /**
+   * 这张图的**主根投入** skuId —— 替代组里那个不是别人替代品的原料; 没有根投入时为 null。
+   *
+   * 与后端 {@code WorkflowAnchorPolicy#primaryRootSku} 同口径。顶部用它显示
+   * 「发布后这张图会移到「XX」名下」—— 归属对象按研判自动重锚(后端 PR #2488)是发布时
+   * 才发生的数据搬迁, 界面必须**提前说出来**, 不能让用户发布完才发现图换了地方。
+   */
+  primaryRootSkuId: string | null;
 }
 
 /** Workflow 类型只由画布拓扑派生，关联原料/成品不参与判定。 */
@@ -55,7 +63,10 @@ export function classifyWorkflowTopology(
   const rootInputCount = logicalRootCount(rootNodes);
   const terminalOutputCount = terminalOutputIds.size;
   const terminalOutputSkuIds = [...terminalOutputIds].sort();
-  const base = { rootInputCount, terminalOutputCount, terminalOutputSkuIds };
+  // 主根投入: 优先取不是别人替代品的那个(替代组的原点), 与后端 primaryRootSku 同口径。
+  const primaryRootNode = rootNodes.find((node) => !node.substituteOfNodeId) ?? rootNodes[0];
+  const primaryRootSkuId = primaryRootNode ? (primaryRootNode.skuId || primaryRootNode.id) : null;
+  const base = { rootInputCount, terminalOutputCount, terminalOutputSkuIds, primaryRootSkuId };
 
   if (terminalOutputCount === 0) {
     return { type: 'INCOMPLETE', label: '待完善画布', ...base };
