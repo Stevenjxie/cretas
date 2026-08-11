@@ -64,5 +64,45 @@
     "enabled": false,
     "max_calls_per_run": 0,
     "monthly_budget_cny": 0
+  },
+  "tray_active_learning": {
+    "queue_root": "D:\\CretasVisionLab\\tray-queues\\tray-active-<timestamp>",
+    "protected_holdout": "D:\\CretasVisionLab\\evaluation\\protected-holdout.json",
+    "base_model_pt": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\phase1-tray-detector\\runs\\tray-detector-v4\\weights\\best.pt",
+    "base_model_sha256": "969ac0e1eb1b7e4be707a5c9c67d3c5f063f97278a7d6b585e61d8bdb9f61c51",
+    "production_tray_onnx": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\export\\tray-tray-detector-v4.onnx",
+    "production_tray_sha256": "aac664413eb9c284d12cc4ad0da95cf790d0bc47b8158832822c5413633963b9",
+    "production_label_onnx": "D:\\Temp\\cretas-liushanmen-qc-synthetic-v2-20260728\\export\\label-v1-lowfloor.onnx",
+    "production_label_sha256": "08aa70231a154fcbb55f4b2c9248fcfca5f3808ae13fe4ea423eaa98749b85e5",
+    "validation_percent": 25,
+    "label_threshold": 0.2,
+    "max_onnx_parity_mismatches": 1,
+    "training": {
+      "epochs": 30,
+      "patience": 10,
+      "batch": 4,
+      "workers": 2,
+      "device": 0,
+      "seed": 20260811,
+      "lr0": 0.00015,
+      "freeze": 10,
+      "export_floor": 0.05
+    },
+    "teacher_optional": true,
+    "teacher_model_path": "B:\\AIModels\\LocateAnything-3B",
+    "teacher_model_revision": "c32291ca5e996f5a7a485845b4f57a233936bba0",
+    "teacher_offline_only": true,
+    "teacher_crop_max_side": 1024,
+    "teacher_failure_mode": "skip",
+    "full_image_teacher_forbidden": true,
+    "deployment": {
+      "auto_deploy": true,
+      "confirm_token": "YES-PROD",
+      "production_sha256": "aac664413eb9c284d12cc4ad0da95cf790d0bc47b8158832822c5413633963b9",
+      "ssh_host": "root@47.100.235.168",
+      "remote_model_path": "/www/wwwroot/cretas/models/label-qc/tray.onnx",
+      "service": "cretas-python",
+      "health_url": "http://127.0.0.1:8083/health"
+    }
   }
 }
