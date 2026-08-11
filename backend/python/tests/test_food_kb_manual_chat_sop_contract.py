@@ -1457,6 +1457,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant-full-chain-sop.html",
         ),
         (
+            "门店简称有歧义时，排行表格和候选按钮应如何展示？",
+            "restaurant",
+            _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
             "食材成本和人工成本用哪些费用名称分类？",
             "restaurant",
             _RESTAURANT_COST_CATEGORY_ANSWER,
