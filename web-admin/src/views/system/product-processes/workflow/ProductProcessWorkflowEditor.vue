@@ -1018,7 +1018,9 @@ const props = defineProps<{
 }>();
 
 const router = useRouter();
-const { fitView, getViewport, setViewport, findNode } = useVueFlow('product-process-workflow');
+const {
+  fitView, getViewport, setViewport, findNode, getSelectedNodes, removeSelectedNodes,
+} = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
 const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
@@ -3182,7 +3184,9 @@ function onNodeDragStart({ node }: { node: Node }): void {
     // ⛔ 浮层 Cell(辅料/包材)是 selectable:false 的投影, 它不该带着当前选区一起走。
     //    不清选区的话: 选中过某个 Cell 再去拖包材, vue-flow 会把选区里的节点一并拖动
     //    (Steve 实测「移动包材 cell 副产 cell 也跟着移动了」)。
-    flowNodes.value.forEach((item) => { if (item.selected) item.selected = false; });
+    // 用 vue-flow 的 API 清选区, 不直接摸 node.selected —— 那是 GraphNode 的运行时字段,
+    // Node 类型上没有 (vue-tsc -b 会红; 本地 `-p tsconfig.json` 跑不出来, CI 用的是 -b)。
+    if (typeof removeSelectedNodes === 'function') removeSelectedNodes(getSelectedNodes?.value ?? []);
     dragStartSnapshot.value = null;
     return;
   }
