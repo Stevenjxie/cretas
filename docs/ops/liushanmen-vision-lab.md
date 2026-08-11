@@ -98,6 +98,44 @@ B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
 用于 ROI 模型训练的 8 张队列不能自动当作 7+20 的 ROI 真值；两者 photo ID/SHA 不匹配时，
 评估会把保护集记录保留为 unknown，而不是静默当作台内。
 
+首轮 8 张可以用完全离线、随机初始化的小分割模型做“数据是否足够”的研究门禁。该实验按任务
+留一验证，并和只使用位置先验的平均掩码基线比较；它不保存权重、不读取保护集、不写 registry，
+结果也不能授权部署：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --runtime-root D:\CretasVisionLab `
+  --epochs 120 `
+  --device cuda
+```
+
+2026-08-12 首轮 8 个独立任务的实测结果为：模型平均 IoU `0.8280`，相对位置基线提高
+`0.0327`，但最差托盘中心分类准确率仅 `0.7037`、最差台外召回仅 `0.1111`，合计错分
+`23` 个中心点（位置基线错分 `5` 个）。因此结论为
+`insufficient_image_conditioned_roi_evidence`：只能说明图像中存在可学习信号，不能说明 8 张足以
+训练生产 ROI。旧 tray 训练和 7+20 候选评估继续暂停；需要新增 ROI 人工样本时，必须先报告
+精确数量、任务/SKU、源图 SHA/ID、pHash，以及保护集和旧 MARK 排除结果，再建立独立队列。
+
+新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
+ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
+SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
+Hamming 距离 `<=10` 排除保护集，队列内保持任务唯一并做 pHash 多样化。它只写 receipt，不建
+队列或 MARK：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_roi_plan.py `
+  --dataset-manifest D:\CretasVisionLab\datasets\tray-332909713eaf\manifest.json `
+  --current-queue D:\CretasVisionLab\tray-queues\tray-active-<round-1> `
+  --old-mark-manifest D:\CretasVisionLab\queues\label-active-20260810T171817Z\manifest.json `
+  --protected-holdout D:\CretasVisionLab\evaluation\protected-holdout.json `
+  --runtime-root D:\CretasVisionLab `
+  --count 24
+```
+
+必须先向操作员报告 receipt 内的完整 24 行 task/SKU、SHA/ID、pHash 和排除距离；只有随后明确
+继续时才根据同一 receipt 的 SHA 绑定结果建立新的独立 `work-area-human/` 队列。
+
 已有多轮 `reviewed=true` 的人工队列时，可以重复传入 `--queue` 建立累计数据集；每个队列仍会
 独立重验，数据集按任务级拆分，并拒绝跨队列重复 stem。例如：
 
