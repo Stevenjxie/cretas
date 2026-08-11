@@ -6399,6 +6399,20 @@ async def parse_restaurant_query(
 
     parsed = await _t3_llm_parse(norm_query, hint=candidate_hint, history=history)
     if parsed is None:
+        # ⛔ fail-closed 是对的 —— 但**静默的** fail-closed 让它永远查不出根因。
+        #
+        # 2026-08-11 查证: 这句拒答在 `python-prod.log` 出现 **0 次**、落库
+        # `smart_bi_llm_fallback_log` 7 天内 **0 条**, 全部历史里只有电池日志有
+        # 2 次(都在 2026-07-26 04:40 那一轮, 16 天前)。原因就是这两条分支只把话
+        # 返回给用户, **一个字都不写日志**。
+        # 后果: 交接里「瞬时不可用之后, 下一轮被当成全新问题」那条待办**没法查** ——
+        # 复发时既不知道发生过, 也拿不到当时的 session 去看上下文断没断。
+        # 判据: **兜底路径至少要留下一条可 grep 的痕迹。**
+        logger.warning(
+            "[restaurant-intent] planner-outage fail-closed: continuation=False "
+            "factory=%s session=%s query=%r",
+            factory_id, session_key, norm_query[:80],
+        )
         # Do not fall through to a neighbouring generic intent. The semantic
         # authority was unavailable, so the only safe response is fail-closed.
         return _build_spec(
@@ -6806,6 +6820,14 @@ async def _parse_continuation(
     ]
     parsed = await _t3_llm_parse(query, hint=candidate_hint, history=history)
     if parsed is None:
+        # 🔴 延续轮这条比首轮那条更要紧: 交接说的形状(「下一轮被当成全新问题」)
+        #    只在延续轮成立, 而**能回答「上下文是不是从这里断的」的只有这一刻的
+        #    痕迹** —— 原问句、这一轮的答话、以及它确实走的是延续路径。
+        logger.warning(
+            "[restaurant-intent] planner-outage fail-closed: continuation=True "
+            "factory=%s original=%r answer=%r",
+            factory_id, str(original_query)[:60], str(query)[:40],
+        )
         return _build_spec(
             "",
             concatenated,
