@@ -51,6 +51,16 @@ class WorkAreaRoiQueueTests(unittest.TestCase):
                 "selected_count": 1, "target_count": 1, "selected": [row],
             })
 
+    def test_multiround_plan_requires_completed_roi_exclusion_evidence(self):
+        row = plan_row(1)
+        with self.assertRaisesRegex(RuntimeError, "exclusion evidence"):
+            module.validate_plan({
+                "version": module.PLAN_VERSION, "plan_only": True,
+                "queue_created": False, "mark_created": False,
+                "completed_roi_queues": ["queue-1", "queue-2"],
+                "selected_count": 1, "target_count": 1, "selected": [row],
+            })
+
 
 if __name__ == "__main__":
     unittest.main()

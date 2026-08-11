@@ -89,6 +89,24 @@ def load_samples(queue: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return manifest, samples
 
 
+def load_combined_samples(
+    queues: list[Path],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not queues:
+        raise ValueError("at least one work-area queue is required")
+    manifests: list[dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    for queue in queues:
+        manifest, queue_samples = load_samples(queue)
+        manifests.append(manifest)
+        samples.extend(queue_samples)
+    for key in ("stem", "source_photo_id", "task_id"):
+        values = [str(sample[key]) for sample in samples]
+        if len(set(values)) != len(values):
+            raise RuntimeError(f"combined work-area queues contain duplicate {key}")
+    return manifests, samples
+
+
 def rasterize_polygon(polygon: list[list[float]], width: int, height: int) -> np.ndarray:
     mask = Image.new("L", (width, height), 0)
     points = [
@@ -105,6 +123,17 @@ def load_image(path: Path, width: int, height: int) -> np.ndarray:
             (width, height), Image.Resampling.BILINEAR,
         )
     return np.asarray(image, dtype=np.float32) / 255.0
+
+
+def add_coordinate_channels(images: np.ndarray) -> np.ndarray:
+    if images.ndim != 4:
+        raise ValueError("expected NHWC image batch")
+    count, height, width, _channels = images.shape
+    x = np.linspace(-1.0, 1.0, width, dtype=np.float32)
+    y = np.linspace(-1.0, 1.0, height, dtype=np.float32)
+    xx, yy = np.meshgrid(x, y)
+    coordinates = np.stack((xx, yy), axis=-1)[None]
+    return np.concatenate((images, np.repeat(coordinates, count, axis=0)), axis=-1)
 
 
 def mask_metrics(predicted: np.ndarray, truth: np.ndarray) -> dict[str, float]:
@@ -149,11 +178,38 @@ def leave_one_out_splits(samples: list[dict[str, Any]]) -> list[tuple[list[int],
             for held_out in range(len(samples))]
 
 
+def task_grouped_splits(
+    samples: list[dict[str, Any]], fold_count: int, *, seed: int = 20260812,
+) -> list[tuple[list[int], list[int]]]:
+    if fold_count == 0 or fold_count >= len(samples):
+        return [(train, [held_out]) for train, held_out in leave_one_out_splits(samples)]
+    if fold_count < 2:
+        raise ValueError("fold count must be zero or at least two")
+    by_sku: dict[str, list[int]] = {}
+    for index, sample in enumerate(samples):
+        by_sku.setdefault(str(sample["sku_code"]), []).append(index)
+    held_by_fold: list[list[int]] = [[] for _ in range(fold_count)]
+    offset = 0
+    for sku_code in sorted(by_sku):
+        indices = sorted(by_sku[sku_code], key=lambda index: str(samples[index]["task_id"]))
+        random.Random(f"{seed}:{sku_code}").shuffle(indices)
+        for position, index in enumerate(indices):
+            held_by_fold[(offset + position) % fold_count].append(index)
+        offset = (offset + len(indices)) % fold_count
+    all_indices = set(range(len(samples)))
+    return [
+        (sorted(all_indices - set(held)), sorted(held))
+        for held in held_by_fold if held
+    ]
+
+
 def _mean(values: list[float]) -> float:
     return sum(values) / max(len(values), 1)
 
 
 def _summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
+    inside_rows = [row for row in rows if row["centers"]["inside_total"] > 0]
+    outside_rows = [row for row in rows if row["centers"]["outside_total"] > 0]
     return {
         "mean_iou": _mean([row["mask"]["iou"] for row in rows]),
         "min_iou": min(row["mask"]["iou"] for row in rows),
@@ -161,36 +217,40 @@ def _summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
         "mean_center_accuracy": _mean([row["centers"]["accuracy"] for row in rows]),
         "min_center_accuracy": min(row["centers"]["accuracy"] for row in rows),
         "total_center_errors": sum(int(row["centers"]["errors"]) for row in rows),
-        "min_inside_recall": min(row["centers"]["inside_recall"] for row in rows),
-        "min_outside_recall": min(row["centers"]["outside_recall"] for row in rows),
+        "min_inside_recall": min(
+            (row["centers"]["inside_recall"] for row in inside_rows), default=1.0,
+        ),
+        "min_outside_recall": min(
+            (row["centers"]["outside_recall"] for row in outside_rows), default=1.0,
+        ),
     }
 
 
-def run_experiment(
-    queue: Path, *, epochs: int, width: int, height: int, device_name: str,
-) -> dict[str, Any]:
-    import torch
-    from torch import nn
-
-    manifest, samples = load_samples(queue)
-    if len(samples) < 8:
-        raise RuntimeError("work-area experiment requires at least 8 independent reviewed images")
-    torch.manual_seed(20260812)
-    np.random.seed(20260812)
-    random.seed(20260812)
-    if device_name == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA requested but unavailable")
-    device = torch.device(device_name)
-    images = np.stack([load_image(sample["image"], width, height) for sample in samples])
-    masks = np.stack([rasterize_polygon(sample["polygon"], width, height) for sample in samples])
+def build_tiny_unet(
+    torch, input_channels: int = 3, base_channels: int = 16, normalized_blocks: bool = False,
+):
+    nn = torch.nn
 
     class Block(nn.Module):
         def __init__(self, source_channels: int, target_channels: int) -> None:
             super().__init__()
-            self.layers = nn.Sequential(
-                nn.Conv2d(source_channels, target_channels, 3, padding=1), nn.ReLU(inplace=True),
-                nn.Conv2d(target_channels, target_channels, 3, padding=1), nn.ReLU(inplace=True),
-            )
+            if normalized_blocks:
+                groups = min(8, target_channels)
+                while target_channels % groups:
+                    groups -= 1
+                self.layers = nn.Sequential(
+                    nn.Conv2d(source_channels, target_channels, 3, padding=1, bias=False),
+                    nn.GroupNorm(groups, target_channels), nn.SiLU(inplace=True),
+                    nn.Conv2d(target_channels, target_channels, 3, padding=1, bias=False),
+                    nn.GroupNorm(groups, target_channels), nn.SiLU(inplace=True),
+                )
+            else:
+                self.layers = nn.Sequential(
+                    nn.Conv2d(source_channels, target_channels, 3, padding=1),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(target_channels, target_channels, 3, padding=1),
+                    nn.ReLU(inplace=True),
+                )
 
         def forward(self, value):
             return self.layers(value)
@@ -198,11 +258,15 @@ def run_experiment(
     class TinyUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.encoder1, self.encoder2 = Block(3, 16), Block(16, 32)
-            self.bottleneck = Block(32, 64)
-            self.up2, self.decoder2 = nn.ConvTranspose2d(64, 32, 2, 2), Block(64, 32)
-            self.up1, self.decoder1 = nn.ConvTranspose2d(32, 16, 2, 2), Block(32, 16)
-            self.output = nn.Conv2d(16, 1, 1)
+            second_channels, bottleneck_channels = base_channels * 2, base_channels * 4
+            self.encoder1 = Block(input_channels, base_channels)
+            self.encoder2 = Block(base_channels, second_channels)
+            self.bottleneck = Block(second_channels, bottleneck_channels)
+            self.up2 = nn.ConvTranspose2d(bottleneck_channels, second_channels, 2, 2)
+            self.decoder2 = Block(second_channels * 2, second_channels)
+            self.up1 = nn.ConvTranspose2d(second_channels, base_channels, 2, 2)
+            self.decoder1 = Block(base_channels * 2, base_channels)
+            self.output = nn.Conv2d(base_channels, 1, 1)
             self.pool = nn.MaxPool2d(2)
 
         def forward(self, value):
@@ -213,49 +277,107 @@ def run_experiment(
             value = self.decoder1(torch.cat((self.up1(value), first), dim=1))
             return self.output(value)
 
+    return TinyUNet()
+
+
+def mean_per_image_dice_loss(probability, truth):
+    reduce_dimensions = tuple(range(1, probability.ndim))
+    intersection = (probability * truth).sum(dim=reduce_dimensions)
+    predicted_area = probability.sum(dim=reduce_dimensions)
+    truth_area = truth.sum(dim=reduce_dimensions)
+    dice = (2 * intersection + 1) / (predicted_area + truth_area + 1)
+    return (1 - dice).mean()
+
+
+def train_model(torch, model, x, y, *, epochs: int, seed: int, device, augment: bool = True):
+    nn = torch.nn
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+    for epoch in range(epochs):
+        model.train()
+        if augment:
+            generator = torch.Generator(device=device).manual_seed(seed + epoch)
+            brightness = 0.90 + 0.20 * torch.rand(
+                (x.shape[0], 1, 1, 1), generator=generator, device=device,
+            )
+            rgb = x[:, :3]
+            noise = 0.015 * torch.randn(rgb.shape, generator=generator, device=device)
+            augmented_rgb = (rgb * brightness + noise).clamp(0, 1)
+            model_input = (
+                torch.cat((augmented_rgb, x[:, 3:]), dim=1)
+                if x.shape[1] > 3 else augmented_rgb
+            )
+        else:
+            model_input = x
+        logits = model(model_input)
+        bce = nn.functional.binary_cross_entropy_with_logits(logits, y)
+        probability = logits.sigmoid()
+        dice_loss = mean_per_image_dice_loss(probability, y)
+        loss = bce + dice_loss
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+    return optimizer
+
+
+def run_experiment(
+    queues: list[Path], *, epochs: int, width: int, height: int, device_name: str,
+    coordinate_channels: bool = False, base_channels: int = 16, fold_count: int = 0,
+    normalized_blocks: bool = False,
+) -> dict[str, Any]:
+    import torch
+    _manifests, samples = load_combined_samples(queues)
+    if len(samples) < 8:
+        raise RuntimeError("work-area experiment requires at least 8 independent reviewed images")
+    torch.manual_seed(20260812)
+    np.random.seed(20260812)
+    random.seed(20260812)
+    if device_name == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    device = torch.device(device_name)
+    images = np.stack([load_image(sample["image"], width, height) for sample in samples])
+    if coordinate_channels:
+        images = add_coordinate_channels(images)
+    masks = np.stack([rasterize_polygon(sample["polygon"], width, height) for sample in samples])
+
     fold_rows: list[dict[str, Any]] = []
     baseline_rows: list[dict[str, Any]] = []
-    for fold_index, (train_indices, held_out) in enumerate(leave_one_out_splits(samples)):
+    splits = task_grouped_splits(samples, fold_count)
+    for fold_index, (train_indices, held_out_indices) in enumerate(splits):
         torch.manual_seed(20260812 + fold_index)
-        model = TinyUNet().to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+        model = build_tiny_unet(
+            torch, images.shape[-1], base_channels, normalized_blocks,
+        ).to(device)
         x = torch.from_numpy(images[train_indices].transpose(0, 3, 1, 2)).to(device)
         y = torch.from_numpy(masks[train_indices, None].astype(np.float32)).to(device)
-        for epoch in range(epochs):
-            model.train()
-            generator = torch.Generator(device=device).manual_seed(20260812 + fold_index * epochs + epoch)
-            brightness = 0.90 + 0.20 * torch.rand((x.shape[0], 1, 1, 1), generator=generator, device=device)
-            noise = 0.015 * torch.randn(x.shape, generator=generator, device=device)
-            logits = model((x * brightness + noise).clamp(0, 1))
-            bce = nn.functional.binary_cross_entropy_with_logits(logits, y)
-            probability = logits.sigmoid()
-            dice_loss = 1 - ((2 * (probability * y).sum() + 1) /
-                             (probability.sum() + y.sum() + 1))
-            loss = bce + dice_loss
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
+        optimizer = train_model(
+            torch, model, x, y, epochs=epochs,
+            seed=20260812 + fold_index * epochs, device=device,
+        )
         model.eval()
-        held_tensor = torch.from_numpy(images[held_out].transpose(2, 0, 1)[None]).to(device)
+        held_tensor = torch.from_numpy(
+            images[held_out_indices].transpose(0, 3, 1, 2),
+        ).to(device)
         with torch.inference_mode():
-            probability = model(held_tensor).sigmoid()[0, 0].cpu().numpy()
-        predicted = probability >= 0.5
-        truth = masks[held_out].astype(bool)
+            probabilities = model(held_tensor).sigmoid()[:, 0].cpu().numpy()
         average_mask = masks[train_indices].mean(axis=0) >= 0.5
-        sample = samples[held_out]
-        fold_rows.append({
-            "fold": fold_index + 1, "held_out_task_id": sample["task_id"],
-            "held_out_photo_id": sample["source_photo_id"], "sku_code": sample["sku_code"],
-            "mask": mask_metrics(predicted, truth),
-            "centers": center_metrics(predicted, truth, sample["boxes"]),
-            "mean_foreground_probability": float(probability.mean()),
-        })
-        baseline_rows.append({
-            "fold": fold_index + 1, "held_out_task_id": sample["task_id"],
-            "held_out_photo_id": sample["source_photo_id"], "sku_code": sample["sku_code"],
-            "mask": mask_metrics(average_mask, truth),
-            "centers": center_metrics(average_mask, truth, sample["boxes"]),
-        })
+        for held_position, held_out in enumerate(held_out_indices):
+            probability = probabilities[held_position]
+            predicted = probability >= 0.5
+            truth = masks[held_out].astype(bool)
+            sample = samples[held_out]
+            fold_rows.append({
+                "fold": fold_index + 1, "held_out_task_id": sample["task_id"],
+                "held_out_photo_id": sample["source_photo_id"], "sku_code": sample["sku_code"],
+                "mask": mask_metrics(predicted, truth),
+                "centers": center_metrics(predicted, truth, sample["boxes"]),
+                "mean_foreground_probability": float(probability.mean()),
+            })
+            baseline_rows.append({
+                "fold": fold_index + 1, "held_out_task_id": sample["task_id"],
+                "held_out_photo_id": sample["source_photo_id"], "sku_code": sample["sku_code"],
+                "mask": mask_metrics(average_mask, truth),
+                "centers": center_metrics(average_mask, truth, sample["boxes"]),
+            })
         del model, optimizer, x, y, held_tensor
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -271,16 +393,25 @@ def run_experiment(
     return {
         "version": "vision-lab-work-area-roi-experiment-v1",
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "queue": str(queue),
-        "queue_manifest_sha256": sha256(queue / "manifest.json"),
+        "queues": [str(queue) for queue in queues],
+        "queue_manifest_sha256s": {
+            str(queue): sha256(queue / "manifest.json") for queue in queues
+        },
         "sample_count": len(samples),
         "task_count": len({sample["task_id"] for sample in samples}),
         "sku_codes": sorted({sample["sku_code"] for sample in samples}),
         "input_size": [width, height],
         "epochs_per_fold": epochs,
-        "folds": len(fold_rows),
-        "split": "leave-one-independent-task-out",
-        "model": "tiny-unet-random-init",
+        "folds": len(splits),
+        "split": (
+            "leave-one-independent-task-out"
+            if len(splits) == len(samples) else "deterministic-sku-stratified-task-k-fold"
+        ),
+        "model": "tiny-unet-coordconv-random-init" if coordinate_channels else "tiny-unet-random-init",
+        "coordinate_channels": coordinate_channels,
+        "base_channels": base_channels,
+        "normalized_blocks": normalized_blocks,
+        "experiment_script_sha256": sha256(Path(__file__)),
         "pretrained_weights": False,
         "downloaded_weights": 0,
         "cloud_calls": 0,
@@ -313,25 +444,115 @@ def run_experiment(
     }
 
 
+def run_fit_diagnostic(
+    queues: list[Path], *, epochs: int, width: int, height: int, device_name: str,
+    coordinate_channels: bool = False, base_channels: int = 16,
+    normalized_blocks: bool = False,
+) -> dict[str, Any]:
+    import torch
+
+    _manifests, samples = load_combined_samples(queues)
+    torch.manual_seed(20260812)
+    np.random.seed(20260812)
+    random.seed(20260812)
+    if device_name == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    device = torch.device(device_name)
+    images = np.stack([load_image(sample["image"], width, height) for sample in samples])
+    if coordinate_channels:
+        images = add_coordinate_channels(images)
+    masks = np.stack([rasterize_polygon(sample["polygon"], width, height) for sample in samples])
+    x = torch.from_numpy(images.transpose(0, 3, 1, 2)).to(device)
+    y = torch.from_numpy(masks[:, None].astype(np.float32)).to(device)
+    model = build_tiny_unet(
+        torch, images.shape[-1], base_channels, normalized_blocks,
+    ).to(device)
+    optimizer = train_model(
+        torch, model, x, y, epochs=epochs, seed=20260812, device=device, augment=False,
+    )
+    model.eval()
+    with torch.inference_mode():
+        probabilities = model(x).sigmoid()[:, 0].cpu().numpy()
+    rows = []
+    for index, sample in enumerate(samples):
+        predicted, truth = probabilities[index] >= 0.5, masks[index].astype(bool)
+        rows.append({
+            "task_id": sample["task_id"], "source_photo_id": sample["source_photo_id"],
+            "sku_code": sample["sku_code"], "mask": mask_metrics(predicted, truth),
+            "centers": center_metrics(predicted, truth, sample["boxes"]),
+        })
+    summary = _summarise(rows)
+    fit_passed = (
+        summary["min_iou"] >= 0.95
+        and summary["min_center_accuracy"] >= 0.99
+        and summary["min_inside_recall"] >= 0.99
+        and summary["min_outside_recall"] >= 0.99
+    )
+    del model, optimizer, x, y
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return {
+        "version": "vision-lab-work-area-roi-fit-diagnostic-v1",
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "queues": [str(queue) for queue in queues],
+        "queue_manifest_sha256s": {
+            str(queue): sha256(queue / "manifest.json") for queue in queues
+        },
+        "sample_count": len(samples), "task_count": len(samples),
+        "epochs": epochs,
+        "model": "tiny-unet-coordconv-random-init" if coordinate_channels else "tiny-unet-random-init",
+        "coordinate_channels": coordinate_channels, "device": str(device),
+        "base_channels": base_channels,
+        "normalized_blocks": normalized_blocks,
+        "experiment_script_sha256": sha256(Path(__file__)),
+        "training_augmentation": False,
+        "summary": summary, "rows": rows,
+        "fit_thresholds": {
+            "min_iou": 0.95, "min_center_accuracy": 0.99,
+            "min_inside_recall": 0.99, "min_outside_recall": 0.99,
+        },
+        "training_fit_passed": fit_passed,
+        "diagnosis": "generalization_data_bottleneck" if fit_passed else "model_or_optimization_bottleneck",
+        "pretrained_weights": False, "downloaded_weights": 0, "cloud_calls": 0,
+        "production_reads": 0, "production_writes": 0, "registry_writes": 0,
+        "protected_holdout_used": False, "model_saved": False,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--queue", required=True, type=Path)
+    parser.add_argument("--queue", required=True, action="append", type=Path)
     parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    parser.add_argument("--fit-diagnostic", action="store_true")
+    parser.add_argument("--coordinate-channels", action="store_true")
+    parser.add_argument("--base-channels", type=int, choices=(16, 24, 32), default=16)
+    parser.add_argument("--normalized-blocks", action="store_true")
+    parser.add_argument("--folds", type=int, default=0,
+                        help="0 means leave-one-task-out; otherwise use task-grouped K-fold")
     args = parser.parse_args()
     if args.epochs <= 0 or args.width % 4 or args.height % 4:
         raise ValueError("epochs must be positive and image dimensions divisible by four")
-    receipt = run_experiment(
-        args.queue.resolve(), epochs=args.epochs, width=args.width,
+    if args.folds == 1 or args.folds < 0:
+        raise ValueError("folds must be zero or at least two")
+    queues = [queue.resolve() for queue in args.queue]
+    runner = run_fit_diagnostic if args.fit_diagnostic else run_experiment
+    receipt = runner(
+        queues, epochs=args.epochs, width=args.width,
         height=args.height, device_name=args.device,
+        coordinate_channels=args.coordinate_channels,
+        base_channels=args.base_channels,
+        normalized_blocks=args.normalized_blocks,
+        **({"fold_count": args.folds} if not args.fit_diagnostic else {}),
     )
     receipts = args.runtime_root / "receipts"
     receipts.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    path = receipts / f"work-area-roi-experiment-{stamp}.json"
+    kind = "fit-diagnostic" if args.fit_diagnostic else "experiment"
+    path = receipts / f"work-area-roi-{kind}-{stamp}.json"
     path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"receipt": str(path), **receipt}, ensure_ascii=False, indent=2))
 

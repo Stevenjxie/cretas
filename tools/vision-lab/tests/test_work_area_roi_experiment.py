@@ -47,6 +47,66 @@ class WorkAreaRoiExperimentTests(unittest.TestCase):
             self.assertNotIn(held, train)
             self.assertEqual(len(train), 7)
 
+    def test_task_grouped_folds_hold_each_task_exactly_once(self):
+        samples = [
+            {"task_id": f"task-{index}", "sku_code": f"sku-{index % 4}"}
+            for index in range(32)
+        ]
+        splits = module.task_grouped_splits(samples, 8)
+        self.assertEqual(len(splits), 8)
+        held = [index for _train, fold_held in splits for index in fold_held]
+        self.assertEqual(sorted(held), list(range(32)))
+        for train, fold_held in splits:
+            self.assertFalse(set(train) & set(fold_held))
+            self.assertEqual(len(train) + len(fold_held), 32)
+
+    def test_combined_sample_loader_requires_a_queue(self):
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            module.load_combined_samples([])
+
+    def test_summary_ignores_absent_class_for_minimum_recall(self):
+        rows = [
+            {"mask": {"iou": 1.0, "dice": 1.0}, "centers": {
+                "accuracy": 1.0, "errors": 0, "inside_total": 1, "inside_recall": 1.0,
+                "outside_total": 0, "outside_recall": 0.0,
+            }},
+            {"mask": {"iou": 0.9, "dice": 0.95}, "centers": {
+                "accuracy": 0.9, "errors": 1, "inside_total": 1, "inside_recall": 1.0,
+                "outside_total": 2, "outside_recall": 0.5,
+            }},
+        ]
+        self.assertEqual(module._summarise(rows)["min_outside_recall"], 0.5)
+
+    def test_coordinate_channels_append_normalized_xy(self):
+        images = np.zeros((2, 3, 4, 3), dtype=np.float32)
+        result = module.add_coordinate_channels(images)
+        self.assertEqual(result.shape, (2, 3, 4, 5))
+        self.assertEqual(float(result[0, 0, 0, 3]), -1.0)
+        self.assertEqual(float(result[0, -1, -1, 4]), 1.0)
+
+    def test_dice_loss_averages_each_image_instead_of_foreground_pixels(self):
+        import torch
+
+        truth = torch.tensor([
+            [[[1.0, 1.0], [1.0, 1.0]]],
+            [[[1.0, 0.0], [0.0, 0.0]]],
+        ])
+        probability = torch.tensor([
+            [[[1.0, 1.0], [1.0, 1.0]]],
+            [[[0.0, 0.0], [0.0, 0.0]]],
+        ])
+        loss = module.mean_per_image_dice_loss(probability, truth)
+        self.assertAlmostEqual(float(loss), 0.25)
+
+    def test_normalized_unet_preserves_mask_shape(self):
+        import torch
+
+        model = module.build_tiny_unet(
+            torch, input_channels=5, base_channels=16, normalized_blocks=True,
+        )
+        output = model(torch.zeros((2, 5, 32, 40)))
+        self.assertEqual(tuple(output.shape), (2, 1, 32, 40))
+
 
 if __name__ == "__main__":
     unittest.main()

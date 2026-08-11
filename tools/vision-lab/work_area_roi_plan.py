@@ -51,22 +51,32 @@ def phash_distance(left: str, right: str) -> int:
     return (int(left, 16) ^ int(right, 16)).bit_count()
 
 
-def allocate_sku_quotas(rows: list[dict[str, Any]], target_count: int) -> dict[str, int]:
+def allocate_sku_quotas(
+    rows: list[dict[str, Any]], target_count: int,
+    existing_counts: Counter[str] | None = None,
+) -> dict[str, int]:
     availability = Counter(str(row["sku_code"]) for row in rows)
+    existing_counts = existing_counts or Counter()
     quotas = {sku: 0 for sku in sorted(availability)}
     for _ in range(target_count):
         choices = [sku for sku in quotas if quotas[sku] < availability[sku]]
         if not choices:
             raise RuntimeError(f"only {sum(availability.values())} eligible rows for {target_count}")
-        sku = min(choices, key=lambda value: (quotas[value], value))
+        sku = min(
+            choices,
+            key=lambda value: (existing_counts[value] + quotas[value], quotas[value], value),
+        )
         quotas[sku] += 1
     return quotas
 
 
 def select_diverse(
     rows: list[dict[str, Any]], current_hashes: list[str], target_count: int,
+    focus_hashes: list[str] | None = None,
+    existing_sku_counts: Counter[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    quotas = allocate_sku_quotas(rows, target_count)
+    focus_hashes = focus_hashes or []
+    quotas = allocate_sku_quotas(rows, target_count, existing_sku_counts)
     selected: list[dict[str, Any]] = []
     sku_counts: Counter[str] = Counter()
     queue_counts: Counter[str] = Counter()
@@ -87,14 +97,19 @@ def select_diverse(
             )
             if nearest <= ROUND_PHASH_DISTANCE:
                 continue
-            choices.append((row, nearest))
+            focus_distance = min(
+                (phash_distance(row["source_perceptual_hash"], value) for value in focus_hashes),
+                default=256,
+            )
+            choices.append((row, nearest, focus_distance))
         if not choices:
             raise RuntimeError("unable to satisfy task, SKU, and pHash diversity constraints")
-        row, _ = max(
+        row, _, _ = max(
             choices,
             key=lambda item: (
                 queue_counts[item[0]["queue_name"]] == 0,
                 -queue_counts[item[0]["queue_name"]],
+                -item[2] if focus_hashes else item[1],
                 item[1],
                 float(item[0].get("selection_score") or 0),
                 str(item[0]["source_photo_id"]),
@@ -119,32 +134,49 @@ def nearest(value: str, rows: list[tuple[str, str]]) -> dict[str, Any] | None:
 
 
 def build_plan(
-    dataset_manifest_path: Path, current_queue: Path, old_mark_path: Path,
-    protected_path: Path, target_count: int,
+    dataset_manifest_path: Path, current_queues: list[Path], old_mark_path: Path,
+    protected_path: Path, target_count: int, focus_photo_ids: list[str] | None = None,
 ) -> dict[str, Any]:
+    if not current_queues:
+        raise ValueError("at least one completed ROI queue is required")
     dataset = load_json(dataset_manifest_path)
-    current_manifest_path = current_queue / "manifest.json"
-    current = load_json(current_manifest_path)
     old_mark = load_json(old_mark_path)
     protected = load_json(protected_path)
 
-    current_rows = current.get("rows") or []
-    if len(current_rows) != int(current.get("queue_count", -1)):
-        raise RuntimeError("current ROI queue manifest is incomplete")
+    current_rows: list[dict[str, Any]] = []
+    current_manifest_paths: list[Path] = []
+    for current_queue in current_queues:
+        current_manifest_path = current_queue / "manifest.json"
+        current = load_json(current_manifest_path)
+        queue_rows = current.get("rows") or []
+        if len(queue_rows) != int(current.get("queue_count", -1)):
+            raise RuntimeError("completed ROI queue manifest is incomplete")
+        current_manifest_paths.append(current_manifest_path)
+        current_rows.extend(queue_rows)
     current_ids = {str(row["source_photo_id"]) for row in current_rows}
     current_tasks = {str(row["task_id"]) for row in current_rows}
+    if len(current_ids) != len(current_rows) or len(current_tasks) != len(current_rows):
+        raise RuntimeError("completed ROI queues contain duplicate photos or tasks")
     current_phashes = [
         (str(row["source_photo_id"]), str(row["source_perceptual_hash"]))
         for row in current_rows
     ]
-    for row in current_rows:
-        stem = str(row["packed_stem"])
-        annotation = work_area.validate_human_annotation(
-            load_json(current_queue / "work-area-human" / f"{stem}.json"),
-            expected_photo_id=stem,
-        )
-        if not annotation["judgeable"] or annotation["source"] != "human":
-            raise RuntimeError(f"current ROI is not reviewed human truth: {stem}")
+    focus_photo_ids = focus_photo_ids or []
+    current_by_photo = {str(row["source_photo_id"]): row for row in current_rows}
+    missing_focus = sorted(set(focus_photo_ids) - set(current_by_photo))
+    if missing_focus:
+        raise RuntimeError(f"focus photos are not reviewed completed ROI rows: {missing_focus}")
+    focus_rows = [current_by_photo[photo_id] for photo_id in focus_photo_ids]
+    focus_phashes = [str(row["source_perceptual_hash"]) for row in focus_rows]
+    for current_queue, current_manifest_path in zip(current_queues, current_manifest_paths):
+        for row in load_json(current_manifest_path).get("rows") or []:
+            stem = str(row["packed_stem"])
+            annotation = work_area.validate_human_annotation(
+                load_json(current_queue / "work-area-human" / f"{stem}.json"),
+                expected_photo_id=stem,
+            )
+            if not annotation["judgeable"] or annotation["source"] != "human":
+                raise RuntimeError(f"completed ROI is not reviewed human truth: {stem}")
 
     old_rows = old_mark.get("rows") or []
     old_ids = {str(row["source_photo_id"]) for row in old_rows}
@@ -195,7 +227,8 @@ def build_plan(
         eligible.append(row)
 
     selected, quotas = select_diverse(
-        eligible, [value for _, value in current_phashes], target_count,
+        eligible, [value for _, value in current_phashes], target_count, focus_phashes,
+        Counter(str(row["sku_code"]) for row in current_rows),
     )
     selected_hashes = [
         (str(row["source_photo_id"]), str(row["source_perceptual_hash"]))
@@ -221,10 +254,16 @@ def build_plan(
             "source_perceptual_hash": row["source_perceptual_hash"],
             "nearest_protected_phash": nearest(row["source_perceptual_hash"], protected_phashes),
             "nearest_current_roi_phash": nearest(row["source_perceptual_hash"], current_phashes),
+            "nearest_focus_phash": nearest(
+                row["source_perceptual_hash"],
+                [(str(item["source_photo_id"]), str(item["source_perceptual_hash"]))
+                 for item in focus_rows],
+            ),
             "nearest_other_selected_phash": nearest(row["source_perceptual_hash"], other_selected),
             "protected_exact_exclusion_passed": True,
             "protected_phash_exclusion_passed": True,
             "old_mark_source_exclusion_passed": True,
+            "completed_roi_exclusion_passed": True,
         })
 
     return {
@@ -234,11 +273,30 @@ def build_plan(
         "target_count": target_count, "selected_count": len(selected_rows),
         "unique_task_count": len({row["task_id"] for row in selected_rows}),
         "sku_quotas": quotas,
+        "completed_sku_counts": dict(Counter(str(row["sku_code"]) for row in current_rows)),
+        "cumulative_sku_counts_after_selection": dict(
+            Counter(str(row["sku_code"]) for row in current_rows)
+            + Counter(str(row["sku_code"]) for row in selected)
+        ),
+        "selection_mode": (
+            "hard-example-phash-neighborhood-diverse"
+            if focus_rows else "global-phash-diverse"
+        ),
+        "focus_rows": [{
+            "source_photo_id": row["source_photo_id"], "task_id": row["task_id"],
+            "sku_code": row["sku_code"],
+            "source_perceptual_hash": row["source_perceptual_hash"],
+        } for row in focus_rows],
         "queue_counts": dict(Counter(Path(row["queue"]).name for row in selected_rows)),
         "source_dataset": str(dataset_manifest_path),
         "source_dataset_manifest_sha256": sha256(dataset_manifest_path),
-        "current_roi_queue": str(current_queue),
-        "current_roi_manifest_sha256": sha256(current_manifest_path),
+        "current_roi_queue": str(current_queues[0]),
+        "current_roi_manifest_sha256": sha256(current_manifest_paths[0]),
+        "completed_roi_queues": [str(queue) for queue in current_queues],
+        "completed_roi_manifest_sha256s": {
+            str(queue): sha256(manifest_path)
+            for queue, manifest_path in zip(current_queues, current_manifest_paths)
+        },
         "old_mark_manifest": str(old_mark_path),
         "old_mark_manifest_sha256": sha256(old_mark_path),
         "protected_manifest": str(protected_path),
@@ -250,11 +308,12 @@ def build_plan(
         },
         "rules": {
             "one_photo_per_task": True, "balanced_sku": True,
-            "current_roi_excluded_by_photo_and_task": True,
+            "all_completed_roi_excluded_by_photo_and_task": True,
             "old_label_mark_excluded_by_source_photo_and_task": True,
             "protected_excluded_by_id_task_sha": True,
             "protected_phash_hamming_max": PROTECTED_PHASH_DISTANCE,
             "current_and_round_phash_hamming_min_exclusive": ROUND_PHASH_DISTANCE,
+            "focus_phash_is_annotation_ranking_only_not_roi_truth": True,
         },
         "selected": selected_rows,
         "protected_holdout_modified": False, "old_mark_modified": False,
@@ -265,17 +324,19 @@ def build_plan(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-manifest", required=True, type=Path)
-    parser.add_argument("--current-queue", required=True, type=Path)
+    parser.add_argument("--current-queue", required=True, action="append", type=Path)
     parser.add_argument("--old-mark-manifest", required=True, type=Path)
     parser.add_argument("--protected-holdout", required=True, type=Path)
     parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--count", type=int, default=24)
+    parser.add_argument("--focus-photo-id", action="append", default=[])
     args = parser.parse_args()
     if args.count <= 0:
         raise ValueError("count must be positive")
     plan = build_plan(
-        args.dataset_manifest.resolve(), args.current_queue.resolve(),
+        args.dataset_manifest.resolve(), [queue.resolve() for queue in args.current_queue],
         args.old_mark_manifest.resolve(), args.protected_holdout.resolve(), args.count,
+        args.focus_photo_id,
     )
     receipts = args.runtime_root.resolve() / "receipts"
     receipts.mkdir(parents=True, exist_ok=True)

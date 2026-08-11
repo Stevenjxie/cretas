@@ -55,6 +55,8 @@ def validate_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
         "protected_phash_exclusion_passed",
         "old_mark_source_exclusion_passed",
     )
+    if plan.get("completed_roi_queues") is not None:
+        required_passes += ("completed_roi_exclusion_passed",)
     if any(any(row.get(key) is not True for key in required_passes) for row in selected):
         raise RuntimeError("ROI plan contains a row without required exclusion evidence")
     return selected
@@ -76,15 +78,30 @@ def build_queue(
     selected = validate_plan(plan)
     bindings = (
         ("source_dataset", "source_dataset_manifest_sha256", "dataset manifest"),
-        ("current_roi_queue", "current_roi_manifest_sha256", "current ROI manifest"),
         ("old_mark_manifest", "old_mark_manifest_sha256", "old MARK manifest"),
         ("protected_manifest", "protected_manifest_sha256", "protected manifest"),
     )
     for path_key, sha_key, label in bindings:
         value = str(plan[path_key])
-        if path_key == "current_roi_queue":
-            value = str(Path(value) / "manifest.json")
         verify_bound_file(value, str(plan[sha_key]), label)
+    completed_queues = plan.get("completed_roi_queues")
+    completed_hashes = plan.get("completed_roi_manifest_sha256s")
+    if completed_queues is None:
+        completed_queues = [plan["current_roi_queue"]]
+        completed_hashes = {
+            str(plan["current_roi_queue"]): plan["current_roi_manifest_sha256"],
+        }
+    if not isinstance(completed_queues, list) or not isinstance(completed_hashes, dict):
+        raise RuntimeError("completed ROI queue bindings are invalid")
+    for queue_value in completed_queues:
+        queue_text = str(queue_value)
+        expected_hash = completed_hashes.get(queue_text)
+        if not expected_hash:
+            raise RuntimeError(f"completed ROI manifest hash is missing: {queue_text}")
+        verify_bound_file(
+            str(Path(queue_text) / "manifest.json"), str(expected_hash),
+            "completed ROI manifest",
+        )
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     queue_parent = queue_parent.resolve()

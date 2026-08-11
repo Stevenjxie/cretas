@@ -104,9 +104,13 @@ B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
 
 ```powershell
 B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
-  --queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<round-1> `
+  --queue D:\CretasVisionLab\tray-queues\work-area-active-<round-2> `
   --runtime-root D:\CretasVisionLab `
-  --epochs 120 `
+  --epochs 480 `
+  --coordinate-channels `
+  --normalized-blocks `
+  --folds 8 `
   --device cuda
 ```
 
@@ -116,6 +120,16 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
 `insufficient_image_conditioned_roi_evidence`：只能说明图像中存在可学习信号，不能说明 8 张足以
 训练生产 ROI。旧 tray 训练和 7+20 候选评估继续暂停；需要新增 ROI 人工样本时，必须先报告
 精确数量、任务/SKU、源图 SHA/ID、pHash，以及保护集和旧 MARK 排除结果，再建立独立队列。
+
+第二轮 24 张于 2026-08-12 完成人工复核：`/api/stats` 为 24/24，四点多边形全部可判断，台内
+`388`、台外 `72`、unknown `0`；累计 32 个独立任务为台内 `532`、台外 `142`、unknown `0`。
+模型容量与泛化必须分开判定：先加 `--fit-diagnostic` 关闭训练扰动，确认模型可以拟合全部人工
+真值；再运行上面的任务级 8 折。拟合通过不等于可部署，8 折通过也仍需锁定独立测试集。
+
+32 张实测容量门禁最差 IoU `0.986`，中心分类、台内召回和台外召回均为 `1.0`；但 8 折只有
+平均 IoU `0.8479`、最差 `0.6285`，合计 `13` 个托盘中心错分，最差台外召回为 `0`。相对位置
+基线的平均 IoU 增益虽为 `0.1030`，仍不满足离线门禁，因此不得保存模型、恢复旧 tray 训练或
+启动 7+20 候选。下一轮应只收集交叉验证困难视角的人工 ROI，不再随机扩充同源普通画面。
 
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
@@ -127,11 +141,16 @@ Hamming 距离 `<=10` 排除保护集，队列内保持任务唯一并做 pHash 
 B:\anaconda3\python.exe tools\vision-lab\work_area_roi_plan.py `
   --dataset-manifest D:\CretasVisionLab\datasets\tray-332909713eaf\manifest.json `
   --current-queue D:\CretasVisionLab\tray-queues\tray-active-<round-1> `
+  --current-queue D:\CretasVisionLab\tray-queues\work-area-active-<round-2> `
   --old-mark-manifest D:\CretasVisionLab\queues\label-active-20260810T171817Z\manifest.json `
   --protected-holdout D:\CretasVisionLab\evaluation\protected-holdout.json `
   --runtime-root D:\CretasVisionLab `
   --count 24
 ```
+
+多轮之后必须重复传入每个已完成队列，使 photo/task 与 pHash 排除覆盖全部人工历史。若交叉验证
+已定位困难图，可重复传 `--focus-photo-id <photo-id>`，只用困难图 pHash 邻域对候选进行标注排序；
+该排序不是 ROI 真值、不是生产启发式，也不会生成伪多边形。
 
 必须先向操作员报告 receipt 内的完整 24 行 task/SKU、SHA/ID、pHash 和排除距离；只有随后明确
 继续时才根据同一 receipt 的 SHA 绑定结果建立新的独立 `work-area-human/` 队列。
