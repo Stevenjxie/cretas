@@ -185,7 +185,12 @@ CASES: List[Dict[str, Any]] = [
      "followup_contains": ["本月", "上个月", "最近7天", "最近30天"],
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "本月", "chain": "dish",
-     "contains": ["哪一组门店"],
+     # ⚠️ 2026-08-11 改断言: 原来写死字面量「哪一组门店」—— 那是**模型自撰的措辞**。
+     #    #2493 之后延续轮恒定走门店按钮, 实际返回是「你想查看哪家门店的米饭销量？」,
+     #    **行为正确而断言变红**。挂在措辞上的断言换个说法就误报, 而它守的从来不是
+     #    措辞: 守的是「这一轮在**问门店**, 而不是直接答」。
+     #    改成结构判据: 是个问句(？) + 问的是门店 + 给了门店按钮。
+     "contains": ["？", "门店"],
      "followup_contains": ["全部门店", _STORE_NAME_PREFIX],
      "followup_excludes": _OTHER_TENANT_STORES},
     {"q": "全部门店", "chain": "dish",
@@ -204,7 +209,8 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["哪个时间范围"],
      "followup_contains": ["本月", "上个月", "最近7天", "最近30天"]},
     {"q": "本月", "chain": "dish_named_store",
-     "contains": ["哪一组门店"],
+     # 见上一条同样的理由: 断言从「模型的那句话」改成「问句 + 问的是门店」。
+     "contains": ["？", "门店"],
      # ⛔ 只断言「按钮里出现了本租户的门店」, 不断言是哪一家:
      #    本租户 10 家门店营收差距 2% 以内, 按钮取其中 3 家, 取到谁会随数据滚动。
      "followup_contains": [_STORE_NAME_PREFIX],
