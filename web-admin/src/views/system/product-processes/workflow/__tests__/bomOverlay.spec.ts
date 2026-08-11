@@ -156,7 +156,7 @@ describe('从 BOM 派生浮层', () => {
     expect(aux!.type === 'bomAuxiliary' && aux!.data.rows).toEqual([]);
   });
 
-  it('每个终端产出派生一个包材 cell, 挂在产出右侧', () => {
+  it('每个终端产出派生一个包材 cell, 挂在产出【上方】(与辅料挂工序一致)', () => {
     const { nodes } = deriveBomOverlay({
       workflowNodes: [outputNode('o1', 900, 200)],
       auxiliaryByProcess: {},
@@ -166,7 +166,8 @@ describe('从 BOM 派生浮层', () => {
     });
     const pack = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}pack:o1`);
     expect(pack).toBeTruthy();
-    expect(pack!.position.x).toBeGreaterThan(900);
+    expect(pack!.position.x).toBe(900);
+    expect(pack!.position.y).toBeLessThan(200);
     expect(pack!.type).toBe('bomPackaging');
     expect(pack!.type === 'bomPackaging' && pack!.data.outputName).toBe('酱鸭腿');
   });
@@ -248,8 +249,8 @@ describe('从 BOM 派生浮层', () => {
     expect(auxEdge).not.toHaveProperty('type');
     expect(auxEdge!.style).toEqual({ stroke: '#1b65a8', strokeWidth: 2 });
     expect(auxEdge!.style).not.toHaveProperty('strokeDasharray');
-    const packEdge = edges.find((e) => e.target === `${BOM_OVERLAY_PREFIX}pack:o1`);
-    expect(packEdge!.source).toBe('o1');
+    const packEdge = edges.find((e) => e.source === `${BOM_OVERLAY_PREFIX}pack:o1`);
+    expect(packEdge!.target).toBe('o1');
     expect(packEdge!.sourceHandle).toBe('bom-pack-out');
     expect(packEdge!.targetHandle).toBe('bom-pack-in');
     expect(packEdge).not.toHaveProperty('type');

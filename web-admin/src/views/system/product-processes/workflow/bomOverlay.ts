@@ -84,9 +84,19 @@ const AUX_GAP_Y = 72;
  * 所以取 max(实测, 下限): 测量偏小时有地板, 真的更高时仍然跟着长。
  */
 const AUX_MIN_HEIGHT = 200;
-// 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
-// 重叠，两个 handle 几乎落在同一点，视觉上像“没有线”。
-const PACK_OFFSET_X = 300;
+/**
+ * 包材 Cell 放在成品 Cell **正上方** —— 与辅料挂工序的方式统一
+ * (Steve 2026-08-11: 「这个包材一个也要像辅料一样，是连接成品 cell 的上方的」)。
+ *
+ * 旧实现是放右侧 (x + 300): 右侧那条通路正是成品往下游走的方向, 包材横在那儿会跟
+ * 主流程连线和「还没建 BOM」气泡挤在一起。改到上方后, 一张图的读法就统一了 ——
+ * **上方挂的都是这道工序/这个产出要消耗的配方项**, 左右是物料流。
+ *
+ * 高度取 max(实测, 下限): 实测来自上一帧, 内容展开后会变高, 只信实测会贴到 Cell 上
+ * (同 AUX_MIN_HEIGHT 的教训)。
+ */
+const PACK_GAP_Y = 72;
+const PACK_MIN_HEIGHT = 200;
 /**
  * 浮层连线的线型 —— **必须与主流程连线一致**。
  * 旧值是 'smoothstep'(直角折线), 而主流程边不设 type 走 vue-flow 默认贝塞尔曲线,
@@ -269,7 +279,11 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
       nodes.push({
         id: packId,
         type: 'bomPackaging',
-        position: { x: node.position.x + PACK_OFFSET_X, y: node.position.y },
+        position: {
+          x: node.position.x,
+          y: node.position.y
+            - (Math.max(input.nodeHeights?.[packId] ?? 0, PACK_MIN_HEIGHT) + PACK_GAP_Y),
+        },
         data: {
           outputName: node.data.name ?? '未命名产出',
           baseUnit: node.data.baseUnit ?? '未配',
@@ -277,11 +291,13 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
           outputNodeId: node.id,
         },
       });
+      // 包材挪到上方后, 连线方向跟着翻: 由包材 Cell 底部出, 进成品 Cell 顶部
+      // —— 与辅料→工序完全一致, 两种浮层的读法不再是两套。
       edges.push({
         id: `${BOM_OVERLAY_PREFIX}edge:pack:${node.id}`,
-        source: node.id,
+        source: packId,
         sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
-        target: packId,
+        target: node.id,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
         style: OVERLAY_EDGE_STYLE,
       });

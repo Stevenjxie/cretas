@@ -271,22 +271,22 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
 });
 
 // must-fix #2 (final whole-branch review of Phase 3-1): 这个分支给 FINISHED_GOOD 新增了
-// 一个 source handle(PACK_OVERLAY_SOURCE_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂投影连线
+// 一个 source handle(PACK_OVERLAY_TARGET_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂投影连线
 // 用的视觉锚点。在这个分支之前, 成品 Cell 没有任何 output handle(它是链的终端) ——
 // evaluateWorkflowConnection 把"非 PROCESS 源 → PROCESS 目标"一律判合法, 如果这个新
 // handle 可以真的发起连线, 用户就能从"成品"拖一条线到任意工序, onConnect/
 // attachInputBinding 会把它当真写进该工序 data.ports 里一个真实 INPUT 端口——
 // 这处腐败发生在一个真实节点内部, stripBomOverlay 的 id 前缀闸对此完全无能为力。
 describe('成品 Cell 的浮层挂点 handle 不可连线 (must-fix #2)', () => {
-  it('FINISHED_GOOD 的 PACK_OVERLAY_SOURCE_HANDLE 设了 :connectable="false"', () => {
+  it('FINISHED_GOOD 的 PACK_OVERLAY_TARGET_HANDLE 设了 :connectable="false"', () => {
     const wrapper = mountNode({
       kind: 'FINISHED_GOOD',
       data: { name: '成品', skuId: 'SKU-FIN', bound: true },
     });
 
     const handles = wrapper.findAll('[data-testid="handle-stub"]');
-    const packHandle = handles.find((h2) => h2.attributes('data-handle-id') === 'bom-pack-out');
-    expect(packHandle, 'FINISHED_GOOD 应该渲染出 bom-pack-out 这个 handle').toBeTruthy();
+    const packHandle = handles.find((h2) => h2.attributes('data-handle-id') === 'bom-pack-in');
+    expect(packHandle, 'FINISHED_GOOD 应该渲染出 bom-pack-in 这个 handle').toBeTruthy();
     expect(packHandle!.attributes('data-connectable')).toBe('false');
   });
 });
