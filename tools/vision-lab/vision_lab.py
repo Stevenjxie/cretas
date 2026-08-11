@@ -2,7 +2,8 @@
 """Local, receipt-driven YOLO training loop for LIUSHANMEN label QC.
 
 The production side is read-only until an evaluated candidate passes every
-promotion gate.  Runtime data lives outside git under D:\\CretasVisionLab.
+promotion gate or an operator explicitly accepts only an incomplete-recall
+gate.  Runtime data lives outside git under D:\\CretasVisionLab.
 """
 from __future__ import annotations
 
@@ -31,6 +32,8 @@ EXIT_ATTENTION_REQUIRED = 20
 SAFE_FACTORY = re.compile(r"^[A-Z0-9_-]+$")
 SAFE_REMOTE_PATH = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SAFE_SERVICE = re.compile(r"^[A-Za-z0-9_.@-]+$")
+OPERATOR_RECALL_OVERRIDE_TOKEN = "ACCEPT-INCOMPLETE-RECALL"
+WAIVABLE_RECALL_ERROR_PREFIX = "required defect group did not reach full recall: "
 
 
 def utc_now() -> str:
@@ -736,10 +739,44 @@ def ssh_run(host: str, command: str, timeout: int = 180, check: bool = True) -> 
     return result.stdout.strip()
 
 
-def deploy_candidate(config: dict[str, Any], state: State, model: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
-    deployment = config["deployment"]
-    if not gate.get("passed"):
+def validate_operator_recall_override(
+    gate: dict[str, Any], token: str | None, reason: str | None,
+) -> dict[str, Any] | None:
+    if gate.get("passed"):
+        if token or reason:
+            raise RuntimeError("operator recall override is only valid for a failed promotion gate")
+        return None
+    if token != OPERATOR_RECALL_OVERRIDE_TOKEN:
         raise RuntimeError("refusing deployment: promotion gate did not pass")
+    normalized_reason = (reason or "").strip()
+    if len(normalized_reason) < 20:
+        raise RuntimeError("operator recall override requires a specific reason of at least 20 characters")
+    errors = gate.get("errors")
+    if not isinstance(errors, list) or not errors:
+        raise RuntimeError("operator recall override requires recorded promotion-gate errors")
+    if any(not isinstance(error, str) or not error.startswith(WAIVABLE_RECALL_ERROR_PREFIX) for error in errors):
+        raise RuntimeError("operator recall override cannot waive non-recall promotion-gate errors")
+    return {
+        "accepted": True,
+        "scope": "incomplete-required-group-recall-only",
+        "reason": normalized_reason,
+        "waived_errors": list(errors),
+    }
+
+
+def deploy_candidate(
+    config: dict[str, Any], state: State, model: dict[str, Any], gate: dict[str, Any],
+    *, operator_override_token: str | None = None, operator_override_reason: str | None = None,
+) -> dict[str, Any]:
+    deployment = config["deployment"]
+    operator_override = validate_operator_recall_override(
+        gate, operator_override_token, operator_override_reason,
+    )
+    gate_metrics = gate.get("metrics")
+    if gate.get("model_id") != model.get("model_id"):
+        raise RuntimeError("promotion-gate model id does not match candidate receipt")
+    if not isinstance(gate_metrics, dict) or gate_metrics.get("artifact_sha256") != model.get("artifact_sha256"):
+        raise RuntimeError("promotion-gate artifact hash does not match candidate receipt")
     if not deployment.get("auto_deploy"):
         return {"status": "ready-not-deployed", "reason": "auto_deploy is disabled"}
     if deployment.get("confirm_token") != "YES-PROD":
@@ -803,6 +840,9 @@ def deploy_candidate(config: dict[str, Any], state: State, model: dict[str, Any]
         "model_id": model["model_id"], "artifact_sha256": local_sha,
         "previous_sha256": current, "backup": backup, "service_status": status,
         "health_http": health, "live_sha256": live, "succeeded": succeeded,
+        "promotion_gate_passed": bool(gate.get("passed")),
+        "promotion_gate_errors": list(gate.get("errors") or []),
+        "operator_override": operator_override,
         "rolled_back": rolled_back, "production_business_writes": 0,
         "rollback_live_sha256": rollback_live, "rollback_healthy": rollback_healthy,
     }
@@ -876,6 +916,8 @@ def command_main(argv: list[str] | None = None) -> int:
     deploy = sub.add_parser("deploy")
     deploy.add_argument("--model-receipt", required=True, type=Path)
     deploy.add_argument("--gate-receipt", required=True, type=Path)
+    deploy.add_argument("--operator-override", choices=[OPERATOR_RECALL_OVERRIDE_TOKEN])
+    deploy.add_argument("--operator-reason")
     sub.add_parser("status")
     cycle = sub.add_parser("cycle")
     cycle.add_argument("--skip-collect", action="store_true")
@@ -905,7 +947,11 @@ def command_main(argv: list[str] | None = None) -> int:
         elif args.command == "evaluate-gate":
             result = evaluate_gate(config, load_json(args.model_receipt), args.metrics.resolve())
         elif args.command == "deploy":
-            result = deploy_candidate(config, state, load_json(args.model_receipt), load_json(args.gate_receipt))
+            result = deploy_candidate(
+                config, state, load_json(args.model_receipt), load_json(args.gate_receipt),
+                operator_override_token=args.operator_override,
+                operator_override_reason=args.operator_reason,
+            )
         elif args.command == "status":
             result = status(config, state)
         elif args.command == "cycle":

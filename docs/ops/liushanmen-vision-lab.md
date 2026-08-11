@@ -65,8 +65,28 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
   label-side-view 队列和 URL；不要打开或复用旧 29 张 label 难例，也不要把它与 tray MARK 混用。
 - MARK 消失：不需要人工操作，流水线会自行训练、评测。
 - `D:\CretasVisionLab\receipts\latest-cycle.json`：本轮最终状态。
-- `candidate-rejected`：新模型没有变好，没有部署，生产模型不变。
+- `candidate-rejected`：候选未通过完整自动门槛，没有部署，生产模型不变。
 - `deployed`：所有门禁通过并已完成健康检查。
+
+## 人工接受不完整召回
+
+默认自动部署仍要求全部门槛通过。若操作员根据完整保护集结果明确接受候选取舍，只能用
+`deploy` 子命令显式豁免 `required_full_recall_groups` 的未满召回；哈希/制品漂移、生产回放、
+PT/ONNX parity、总缺陷回退、误报、延迟及其他错误一律不可豁免。命令必须同时提供固定 token
+和不少于 20 个字符的具体原因，原始 `gate=false`、失败项、原因、旧/新 SHA 与回滚文件会保留
+在部署回执中：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
+  --config D:\CretasVisionLab\config.json deploy `
+  --model-receipt D:\CretasVisionLab\models\registry\<model-id>\training-receipt.json `
+  --gate-receipt D:\CretasVisionLab\models\registry\<model-id>\promotion-gate.json `
+  --operator-override ACCEPT-INCOMPLETE-RECALL `
+  --operator-reason "<本次风险接受的具体依据>"
+```
+
+该入口仍执行生产现有 SHA 防漂移、备份、暂存文件 SHA、原子替换、服务重启、健康检查和失败
+自动回滚；它不会把原始 promotion gate 改写成通过。
 
 ## 侧视白标主动学习
 
