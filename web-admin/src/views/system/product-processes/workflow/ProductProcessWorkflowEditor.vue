@@ -102,94 +102,65 @@
       </el-alert>
 
       <!--
-        画布展示的是「可编辑版本」, 它是草稿时画布内容 ≠ 产线在跑的配方。
-        画布自身不显示 BOM 版本状态, 不说这句话用户就会以为已经配好了。
+        版本状态合并条 (2026-08-11)。原先这里是三条独立的 BOM 横幅 + 一条工艺草稿横幅,
+        纵向堆叠能吃掉画布上方一大块; 同一个产品还会同时命中两条并互相矛盾
+        (F006 实撞: 「拓扑成品D 草稿 v7 尚未生效, 生产仍使用生效版 v5」与
+         「拓扑成品D 暂未读取到生效 BOM」同屏)。
+        现在: 一行摘要, 需要动手时才默认展开; 每个产品一行, 版本号全部带归属前缀。
       -->
-      <el-alert
-        v-if="bomDraftNotices.length > 0"
-        class="workflow-bom-alert"
-        type="warning"
-        :closable="false"
-        show-icon
-        data-testid="bom-draft-notice"
+      <div
+        v-if="bomVersionLines.length > 0 || (definition?.status === 'DRAFT' && activation?.enabled)"
+        class="version-status-strip"
+        :class="{ 'is-actionable': bomVersionNeedsAction }"
+        data-testid="workflow-version-status"
       >
-        <template #title>
-          {{ bomDraftNotices.map((item) => `${item.productName} 草稿 v${item.draftVersion ?? '-'}`).join('、') }}
-          尚未生效
-        </template>
-        <template #default>
-          <span>
-            画布上的辅料/包材是这份草稿的内容；生产仍使用{{
-              bomDraftNotices[0]?.activeVersion == null
-                ? '旧配方（该产品还没有任何生效版本）'
-                : `生效版 v${bomDraftNotices[0]?.activeVersion}`
-            }}。生效后才会被之后新建的生产计划采用。
+        <button
+          type="button"
+          class="version-status-summary"
+          data-testid="workflow-version-status-toggle"
+          @click="toggleBomVersionPanel"
+        >
+          <span class="version-status-dot" aria-hidden="true"></span>
+          <span v-if="definition?.status === 'DRAFT' && activation?.enabled" class="version-chip">
+            工艺 草稿 v{{ definition.version }} · 生产用 v{{ activation.activeDefinitionVersion }}
           </span>
-          <el-button
-            link
-            type="primary"
-            :loading="activatingBomDraft"
-            data-testid="bom-draft-activate"
-            @click="activateBomDraft(bomDraftNotices[0])"
+          <span v-for="line in bomVersionLines" :key="line.productId" class="version-chip">
+            {{ line.productName }}：<template v-if="line.activeVersion == null">未建 BOM</template>
+            <template v-else>BOM v{{ line.activeVersion }}<template v-if="line.draftVersion != null"> → 草稿 v{{ line.draftVersion }}</template></template>
+          </span>
+          <span class="version-status-more">{{ bomVersionPanelOpen ? '收起' : '详情' }}</span>
+        </button>
+
+        <div v-if="bomVersionPanelOpen" class="version-status-detail">
+          <p v-if="definition?.status === 'DRAFT' && activation?.enabled" class="version-status-row">
+            <strong>工艺</strong>
+            当前编辑草稿 v{{ definition.version }}；生产继续使用已启用 Workflow v{{ activation.activeDefinitionVersion }}。
+          </p>
+          <p
+            v-for="line in bomVersionLines"
+            :key="line.productId"
+            class="version-status-row"
+            data-testid="workflow-version-status-row"
           >
-            生效该草稿 →
-          </el-button>
-
-        </template>
-      </el-alert>
-
-      <el-alert
-        v-if="bomMissingProducts.length > 0"
-        class="workflow-bom-alert"
-        type="info"
-        :closable="false"
-        show-icon
-      >
-        <template #title>
-          {{ bomMissingProducts.map((item) => item.name).join('、') }} 暂未读取到生效 BOM
-        </template>
-        <template #default>
-          <!-- 冷启动已在画布内闭环: 直接点辅料/包材 cell 即会建首版草稿, 不必再把用户支去别的页面。
-               ⚠️ 2026-08-07 阶段 2 起这里不再提「副产 cell」—— 副产已改成工序上的真实产出节点,
-               不产生 BOM 行, 也就建不了 BOM 草稿。提它等于把用户指向一扇不存在的门。 -->
-          <span>
-            直接在下方的辅料 / 包材 cell 上配置即可，系统会自动建立首版草稿；
-            点击“自动同步并发布”后会重新执行权威检查。
-          </span>
-        </template>
-      </el-alert>
-
-      <el-alert
-        v-else-if="bomProductionMismatchProducts.length > 0"
-        class="workflow-bom-alert"
-        data-testid="workflow-bom-revision-alert"
-        type="warning"
-        :closable="false"
-        show-icon
-      >
-        <template #title>
-          {{ bomProductionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 与当前已启用 Workflow 不一致
-        </template>
-        <template #default>
-          <!--
-            2026-08-07: 去掉「查看 BOM →」。BOM 就在本画布的辅料 / 包材 cell 上,
-            把用户支去另一个页面正是这次要消灭的心智(旧 BOM 菜单入口已于 8-05 摘除)。
-            横幅只说明状况, 不再提供出口。
-          -->
-          <span>发布当前草稿时系统会重新检查并自动同步；已有生产计划继续使用原快照。
-            用量与锅序直接在下方工序的辅料 / 包材 cell 上改。</span>
-        </template>
-      </el-alert>
-
-      <el-alert
-        v-if="definition?.status === 'DRAFT' && activation?.enabled"
-        class="workflow-bom-alert"
-        data-testid="workflow-draft-production-context"
-        type="info"
-        :closable="false"
-        show-icon
-        :title="`当前编辑草稿 v${definition.version}；生产继续使用已启用 Workflow v${activation.activeDefinitionVersion}`"
-      />
+            <strong>{{ line.productName }}</strong>
+            {{ bomVersionLineText(line) }}
+            <el-button
+              v-if="line.notice"
+              link
+              type="primary"
+              :loading="activatingBomDraft"
+              data-testid="bom-draft-activate"
+              @click="activateBomDraft(line.notice)"
+            >
+              生效该草稿 →
+            </el-button>
+          </p>
+          <p class="version-status-hint">
+            画布上的辅料 / 包材显示的是可编辑版本的内容；用量与锅序直接在下方工序的
+            辅料 / 包材 cell 上改，发布时系统会重新执行权威检查并自动同步。
+          </p>
+        </div>
+      </div>
 
       <el-alert
         v-if="workflowBomSyncPreflight"
@@ -1070,7 +1041,18 @@ const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
 const productBomItems = ref<BomRecipeItemOption[]>([]);
+/**
+ * **真的没有生效 BOM** 的产品 —— 接口连 recipe 对象都没返回。
+ *
+ * ⚠️ 2026-08-11 修正: 这个 ref 原先的填充判据是 `items.length === 0`, 也就是
+ * 「生效配方里没有辅料/包材明细行」, 但横幅文案写的是「暂未读取到生效 BOM」。
+ * 两者不是一回事 —— 一个**有**生效 BOM、只是还没配料的产品会被告知"没有生效 BOM",
+ * 用户按提示去建 BOM, 结果它本来就有。F006 拓扑成品D 实撞 (生效 v5, 明细 0 行)。
+ * 现在按「接口有没有返回 recipe」判, 空配方走 {@link bomEmptyProducts}。
+ */
 const bomMissingProducts = ref<BomProductTarget[]>([]);
+/** 有生效 BOM, 但里面一条辅料/包材都还没配的产品 —— 这不是错误, 是「还没配」。 */
+const bomEmptyProducts = ref<BomProductTarget[]>([]);
 const activeBomByProduct = ref<Record<string, ActiveBomRevision>>({});
 const bomProductionMismatchProducts = computed<BomProductTarget[]>(() => {
   const activeWorkflowId = activation.value?.enabled
@@ -1119,6 +1101,94 @@ const bomOverlayProductIdByRecipe = ref<Record<string, string>>({});
 /** 画布当前展示的是草稿的那些产品; 非空即代表「所见 ≠ 产线在跑的」。 */
 const bomDraftNotices = ref<DraftBomNotice[]>([]);
 const activatingBomDraft = ref(false);
+
+/**
+ * 顶部「版本状态」合并行 —— 每个产出产品一行, 取代原先纵向堆叠的三条 BOM 横幅
+ * (草稿未生效 / 暂无生效 BOM / 生效 BOM 与已启用 Workflow 不一致)。
+ *
+ * ⚠️ 为什么合并: 那三条各自独立 `v-if`, 同一个产品可以同时命中两条, 画布上方被
+ * 挤掉一大块; 更糟的是它们会互相矛盾 —— F006 实撞过「拓扑成品D 草稿 v7 尚未生效,
+ * 生产仍使用生效版 v5」与「拓扑成品D 暂未读取到生效 BOM」同屏出现。
+ *
+ * ⚠️ 版本号必须带归属前缀: 这个页面同屏最多有四个 v 号 (工艺草稿 / 工艺已启用 /
+ * BOM 草稿 / BOM 生效), 不标是谁的版本, 用户看到的就是一串对不上的数字。
+ */
+interface BomVersionLine {
+  productId: string;
+  productName: string;
+  /** 该产品的 BOM 生效版本; null = 真的没有生效 BOM */
+  activeVersion: number | null;
+  /** 该产品的 BOM 草稿版本 (未生效); null = 没有待生效草稿 */
+  draftVersion: number | null;
+  /** 有生效 BOM, 但一条辅料/包材都没配 */
+  activeIsEmpty: boolean;
+  /** 生效 BOM 指向的 Workflow 与当前已启用的不是同一个 */
+  mismatched: boolean;
+  notice?: DraftBomNotice;
+}
+
+const bomVersionLines = computed<BomVersionLine[]>(() => {
+  const byId = new Map<string, BomVersionLine>();
+  const ensure = (id: string, name: string): BomVersionLine => {
+    let line = byId.get(id);
+    if (!line) {
+      line = {
+        productId: id,
+        productName: name,
+        activeVersion: activeBomByProduct.value[id]?.version ?? null,
+        draftVersion: null,
+        activeIsEmpty: false,
+        mismatched: false,
+      };
+      byId.set(id, line);
+    }
+    return line;
+  };
+  // 🔴 逐产品取自己的 activeVersion —— 原横幅用 bomDraftNotices[0].activeVersion
+  //    描述标题里列出的**所有**产品, 多产出画布上必然说错。
+  bomDraftNotices.value.forEach((notice) => {
+    const line = ensure(notice.productTypeId, notice.productName);
+    line.draftVersion = notice.draftVersion ?? null;
+    if (notice.activeVersion != null) line.activeVersion = notice.activeVersion;
+    line.notice = notice;
+  });
+  bomMissingProducts.value.forEach((t) => { ensure(t.id, t.name).activeVersion = null; });
+  bomEmptyProducts.value.forEach((t) => { ensure(t.id, t.name).activeIsEmpty = true; });
+  bomProductionMismatchProducts.value.forEach((t) => { ensure(t.id, t.name).mismatched = true; });
+  return [...byId.values()];
+});
+
+/** 每行右侧的一句话状态, 按严重度取最该说的那一句 (不叠加, 一行只说一件事)。 */
+function bomVersionLineText(line: BomVersionLine): string {
+  if (line.activeVersion == null) {
+    return '还没有生效 BOM —— 在下方辅料 / 包材 cell 上配置即可自动建首版草稿';
+  }
+  const parts: string[] = [`BOM 生效 v${line.activeVersion}`];
+  if (line.activeIsEmpty) parts.push('（还没配辅料 / 包材）');
+  if (line.draftVersion != null) parts.push(`· 草稿 v${line.draftVersion} 未生效`);
+  if (line.mismatched) parts.push('· 与已启用工艺不一致，发布时自动同步');
+  return parts.join('');
+}
+
+/**
+ * 有没有「需要用户动手」的事 —— 没建 BOM, 或有草稿等着生效。
+ * 纯陈述性的差异(生效 BOM 与已启用工艺不一致, 发布时会自动同步)不算, 它不需要用户做什么。
+ */
+const bomVersionNeedsAction = computed(() =>
+  bomVersionLines.value.some((l) => l.activeVersion == null || l.draftVersion != null));
+/**
+ * 折叠态。⚠️ 不能写死 false —— 需要动手的事被折起来等于没提示。
+ * 用户手动收起后不再自动弹开(bomVersionPanelTouched), 否则每次重算都跳回展开, 很烦。
+ */
+const bomVersionPanelOpen = ref(false);
+const bomVersionPanelTouched = ref(false);
+watch(bomVersionNeedsAction, (needsAction) => {
+  if (needsAction && !bomVersionPanelTouched.value) bomVersionPanelOpen.value = true;
+}, { immediate: true });
+function toggleBomVersionPanel(): void {
+  bomVersionPanelTouched.value = true;
+  bomVersionPanelOpen.value = !bomVersionPanelOpen.value;
+}
 
 /**
  * 生效是影响生产的动作(之后新建的生产计划会读新快照), 与 BOM 页一样先确认再执行。
@@ -1994,6 +2064,7 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   processEditVisible.value = false;
   processEditNodeId.value = '';
   bomMissingProducts.value = [];
+  bomEmptyProducts.value = [];
   activeBomByProduct.value = {};
   skuBindingTarget.value = null;
   if (invalidatePersistence) {
@@ -2107,6 +2178,7 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
   const generation = ++bomLoadGeneration;
   productBomItems.value = [];
   bomMissingProducts.value = [];
+  bomEmptyProducts.value = [];
   activeBomByProduct.value = {};
   if (!factoryId || !ownerId) return;
   if (uniqueTargets.length === 0) return;
@@ -2129,25 +2201,36 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
       || props.productTypeId !== ownerId) return;
     const allItems: BomRecipeItemOption[] = [];
     const missing: BomProductTarget[] = [];
+    const empty: BomProductTarget[] = [];
     const activeBomMap: Record<string, ActiveBomRevision> = {};
     responses.forEach(({ target, response }) => {
+      // 「有没有生效配方」的判据 = **读不读得出版本号**, 与 UI 显示 `BOM 生效 v{n}` 同源。
+      // ⛔ 不能只做 Boolean(response.data): 空数组 [] 在 JS 里是 truthy, 接口"什么都没有"
+      //    时会被判成"有配方", 于是又变回一句说不准的话 —— 这正是本次要修的那类错。
+      const activeRecipe = response?.success && response.data && !Array.isArray(response.data)
+        ? response.data
+        : null;
+      const hasActiveRecipe = activeRecipe?.version != null;
       const items = response?.success && Array.isArray(response.data?.items)
         ? response.data.items
         : [];
       allItems.push(...items);
-      if (items.length === 0) missing.push(target);
-      if (response?.success && response.data) {
+      // 「没有生效 BOM」与「生效 BOM 是空配方」必须分开 —— 见 bomMissingProducts 注释。
+      if (!hasActiveRecipe) missing.push(target);
+      else if (items.length === 0) empty.push(target);
+      if (activeRecipe) {
         activeBomMap[target.id] = {
-          version: response.data.version,
-          workflowId: response.data.workflowId,
-          workflowDefinitionVersion: response.data.workflowDefinitionVersion,
-          workflowRevisionId: response.data.workflowRevisionId,
-          workflowRevisionHash: response.data.workflowRevisionHash,
+          version: activeRecipe.version,
+          workflowId: activeRecipe.workflowId,
+          workflowDefinitionVersion: activeRecipe.workflowDefinitionVersion,
+          workflowRevisionId: activeRecipe.workflowRevisionId,
+          workflowRevisionHash: activeRecipe.workflowRevisionHash,
         };
       }
     });
     productBomItems.value = allItems;
     bomMissingProducts.value = missing;
+    bomEmptyProducts.value = empty;
     activeBomByProduct.value = activeBomMap;
   } catch (error) {
     if (generation !== bomLoadGeneration
@@ -4825,6 +4908,36 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 
 <style scoped>
 .workflow-bom-alert, .workflow-validation-alert { margin: 0 12px 12px; }
+/* 版本状态合并条 (2026-08-11) —— 取代原先纵向堆叠的 3 条 BOM 横幅 + 1 条工艺草稿横幅。
+   折叠态一行, 展开才给细节; 画布上方从 ~140px 压到 ~32px。 */
+.version-status-strip {
+  margin: 4px 0 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  background: var(--el-fill-color-blank);
+  font-size: 13px;
+}
+.version-status-strip.is-actionable { border-color: var(--el-color-warning-light-5); background: var(--el-color-warning-light-9); }
+.version-status-summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  width: 100%; padding: 6px 10px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--el-text-color-regular); font: inherit;
+}
+.version-status-summary:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; }
+.version-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-info); flex: none; }
+.is-actionable .version-status-dot { background: var(--el-color-warning); }
+.version-chip {
+  padding: 1px 8px; border-radius: 10px;
+  background: var(--el-fill-color-light); color: var(--el-text-color-regular);
+  white-space: nowrap;
+}
+.version-status-more { margin-left: auto; color: var(--el-color-primary); flex: none; }
+.version-status-detail { padding: 2px 12px 10px 28px; border-top: 1px dashed var(--el-border-color-lighter); }
+.version-status-row { margin: 6px 0; line-height: 1.6; color: var(--el-text-color-regular); }
+.version-status-row strong { margin-right: 6px; color: var(--el-text-color-primary); }
+.version-status-hint { margin: 8px 0 0; color: var(--el-text-color-secondary); line-height: 1.6; }
+
 .workflow-validation-alert :deep(.el-alert__content) { width: 100%; }
 .workflow-validation-alert :deep(.el-alert__description) {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

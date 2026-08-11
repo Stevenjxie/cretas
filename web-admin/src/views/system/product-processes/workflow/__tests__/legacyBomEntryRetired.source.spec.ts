@@ -47,9 +47,10 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
   });
 
   it('生产不一致横幅: 去掉「查看 BOM →」后必须说清去哪改', () => {
-    const at = source.indexOf('的生效 BOM 与当前已启用 Workflow 不一致');
+    // 2026-08-11: 不一致这句挪进 bomVersionLineText(); 去哪改的引导挪进合并条的公共提示。
+    const at = source.indexOf('version-status-hint');
     expect(at).toBeGreaterThan(-1);
-    const block = source.slice(at, at + 900);
+    const block = source.slice(at, at + 500);
     // 同上: 只禁按钮, 不禁注释里提到这四个字
     expect(block).not.toMatch(/>\s*查看 BOM/);
     // ⛔ 替代路径: 必须指向 cell, 否则用户读完横幅不知道下一步

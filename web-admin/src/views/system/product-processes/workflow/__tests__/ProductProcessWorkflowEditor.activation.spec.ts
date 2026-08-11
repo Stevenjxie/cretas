@@ -231,9 +231,13 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     };
 
     expect(vm.bomProductionMismatchProducts).toEqual([]);
-    expect(wrapper.find('[data-testid="workflow-bom-revision-alert"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="workflow-draft-production-context"]').attributes('title'))
-      .toContain('生产继续使用已启用 Workflow v1');
+    // 2026-08-11: 三条 BOM 横幅 + 工艺草稿横幅并成一条「版本状态」折叠条。
+    // 断言意图不变: 没有不一致时不许说不一致; 草稿 vs 生产的上下文必须仍然看得见。
+    // 折叠摘要里就能看到「在编的是草稿, 生产用的是哪一版」—— 这条信息不许被折进详情。
+    expect(wrapper.get('[data-testid="workflow-version-status-toggle"]').text())
+      .toContain('生产用 v1');
+    expect(wrapper.get('[data-testid="workflow-version-status"]').text())
+      .not.toContain('与已启用工艺不一致');
 
     apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
       success: true,
@@ -301,7 +305,14 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     };
 
     expect(vm.bomProductionMismatchProducts).toEqual([{ id: 'PT-A', name: 'Finished' }]);
-    expect(wrapper.find('[data-testid="workflow-bom-revision-alert"]').exists()).toBe(true);
+    // 「生效 BOM 与已启用工艺不一致」是陈述性的(发布时自动同步), 不触发自动展开 ——
+    // 但必须真的在详情里, 一次点击就能看到, 不能悄悄消失。
+    await wrapper.get('[data-testid="workflow-version-status-toggle"]').trigger('click');
+    await flushPromises();
+    expect(
+      wrapper.findAll('[data-testid="workflow-version-status-row"]')
+        .map((row) => row.text()).join(' | '),
+    ).toContain('与已启用工艺不一致');
   });
 
   it('cancels a pending autosave when publish starts and does not recreate a draft after success', async () => {

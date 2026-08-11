@@ -424,6 +424,36 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     ]));
   });
 
+  /**
+   * 🔴 F006 实撞: 「拓扑成品D 暂未读取到生效 BOM」是**假警报** —— D 有生效 BOM v5,
+   * 只是里面 0 行辅料/包材。旧判据是 `items.length === 0`, 文案却说「没有生效 BOM」,
+   * 说的和测的不是一回事; 用户按提示去建 BOM, 而它本来就有。
+   *
+   * ⚠️ 这条测试是**变异驱动**补的: 把判据改回 items.length===0 时全套 417 条一条都不红,
+   *    说明当时没有任何断言在守这个修复。
+   */
+  it('有生效 BOM 但配方是空的 → 归入 bomEmptyProducts, 不许再说「还没有生效 BOM」', async () => {
+    const inner = apiMocks.get.getMockImplementation()!;
+    apiMocks.get.mockImplementation((url: string) => {
+      if (url.includes('/bom/recipes/by-product/') && url.endsWith('/current')) {
+        // 真实接口: 有生效配方就返回带 version 的对象; 这里 items 为空 = 还没配辅料/包材
+        return Promise.resolve({ success: true, data: { version: 5, items: [] } });
+      }
+      return inner(url);
+    });
+
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    await flushPromises();
+
+    expect(vm.bomMissingProducts)
+      .toEqual([]);
+    expect(vm.bomEmptyProducts.map((item: { id: string }) => item.id))
+      .toContain('PT-PIG-400');
+  });
+
   it('blocks the atomic publish when the authoritative preflight reports no active BOM', async () => {
     apiMocks.saveProductProcessWorkflowDraft.mockImplementation((
       _factoryId: string,
