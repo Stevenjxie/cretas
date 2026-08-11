@@ -206,13 +206,38 @@ def scope_only_refinement(
             matched.append(name)
             residue = residue.replace(name, " ")
 
-    scope = "all" if not matched else ("single" if len(matched) == 1 else "multi")
     if not matched:
-        # 没点名门店 -> 必须是一句「全部门店」类的话, 否则不是范围收窄。
-        if not any(phrase in residue for phrase in _ALL_STORE_PHRASES):
+        # 没点名完整门店名 -> 要么是一句「全部门店」类的话, 要么是**打不全的片段**。
+        if any(phrase in residue for phrase in _ALL_STORE_PHRASES):
+            for phrase in sorted(_ALL_STORE_PHRASES, key=len, reverse=True):
+                residue = residue.replace(phrase, " ")
+            for filler in _REFINEMENT_FILLER:
+                residue = residue.replace(filler, "")
+            return ("all", ()) if not residue.strip() else None
+
+        # 🔴 2026-08-11 打不全的门店名。prod 实测:「龙之梦」「长宁」在 MOCK_REST
+        #    都**唯一命中一家店**, 信息完全够, 但此前不被认成收窄, 用户拿到的是
+        #    一句内部黑话(「我识别到的问题对象与准备执行的分析范围不一致…」)。
+        #    **打不全比打错字更糟, 而它是最常见的输入方式。**
+        #
+        # ⛔ 只做**子串**匹配, 不做模糊/编辑距离: 「长宁龙梦店」(打错字)必须继续
+        #    落到既有的诚实拒答(「没有找到名为…的门店」+ 给出路), 而不是被硬塞给
+        #    某家店 —— 那会让用户拿到一个**看着像答案的错答案**。
+        # ⛔ 也不引语义置信度: 在一条本来确定性的路上新增 LLM 调用是架构红线
+        #    (2026-08-07 为此撤回过), 且置信度会随模型强弱漂。
+        fragment = residue
+        for filler in _REFINEMENT_FILLER:
+            fragment = fragment.replace(filler, "")
+        fragment = fragment.strip()
+        # 单字片段(如「店」)会命中全部门店 —— 那不是收窄, 是没说。
+        if len(fragment) < 2:
             return None
-        for phrase in sorted(_ALL_STORE_PHRASES, key=len, reverse=True):
-            residue = residue.replace(phrase, " ")
+        hits = tuple(name for name in known_stores if fragment in name)
+        if not hits:
+            return None
+        # ⛔ 命中多家时**全部带出**, 不许挑一个: 少报一家 = 把歧义压成确定,
+        #    而「唯一命中 vs 多家命中」的处置(确认 / 候选按钮)只能由上层决定。
+        return ("single" if len(hits) == 1 else "multi"), hits
 
     for filler in _REFINEMENT_FILLER:
         residue = residue.replace(filler, "")
@@ -221,7 +246,7 @@ def scope_only_refinement(
         return None
 
     ordered = tuple(name for name in known_stores if name in matched)
-    return scope, ordered
+    return ("single" if len(matched) == 1 else "multi"), ordered
 
 
 # ─── QuerySpec ────────────────────────────────────────────────────────────
@@ -6073,12 +6098,22 @@ async def parse_restaurant_query(
                     exc,
                 )
                 known_stores = ()
-            if scope_only_refinement(norm_query, known_stores) is not None:
+            narrowed = scope_only_refinement(norm_query, known_stores)
+            if narrowed is not None:
+                scope, names = narrowed
+                # 🔴 拼**归一化后的全名**, 不是用户打的那几个字。
+                #    prod 实测:「龙之梦」唯一命中「模拟·长宁龙之梦店」, 但直接把
+                #    「龙之梦」拼上去等于让下游再解析一次片段 —— 而它此前正是在那里
+                #    被拦成一句内部黑话(「我识别到的问题对象与准备执行的分析范围
+                #    不一致…」)。归一化在这里做一次, 下游拿到的就是规范名。
+                # ⚠️ 命中多家时**全拼上**, 由下游的既有歧义处置给候选按钮
+                #    (#2464「门店名匹配到多家时给候选, 不给死胡同」) —— 这里不挑。
+                suffix = " ".join(names) if names else norm_query
                 logger.info(
-                    "[restaurant-intent] scope-refinement 命中: seed=%r + %r",
-                    seed[:60], norm_query[:30],
+                    "[restaurant-intent] scope-refinement 命中(%s): seed=%r + %r -> %r",
+                    scope, seed[:50], norm_query[:20], suffix[:60],
                 )
-                norm_query = f"{seed} {norm_query}".strip()
+                norm_query = f"{seed} {suffix}".strip()
 
     if semantic_first:
         if _normalize_exact_phrase(norm_query) == _normalize_exact_phrase(
