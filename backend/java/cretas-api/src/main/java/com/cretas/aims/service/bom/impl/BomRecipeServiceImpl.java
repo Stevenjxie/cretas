@@ -355,6 +355,16 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId) {
+        // 对外入口(手动「生效该草稿」/ AI 工具 / Controller)一律没有「正在发布的工艺」。
+        return activateRecipe(factoryId, recipeId, operatorId, null);
+    }
+
+    /**
+     * @param publishingWorkflowId 仅发布链路传入 —— 见
+     *        {@link #requireDraftMatchesEnabledWorkflow(String, List, Long)}。
+     */
+    private BomRecipe activateRecipe(
+            String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
         if (recipe.getStatus() == BomRecipe.Status.ACTIVE && Boolean.TRUE.equals(recipe.getIsCurrent())) {
             throw new IllegalStateException("当前 BOM 已经生效，无需重复激活");
@@ -393,7 +403,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         //
         // 判据取 activation.activeWorkflowId(该产品当前启用的工艺记录), 与草稿钉的 workflowId 比对。
         // ⛔ fail closed: 宁可在这里拦住(用户还能回画布重新发布), 也不要激活出一个建不了计划的状态。
-        requireDraftMatchesEnabledWorkflow(factoryId, family);
+        requireDraftMatchesEnabledWorkflow(factoryId, family, publishingWorkflowId);
 
         // Also repair same-revision legacy drafts before validation. This is deterministic only:
         // exact stable tuple, a unique deleted predecessor, or a unique material+unit slot.
@@ -726,7 +736,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "请刷新 Workflow 后重新执行自动同步",
                     "workflow");
         }
-        BomRecipe activated = activateRecipe(factoryId, syncDraft.getId(), operatorId);
+        // 正在发布的就是 targetRevision 所属的那条 workflow 记录 —— 启用记录要等本方法返回后
+        // 才被 publishAndActivate 切过去, 所以必须显式告诉版本线闸「它马上就是启用的那条」。
+        BomRecipe activated = activateRecipe(
+                factoryId, syncDraft.getId(), operatorId, targetRevision.getWorkflowId());
         bomWorkflowRevisionService.requireActiveBomPinsRevision(
                 factoryId, productTypeId, targetRevision);
         return activated;
@@ -1099,11 +1112,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * 待激活的 BOM Family 必须钉在**当前启用的那条 workflow 记录**上。
      *
      * <p>没有启用记录(冷启动 / Workflow 已停用)时不拦 —— 那时不存在「版本线错位」这回事。
+     *
+     * <p>🔴 2026-08-11 真机: 发布链路上还要放行**本次事务正在发布的那条**。
+     * {@code publishAndActivate} 的顺序是「同步 BOM(含激活) → 切换启用记录」, 所以走到这里时
+     * 启用记录仍指向旧工艺; 而改画布会分叉出新的 workflow 记录(158 → 162), 同步草稿被重钉到 162
+     * ⇒ 判据必然不等, **凡是「已有启用记录 + 重新发布」全部被拦**, 而拒绝提示写的正是
+     * 「请回到画布点『自动同步并发布』」—— 出口指向被自己堵死的那个动作。
+     * (prod 实证: 闸落地后成功发布 2 条全是首发 v1, 重发布 0 条, 3 个产品卡住。)
+     *
+     * <p>放行它是安全的: 发布成功后同一 {@code @Transactional} 内立刻把启用记录切到这条
+     * (见 {@code ProductProcessWorkflowServiceImpl#publishAndActivate}), 读取侧看到的是一致状态;
+     * 发布中途失败则整体回滚, 不会留下「BOM 已激活但工艺没启用」的中间态。
+     *
+     * @param publishingWorkflowId 本次事务正在发布的 workflow 记录 id; {@code null} 表示
+     *                             手动「生效该草稿」路径 —— 那条路照旧严格按启用记录判。
      */
-    private void requireDraftMatchesEnabledWorkflow(String factoryId, List<BomRecipe> family) {
+    private void requireDraftMatchesEnabledWorkflow(
+            String factoryId, List<BomRecipe> family, Long publishingWorkflowId) {
         for (BomRecipe member : family) {
             Long pinnedWorkflowId = member.getWorkflowId();
-            if (pinnedWorkflowId == null) {
+            if (pinnedWorkflowId == null || pinnedWorkflowId.equals(publishingWorkflowId)) {
                 continue;
             }
             Long enabledWorkflowId = workflowActivationRepo
@@ -1725,7 +1753,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         log.info("Projected BOM family from workflow revision: factory={}, product={}, revision={}, draft={}",
                 factoryId, productTypeId, targetRevision.getId(), draft.getId());
         // activateRecipe 按家族激活(见其 family 循环), 所以联产的每个终端产出都会拿到 ACTIVE BOM。
-        return activateRecipe(factoryId, draft.getId(), operatorId);
+        // 投影同样发生在发布事务内(启用记录尚未切换), 所以和上面的同步路径一样要放行正在发布的那条 ——
+        // 首发时因为没有启用记录本来就不触发, 但「有启用记录却没有 ACTIVE BOM」(被归档/删过)会走到这里。
+        return activateRecipe(
+                factoryId, draft.getId(), operatorId, targetRevision.getWorkflowId());
     }
 
     private void validateActivatableItems(BomRecipe recipe) {

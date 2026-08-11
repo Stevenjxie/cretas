@@ -51,7 +51,7 @@ class ByProductActivationAndBomUxContractTest {
 
         assertThat(src)
                 .as("activateRecipe 必须调用版本线校验")
-                .contains("requireDraftMatchesEnabledWorkflow(factoryId, family);");
+                .contains("requireDraftMatchesEnabledWorkflow(factoryId, family, publishingWorkflowId);");
         assertThat(src)
                 .as("判据必须是「当前启用的工艺记录」activeWorkflowId, 不是别的")
                 .contains("getActiveWorkflowId()");
@@ -62,10 +62,12 @@ class ByProductActivationAndBomUxContractTest {
         // ⛔ 必须把范围限定在 activateRecipe 方法体内再比位置:
         //    validateFamilyContracts 在本文件出现 3 次, 裸 indexOf 会命中**更靠前**的那个,
         //    于是「闸在校验之前」这条断言恒假 —— 我第一版正是这么写的, 当场红在自己的锚点上。
-        int methodStart = src.indexOf("public BomRecipe activateRecipe(");
-        assertThat(methodStart).as("应能定位到 activateRecipe").isGreaterThan(0);
+        // 2026-08-11: 对外的 activateRecipe 现在只是一层 delegate(补 publishingWorkflowId=null),
+        // 真正的流程在私有重载里 —— 锚点跟着搬, 否则量的是那三行 delegate。
+        int methodStart = src.indexOf("private BomRecipe activateRecipe(");
+        assertThat(methodStart).as("应能定位到 activateRecipe 私有重载").isGreaterThan(0);
         String method = src.substring(methodStart);
-        int guardAt = method.indexOf("requireDraftMatchesEnabledWorkflow(factoryId, family);");
+        int guardAt = method.indexOf("requireDraftMatchesEnabledWorkflow(factoryId, family, publishingWorkflowId);");
         int validateAt = method.indexOf("validateFamilyContracts(factoryId, family);");
         assertThat(guardAt).as("应能在 activateRecipe 内定位到版本线闸").isGreaterThan(0);
         assertThat(validateAt).as("应能在 activateRecipe 内定位到 family 校验").isGreaterThan(0);
