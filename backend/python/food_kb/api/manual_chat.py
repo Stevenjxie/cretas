@@ -2083,6 +2083,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _RESTAURANT_STAFFING_SCOPE_ANSWER
     elif (
         is_restaurant_request
+        and _needs_restaurant_output_clarification_guard(request.question)
+    ):
+        # A question that explicitly combines a ranked/table result with
+        # ambiguous store candidates needs the complete renderer and
+        # clarification contract.  The generic range-action guard also
+        # recognizes some of these words, so keep this more specific route
+        # ahead of it.
+        guard_answer = _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    elif (
+        is_restaurant_request
         and _needs_restaurant_scope_action_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SCOPE_ACTION_ANSWER
@@ -2101,11 +2111,6 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_platform_sync_guard(request.question)
     ):
         guard_answer = _RESTAURANT_PLATFORM_SYNC_ANSWER
-    elif (
-        is_restaurant_request
-        and _needs_restaurant_output_clarification_guard(request.question)
-    ):
-        guard_answer = _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_query_contract_guard(request.question)
