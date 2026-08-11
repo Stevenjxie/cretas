@@ -61,10 +61,26 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
+- 存在 `D:\CretasVisionLab\MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json`：只处理 MARK 指向的独立
+  label-side-view 队列和 URL；不要打开或复用旧 29 张 label 难例，也不要把它与 tray MARK 混用。
 - MARK 消失：不需要人工操作，流水线会自行训练、评测。
 - `D:\CretasVisionLab\receipts\latest-cycle.json`：本轮最终状态。
 - `candidate-rejected`：新模型没有变好，没有部署，生产模型不变。
 - `deployed`：所有门禁通过并已完成健康检查。
+
+## 侧视白标主动学习
+
+仅当完整 tray→label 回放证明“tray 已检出但白标漏检”是独立瓶颈时，才运行
+`mine_label_side_view_queue.py plan`。计划阶段只读本地 VisionLab 数据库，候选必须来自人工确认的
+`NO_DEFECT` 新来源；240+83+57 已完成来源、旧 29 张队列、保护集 exact ID/SHA 与 pHash 距离
+不大于 10 的近重复全部排除，队列内部 pHash 距离不大于 4 的 crop 也排除。先检查 preflight
+回执中的数量、来源、去重距离和 `cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
+
+`build` 会以 preflight 的候选 digest、源图 SHA、crop 像素 SHA 和感知哈希重新验证内容，生成
+`label-side-view-active-<timestamp>`、独立的 `MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json` 和
+`annotations-human`。生产 YOLO 预框始终是 proposal；只有标注服务器落盘的
+`reviewed=true, source=human` 才能进入后续 label 训练。不得因此覆盖 tray MARK、旧 label MARK、
+生产模型或原图。
 
 ## 首次初始化
 
