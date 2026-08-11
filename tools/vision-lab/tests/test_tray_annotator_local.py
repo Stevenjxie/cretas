@@ -41,16 +41,18 @@ async function confirmOk(){
 }
 """
         result = module.apply_precision_box_style(page, "tray-active-round3")
-        self.assertIn('precisionBoxStyle="thin-dashed-filled-v3"', result)
-        self.assertIn('boxFillMode="red-10-yellow-16"', result)
+        self.assertIn('precisionBoxStyle="thin-dashed-filled-v4"', result)
+        self.assertIn('boxFillMode="teal-26-yellow-30"', result)
         self.assertIn("队列 tray-active-round3", result)
         self.assertIn("if(!response.ok)", result)
         self.assertIn("alert(error.message", result)
         self.assertIn("[9*cssPx,6*cssPx]", result)
         self.assertIn("1.25 : 1", result)
         self.assertIn("3.5*cv.width", result)
-        self.assertIn("rgba(255,210,63,.16)", result)
-        self.assertIn("rgba(255,59,48,.10)", result)
+        self.assertIn("rgba(255,210,63,.30)", result)
+        self.assertIn("rgba(0,167,196,.26)", result)
+        self.assertIn("'#00a7c4'", result)
+        self.assertNotIn("'#ff3b30'", result)
         self.assertNotIn("ctx.fillRect(hx-hs", result)
         self.assertIn("handles are intentionally invisible", result)
 

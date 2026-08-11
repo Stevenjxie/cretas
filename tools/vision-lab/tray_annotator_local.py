@@ -30,10 +30,10 @@ def apply_precision_box_style(page: str, queue_name: str = "tray-queue") -> str:
             """    const cssPx=cv.width/Math.max(cv.getBoundingClientRect().width,1);
     ctx.setLineDash(i===sel ? [9*cssPx,6*cssPx] : []);
     ctx.lineWidth = (i===sel ? 1.25 : 1)*cssPx;
-    ctx.strokeStyle = i===sel ? '#ffd23f' : '#ff3b30';
+    ctx.strokeStyle = i===sel ? '#ffd23f' : '#00a7c4';
     ctx.strokeRect(x0,y0,x1-x0,y1-y0);
     ctx.setLineDash([]);
-    ctx.fillStyle = i===sel ? 'rgba(255,210,63,.16)' : 'rgba(255,59,48,.10)';
+    ctx.fillStyle = i===sel ? 'rgba(255,210,63,.30)' : 'rgba(0,167,196,.26)';
     ctx.fillRect(x0,y0,x1-x0,y1-y0);""",
         """    if(i===sel){
       const hs=handleSize();
@@ -71,7 +71,7 @@ def apply_precision_box_style(page: str, queue_name: str = "tray-queue") -> str:
     )
     return page.replace(
         "<script>",
-        '<script>\nconst precisionBoxStyle="thin-dashed-filled-v3"; const boxFillMode="red-10-yellow-16";',
+        '<script>\nconst precisionBoxStyle="thin-dashed-filled-v4"; const boxFillMode="teal-26-yellow-30";',
         1,
     )
 
