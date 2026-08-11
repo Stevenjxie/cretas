@@ -63,9 +63,15 @@ describe('画布接入 BOM 浮层', () => {
 
   it('浮层允许拖动但不会进入 Workflow dirty，派生刷新保留拖后位置', () => {
     expect(source).toMatch(/existingOverlayPositions[\s\S]{0,1800}draggable:\s*true/);
-    const dragStopBody = source.slice(source.indexOf('function onNodeDragStop'), source.indexOf('function onNodeDragStop') + 900);
+    // 窗口要够大: onNodeDragStop 2026-08-11 加了多选拖动处理(消费 nodes[] 而不只是 node),
+    // 900 字符已经切不到 dirty 那行了 —— 切片不够长会让断言拿到 -1, 看着像"没有 dirty"。
+    const dragStopBody = source.slice(source.indexOf('function onNodeDragStop'), source.indexOf('function onNodeDragStop') + 2000);
     expect(dragStopBody).toContain('isBomOverlayNode(node)');
     expect(dragStopBody).toContain('overlay.position');
     expect(dragStopBody.indexOf('return;')).toBeLessThan(dragStopBody.indexOf('dirty.value = true'));
+    // 🔴 多选拖动必须整批提交: 只认事件里的 node, 其余被拖动的节点位置从未写回,
+    //    下次重绘就弹回原处 (Steve 实测「拖动以后 cell 总是会自动布局到某个地方」)。
+    expect(dragStopBody).toContain('nodes && nodes.length ? nodes : [node]');
+    expect(dragStopBody).toMatch(/dragged\.forEach/);
   });
 });
