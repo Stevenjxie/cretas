@@ -84,6 +84,8 @@ def build_items(queue: Path, manifest: dict, *, display_width: int = DISPLAY_WID
         items.append({
             "id": stem,
             "source_photo_id": str(row.get("source_photo_id") or row.get("photo_id") or stem),
+            "source_sha256": str(row.get("source_sha256") or ""),
+            "packed_image_sha256": str(row.get("packed_image_sha256") or ""),
             "task_id": str(row.get("task_id") or "unknown"),
             "sku_code": str(row.get("sku_code") or "unknown"),
             "display_w": width,
@@ -100,6 +102,8 @@ def build_annotation(item: dict, payload: dict) -> dict:
     candidate = {
         "photo_id": item["id"],
         "source_photo_id": item["source_photo_id"],
+        "source_sha256": item["source_sha256"],
+        "packed_image_sha256": item["packed_image_sha256"],
         "task_id": item["task_id"],
         "sku_code": item["sku_code"],
         "format": FORMAT,

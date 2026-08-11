@@ -9,6 +9,7 @@ FORMAT = "normalised_polygon_v1"
 INSIDE_WORK_AREA = "inside_work_area"
 OUTSIDE_WORK_AREA = "outside_work_area"
 UNKNOWN_WORK_AREA = "unknown_work_area"
+WORK_AREA_GROUPS = (INSIDE_WORK_AREA, OUTSIDE_WORK_AREA, UNKNOWN_WORK_AREA)
 MIN_POLYGON_AREA = 0.02
 
 
@@ -101,6 +102,30 @@ def classify_box_center(box: Any, polygon: Sequence[Sequence[float]]) -> str:
     return INSIDE_WORK_AREA if point_in_polygon(((x0 + x1) / 2, (y0 + y1) / 2), polygon) else OUTSIDE_WORK_AREA
 
 
+def classify_pixel_box(
+    box: Any, image_width: int, image_height: int, annotation: dict[str, Any] | None,
+) -> str:
+    """Classify a pixel-space tray box, failing closed when human ROI truth is absent."""
+    if annotation is None or annotation.get("judgeable") is not True:
+        return UNKNOWN_WORK_AREA
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError("work-area classification requires positive image dimensions")
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        raise ValueError("pixel tray box must contain xyxy coordinates")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in box):
+        raise ValueError("pixel tray box coordinates must be finite numbers")
+    values = [float(value) for value in box]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("pixel tray box coordinates must be finite numbers")
+    if not (0.0 <= values[0] < values[2] <= image_width and 0.0 <= values[1] < values[3] <= image_height):
+        raise ValueError("pixel tray box must stay inside the image")
+    normalised = [
+        values[0] / image_width, values[1] / image_height,
+        values[2] / image_width, values[3] / image_height,
+    ]
+    return classify_box_center(normalised, annotation["polygon"])
+
+
 def classify_boxes(boxes: Iterable[Any], polygon: Sequence[Sequence[float]]) -> dict[str, int]:
     counts = {INSIDE_WORK_AREA: 0, OUTSIDE_WORK_AREA: 0}
     for box in boxes:
@@ -115,6 +140,8 @@ def validate_human_annotation(payload: Any, *, expected_photo_id: str | None = N
         raise ValueError("work-area annotation photo_id mismatch")
     if payload.get("reviewed") is not True or payload.get("source") != "human":
         raise ValueError("work-area annotation requires reviewed=true and source=human")
+    if payload.get("format") != FORMAT:
+        raise ValueError(f"work-area annotation requires format={FORMAT}")
     if not isinstance(payload.get("judgeable"), bool):
         raise ValueError("work-area annotation requires an explicit judgeable decision")
     result = dict(payload)

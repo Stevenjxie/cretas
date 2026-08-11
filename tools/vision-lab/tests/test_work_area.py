@@ -44,6 +44,21 @@ class WorkAreaContractTests(unittest.TestCase):
         self.assertIsNone(result["polygon"])
         self.assertFalse(result["judgeable"])
 
+    def test_pixel_box_without_human_roi_is_unknown(self):
+        self.assertEqual(
+            module.classify_pixel_box([10, 10, 20, 20], 100, 100, None),
+            module.UNKNOWN_WORK_AREA,
+        )
+        annotation = module.validate_human_annotation({
+            "photo_id": "photo-1", "format": module.FORMAT,
+            "reviewed": True, "source": "human", "judgeable": True,
+            "polygon": self.polygon,
+        })
+        self.assertEqual(
+            module.classify_pixel_box([30, 30, 50, 50], 100, 100, annotation),
+            module.INSIDE_WORK_AREA,
+        )
+
     def test_annotation_rejects_teacher_or_unreviewed_truth(self):
         for source, reviewed in (("teacher", True), ("human", False)):
             with self.assertRaisesRegex(ValueError, "reviewed=true"):

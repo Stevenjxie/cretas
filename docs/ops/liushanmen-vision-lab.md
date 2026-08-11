@@ -72,12 +72,31 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_annotator_local.py `
 ROI 数据不足以独立验证轻量分割模型时只能停在人工数据阶段；不得下载新权重、用粗矩形或启发式
 结果冒充生产 ROI。后续候选必须同时报告台内主门禁、台外缺标非回退和 `unknown_work_area` 数量。
 
-人工确认完成后运行 tray 候选闭环：
+人工确认完成后先只运行 ROI 审计。该命令要求每张都存在 `reviewed=true, source=human` 的四点
+非自交多边形，重新核对源图、打包图、tray 标注和 ROI 文件哈希，并在 `receipts/` 新增台内、
+台外与 unknown 数量回执；缺一张或存在无法判断项就失败，不启动训练：
 
 ```powershell
 B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
-  --config D:\CretasVisionLab\config.json
+  --config D:\CretasVisionLab\config.json `
+  --work-area-queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --audit-work-area-only
 ```
+
+候选评估只从独立 `work-area-human/` sidecar 读取 ROI，不向受保护 7+20 manifest 添加字段。评估时
+必须显式传入覆盖保护集图片且源图 SHA 匹配的人工 ROI 目录；缺失和无法判断都记入
+`unknown_work_area` 并阻断发布：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
+  --config D:\CretasVisionLab\config.json `
+  --candidate-receipt D:\CretasVisionLab\models\registry\<candidate>\training-receipt.json `
+  --work-area-annotations D:\CretasVisionLab\evaluation\work-area-human `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<round-1>
+```
+
+用于 ROI 模型训练的 8 张队列不能自动当作 7+20 的 ROI 真值；两者 photo ID/SHA 不匹配时，
+评估会把保护集记录保留为 unknown，而不是静默当作台内。
 
 已有多轮 `reviewed=true` 的人工队列时，可以重复传入 `--queue` 建立累计数据集；每个队列仍会
 独立重验，数据集按任务级拆分，并拒绝跨队列重复 stem。例如：
@@ -94,8 +113,10 @@ YOLO 层数，不改变保护集、人工真值或部署门禁；不得依据保
 
 该入口先重验源图、打包图、人工标注与保护集哈希，再按任务拆分训练/验证集，训练轻量
 YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺陷与 20 张正常图。候选必须
-同时满足：缺陷召回不回退、新盲测 2/2、根因样本 tray 覆盖且命中、正常图误报改善、延迟
-合格、PT/ONNX 一致性不差于生产模型。任一项失败都只写淘汰回执，不修改生产模型。
+同时满足：台内主缺标召回/覆盖和误报门禁、台外缺标不相对生产回退、unknown 为 0、整体缺陷
+召回不回退、正常图误报改善、延迟合格、PT/ONNX 一致性不差于生产模型。台外根因样本
+`df1f6029-389d-45b5-995e-be19b2f5b943` 必须单列身份、tray 覆盖和命中结果；它不再冒充台内主告警，
+但也不得相对生产结果回退。任一项失败都只写淘汰回执，不修改生产模型。
 
 ## 操作员只需要关注什么
 

@@ -33,6 +33,7 @@ class WorkAreaAnnotatorTests(unittest.TestCase):
             "rows": [{
                 "packed_stem": "tray-1", "packed_image": "images/tray-1.jpg",
                 "source_photo_id": "source-1", "task_id": "task-1", "sku_code": "SKU-1",
+                "source_sha256": "a" * 64, "packed_image_sha256": "b" * 64,
             }],
         }
         (queue / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -50,6 +51,7 @@ class WorkAreaAnnotatorTests(unittest.TestCase):
     def test_build_annotation_reports_inside_and_outside(self):
         item = {
             "id": "tray-1", "source_photo_id": "source-1", "task_id": "task-1", "sku_code": "SKU-1",
+            "source_sha256": "a" * 64, "packed_image_sha256": "b" * 64,
             "tray_boxes": [[0.2, 0.2, 0.5, 0.5], [0.85, 0.0, 0.99, 0.1]],
         }
         result = module.build_annotation(item, {
@@ -58,6 +60,8 @@ class WorkAreaAnnotatorTests(unittest.TestCase):
         self.assertEqual(result["tray_scope_counts"], {"inside_work_area": 1, "outside_work_area": 1})
         self.assertTrue(result["outside_samples_retained"])
         self.assertEqual(result["scope_rule"], "tray_center_in_polygon")
+        self.assertEqual(result["source_sha256"], "a" * 64)
+        self.assertEqual(result["packed_image_sha256"], "b" * 64)
 
     def test_training_queue_rejects_protected_holdout(self):
         with tempfile.TemporaryDirectory() as temporary:
