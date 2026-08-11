@@ -5004,9 +5004,24 @@ _T3_MAX_TOKENS = 500
 from common.llm_router import _SLOT_HOP_BUDGET_SECONDS as _SEMANTIC_PROVIDER_TIMEOUT_SECONDS  # noqa: E402,F401
 
 # 总预算 = 单跳 × ~2 —— 至少要放得下「一个慢候选失败后, 还能再试一个」。
-# owner 2026-08-10 拍板从 25s 放宽到 45s(上游 nginx 默认 60s 之下)。
 # 📌 只有降级路径才吃得到这个预算: 链头健康时实测中位 1.6s / p95 2.8s。
-_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 45.0
+#
+# 🔴 2026-08-12: 45.0 → 12.0 (= 单跳 6s × 2)。45 是 owner 08-10 从 25 放宽的,
+#    但**上面那行注释逐字写着**「Keep the whole cascade inside Java's independent
+#    30 s deadline」—— 而 45 > 30。注释说 30、常量是 45, 两处口径打架, 且没有
+#    任何东西会红。实测后果 (prod trace, 08-11 23:55 与 08-12 00:30 两次):
+#      [Java] Tiered intent answer failed ... in 30002ms: timeout
+#      [Java] [Branch:TieredFirst] restaurant semantic planner unavailable
+#    用户看到的「餐饮语义规划暂时不可用」是 **Java 的秒表到点**写出来的, 不是
+#    Python 失败 —— Python 可能第 40 秒才算完, 算完了也没人收, 白烧免费额度。
+#
+#    owner 2026-08-12 拍板: 「25 秒都有点太长了」。老板问一句话等到第 15 秒还
+#    没有就该诚实说没算出来; 45 秒里挣扎出来的「成功」和失败没区别。
+#
+# ⛔ 这个数与 Java 的 `GoldFinanceClient.MIN_TIERED_ANSWER_TIMEOUT_MS` 是**一对**,
+#    Java 必须 ≥ 本值 + 网络余量。它俩以前谁也不知道谁, 所以能一直打架 ——
+#    现在由 tests/test_tiered_budget_alignment.py 把两侧源码都读出来比一次。
+_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0
 _SEMANTIC_MAX_TOKENS = 1000
 _T3_MIN_CONFIDENCE = 0.6
 
