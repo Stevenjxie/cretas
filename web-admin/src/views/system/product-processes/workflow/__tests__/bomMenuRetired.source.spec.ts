@@ -80,15 +80,21 @@ describe('阶段 5: 页面真删, 但老地址仍然落地', () => {
    */
   it('诊断横幅不再跳 BOM 页, 改为指向画布内的 cell', () => {
     expect(EDITOR).not.toMatch(/goToBomManagement\s*\(/);
-    const at = EDITOR.indexOf('的生效 BOM 与当前已启用 Workflow 不一致');
+    // 2026-08-11: 三条 BOM 横幅并成一条「版本状态」折叠条, 锚点从横幅标题
+    // 改成合并条的公共提示。意图一字未改 —— 仍要求替代路径(指向 cell)真的在。
+    const at = EDITOR.indexOf('version-status-hint');
     expect(at).toBeGreaterThan(-1);
-    expect(EDITOR.slice(at, at + 900)).toMatch(/辅料 \/ 包材 cell/);
+    expect(EDITOR.slice(at, at + 500)).toMatch(/辅料 \/ 包材 cell/);
   });
 });
 
 describe('画布内已闭环的入口不再把用户支走', () => {
   it('缺 BOM 横幅不再有「去 BOM 配置」按钮 —— 冷启动直接点 cell 即可', () => {
-    const at = EDITOR.indexOf('暂未读取到生效 BOM');
+    // 2026-08-11: 「暂未读取到生效 BOM」这句话本身已被删除 —— 它是假警报,
+    // 代码判据是「生效配方明细行数为 0」而文案说的是「没有生效 BOM」, 两者不是
+    // 一回事 (F006 拓扑成品D 有生效 v5 但 0 行明细, 被误报成没有 BOM)。
+    // 现在冷启动引导落在 bomVersionLineText() 的 activeVersion == null 分支上。
+    const at = EDITOR.indexOf('还没有生效 BOM');
     expect(at).toBeGreaterThan(-1);
     const block = EDITOR.slice(at, at + 700);
     expect(block).not.toMatch(/去 BOM 配置/);
@@ -106,7 +112,8 @@ describe('画布内已闭环的入口不再把用户支走', () => {
   });
 
   it('草稿横幅不再有「去 BOM 页查看」 —— 生效按钮就在同一行', () => {
-    const at = EDITOR.indexOf('bom-draft-notice');
+    // 2026-08-11: 合并后草稿状态与生效按钮同在「版本状态」折叠条里。
+    const at = EDITOR.indexOf('workflow-version-status-row');
     expect(at).toBeGreaterThan(-1);
     const block = EDITOR.slice(at, at + 1200);
     expect(block).not.toMatch(/去 BOM 页查看/);
