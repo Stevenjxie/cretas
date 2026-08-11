@@ -40,6 +40,19 @@ B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
   --config D:\CretasVisionLab\config.json
 ```
 
+已有多轮 `reviewed=true` 的人工队列时，可以重复传入 `--queue` 建立累计数据集；每个队列仍会
+独立重验，数据集按任务级拆分，并拒绝跨队列重复 stem。例如：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
+  --config D:\CretasVisionLab\config.json `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<round-1> `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<round-2>
+```
+
+训练配置支持可选的 `tray_active_learning.training.freeze`（默认 `10`）。它只控制冻结的
+YOLO 层数，不改变保护集、人工真值或部署门禁；不得依据保护集结果反复搜索该参数。
+
 该入口先重验源图、打包图、人工标注与保护集哈希，再按任务拆分训练/验证集，训练轻量
 YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺陷与 20 张正常图。候选必须
 同时满足：缺陷召回不回退、新盲测 2/2、根因样本 tray 覆盖且命中、正常图误报改善、延迟

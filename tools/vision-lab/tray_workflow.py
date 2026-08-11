@@ -47,7 +47,14 @@ def phash_distance(left: str, right: str) -> int:
 
 
 def annotation_set_digest(rows: list[dict[str, Any]]) -> str:
-    identity = [{"name": row["annotation_path"].name, "sha256": row["annotation_sha256"]} for row in rows]
+    identity = [
+        {
+            "queue": str(row.get("queue") or ""),
+            "name": row["annotation_path"].name,
+            "sha256": row["annotation_sha256"],
+        }
+        for row in rows
+    ]
     return hashlib.sha256(vision_lab.stable_json(identity)).hexdigest()
 
 
@@ -146,13 +153,25 @@ def dataset_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def build_dataset(config: dict[str, Any], queue: Path) -> dict[str, Any]:
+def build_dataset(config: dict[str, Any], queue: Path | list[Path]) -> dict[str, Any]:
     tray = config["tray_active_learning"]
     holdout_path = Path(os.path.expandvars(tray["protected_holdout"]))
-    queue_manifest, rows = validate_reviewed_queue(queue, holdout_path)
+    queues = [queue] if isinstance(queue, Path) else list(queue)
+    if not queues:
+        raise RuntimeError("at least one reviewed tray queue is required")
+    rows: list[dict[str, Any]] = []
+    queue_manifests: list[dict[str, str]] = []
+    for queue_root in queues:
+        _, reviewed = validate_reviewed_queue(queue_root, holdout_path)
+        for row in reviewed:
+            row["queue"] = queue_root
+        rows.extend(reviewed)
+        queue_manifests.append({
+            "queue": str(queue_root), "manifest_sha256": sha256(queue_root / "manifest.json"),
+        })
     annotation_digest = annotation_set_digest(rows)
     dataset_id = "tray-" + hashlib.sha256(vision_lab.stable_json({
-        "queue_manifest": sha256(queue / "manifest.json"), "annotations": annotation_digest,
+        "queue_manifests": queue_manifests, "annotations": annotation_digest,
     })).hexdigest()[:12]
     root = Path(config["runtime_root"])
     out = root / "datasets" / dataset_id
@@ -196,6 +215,8 @@ def build_dataset(config: dict[str, Any], queue: Path) -> dict[str, Any]:
         image_out = temporary / "images" / split / f"{stem}.jpg"
         label_out = temporary / "labels" / split / f"{stem}.txt"
         annotation_out = temporary / "annotations-source" / f"{stem}.json"
+        if image_out.exists() or label_out.exists() or annotation_out.exists():
+            raise RuntimeError(f"duplicate tray dataset stem across queues: {stem}")
         shutil.copy2(item["image"], image_out)
         shutil.copy2(item["annotation_path"], annotation_out)
         label_out.write_text("\n".join(yolo_line(box) for box in item["boxes"]) + "\n", encoding="utf-8")
@@ -203,6 +224,7 @@ def build_dataset(config: dict[str, Any], queue: Path) -> dict[str, Any]:
         counts[f"{split}_boxes"] += len(item["boxes"])
         provenance.append({
             "stem": stem, "split": split, "task_id": item["task_id"],
+            "queue": str(item["queue"]),
             "source_photo_id": source["source_photo_id"], "source_sha256": source["source_sha256"],
             "packed_image_sha256": source["packed_image_sha256"],
             "annotation_sha256": item["annotation_sha256"], "box_count": len(item["boxes"]),
@@ -219,8 +241,8 @@ def build_dataset(config: dict[str, Any], queue: Path) -> dict[str, Any]:
     )
     manifest = {
         "version": "vision-lab-tray-dataset-v1", "dataset_id": dataset_id,
-        "created_at": vision_lab.utc_now(), "queue": str(queue),
-        "queue_manifest_sha256": sha256(queue / "manifest.json"),
+        "created_at": vision_lab.utc_now(), "queues": [str(value) for value in queues],
+        "queue_manifests": queue_manifests,
         "annotation_set_sha256": annotation_digest, "human_reviewed_images": len(rows),
         "human_boxes": sum(len(row["boxes"]) for row in rows), "counts": dict(counts),
         "task_level_split": True, "validation_task_ids": sorted(val_tasks),
@@ -229,6 +251,9 @@ def build_dataset(config: dict[str, Any], queue: Path) -> dict[str, Any]:
         "preannotations_used_as_truth": False, "production_writes": 0,
         "data_yaml": str(out / "data.yaml"),
     }
+    if len(queues) == 1:
+        manifest["queue"] = str(queues[0])
+        manifest["queue_manifest_sha256"] = queue_manifests[0]["manifest_sha256"]
     manifest["dataset_sha256"] = dataset_digest(temporary)
     (temporary / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(out)
@@ -319,7 +344,8 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: 
         batch=int(training.get("batch", 4)), device=training.get("device", 0),
         workers=int(training.get("workers", 2)), project=str(root / "runs"), name=run_id,
         exist_ok=False, pretrained=True, optimizer="AdamW", lr0=float(training.get("lr0", 0.00015)),
-        lrf=0.10, weight_decay=0.0005, warmup_epochs=1.0, freeze=10,
+        lrf=0.10, weight_decay=0.0005, warmup_epochs=1.0,
+        freeze=int(training.get("freeze", 10)),
         seed=int(training.get("seed", 20260811)), deterministic=True,
         close_mosaic=5, mosaic=0.10, mixup=0.0, copy_paste=0.0,
         degrees=0.5, translate=0.02, scale=0.10, shear=0.0, perspective=0.0,
@@ -467,14 +493,14 @@ def deploy_if_passed(config: dict[str, Any], model: dict[str, Any], gate: dict[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--queue", type=Path)
+    parser.add_argument("--queue", action="append", type=Path)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--candidate-receipt", type=Path)
     args = parser.parse_args()
     config = vision_lab.load_config(args.config)
-    queue = args.queue or Path(os.path.expandvars(config["tray_active_learning"]["queue_root"]))
-    dataset = build_dataset(config, queue.resolve())
+    queues = args.queue or [Path(os.path.expandvars(config["tray_active_learning"]["queue_root"]))]
+    dataset = build_dataset(config, [queue.resolve() for queue in queues])
     if args.prepare_only:
         print(json.dumps(dataset, ensure_ascii=False, indent=2))
         return

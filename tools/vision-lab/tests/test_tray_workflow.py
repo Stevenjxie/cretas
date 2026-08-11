@@ -20,6 +20,62 @@ SPEC.loader.exec_module(module)
 
 
 class TrayWorkflowTests(unittest.TestCase):
+    def test_build_dataset_accumulates_multiple_reviewed_queues(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queues = [root / "queue-a", root / "queue-b"]
+            reviewed_by_queue = {}
+            for queue_index, queue in enumerate(queues):
+                queue.mkdir()
+                (queue / "manifest.json").write_text(
+                    json.dumps({"queue": queue_index}), encoding="utf-8",
+                )
+                reviewed = []
+                for item_index in range(4):
+                    index = queue_index * 4 + item_index
+                    image = root / f"image-{index}.jpg"
+                    annotation = root / f"annotation-{index}.json"
+                    Image.new("RGB", (32, 24), (index * 30, 80, 160)).save(image)
+                    annotation.write_text(json.dumps({"boxes": [[0.1, 0.1, 0.8, 0.8]]}), encoding="utf-8")
+                    digest = module.sha256(image)
+                    reviewed.append({
+                        "task_id": f"task-{index}", "image": image,
+                        "annotation_path": annotation, "annotation_sha256": module.sha256(annotation),
+                        "boxes": [[0.1, 0.1, 0.8, 0.8]],
+                        "source": {
+                            "packed_stem": f"trayal_{index:03d}",
+                            "source_photo_id": f"photo-{index}", "source_sha256": digest,
+                            "packed_image_sha256": digest,
+                            "source_perceptual_hash": module.hashlib.sha256(f"phash-{index}".encode()).hexdigest(),
+                            "selection_tags": ["edge"],
+                        },
+                    })
+                reviewed_by_queue[queue] = reviewed
+            config = {
+                "runtime_root": str(root / "runtime"),
+                "tray_active_learning": {
+                    "protected_holdout": str(root / "holdout.json"), "validation_percent": 25,
+                },
+            }
+            (root / "runtime" / "receipts").mkdir(parents=True)
+            with mock.patch.object(
+                module, "validate_reviewed_queue",
+                side_effect=lambda queue, _: ({}, reviewed_by_queue[queue]),
+            ):
+                dataset = module.build_dataset(config, queues)
+                single_queue_dataset = module.build_dataset(config, queues[0])
+            self.assertEqual(dataset["human_reviewed_images"], 8)
+            self.assertEqual(dataset["human_boxes"], 8)
+            self.assertEqual(dataset["queues"], [str(queue) for queue in queues])
+            provenance = module.load_json(Path(dataset["data_yaml"]).parent / "provenance.json")
+            self.assertEqual({row["queue"] for row in provenance["rows"]}, {str(queue) for queue in queues})
+            self.assertNotIn("queue", dataset)
+            self.assertNotIn("queue_manifest_sha256", dataset)
+            self.assertEqual(single_queue_dataset["queue"], str(queues[0]))
+            self.assertEqual(
+                single_queue_dataset["queue_manifest_sha256"], module.sha256(queues[0] / "manifest.json"),
+            )
+
     def test_validation_tasks_are_task_level_and_nonempty(self):
         rows = [{"task_id": f"task-{index}"} for index in range(8)]
         selected = module.choose_validation_tasks(rows, 25)
