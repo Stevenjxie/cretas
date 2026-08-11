@@ -574,6 +574,8 @@ const selectedProductName = computed(() => {
 // ─────────────────────────────────────────────
 // 按产出反查 —— 「谁产出这个成品」
 //
+/** 画布抛上来的研判结论 —— 联产时顶部不再显示具体归属对象。权威在画布, 这里只消费。 */
+const canvasTopologyType = ref<string>('');
 // 归属对象只是**存放位置**。用户 2026-08-11 真机撞到的就是这两个数在同一屏打架:
 // 画布顶部研判「原料分流」, 归属对象却写着「成品 · 拓扑成品C」。选中一个成品之后,
 // 这里去问后端「有哪些已启用的图产出它」, 让用户能从产出走到图, 而不是只能从锚点走。
@@ -1224,7 +1226,21 @@ async function saveCustomFieldConfig() {
               <el-icon class="toolbar-field-hint-icon"><QuestionFilled /></el-icon>
             </el-tooltip>
           </span>
+          <!--
+            联产(多原料多成品)不显示具体归属对象 (Steve 2026-08-11 拍板:
+            「就是直接不给匹配对象, 就是直接显示联产就好了」)。
+            N 进 M 出既没有唯一原料也没有唯一成品, 摆一个具体成品在这儿会让人以为
+            这张图属于它 —— 那正是「系统研判: 联产」和这个下拉在同一屏打架的来源。
+            ⚠️ 库里 product_type_id 仍然存着(它是版本谱系键, NOT NULL), 只是**不再当作
+            有意义的归属展示**; 这张图靠画布顶部「本图产出」和「按产出反查」找得到。
+          -->
+          <div v-if="canvasTopologyType === 'JOINT_PRODUCTION'" class="joint-anchor-note"
+               data-testid="joint-production-anchor">
+            <el-tag type="warning" effect="plain">联产</el-tag>
+            <span>不归属单一对象 —— 这张图 N 进 M 出，实际产出以画布顶部「本图产出」为准。</span>
+          </div>
           <el-select
+            v-else
             v-model="selectedProductId"
             placeholder="选择本条工艺存放在哪个成品或原料下（支持拼音首字母搜索）"
             filterable
@@ -1297,6 +1313,7 @@ async function saveCustomFieldConfig() {
         :product-name="selectedProductName"
         :can-write="canWrite"
         :raw-owner-mode="selectedOwnerIsRaw"
+        @topology-change="canvasTopologyType = $event"
       />
 
     <el-collapse
@@ -1692,6 +1709,16 @@ async function saveCustomFieldConfig() {
 </template>
 
 <style scoped>
+
+.joint-anchor-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 360px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .page-container { padding: 20px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }

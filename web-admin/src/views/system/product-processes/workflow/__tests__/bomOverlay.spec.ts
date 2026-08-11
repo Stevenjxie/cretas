@@ -176,25 +176,34 @@ describe('从 BOM 派生浮层', () => {
    * 完好的好看的一个布局」。旧实现是 `y - 220` 固定偏移, 而工序 Cell 高度随内容变化
    * 很大(投入/产出/单位关系/副产全展开能到 600px+), 220 不够 → 辅料 Cell 压在工序上面。
    */
-  it('辅料 Cell 的间距跟着工序 Cell 的实测高度走, 不是固定偏移', () => {
+  it('辅料 Cell 的间距跟着【辅料自己】的实测高度走, 不是固定偏移、也不是工序的高度', () => {
     const tall = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 1000)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
-      nodeHeights: { p1: 600 },
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 300 },
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
     const short = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 1000)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
-      nodeHeights: { p1: 120 },
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 80 },
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
 
-    // 高工序 → 辅料要放得更高; 两者必须真的不同, 否则就是又退回固定偏移了
+    // 辅料越高 → 要放得越高(它是从自己的 y 往下长的, 底边才对着工序)
     expect(tall.position.y).toBeLessThan(short.position.y);
-    // 留白至少一个工序高度 + 间隙, 保证不重叠
-    expect(short.position.y).toBeLessThanOrEqual(1000 - 120);
-    expect(tall.position.y).toBeLessThanOrEqual(1000 - 600);
+    // 底边正好落在工序上方: y = 工序Y - (辅料高 + GAP)
+    expect(short.position.y).toBeLessThanOrEqual(1000 - 80);
+    expect(tall.position.y).toBeLessThanOrEqual(1000 - 300);
+    // ⛔ 工序自己的高度不许参与 —— 传工序高度不该改变结果 (上一版就是拿错了这个,
+    //    工序越高辅料被推得越远)
+    const withProcessHeight = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 1000)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: {},
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 80, p1: 900 },
+    }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
+    expect(withProcessHeight.position.y).toBe(short.position.y);
   });
 
   it('拿不到实测高度时退回兜底高度 —— 首帧也不许重叠', () => {
@@ -203,7 +212,7 @@ describe('从 BOM 派生浮层', () => {
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
-    expect(aux.position.y).toBeLessThan(1000 - 300);
+    expect(aux.position.y).toBeLessThan(1000 - 100);
   });
 
   it('派生连线与普通 Workflow 连线使用同一实线样式且两端 handle 正确', () => {

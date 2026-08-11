@@ -1580,6 +1580,21 @@ watch(pendingAnchorMove, (move) => {
   if (move && !bomVersionPanelTouched.value) bomVersionPanelOpen.value = true;
 }, { immediate: true });
 
+/**
+ * 把画布研判结论抛给外层 —— 顶部那个「存放位置（归属对象）」下拉在**联产**时要改成
+ * 只显示「联产」, 不再给一个具体对象 (Steve 2026-08-11 拍板)。
+ *
+ * ⛔ 为什么由画布抛出而不是 index.vue 自己算: 研判的权威在画布拓扑, 外层再算一份就是
+ * 第三份实现(后端 WorkflowTopologyClassifier / 前端 classifyCanvasTopology 已经是两份),
+ * 迟早对不上。外层只消费结论。
+ */
+const emit = defineEmits<{ topologyChange: [type: string] }>();
+watch(
+  () => derivedWorkflowClassification.value.type,
+  (type) => emit('topologyChange', type),
+  { immediate: true },
+);
+
 /** 顶部「本图产出：A、B」—— 研判结论驱动, 归属对象(存放位置)不参与。 */
 const terminalOutputNames = computed(() => terminalOutputLabels(
   stripBomOverlay(flowNodes.value),
@@ -2935,12 +2950,13 @@ function refreshBomOverlay(): void {
     position: { x: node.position.x, y: node.position.y },
     data: node.data as BomOverlaySourceNodeData,
   }));
-  // 工序 Cell 的高度随内容变化很大, 固定偏移会让辅料 Cell 压在工序上面。
-  // 取 vue-flow 的实测尺寸传进去; 首帧还没测量时为空, 派生自己会退回兜底高度。
+  // 辅料 Cell 放在工序上方, 决定留白的是**辅料自己的高度**(它要列辅料行, 本身就高),
+  // 不是工序的高度 —— 工序往下长, 多高都不影响上方。上一版拿错了这个, 工序越高辅料被
+  // 推得越远 (Steve 实测「辅料也是废了好远」)。这里量的是**上一帧已渲染的辅料浮层节点**。
   // ⛔ findNode 要判存在再调 —— 它是 useVueFlow 的可选成员, 直接调会在没提供它的宿主
   //    (含单测 mock) 上抛 TypeError, 把整个 definition 加载带挂 (74 条测试当场红)。
   const nodeHeights: Record<string, number> = {};
-  workflowNodes.forEach((node) => {
+  flowNodes.value.filter(isBomOverlayNode).forEach((node) => {
     const measured = typeof findNode === 'function' ? findNode(node.id)?.dimensions?.height : undefined;
     if (typeof measured === 'number' && measured > 0) nodeHeights[node.id] = measured;
   });
@@ -3163,24 +3179,45 @@ function onNodeClick({ node, event }: NodeMouseEvent): void {
 function onNodeDragStart({ node }: { node: Node }): void {
   if (!canEdit.value) return;
   if (isBomOverlayNode(node)) {
+    // ⛔ 浮层 Cell(辅料/包材)是 selectable:false 的投影, 它不该带着当前选区一起走。
+    //    不清选区的话: 选中过某个 Cell 再去拖包材, vue-flow 会把选区里的节点一并拖动
+    //    (Steve 实测「移动包材 cell 副产 cell 也跟着移动了」)。
+    flowNodes.value.forEach((item) => { if (item.selected) item.selected = false; });
     dragStartSnapshot.value = null;
     return;
   }
   dragStartSnapshot.value = currentDefinition();
 }
 
-function onNodeDragStop({ node }: { node: Node }): void {
+/**
+ * ⚠️ 必须消费 `nodes`(被拖动的**全部**节点), 不能只认 `node`。
+ *
+ * vue-flow 的多选拖动会同时移动选区里的所有节点, 但事件里的 `node` 只是「手抓着的那个」。
+ * 只提交它 = 其余被拖动的节点位置**从未写回** → 下一次重绘它们弹回原处
+ * (Steve 实测「拖动以后 cell 总是会自动布局到某个地方」)。
+ * NodeDragEvent 本来就带 `nodes: GraphNode[]`, 我们一直没用。
+ */
+function onNodeDragStop({ node, nodes }: { node: Node; nodes?: Node[] }): void {
   if (!canEdit.value) return;
+  const dragged = nodes && nodes.length ? nodes : [node];
   if (isBomOverlayNode(node)) {
-    const overlay = flowNodes.value.find((candidate) => candidate.id === node.id);
-    if (overlay) overlay.position = { x: node.position.x, y: node.position.y };
+    dragged.forEach((moved) => {
+      const overlay = flowNodes.value.find((candidate) => candidate.id === moved.id);
+      if (overlay) overlay.position = { x: moved.position.x, y: moved.position.y };
+    });
     dragStartSnapshot.value = null;
     return;
   }
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
-  const target = flowNodes.value.find((candidate) => candidate.id === node.id);
-  if (target) target.position = snapPosition(node.position);
+  dragged.forEach((moved) => {
+    const target = flowNodes.value.find((candidate) => candidate.id === moved.id);
+    if (!target) return;
+    // 浮层节点不吃网格对齐(它是投影, 位置只属于画布会话); 真实节点才 snap。
+    target.position = isBomOverlayNode(moved)
+      ? { x: moved.position.x, y: moved.position.y }
+      : snapPosition(moved.position);
+  });
   editSeq += 1;
   dirty.value = true;
   scheduleAutoSave();

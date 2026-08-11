@@ -61,16 +61,21 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  * 普通 Workflow 一致的蓝色实线和箭头；它仍只表达归属，不代表执行物料流。
  */
 /**
- * 辅料 Cell 距离工序 Cell 顶部的留白。
+ * 辅料 Cell 底边与工序 Cell 顶边之间的留白。
  *
- * ⚠️ 2026-08-11: 旧实现是 `y - 220` 的**固定偏移**, 但工序 Cell 的高度随内容变化很大
- * (投入/产出/单位关系/副产几段全展开时能到 600px+), 220 根本不够 —— 辅料 Cell 直接
- * 压在工序 Cell 上面, 自动布局一跑就是一团 (F006 拓扑成品C/D 实撞)。
- * 现在改成 `y - (工序实测高度 + AUX_GAP_Y)`; 拿不到实测高度时退回
- * AUX_FALLBACK_HEIGHT, 保证首帧(还没测量)也不会重叠。
+ * ⚠️ 2026-08-11 第二版(修正上一版的错): 上一版写的是
+ *   `auxY = 工序Y - (工序实测高度 + GAP)`
+ * —— **拿错了高度**。工序 Cell 是从它自己的 y 往下长的, 它有多高跟放在它**上面**的东西
+ * 完全无关; 用工序高度当偏移, 工序越高辅料被推得越远 (Steve 实测: 「辅料也是废了好远」)。
+ *
+ * 真正决定间距的是**辅料自己的高度** —— 原来固定 220 不够, 是因为辅料 Cell 要列辅料行,
+ * 自身就很高, 不是因为工序高。
+ *
+ * 正解: `auxY = 工序Y - (辅料自身高度 + AUX_GAP_Y)`, 让辅料底边正好落在工序上方 GAP 处。
+ * 拿不到辅料实测高度时退回 AUX_FALLBACK_HEIGHT(辅料 Cell 的典型高度)。
  */
-const AUX_GAP_Y = 64;
-const AUX_FALLBACK_HEIGHT = 360;
+const AUX_GAP_Y = 48;
+const AUX_FALLBACK_HEIGHT = 150;
 // 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
 // 重叠，两个 handle 几乎落在同一点，视觉上像“没有线”。
 const PACK_OFFSET_X = 300;
@@ -169,7 +174,8 @@ export interface BomOverlayInput {
   auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput>;
   packagingByOutput: Record<string, BomOverlayPackagingInput>;
   /**
-   * 工序节点的**实测**高度 (nodeId → px)，用来把辅料 Cell 放在工序上方且不重叠。
+   * **辅料浮层节点自己**的实测高度 (辅料节点 id → px)，用来把它放在工序上方且不重叠。
+   * ⛔ 不是工序的高度 —— 工序往下长, 它多高都不影响上方的留白 (上一版就是拿错了这个)。
    * 首帧还没测量时传空即可 —— 派生会退回 AUX_FALLBACK_HEIGHT。
    */
   nodeHeights?: Record<string, number>;
@@ -222,8 +228,9 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         type: 'bomAuxiliary',
         position: {
           x: node.position.x,
+          // 用**辅料自己**的高度: 底边落在工序顶边上方 AUX_GAP_Y 处。
           y: node.position.y
-            - ((input.nodeHeights?.[node.id] ?? AUX_FALLBACK_HEIGHT) + AUX_GAP_Y),
+            - ((input.nodeHeights?.[auxId] ?? AUX_FALLBACK_HEIGHT) + AUX_GAP_Y),
         },
         data: {
           processName: node.data.processName ?? '未命名工序',
