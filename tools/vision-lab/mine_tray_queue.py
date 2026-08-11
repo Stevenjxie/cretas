@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -26,6 +27,7 @@ TEACHER_REVISION = "c32291ca5e996f5a7a485845b4f57a233936bba0"
 TEACHER_LICENSE = "NVIDIA non-commercial research use"
 TEACHER_MAX_SIDE = 1024
 DEFAULT_TEACHER_PATH = Path(r"B:\AIModels\LocateAnything-3B")
+TEACHER_MODEL_RECEIPT = "VISIONLAB_MODEL_RECEIPT.json"
 TEACHER_PROMPTS = {
     "all": "each individual foreground sealed plastic food tray package used for quality inspection",
     "edge": "each partially visible sealed food tray at an image edge",
@@ -52,6 +54,88 @@ def write_json(path: Path, payload: Any) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def teacher_model_files(model_path: Path) -> list[Path]:
+    index_path = model_path / "model.safetensors.index.json"
+    required = [
+        model_path / "config.json", model_path / "tokenizer_config.json",
+        model_path / "processor_config.json", model_path / "preprocessor_config.json",
+        index_path,
+    ]
+    if index_path.is_file():
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        shards = sorted(set(payload.get("weight_map", {}).values()))
+        if not shards:
+            raise RuntimeError(f"teacher weight index has no shards: {index_path}")
+        required.extend(model_path / shard for shard in shards)
+    return required
+
+
+def seal_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
+    if not model_path.is_dir():
+        raise FileNotFoundError(model_path)
+    incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
+    required = teacher_model_files(model_path)
+    missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
+    if incomplete or missing:
+        raise RuntimeError(f"teacher model incomplete: missing={missing}, incomplete={incomplete}")
+    critical = {
+        str(path.relative_to(model_path)): {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
+        for path in required if path.name == "model.safetensors.index.json" or path.suffix == ".safetensors"
+    }
+    snapshot_files = sorted(
+        path for path in model_path.rglob("*") if path.is_file() and path.name != TEACHER_MODEL_RECEIPT
+    )
+    receipt = {
+        "version": "vision-lab-locateanything-model-v1", "created_at": utc_now(),
+        "model_id": TEACHER_MODEL_ID, "revision": revision, "model_path": str(model_path),
+        "offline_only": True, "full_image_inference_forbidden": True,
+        "crop_max_side": TEACHER_MAX_SIDE, "file_count": len(snapshot_files),
+        "total_bytes": sum(path.stat().st_size for path in snapshot_files), "critical_files": critical,
+    }
+    write_json(model_path / TEACHER_MODEL_RECEIPT, receipt)
+    return receipt
+
+
+def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
+    receipt_path = model_path / TEACHER_MODEL_RECEIPT
+    if not receipt_path.is_file():
+        raise RuntimeError(f"teacher model receipt missing: {receipt_path}")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if receipt.get("model_id") != TEACHER_MODEL_ID or receipt.get("revision") != revision:
+        raise RuntimeError("teacher model id or fixed revision mismatch")
+    required = teacher_model_files(model_path)
+    incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
+    missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
+    if incomplete or missing:
+        raise RuntimeError(f"teacher model incomplete: missing={missing}, incomplete={incomplete}")
+    snapshot_files = sorted(
+        path for path in model_path.rglob("*") if path.is_file() and path.name != TEACHER_MODEL_RECEIPT
+    )
+    total_bytes = sum(path.stat().st_size for path in snapshot_files)
+    critical = receipt.get("critical_files") or {}
+    verified: dict[str, dict[str, Any]] = {}
+    for path in required:
+        relative = str(path.relative_to(model_path))
+        if path.name != "model.safetensors.index.json" and path.suffix != ".safetensors":
+            continue
+        expected = critical.get(relative)
+        if not isinstance(expected, dict):
+            raise RuntimeError(f"teacher receipt missing critical file: {relative}")
+        actual_size = path.stat().st_size
+        actual_sha = sha256_file(path)
+        if actual_size != int(expected.get("bytes", -1)) or actual_sha != expected.get("sha256"):
+            raise RuntimeError(f"teacher critical file mismatch: {relative}")
+        verified[relative] = {"bytes": actual_size, "sha256": actual_sha}
+    if len(snapshot_files) != int(receipt.get("file_count", -1)) or total_bytes != int(receipt.get("total_bytes", -1)):
+        raise RuntimeError("teacher snapshot file count or total size mismatch")
+    return {
+        "model_id": TEACHER_MODEL_ID, "revision": revision, "model_path": str(model_path),
+        "receipt": str(receipt_path), "critical_files": verified,
+        "file_count": len(snapshot_files), "total_bytes": total_bytes,
+        "offline_only": True, "crop_max_side": TEACHER_MAX_SIDE,
+    }
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -310,13 +394,13 @@ def detector_disagreement(
 
 
 class LocateAnythingTeacher:
-    def __init__(self, model_path: str, revision: str | None) -> None:
+    def __init__(self, model_path: str) -> None:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
         import torch
         from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
         options: dict[str, Any] = {"trust_remote_code": True, "local_files_only": True}
-        if revision:
-            options["revision"] = revision
         self.device = "cuda"
         self.dtype = torch.bfloat16
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, fix_mistral_regex=True, **options)
@@ -452,9 +536,10 @@ def map_crop_box(box: list[float], crop: list[float]) -> list[float]:
 
 
 def run_teacher(
-    records: list[dict[str, Any]], model_path: str, revision: str | None, receipt_path: Path
+    records: list[dict[str, Any]], model_path: str, revision: str,
+    model_integrity: dict[str, Any], receipt_path: Path,
 ) -> dict[str, Any]:
-    teacher = LocateAnythingTeacher(model_path, revision)
+    teacher = LocateAnythingTeacher(model_path)
     output: dict[str, Any] = {}
     calls = 0
     for record in records:
@@ -494,11 +579,11 @@ def run_teacher(
         output[str(record["photo_id"])] = {"crop_prompts": prompt_results, "proposals": grouped}
         write_json(receipt_path, {
             "version": "locateanything-tray-teacher-v1", "created_at": utc_now(),
-            "model_id": TEACHER_MODEL_ID, "model_revision": TEACHER_REVISION,
+            "model_id": TEACHER_MODEL_ID, "model_revision": revision,
             "license_scope": TEACHER_LICENSE, "teacher_is_ground_truth": False,
             "teacher_scope": "local_crops_only", "full_image_inference": False,
             "teacher_max_side": TEACHER_MAX_SIDE, "cloud_calls": 0,
-            "local_teacher_calls": calls, "records": output,
+            "local_teacher_calls": calls, "model_integrity": model_integrity, "records": output,
         })
     return output
 
@@ -527,6 +612,9 @@ def select_queue(
             quota -= 1
 
     ordered = sorted(records, key=lambda row: row["selection_score"], reverse=True)
+    # Reserve one third for human review of teacher-only additions. This is a
+    # sampling quota, never permission to treat a proposal as truth.
+    add([row for row in ordered if "teacher_added" in row["selection_tags"]], math.ceil(queue_size / 3))
     if priority_tag:
         add([row for row in ordered if priority_tag in row["selection_tags"]], math.ceil(queue_size * 2 / 3))
     quotas = {"edge": math.ceil(queue_size / 3), "isolated": math.ceil(queue_size / 3), "stacked_occluded": queue_size // 3}
@@ -656,6 +744,7 @@ def main() -> None:
     teacher_receipt = args.output_root.parent / "receipts" / f"tray-teacher-{stamp}.json"
     teacher_used = False
     teacher_skip_reason: str | None = None
+    teacher_integrity: dict[str, Any] | None = None
     if args.skip_teacher:
         teacher_results = {}
         teacher_skip_reason = "optional teacher explicitly skipped"
@@ -670,7 +759,10 @@ def main() -> None:
             teacher_skip_reason = f"offline teacher path unavailable: {teacher_path}"
         else:
             try:
-                teacher_results = run_teacher(shortlist, str(teacher_path), None, teacher_receipt)
+                teacher_integrity = verify_teacher_model(teacher_path, args.teacher_revision)
+                teacher_results = run_teacher(
+                    shortlist, str(teacher_path), args.teacher_revision, teacher_integrity, teacher_receipt,
+                )
                 teacher_used = True
             except Exception as exc:  # teacher is explicitly non-blocking
                 teacher_results = {}
@@ -678,7 +770,7 @@ def main() -> None:
                 write_json(teacher_receipt, {
                     "version": "locateanything-tray-teacher-v1", "status": "skipped",
                     "created_at": utc_now(), "model_path": str(teacher_path),
-                    "model_revision": TEACHER_REVISION, "offline_only": True,
+                    "model_revision": args.teacher_revision, "offline_only": True,
                     "teacher_is_ground_truth": False, "cloud_calls": 0,
                     "reason": teacher_skip_reason,
                 })
@@ -761,10 +853,11 @@ def main() -> None:
         "purpose": "tray detector active learning with human-complete box review",
         "teacher": {
             "enabled": teacher_used, "model_id": TEACHER_MODEL_ID,
-            "revision": TEACHER_REVISION, "license_scope": TEACHER_LICENSE,
+            "revision": args.teacher_revision, "license_scope": TEACHER_LICENSE,
             "is_ground_truth": False,
             "offline_only": True, "scope": "local_crops_only",
             "full_image_inference": False, "crop_max_side": TEACHER_MAX_SIDE,
+            "model_path": str(args.teacher_model), "model_integrity": teacher_integrity,
             "skipped_reason": teacher_skip_reason,
         },
         "detector_model": str(args.tray_model), "detector_sha256": sha256_file(args.tray_model),

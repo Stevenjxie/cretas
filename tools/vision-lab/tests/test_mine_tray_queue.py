@@ -22,6 +22,34 @@ class MineTrayQueueTests(unittest.TestCase):
     def test_teacher_default_is_stable_offline_b_drive_path(self):
         self.assertEqual(module.DEFAULT_TEACHER_PATH, Path(r"B:\AIModels\LocateAnything-3B"))
 
+    def test_teacher_model_seal_pins_revision_and_detects_weight_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            for name in (
+                "config.json", "tokenizer_config.json", "processor_config.json", "preprocessor_config.json",
+            ):
+                (model / name).write_text("{}", encoding="utf-8")
+            (model / "model-00001-of-00002.safetensors").write_bytes(b"first-weight-shard")
+            (model / "model-00002-of-00002.safetensors").write_bytes(b"second-weight-shard")
+            (model / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {
+                "layer.0": "model-00001-of-00002.safetensors",
+                "layer.1": "model-00002-of-00002.safetensors",
+            }}), encoding="utf-8")
+            receipt = module.seal_teacher_model(model, module.TEACHER_REVISION)
+            self.assertEqual(receipt["revision"], module.TEACHER_REVISION)
+            evidence = module.verify_teacher_model(model, module.TEACHER_REVISION)
+            self.assertEqual(len(evidence["critical_files"]), 3)
+            self.assertEqual(evidence["file_count"], 7)
+            self.assertGreater(evidence["total_bytes"], 0)
+            (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "critical file mismatch"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
+
+    def test_teacher_model_verify_rejects_unsealed_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(RuntimeError, "receipt missing"):
+                module.verify_teacher_model(Path(temporary), module.TEACHER_REVISION)
+
     def test_teacher_regions_are_local_crops_and_map_back_to_full_image(self):
         image = Image.new("RGB", (400, 300), (30, 30, 30))
         ImageDraw.Draw(image).rectangle((300, 20, 390, 140), fill=(20, 70, 210))
@@ -74,6 +102,18 @@ class MineTrayQueueTests(unittest.TestCase):
                 "selection_tags": ["top_blue_basket"] if index in {4, 5} else ["edge"],
             })
         selected = module.select_queue(rows, queue_size=3, task_cap=1, priority_tag="top_blue_basket")
+        self.assertEqual([row["photo_id"] for row in selected[:2]], ["photo-4", "photo-5"])
+
+    def test_teacher_added_queue_quota_is_reserved_before_generic_risk(self):
+        rows = []
+        for index in range(6):
+            rows.append({
+                "photo_id": f"photo-{index}", "task_id": f"task-{index}",
+                "image_phash": hashlib.sha256(f"teacher-photo-{index}".encode()).hexdigest(),
+                "selection_score": float(100 - index),
+                "selection_tags": ["teacher_added"] if index in {4, 5} else ["edge"],
+            })
+        selected = module.select_queue(rows, queue_size=6, task_cap=1)
         self.assertEqual([row["photo_id"] for row in selected[:2]], ["photo-4", "photo-5"])
 
     def test_teacher_parser_rejects_full_frame_and_keeps_tray_box(self):
