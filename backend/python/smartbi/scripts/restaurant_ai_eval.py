@@ -598,9 +598,16 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
     problems += invariant_problems(flat, case.get("invariant", {}))
     # ⛔ 喂 `message` 不是 `flat` —— flat 已经把空白压平, 拿它查排版等于自发通行证。
     #    这条对**每一题**都跑, 不用逐题登记: 表格是哪一题给的不重要, 给了就必须合法。
-    problems += markdown_table_problems(message)
+    table_problems = markdown_table_problems(message)
+    problems += table_problems
     return {
         "problems": problems, "flat": flat,
+        # ⛔ `message` 是**未压平的原文**, 与 flat 并存不是冗余:
+        #    `--record` 落盘的是它, 因为下游判定排版的那一层需要换行和空行。
+        #    落 flat 就等于把排版判据永久变成恒真 —— 08-11 那 8 张塌掉的表
+        #    正是这么躲过两轮 85/85 的。
+        "message": message,
+        "table_problems": table_problems,
         "followups": flat_followups, "elapsed": time.time() - started,
     }
 
@@ -788,13 +795,51 @@ def select_units(units: Sequence[Any], only: Optional[str]) -> List[Any]:
        4.3M token, 把当天的免费额度烧掉 8 个模型。
        ⛔ 删守卫不等于放松不变量 —— 不变量改由 `test_only_pulls_in_the_whole_chain`
           守着, 那条会**变红**, 而 FATAL 只会让人绕开。
+
+    ⚠️ 2026-08-12: 支持**逗号分隔多个片段**(任一命中即选中)。
+       之前只收一个片段, 想跑一个覆盖多种问法类的子集就只能跑 N 次命令 ——
+       而每次命令都要重新登录并跑一遍 `_preflight_fixture`, **那一步自己就要
+       打 7 次真实问答**(1 次门店名单 + 6 次菜品存在性)。跑 15 个子集 =
+       白付 105 次 LLM 调用, 比想省的那部分还贵。
+       一次调用选中多个单元, preflight 只付一次。
     """
     if not only:
         return list(units)
-    return [u for u in units if any(only in c["q"] for _i, c in u[1])]
+    needles = [piece.strip() for piece in only.split(",") if piece.strip()]
+    if not needles:
+        return list(units)
+    return [u for u in units
+            if any(n in c["q"] for _i, c in u[1] for n in needles)]
 
 
-def run_eval(base: str, only: Optional[str] = None) -> int:
+def record_row(idx: int, case: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """一条用例的可离线复用记录。纯函数 —— 与发 HTTP 那部分分开, 才能被单测。
+
+    🔴 为什么要落盘, 而不是判定跟着电池一起跑:
+       跑一轮全量电池是 **47万~130万 token**(链头不健康时更高), 而判定本身
+       每题只要 ~1,800。把答案存下来, 判定就能在**零电池成本**下反复跑 ——
+       换评分卡、改提示词、加一条判据, 都不用再问一次生产系统。
+       (08-11 为验 15 个 PR 跑了 12 轮全量, 烧掉 8 个模型当天的额度。)
+
+    ⛔ 存 `message` 不存 `flat`: 判定排版要看换行和空行。
+    ⛔ 存**断言的结论**(problems), 不只是通过与否 —— 四象限里「断言红在哪一句」
+       是要逐条读的, 只存一个布尔值就得回头重跑才知道红的是什么。
+    """
+    return {
+        "idx": idx,
+        "q": case["q"],
+        "chain": case.get("chain"),
+        "mode": case.get("mode"),
+        "message": outcome.get("message", ""),
+        "followups": outcome.get("followups", ""),
+        "assertion_problems": list(outcome.get("problems", [])),
+        "table_problems": list(outcome.get("table_problems", [])),
+        "elapsed": round(float(outcome.get("elapsed", 0.0)), 2),
+    }
+
+
+def run_eval(base: str, only: Optional[str] = None,
+             record: Optional[str] = None) -> int:
     # 本轮开始时的日志长度 —— 收尾时只读这之后追加的那一段, 用来说清
     # 「这一轮是在什么条件下取的数」(见 `summarize_provenance` 上面那段)。
     # 放在登录之前: 预检夹具也会发查询、也会焐热缓存, 它同样属于本轮条件。
@@ -861,10 +906,13 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
     passed, failed = 0, 0
     failures: List[str] = []
     latencies: List[float] = []
+    recorded: List[Dict[str, Any]] = []
 
     def _report(idx: int, case: Dict[str, Any], outcome: Dict[str, Any]) -> None:
         nonlocal passed, failed
         latencies.append(outcome["elapsed"])
+        if record:
+            recorded.append(record_row(idx, case, outcome))
         q, problems = case["q"], outcome["problems"]
         if problems:
             failed += 1
@@ -911,7 +959,21 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
               f"{ordered[len(ordered)//2]:.1f}s | p95 {p95:.1f}s | 最慢 {ordered[-1]:.1f}s")
     print(f"== {passed} passed, {failed} failed / {passed + failed} run ==")
     # ⛔ 无论成败都打 —— 取数条件是**读这个分数的前提**, 不是失败时才需要的附注。
-    print("\n".join(render_provenance(_provenance_since(log_cursor))))
+    provenance = _provenance_since(log_cursor)
+    print("\n".join(render_provenance(provenance)))
+    if record:
+        # 取数条件跟着答案一起存: 判定是离线跑的, 到时候光看答案没法判断
+        # 这批答案是冷启动来的还是重放缓存来的 —— 而那决定它们可不可比。
+        with open(record, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(
+                {"_meta": {"factory": FACTORY_ID, "base": base, "only": only,
+                           "passed": passed, "failed": failed,
+                           "provenance": provenance}},
+                ensure_ascii=False) + "\n")
+            for row in recorded:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"\n已记录 {len(recorded)} 条答案 -> {record}"
+              f"\n  (判定离线跑: python -m smartbi.scripts.restaurant_ai_judge {record})")
     if failures:
         print("\n".join(["", "── 失败明细 ──", *failures]))
     return 1 if failed else 0
@@ -922,9 +984,14 @@ def main() -> None:
     parser.add_argument("--base", default="https://admin.cretaceousfuture.com",
                         help="Java 后端 base URL")
     parser.add_argument("--only", default="",
-                        help="only run cases whose query contains this substring")
+                        help="只跑问句含这些片段的用例; 逗号分隔可给多个(任一命中即选中)。"
+                             "链式用例任一步命中则整条链都跑。")
+    parser.add_argument("--record", default="",
+                        help="把每题的**原始答案**与断言结论落成 JSONL, 供离线判定复用 "
+                             "(跑一轮全量电池 47万~130万 token, 判定每题只要 ~1,800 —— "
+                             "存下来就能零电池成本反复判)")
     args = parser.parse_args()
-    sys.exit(run_eval(args.base, args.only or None))
+    sys.exit(run_eval(args.base, args.only or None, args.record or None))
 
 
 if __name__ == "__main__":

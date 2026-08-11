@@ -15,6 +15,38 @@ _TECH_ONLY = re.compile(
 )
 NO_DISPLAYABLE_BUSINESS_RESULT = "没有获得可展示的业务结果，本次不生成结论。"
 
+# ── 店长读不懂的词：两张表，各自写明「谁在强制它」 ────────────────────────
+#
+# 🔴 2026-08-12 搬到这里的理由：`INTERNAL_VOCAB` 原本只活在
+#    `test_no_internal_jargon_in_customer_text.py` 里。那道闸扫的是**源码字符串**，
+#    因此运行时判据（答案里有没有黑话）想复用同一份词表时**够不着它** ——
+#    production 代码 import 测试模块是反的。两边各抄一份就会漂，而这正是本仓
+#    反复拆过的形状（会随环境变的东西只能有一处定义）。
+#    搬过来之后：源码闸和运行时判据读同一个元组，加一个词两边同时生效。
+#
+# ⛔ 两张表**不能合并**，因为强制它们的载体不同，合并会立刻让 CI 变红：
+
+#: 内部概念名。**源码闸 + 运行时判据双方强制。**
+#: 只收「店长读不懂且没法据此行动」的词；「毛利」「门店」这类业务词不在此列。
+INTERNAL_VOCAB = (
+    "问题对象", "分析范围", "执行范围", "语义规划", "查询计划", "计划版本",
+    "维度", "槽位", "解析器", "置信度", "相似度", "向量", "意图代码",
+)
+
+#: 统计/计量黑话。**只由运行时判据强制，源码闸刻意不扫。**
+#:
+#: ⚠️ 这个「刻意」有实测依据，不是偷懒：2026-08-12 把这五个词并进
+#:    `INTERNAL_VOCAB` 跑源码闸，当场红在
+#:    `restaurant_intent:1316`「…才能计算弹性、置信区间和决定系数」——
+#:    那是一句**真的会发给店长**的话。也就是说源码里现存违例，
+#:    合并两张表 = 在改文案之前先把 CI 弄红。
+#:    改那句文案属于 P-B（契约白话化）的范围，不属于评估升级。
+#:    在它改完之前，这五个词由运行时判据盯着：答案里真出现了就报，
+#:    而不是靠一句「记得改」的注释（注释不构成约束力，只有会红的断言构成）。
+ANALYST_JARGON = (
+    "置信区间", "因果效果", "回归估计", "显著性", "决定系数", "p值", "P值",
+)
+
 # The restaurant chat is read by owners and store managers, not engineers.
 # Keep the replacements ordered from specific phrases to individual jargon so
 # that the resulting sentences remain natural instead of becoming word-for-word
