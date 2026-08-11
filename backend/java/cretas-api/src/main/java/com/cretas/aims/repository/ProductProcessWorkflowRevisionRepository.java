@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -11,6 +12,19 @@ import java.util.Optional;
 
 public interface ProductProcessWorkflowRevisionRepository
         extends JpaRepository<ProductProcessWorkflowRevision, Long> {
+
+    /** 归属对象搬家时跟着搬 —— 三张表都带 product_type_id, 漏一张就对不上。 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ProductProcessWorkflowRevision revision
+               set revision.productTypeId = :newOwnerId
+             where revision.factoryId = :factoryId
+               and revision.productTypeId = :oldOwnerId
+            """)
+    int reanchorOwner(
+            @Param("factoryId") String factoryId,
+            @Param("oldOwnerId") String oldOwnerId,
+            @Param("newOwnerId") String newOwnerId);
 
     Optional<ProductProcessWorkflowRevision> findByIdAndFactoryId(Long id, String factoryId);
 

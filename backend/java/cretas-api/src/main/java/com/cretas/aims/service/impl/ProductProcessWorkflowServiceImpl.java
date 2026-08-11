@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.service.workflow.WorkflowTopologyClassifier;
+import com.cretas.aims.service.workflow.WorkflowAnchorPolicy;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
@@ -30,6 +32,7 @@ import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -39,6 +42,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflowService {
@@ -132,6 +136,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         ProductProcessWorkflowDTO published =
                 publishInternal(factoryId, productTypeId, lockVersion, operatorId, true, null);
         workflowActivationService.activate(factoryId, published.getId(), operatorId);
+        reanchorByTopology(factoryId, productTypeId, published);
         return published;
     }
 
@@ -242,6 +247,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                         factoryId, productTypeId, lockVersion, operatorId, true, normalizedKey);
         ProductProcessWorkflowActivationDTO activation =
                 workflowActivationService.activate(factoryId, published.getId(), operatorId);
+        reanchorByTopology(factoryId, productTypeId, published);
         return WorkflowPublishAndActivateResponse.builder()
                 .workflow(published)
                 .activation(activation)
@@ -507,6 +513,77 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             ProductProcessWorkflow.Status status) {
         return repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 factoryId, productTypeId, status);
+    }
+
+
+    /**
+     * 发布后按研判结论把整条谱系搬到正确的归属对象下 —— 「归属对象自动更改」的落地点。
+     *
+     * <p>研判早就能认出「原料分流」并显示在顶部, 但此前**没有任何代码拿这个结论去改归属对象**:
+     * 一张单原料分流成 C、D 的图, 归属对象仍钉在成品 C 上, 让人以为图属于 C。
+     * 规则见 {@link WorkflowAnchorPolicy} (联产不动 —— 任选一个当锚都是编的)。
+     *
+     * <p><b>为什么整条谱系一起搬</b>: {@code (factoryId, productTypeId)} 就是谱系键,
+     * 只搬新发布那一版会把版本历史劈成两半。三张带 product_type_id 的表
+     * (workflows / revisions / activations) 必须同时搬, 漏一张就对不上。
+     *
+     * <p><b>为什么现在敢搬</b>: V20261029_81 已把 product_type_id 从
+     * fk_ppwa_active_workflow_owner / fk_production_plan_selected_workflow / fk_pwi_workflow_owner
+     * 三条复合外键里摘掉, 归属对象变了不会打断已启用记录、在跑的生产计划和运行实例。
+     *
+     * @return 真的搬了就返回新归属对象 id, 没搬返回 empty
+     */
+    private Optional<String> reanchorByTopology(
+            String factoryId, String currentOwnerId, ProductProcessWorkflowDTO published) {
+        Optional<String> desired = WorkflowAnchorPolicy.desiredOwner(
+                published, WorkflowTopologyClassifier.classify(published));
+        if (desired.isEmpty() || desired.get().equals(currentOwnerId)) return Optional.empty();
+        String newOwnerId = desired.get();
+
+        // ⛔ 目标已经有自己的谱系 → 不搬。activations 上有 UNIQUE(factory_id, product_type_id),
+        //    硬搬会撞唯一键; 而且两条谱系合并不是「换个归属」能表达的事, 需要人来决定留哪条。
+        //    这里选择静默留在原地 + 打日志: 发布本身是成功的, 不该因为归属没搬成而失败。
+        if (repository.existsByFactoryIdAndProductTypeId(factoryId, newOwnerId)) {
+            log.warn("[Workflow] 归属对象未自动搬迁: factory={} {} → {} (目标已有自己的工艺图谱系)",
+                    factoryId, currentOwnerId, newOwnerId);
+            return Optional.empty();
+        }
+
+        // ⛔ 目标必须真实存在于本厂主数据。不先判就直接 requireWorkflowOwner 的话, 它会抛
+        //    PRODUCT_PROCESS_WORKFLOW_OWNER_INVALID —— **把整个发布带挂**。
+        //    搬归属是发布的附带动作, 附带动作永远不该弄挂主动作 (单测 publishValidDraft 当场抓到)。
+        boolean ownerResolvable =
+                productTypeRepository.findByIdAndFactoryId(newOwnerId, factoryId).isPresent()
+                        || rawMaterialTypeRepository.findById(newOwnerId)
+                                .filter(raw -> factoryId.equals(raw.getFactoryId()))
+                                .isPresent();
+        if (!ownerResolvable) {
+            log.warn("[Workflow] 归属对象未自动搬迁: factory={} {} → {} (目标不在本厂主数据里)",
+                    factoryId, currentOwnerId, newOwnerId);
+            return Optional.empty();
+        }
+
+        try {
+            // 归属对象可以是原料 —— requireWorkflowOwner 会为 RawMaterialType 懒建 inactive 内部锚点
+            // (__RAW_WORKFLOW_OWNER__*), 前端产品目录会过滤掉, 不把原料伪装成 SKU。
+            requireWorkflowOwner(factoryId, newOwnerId);
+
+            int movedWorkflows = repository.reanchorLineage(factoryId, currentOwnerId, newOwnerId);
+            int movedRevisions = revisionRepository.reanchorOwner(factoryId, currentOwnerId, newOwnerId);
+            int movedActivations =
+                    activationRepository.reanchorOwner(factoryId, currentOwnerId, newOwnerId);
+            log.info("[Workflow] 归属对象按研判自动搬迁: factory={} {} → {} "
+                            + "(workflows={} revisions={} activations={})",
+                    factoryId, currentOwnerId, newOwnerId,
+                    movedWorkflows, movedRevisions, movedActivations);
+            return Optional.of(newOwnerId);
+        } catch (RuntimeException reanchorFailed) {
+            // 兜底: 搬不动就留在原地, 顶部的「系统研判」照旧如实显示拓扑。
+            // 宁可归属对象暂时不准, 也不能让用户的发布失败。
+            log.warn("[Workflow] 归属对象搬迁失败, 保持原归属: factory={} {} → {}",
+                    factoryId, currentOwnerId, newOwnerId, reanchorFailed);
+            return Optional.empty();
+        }
     }
 
     private void requireWorkflowOwner(String factoryId, String ownerId) {
