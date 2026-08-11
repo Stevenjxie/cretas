@@ -551,6 +551,96 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
   });
 
+  /**
+   * 🔴 2026-08-12 (Steve): 每个工序 Cell 至少保留一个产出 Cell。
+   *
+   * 探针实测: 建完工序后删掉那个产出 Cell, 工序原样留在画布上、OUTPUT 端口 = []。
+   * 业务上工序没有产出不成立 —— 报工时无处填本次产出的 SKU 与数量。
+   *
+   * ⚠️ 规则有三个承载点, 三条都要钉: 单个删 / 框选批量删 / 删那根产出连线。
+   * 只钉一条的话, 另两条就是绕过口。
+   */
+  describe('🔴 工序至少要有一个产出 Cell', () => {
+    async function buildOneProcess(): Promise<{
+      vm: EditorVm & { removeNode: (id: string) => void; removeEdgeById: (id: string) => void };
+      processId: string; outCellId: string; outPortId: string;
+    }> {
+      const vm = await mountEditor() as unknown as EditorVm & {
+        removeNode: (id: string) => void; removeEdgeById: (id: string) => void;
+      };
+      vm.openAddProcess('raw');
+      vm.selectedWorkProcessId = 'WP-PACK';
+      vm.confirmAddProcess();
+      await flushPromises();
+      const proc = vm.flowNodes.find((n) => (n.data as { processName?: string })?.processName);
+      if (!proc) throw new Error('Expected a process node');
+      const ports = (proc.data as { ports: Array<{ id: string; direction: string; materialNodeId: string }> }).ports;
+      const out = ports.find((p) => p.direction === 'OUTPUT');
+      if (!out) throw new Error('Expected an OUTPUT port');
+      return { vm, processId: proc.id, outCellId: out.materialNodeId, outPortId: out.id };
+    }
+    const outputsOf = (vm: EditorVm, processId: string): unknown[] => {
+      const proc = vm.flowNodes.find((n) => n.id === processId);
+      return (proc!.data as { ports: Array<{ direction: string }> }).ports.filter((p) => p.direction === 'OUTPUT');
+    };
+
+    it('承载点1 单个删: 删唯一产出 Cell 被拦, 端口与 Cell 都还在', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+
+      vm.removeNode(outCellId);
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(true);
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('承载点2 框选批量删: 同样被拦', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+      const cell = vm.flowNodes.find((n) => n.id === outCellId);
+      cell!.selected = true;
+
+      vm.removeSelectedElements();
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(true);
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('承载点3 删那根产出连线: 同样被拦', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      const { vm, processId, outPortId } = await buildOneProcess();
+      const edge = vm.flowEdges.find((e) => e.sourceHandle === outPortId);
+      if (!edge) throw new Error('Expected the process→output edge');
+
+      vm.removeEdgeById(edge.id);
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('放行对照: 连整个工序 Cell 一起删, 不该被这条规则拦住', async () => {
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+      const proc = vm.flowNodes.find((n) => n.id === processId);
+      const cell = vm.flowNodes.find((n) => n.id === outCellId);
+      proc!.selected = true;
+      cell!.selected = true;
+
+      vm.removeSelectedElements();
+      await flushPromises();
+
+      expect(vm.flowNodes.some((n) => n.id === processId)).toBe(false);
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(false);
+    });
+  });
+
   it('selecting a Cell also selects every directly connected line', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');

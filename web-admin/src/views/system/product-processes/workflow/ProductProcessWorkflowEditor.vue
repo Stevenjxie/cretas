@@ -3400,6 +3400,72 @@ function closeCanvasDropdowns(event?: MouseEvent | TouchEvent): void {
 }
 
 /** 删除一条边, 并同步解绑对应的工序端口 (保持模型一致, 反向于 attach) */
+/**
+ * 🔴 2026-08-12 (Steve 提出): **每个工序 Cell 至少保留一个产出 Cell**。
+ *
+ * <p>业务口径: 建工序时产出 Cell 是跟着一起生成的(见 confirmAddProcess 的提示语
+ * 「自动生成工序 Cell、产出 Cell 和两条连接」), 二者本就是绑定关系。工序没有产出
+ * 在业务上不成立 —— 报工时无处可填产出 SKU 与数量。
+ *
+ * <p>但删除路径**没有守住这条**: 实测(单测探针)建完工序后删掉那个产出 Cell,
+ * 工序原样留在画布上、`OUTPUT 端口 = []`。这种半截状态正是「产出物料区看着不对」
+ * 一类问题的来源。
+ *
+ * <p>⚠️ 这条规则有**三个承载点**, 只堵一个另两个就是绕过口:
+ * {@link removeNode}(单个删) / {@link removeSelectedElements}(框选批量删) /
+ * {@link removeEdgeById}(删工序到产出 Cell 的那根线, 走 detachEdgePort)。
+ * 所以判据收敛在这一个函数里, 三处都调它。
+ *
+ * @param removed 本次将要移除的东西
+ * @return 会因此失去全部产出的工序名; 空数组表示可以放行
+ */
+function processesLosingLastOutput(removed: {
+  materialIds?: ReadonlySet<string>;
+  portIds?: ReadonlySet<string>;
+  processIds?: ReadonlySet<string>;
+}): string[] {
+  const materialIds = removed.materialIds ?? new Set<string>();
+  const portIds = removed.portIds ?? new Set<string>();
+  const processIds = removed.processIds ?? new Set<string>();
+  const losing: string[] = [];
+  flowNodes.value.forEach((node) => {
+    if (nodeKind(node) !== 'PROCESS') return;
+    // 工序本身也被删 → 它有没有产出无所谓。
+    if (processIds.has(node.id)) return;
+    const data = node.data as ProcessNodeData;
+    const outputs = data.ports.filter((port) => port.direction === 'OUTPUT');
+    if (outputs.length === 0) return;   // 本来就没有(异常存量图), 不由这条规则负责修
+    const surviving = outputs.filter((port) => (
+      !portIds.has(port.id) && !materialIds.has(port.materialNodeId)
+    ));
+    if (surviving.length === 0) {
+      losing.push(data.processName || '该工序');
+    }
+  });
+  return losing;
+}
+
+/** 拦下会让工序失去全部产出的删除; 返回 true 表示已拦(调用方应直接 return)。 */
+function blockedByLastOutputRule(removed: {
+  materialIds?: ReadonlySet<string>;
+  portIds?: ReadonlySet<string>;
+  processIds?: ReadonlySet<string>;
+}): boolean {
+  const losing = processesLosingLastOutput(removed);
+  if (losing.length === 0) return false;
+  // ⛔ 出口必须是**能走通**的动作: 要么补一个产出, 要么连工序一起删。
+  //    (不能像别处那样把用户指回他刚被拦下的那个动作。)
+  ElMessageBox.alert(
+    `工序「${losing.join('」「')}」将没有任何产出 Cell。`
+    + '每道工序必须至少保留一个产出 —— 否则报工时无处填写本次产出的 SKU 与数量。\n\n'
+    + '请改为：先用「+ 产出 Cell（分流）」补一个产出，再删这个；'
+    + '或者直接删掉整个工序 Cell（产出会随它一起移除）。',
+    '工序至少要有一个产出',
+    { type: 'warning', confirmButtonText: '我知道了' },
+  ).catch(() => { /* 关闭即可 */ });
+  return true;
+}
+
 function detachEdgePort(edge: Edge): void {
   const processNode = flowNodes.value.find((node) => (
     nodeKind(node) === 'PROCESS' && (node.id === edge.source || node.id === edge.target)
@@ -3416,6 +3482,8 @@ function removeEdgeById(edgeId: string): void {
   const edge = flowEdges.value.find((e) => e.id === edgeId);
   if (!edge) return;
   if (isBomOverlayEdge(edge)) return;
+  // 承载点 3/3: 删掉「工序 → 产出 Cell」那根线, 也会经 detachEdgePort 摘掉产出端口。
+  if (edge.sourceHandle && blockedByLastOutputRule({ portIds: new Set([edge.sourceHandle]) })) return;
   mutate(() => {
     // 找到该边连的工序端 + 端口 id (INPUT: 边的 targetHandle=portId; OUTPUT: sourceHandle=portId)
     detachEdgePort(edge);
@@ -3433,6 +3501,9 @@ function removeNode(nodeId: string): void {
   // 且下面的确认框会读 processName/name 当标题, 对浮层 cell 显示会是「移除「腌制」…
   // 这不会删除工序/SKU 主数据」这种字面上真但语义上误导的话(它删的根本不是工序)。
   if (isBomOverlayNode(node)) return;
+  // 承载点 1/3: 单个删物料 Cell —— 见 processesLosingLastOutput
+  if (nodeKind(node) !== 'PROCESS'
+    && blockedByLastOutputRule({ materialIds: new Set([nodeId]) })) return;
   const data = node.data as { name?: string; processName?: string } | undefined;
   const label = data?.name || data?.processName || '该 Cell';
   const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
@@ -3480,6 +3551,14 @@ function removeSelectedElements(): void {
   const removedEdgeIds = new Set(flowEdges.value
     .filter((edge) => explicitlySelectedEdges.has(edge.id) || idSet.has(edge.source) || idSet.has(edge.target))
     .map((edge) => edge.id));
+  // 承载点 2/3: 框选批量删。除了被选中的物料 Cell, 单独选中的**连线**也会经
+  // detachEdgePort 摘掉端口, 所以两种都要算进判据, 否则「只框那根线」就是绕过口。
+  const removedPortIds = new Set(flowEdges.value
+    .filter((edge) => removedEdgeIds.has(edge.id) && edge.sourceHandle)
+    .map((edge) => edge.sourceHandle as string));
+  if (blockedByLastOutputRule({
+    materialIds: materialIds, portIds: removedPortIds, processIds: idSet,
+  })) return;
   const doRemove = (): void => {
     mutate(() => {
       flowEdges.value.filter((edge) => removedEdgeIds.has(edge.id)).forEach(detachEdgePort);
