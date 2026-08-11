@@ -136,6 +136,21 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_roi_plan.py `
 必须先向操作员报告 receipt 内的完整 24 行 task/SKU、SHA/ID、pHash 和排除距离；只有随后明确
 继续时才根据同一 receipt 的 SHA 绑定结果建立新的独立 `work-area-human/` 队列。
 
+收到继续指令后，用计划 receipt 的完整 SHA 建队列；构建器会再次核对计划绑定的 dataset、当前
+ROI、旧 MARK 与保护集 manifest，并逐张复核源图/打包图 SHA 和人工 tray 标注。它只复制只读
+上下文，空的 `work-area-human/` 是唯一后续写入目录：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_roi_queue.py `
+  --plan-receipt D:\CretasVisionLab\receipts\work-area-roi-plan-<timestamp>.json `
+  --plan-sha256 <完整 64 位 SHA256> `
+  --queue-parent D:\CretasVisionLab\tray-queues `
+  --runtime-root D:\CretasVisionLab
+```
+
+构建完成后先核对 build receipt、`queue_count/task_count`、四个 SKU 数量、24 份图片和 24 份
+`annotations-human`，确认 `work-area-human` 为 0，再将 8774 切换到新队列。不得覆盖上一轮队列。
+
 已有多轮 `reviewed=true` 的人工队列时，可以重复传入 `--queue` 建立累计数据集；每个队列仍会
 独立重验，数据集按任务级拆分，并拒绝跨队列重复 stem。例如：
 
