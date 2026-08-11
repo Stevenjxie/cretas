@@ -81,3 +81,59 @@ def test_empty_store_catalogue_never_matches():
     """租户名单拿不到时(dim_store 不可用)一律不认 —— 拿一个验不了的名字去收窄,
     会安静地算出一个空口径。"""
     assert scope_only_refinement("模拟·长宁龙之梦店", ()) is None
+
+
+# ── 2026-08-11 打不全的门店名 ────────────────────────────────────────────
+#
+# 🔴 prod 实测(在「本月米饭的销量是多少」答完之后输入):
+#      「模拟·长宁龙之梦店店」多打字 -> ✅ 正确解析
+#      「长宁龙梦店」打错字         -> ✅ 诚实说没找到 + 给出路
+#      **「龙之梦」打不全           -> ❌「我识别到的问题对象与准备执行的分析范围
+#                                       不一致…」**(内部黑话, 店长读不懂)
+#      **「长宁」更短               -> ❌ 同上**
+#
+#    而「龙之梦」「长宁」在 MOCK_REST 都**唯一命中一家店**, 信息完全够。
+#    `_canonicalize_store_mention` 的包含匹配 SQL 早就写好了 —— 缺的是这个片段
+#    压根没被当成门店名交给匹配层。**打不全比打错字更糟, 而它是最常见的输入方式。**
+#
+# ⛔ 不为此引语义置信度: 在一条本来确定性的路上新增 LLM 调用是架构红线(08-07 为此
+#    撤回过), 且置信度会随模型强弱漂。确定性子串匹配已经够用。
+def test_a_unique_fragment_resolves_to_the_full_store_name():
+    """打不全但唯一命中 —— 必须认出来, 并给出**规范全名**(下游要拿它去查)。"""
+    got = scope_only_refinement("龙之梦", _STORES)
+    assert got is not None, "唯一命中的片段没被认成收窄 —— 用户会拿到一句内部黑话"
+    scope, names = got
+    assert names == ("模拟·长宁龙之梦店",), f"没有归一到全名: {names}"
+
+
+def test_an_even_shorter_unique_fragment_also_resolves():
+    got = scope_only_refinement("长宁", _STORES)
+    assert got is not None
+    assert got[1] == ("模拟·长宁龙之梦店",)
+
+
+def test_an_ambiguous_fragment_returns_every_candidate():
+    """⛔ 歧义片段不许挑一个 —— 要把候选**都**带出来, 由上层给按钮。
+
+    「唯一命中」与「多家命中」的区别只能由上层处置(确认 vs 候选), 这里的职责是
+    如实报出匹配到几家。少报一家 = 把歧义压成确定, 而那正是本仓反复在拆的形状。
+    """
+    stores = ("模拟·宝山大场社区店", "模拟·普陀真如社区店", "模拟·长宁龙之梦店")
+    got = scope_only_refinement("社区店", stores)
+    assert got is not None
+    assert got[1] == ("模拟·宝山大场社区店", "模拟·普陀真如社区店")
+
+
+def test_a_typo_fragment_is_still_not_a_refinement():
+    """⛔ 阴性对照: 打错字(不是任何门店名的子串)照旧不认。
+
+    现在的处理已经是对的 ——「没有找到名为「长宁龙梦店」的门店」+ 给出路。
+    片段匹配**不能**放松到模糊匹配, 否则「长宁龙梦店」会被硬塞给某家店,
+    用户拿到一个看着像答案的错答案。
+    """
+    assert scope_only_refinement("长宁龙梦店", _STORES) is None
+
+
+def test_a_fragment_plus_a_metric_is_still_a_new_question():
+    """⛔ 承重不变: 片段匹配不许把「去掉范围词后什么都不剩」这条判据放松掉。"""
+    assert scope_only_refinement("龙之梦的毛利率", _STORES) is None
