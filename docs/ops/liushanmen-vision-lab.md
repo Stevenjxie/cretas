@@ -26,6 +26,17 @@ B:\anaconda3\python.exe tools\vision-lab\tray_annotator_local.py `
   --port 8765
 ```
 
+Label-only 队列必须使用现代缺标确认入口；它只监听 loopback，并强制“缺一类时二次人工确认”：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
+  --queue D:\CretasVisionLab\queues\label-side-view-active-<timestamp> `
+  --port 8772
+```
+
+`tray_annotator_local.py` 与 `label_annotator_local.py` 会按 manifest 互相拒绝错误队列。旧
+`label_hard_negative_annotator_legacy_adapter.py` 不支持缺标确认，已禁止作为 label 入口；不要恢复或调用。
+
 每张修正完成后必须点“这张没问题”或按空格；只有页面显示 `已确认 24/24`，对应
 `annotations-human/*.json` 才会写入 `reviewed=true, source=human`。仅翻到下一张不会被
 流水线当作人工真值。连续轮次必须核对页面顶部的完整队列名；服务端保存返回非 200 时

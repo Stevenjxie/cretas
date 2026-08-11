@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +15,23 @@ SPEC.loader.exec_module(module)
 
 
 class TrayAnnotatorLocalTests(unittest.TestCase):
+    def test_label_manifest_is_rejected_with_canonical_launcher(self):
+        manifest = {
+            "rows": [{"crop_id": "label-1", "image": "images/label-1.jpg"}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = Path(temporary)
+            (queue / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "label_annotator_local.py"):
+                module.validate_tray_queue(queue)
+
+    def test_tray_manifest_is_accepted(self):
+        manifest = {"rows": [{"packed_image": "packed/tray-1.jpg"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = Path(temporary)
+            (queue / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(manifest, module.validate_tray_queue(queue))
+
     def test_precision_style_keeps_edges_visible_and_handles_small(self):
         page = """<header>
 <script>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import html
 import importlib.util
+import json
 import os
 from pathlib import Path
 
@@ -85,6 +86,23 @@ def load_module(path: Path):
     return module
 
 
+def validate_tray_queue(queue: Path) -> dict:
+    manifest_path = queue / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(manifest_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rows = manifest.get("rows") if isinstance(manifest, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("tray queue manifest must contain non-empty rows")
+    if all(isinstance(row, dict) and row.get("crop_id") and row.get("image") for row in rows):
+        raise RuntimeError(
+            "label queue detected; use tools/vision-lab/label_annotator_local.py"
+        )
+    if any(not isinstance(row, dict) or not row.get("packed_image") for row in rows):
+        raise RuntimeError("unsupported tray queue manifest; packed_image is required")
+    return manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--queue", required=True, type=Path)
@@ -93,8 +111,7 @@ def main() -> None:
     args = parser.parse_args()
 
     queue = args.queue.resolve()
-    if not (queue / "manifest.json").is_file():
-        raise FileNotFoundError(queue / "manifest.json")
+    validate_tray_queue(queue)
     if not args.annotator_script.is_file():
         raise FileNotFoundError(args.annotator_script)
     os.environ["CRETAS_TRAY_ANNOTATION_ROOT"] = str(queue)
