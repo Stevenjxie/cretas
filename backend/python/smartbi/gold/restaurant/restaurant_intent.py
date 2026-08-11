@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import OrderedDict
@@ -5881,6 +5882,47 @@ def _t3_contract_violation(content: str) -> Optional[str]:
     return None
 
 
+
+
+# ── 按租户把规划流量限制到单一账号 (2026-08-11) ──────────────────────────
+#
+# 🔴 起因(实测): 回归电池今天跑了 12 轮全量, 约 2100 次调用 / 4.3M token,
+#    把免费额度烧掉 8 个模型 —— 而 prod **真实用户流量是 0**, 烧掉的全是验证。
+#
+#    更贵的是它构成一个**恶性循环**: 额度耗尽 → 链往下掉 → 换模型 →
+#    **前缀缓存从头开始** → 每次调用付全额 token → 耗得更快。
+#    今天实测缓存命中只有 49%, 而 prompt 本身的共同前缀是 **99%** ——
+#    低命中率不是 prompt 的问题, 是一轮之内跨了 5 个模型。
+#
+# 🔑 顺带解决另一件更要紧的事: 电池分数现在由「今天哪个模型还活着」主导
+#    (08-11 三个读数 83 / 78 / 76 互不可比)。把电池租户限制到一个账号,
+#    分数才重新变成**代码的函数**。
+#
+# ⛔ 严格 opt-in: 环境变量不设 = `None` = 零行为变更。真实租户不受影响。
+# ⛔ 用 `call_chain` **已有的** `chain` 参数(它是账号过滤器: `if ac in chain`),
+#    不新造机制 —— 路由是本仓最不该多一个载体的地方。
+# ⚠️ 代价要写明: 被钉的租户不再走用户实际的那条链, 真实路径上的回归它看不见。
+#    所以只该钉**电池租户**, 且电池的「取数条件」会把实际服务模型打出来。
+def _planner_account_pins() -> Dict[str, str]:
+    """`RESTAURANT_PLANNER_ACCOUNT_PINS` = "MOCK_REST=aliyun_c,OTHER=aliyun_a"。"""
+    raw = os.environ.get("RESTAURANT_PLANNER_ACCOUNT_PINS", "").strip()
+    pins: Dict[str, str] = {}
+    for item in raw.split(","):
+        if "=" in item:
+            tenant, account = item.split("=", 1)
+            if tenant.strip() and account.strip():
+                pins[tenant.strip()] = account.strip()
+    return pins
+
+
+def _planner_account_filter(factory_id: Optional[str]) -> Optional[List[str]]:
+    """这个租户的规划流量限制到哪个账号; 没配就返回 None(= 走完整链)。"""
+    if not factory_id:
+        return None
+    account = _planner_account_pins().get(factory_id)
+    return [account] if account else None
+
+
 async def _t3_llm_parse(
     query: str,
     *,
@@ -5889,6 +5931,7 @@ async def _t3_llm_parse(
     available_stores: Sequence[str] = (),
     prefer_high_accuracy: bool = False,
     session_summary: Optional[str] = None,
+    account_filter: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Call the SmartBI LLM router to structurally parse ``query``.
 
@@ -5931,10 +5974,18 @@ async def _t3_llm_parse(
                 _SEMANTIC_MAX_TOKENS if prefer_high_accuracy else _T3_MAX_TOKENS
             ),
         }
+        if account_filter:
+            logger.info(
+                "[restaurant-intent] planner 限制到账号 %s (租户已配 pin)",
+                account_filter,
+            )
         with llm_caller_context("restaurant_intent"):
             result = await call_chain(
                 selected_slot,
                 payload,
+                # `chain` 是 call_chain **已有的账号过滤器**(`if ac in chain`)。
+                # None = 走完整链(默认, 零行为变更)。
+                chain=account_filter,
                 timeout=provider_timeout,
                 total_timeout=total_timeout,
                 content_validator=_t3_contract_violation,
@@ -6308,6 +6359,7 @@ async def parse_restaurant_query(
             available_stores=available_stores,
             prefer_high_accuracy=True,
             session_summary=session_summary,
+            account_filter=_planner_account_filter(factory_id),
         )
         if parsed is None:
             # Planner outage lifeboat. A reviewed promotion is a human
@@ -6660,7 +6712,10 @@ async def parse_restaurant_query(
     except Exception as exc:
         logger.warning(f"[restaurant-intent] vector candidate match raised: {exc}")
 
-    parsed = await _t3_llm_parse(norm_query, hint=candidate_hint, history=history)
+    parsed = await _t3_llm_parse(
+        norm_query, hint=candidate_hint, history=history,
+        account_filter=_planner_account_filter(factory_id),
+    )
     if parsed is None:
         # ⛔ fail-closed 是对的 —— 但**静默的** fail-closed 让它永远查不出根因。
         #
@@ -6885,6 +6940,7 @@ async def _parse_continuation(
             available_stores=available_stores,
             prefer_high_accuracy=True,
             session_summary=session_summary,
+            account_filter=_planner_account_filter(factory_id),
         )
         if parsed is None:
             return _build_spec(
@@ -7081,7 +7137,10 @@ async def _parse_continuation(
         {"role": "user", "content": original_query},
         {"role": "assistant", "content": clarification_question or ""},
     ]
-    parsed = await _t3_llm_parse(query, hint=candidate_hint, history=history)
+    parsed = await _t3_llm_parse(
+        query, hint=candidate_hint, history=history,
+        account_filter=_planner_account_filter(factory_id),
+    )
     if parsed is None:
         # 🔴 延续轮这条比首轮那条更要紧: 交接说的形状(「下一轮被当成全新问题」)
         #    只在延续轮成立, 而**能回答「上下文是不是从这里断的」的只有这一刻的
