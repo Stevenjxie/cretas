@@ -10,6 +10,7 @@ sync-style helper checks).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import date
 from unittest.mock import AsyncMock, patch
@@ -710,6 +711,78 @@ async def test_semantic_planner_outage_fails_closed():
     assert spec.clarification_needed is True
     assert spec.planner_authority == "llm_unavailable"
     assert "没有执行任何相邻分析" in spec.clarification_question
+
+
+# ── 2026-08-11: 供应商不可用必须在服务端留痕 ────────────────────────────
+#
+# 🔴 交接里有一条待办: 「一次瞬时『餐饮语义规划暂时不可用』后, 下一轮被当成全新
+#    问题」。查证时发现**根本没法查**:
+#      · `python-prod.log` 里这句话出现 **0 次**
+#      · 落库 `smart_bi_llm_fallback_log` 7 天内 **0 条**
+#      · 全部历史里只有电池日志有 2 次, 都在 2026-07-26 04:40 那一轮(16 天前)
+#    因为这两条 fail-closed 分支**只把话返回给用户, 一个字都不写日志**。
+#
+# 后果: 它下次复发时没人会知道, 而「下一轮丢没丢上下文」必须有那一刻的 session
+# 才诊断得了。判据: **fail-closed 是正确行为, 但静默的 fail-closed 让它永远
+# 查不出根因** —— 兜底路径至少要留下一条可 grep 的痕迹。
+@pytest.mark.asyncio
+async def test_planner_outage_leaves_a_greppable_trace(caplog):
+    """🔴 首轮供应商不可用: 必须打一条 warning, 否则复发时无从查起。"""
+    pool = _restaurant_pool()
+    with caplog.at_level(logging.WARNING,
+                         logger="smartbi.gold.restaurant.restaurant_intent"), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
+              new=AsyncMock(return_value=None)):
+        spec = await parse_restaurant_query("随便聊聊宇宙", pool, factory_id="QHJ01")
+
+    assert spec.planner_authority == "llm_unavailable"
+    assert "planner-outage" in caplog.text, (
+        "供应商不可用没有留下任何日志 —— 复发时既查不到发生过, 也拿不到当时的 session")
+    assert "continuation=False" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_planner_outage_trace_says_whether_it_was_a_continuation(caplog):
+    """🔴 延续轮那条单独验 —— 交接说的那个形状(下一轮被当成全新问题)只在延续轮成立。
+
+    阴性对照的意义: 只测首轮的话, 延续轮那处漏掉日志不会红, 而**恰恰是延续轮
+    的痕迹**才能回答「上下文是不是从这里断的」。
+
+    ⛔ 直接调 `_parse_continuation`, 而不是跑两轮 `parse_restaurant_query`:
+       第一版就是那么写的, 结果桩不支持 pending 登记(日志 `pending-clarification
+       put failed`), 第二轮**根本没走成延续路径**, 落回首轮分支打了
+       `continuation=False` —— 断言确实红了, 但红的原因不是被测行为。
+       判据: **先确认测试真的把被测那条路走到了**, 否则红绿都不作数。
+    """
+    # ⚠️ 夹具不能用「米饭的销量是多少 + 本月」: 那一对能靠**显式槽位**确定性编译
+    #    (实测 authority=explicit_named_dish_slots), 根本走不到 LLM, 于是这条测试
+    #    测的是另一条路。要验供应商不可用, 问句本身必须编译不出槽位。
+    pool = _restaurant_pool()
+    pending = {
+        "original_query": "随便聊聊宇宙",
+        "clarification_question": "你想看哪个时间范围？",
+    }
+    with caplog.at_level(logging.WARNING,
+                         logger="smartbi.gold.restaurant.restaurant_intent"), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
+              new=AsyncMock(return_value=None)):
+        spec = await restaurant_intent._parse_continuation(
+            "本月", pool, factory_id="QHJ01", pending=pending)
+
+    assert spec.planner_authority == "llm_unavailable"
+    assert "planner-outage" in caplog.text
+    assert "continuation=True" in caplog.text, (
+        "延续轮的痕迹没写明它是延续轮 —— 那正是要判断上下文断没断的那一位")
+    assert "随便聊聊宇宙" in caplog.text, (
+        "痕迹里没有原问句 —— 那就答不了「上下文是从哪一轮断的」")
 
 
 @pytest.mark.asyncio
