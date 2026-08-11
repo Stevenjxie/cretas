@@ -808,6 +808,145 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("deliberative and hypothetical mood outranks the write verb")
+    void restaurantAdvisoryMoodIsNotAWriteRequest() {
+        // 2026-08-11 实测: 这三句在 prod 被判成写 → Python 语义权威被跳过 →
+        // 掉进 Java 识别层猜答案。「要不要下架」是在问, 不是在下令。
+        for (String query : new String[]{
+                "有没有哪个菜是在亏钱卖的，要不要下架",
+                "如果下架补什么菜进来",
+                "如果其中一道下架冲击多大",
+                "该不该给招牌菜调价",
+                "需不需要停售这道菜",
+                "哪些菜应该下架",
+                "建议下架哪几道菜",
+                "是否要下架卤炸牛肉串",
+                "值不值得给套餐降价"
+        }) {
+            assertThat(IntentExecutionOrchestrator.isRestaurantWriteRequest(query))
+                    .as(query)
+                    .isFalse();
+        }
+
+        // 祈使句仍然是写 —— 这条改动不许放松 governed write route。
+        for (String query : new String[]{
+                "下架红糖糍粑",
+                "下架最近7天销量最低的5道菜",
+                "把卤炸牛肉串停售",
+                "给招牌菜调价",
+                "创建一个满减活动",
+                "给本月复购客户发券"
+        }) {
+            assertThat(IntentExecutionOrchestrator.isRestaurantWriteRequest(query))
+                    .as(query)
+                    .isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("write-classified restaurant question resolving to a READ intent fails closed instead of answering")
+    void writeClassifiedRestaurantQuestionNeverFallsIntoReadAnswer() {
+        // 语气判据故意不覆盖这种叙述式提及 (「下架之后…」既不是征询也不是假设),
+        // 所以它仍被判成写 → Python 语义权威被跳过。此时 Java 解析出一个【读】意图,
+        // 两个判据互相矛盾 —— 这条路上没有 request_coverage 契约, 不许猜, 只能 fail closed。
+        String query = "上个月这些菜品下架之后营收变化多大";
+        assertThat(IntentExecutionOrchestrator.isRestaurantWriteRequest(query)).isTrue();
+
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        AIIntentConfig readIntent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_DISH_SLOW")
+                .intentName("慢销菜品")
+                .intentCategory("SMARTBI")
+                .toolName("restaurant_dish_slowseller_gold")
+                .businessType("RESTAURANT")
+                .sensitivityLevel("LOW")
+                .build();
+        stubRecognizer(query, readIntent);
+        when(writeGuardService.isWriteIntent(readIntent)).thenReturn(false);
+        // 权限放行, 让「没执行」只可能来自这道闸 —— 否则 NO_PERMISSION 会替它挡住,
+        // never(executeWithTool) 就变成一条恒真断言。
+        when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_SLOW"), eq("admin")))
+                .thenReturn(true);
+        // 把慢销榜这条路整个打通, 让「闸拆掉」时红的那句话说的是被测行为
+        // (答了一个业务问题), 而不是某个没打桩的 mock 抛 NPE。
+        ToolExecutor slowSellerTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_dish_slowseller_gold"))
+                .thenReturn(Optional.of(slowSellerTool));
+        when(toolDispatchService.executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any()))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_DISH_SLOW")
+                        .status("COMPLETED")
+                        .message("慢销/滞销菜品（销量垫底）：1. 酸梅汤 63368 份")
+                        .build());
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput(query).build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage()).contains("没有执行");
+        // 前端不许出现技术内容 (owner 2026-08-11 拍板)。
+        assertThat(response.getMessage())
+                .doesNotContain("RESTAURANT_DISH_SLOW")
+                .doesNotContain("置信度");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("write-classified question resolving to a WRITE intent still reaches the governed write route")
+    void writeClassifiedRestaurantQuestionResolvingToWriteIntentIsNotBlocked() {
+        // 阴性对照: 同一条闸, 只把「解析出来的意图是不是写」翻过来。
+        // 若闸退化成「判成写就一律拦」, 这条会红 —— 那等于把 governed write route 拆了。
+        String query = "上个月这些菜品下架之后营收变化多大";
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        AIIntentConfig writeIntent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_DISH_DELETE")
+                .intentName("下架菜品")
+                .intentCategory("RESTAURANT")
+                .toolName("restaurant_dish_delete")
+                .businessType("RESTAURANT")
+                .sensitivityLevel("CRITICAL")
+                .requiresApproval(true)
+                .build();
+        stubRecognizer(query, writeIntent);
+        when(writeGuardService.isWriteIntent(writeIntent)).thenReturn(true);
+        when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_DELETE"), eq("admin")))
+                .thenReturn(true);
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput(query).build(),
+                7L,
+                "admin");
+
+        // 走到审批 = 仍在 governed write route 上, 没有被这道闸吃掉。
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isNotEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_DISH_DELETE");
+    }
+
+    private void stubRecognizer(String query, AIIntentConfig intent) {
+        IntentMatchResult match = IntentMatchResult.builder()
+                .userInput(query)
+                .bestMatch(intent)
+                .confidence(0.8)
+                .matchMethod(IntentMatchResult.MatchMethod.LLM)
+                .isStrongSignal(true)
+                .requiresConfirmation(false)
+                .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                .build();
+        when(aiIntentService.recognizeIntentWithConfidence(
+                eq(query), eq("DEMO_REST"), eq(3), eq(7L), eq("admin"),
+                any(), any(), any()))
+                .thenReturn(match);
+    }
+
+    @Test
     @DisplayName("explicit named-dish removal is extracted without hijacking advisory questions")
     void explicitNamedDishRemovalUsesNarrowWriteGrammar() {
         assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(

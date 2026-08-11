@@ -96,6 +96,11 @@ public class SseStreamingService {
     @Autowired
     private WriteGuardService writeGuardService;
 
+    // 声明优先的写意图判定 (与 /execute 同一份实现)。required=false: 裸构造的单测不提供时
+    // 回落纯 writeGuardService 启发式, 与 IntentExecutionOrchestrator 的处理一致。
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.IntentAccessModeFilter intentAccessModeFilter;
+
     @Autowired(required = false)
     private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
             restaurantGrossMarginChatRouteSelector;
@@ -234,13 +239,18 @@ public class SseStreamingService {
             // card exists to close. Single source of truth — never copy this logic again.
             boolean restaurantTenant = !factoryPackConstrained
                     && isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
-            boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
+            boolean restaurantSemanticPlanEligible = tieredFirstEnabled
                     && !factoryPackConstrained
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
                     && restaurantTenant
                     && userInput != null && !userInput.isEmpty()
-                    && !IntentExecutionOrchestrator.hasExplicitReadVeto(userInput)
-                    && !IntentExecutionOrchestrator.isRestaurantWriteRequest(userInput);
+                    && !IntentExecutionOrchestrator.hasExplicitReadVeto(userInput);
+            // 写动词是唯一压掉语义权威的原因时记下来 —— 识别层要靠它判「闸说改、解析器说看」
+            // 的矛盾, 与 IntentExecutionOrchestrator.execute() 同一套推导。
+            boolean restaurantWriteVerbSuppressedPlan = restaurantSemanticPlanEligible
+                    && IntentExecutionOrchestrator.isRestaurantWriteRequest(userInput);
+            boolean requiresRestaurantSemanticPlan = restaurantSemanticPlanEligible
+                    && !restaurantWriteVerbSuppressedPlan;
             if (requiresRestaurantSemanticPlan) {
                 IntentExecuteResponse tieredFirst = tryRestaurantTieredDelegate(
                         factoryId, userInput, request, "sse_tiered_first");
@@ -341,6 +351,11 @@ public class SseStreamingService {
 
                 IntentMatchResult cachedMatch = deserializeIntentResult(cacheHit.getIntentResult());
                 if (cachedMatch != null && cachedMatch.hasMatch()) {
+                    if (streamRestaurantWriteReadAmbiguity(
+                            emitter, restaurantWriteVerbSuppressedPlan,
+                            cachedMatch.getBestMatch(), request, startTime)) {
+                        return;
+                    }
                     sendSseEvent(emitter, "intent_recognized", Map.of(
                             "intentCode", cachedMatch.getBestMatch().getIntentCode(),
                             "intentName", cachedMatch.getBestMatch().getIntentName(),
@@ -406,6 +421,10 @@ public class SseStreamingService {
             }
 
             AIIntentConfig intent = matchResult.getBestMatch();
+            if (streamRestaurantWriteReadAmbiguity(
+                    emitter, restaurantWriteVerbSuppressedPlan, intent, request, startTime)) {
+                return;
+            }
             sendSseEvent(emitter, "intent_recognized", Map.of(
                     "intentCode", intent.getIntentCode(),
                     "intentName", intent.getIntentName(),
@@ -1042,6 +1061,41 @@ public class SseStreamingService {
             log.warn("[SSE][Branch:TieredDelegate] delegate 失败 (origin={}): {}", origin, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 写动词判成写 → 语义权威被跳过, 而 Java 解析出来的是个【读】意图 —— 两个判据矛盾。
+     * 这条路上没有 Python 的 request_coverage 契约, 继续执行等于猜用户问的是什么
+     * (2026-08-11 实测: 「要不要下架」被猜成慢销榜, 用销量答毛利问题)。fail closed。
+     *
+     * <p>判定与话术都取自 {@link IntentExecutionOrchestrator} —— 同一句话在流式与非流式
+     * 入口必须走出同一条路, 这正是 card4 立下「never copy this logic again」的原因。
+     *
+     * @return true 表示已经把澄清响应流出去了, 调用方必须就地 return
+     */
+    private boolean streamRestaurantWriteReadAmbiguity(SseEmitter emitter,
+                                                       boolean writeVerbSuppressedPlan,
+                                                       AIIntentConfig intent,
+                                                       IntentExecuteRequest request,
+                                                       long startTime) throws IOException {
+        if (!writeVerbSuppressedPlan || intent == null
+                || IntentExecutionOrchestrator.isWriteIntentDeclarationAware(
+                        intent, intentAccessModeFilter, writeGuardService)) {
+            return false;
+        }
+        log.warn("[SSE][Branch:RestaurantWriteReadAmbiguity] 写判定与读意图矛盾, fail closed: "
+                        + "candidateIntent={}, input='{}'",
+                intent.getIntentCode(), request != null ? request.getUserInput() : null);
+        String message = IntentExecutionOrchestrator.RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE;
+        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .status("NEED_CLARIFICATION")
+                .message(message)
+                .formattedText(message)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build(), startTime);
+        return true;
     }
 
     /**
