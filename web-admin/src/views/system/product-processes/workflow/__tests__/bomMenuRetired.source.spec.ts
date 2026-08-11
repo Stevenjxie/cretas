@@ -88,6 +88,48 @@ describe('阶段 5: 页面真删, 但老地址仍然落地', () => {
   });
 });
 
+describe('BOM 状态就近提示 (2026-08-11)', () => {
+  const NODE = read('../WorkflowMaterialNode.vue');
+
+  /**
+   * Steve: 「黄色横幅的内容, 能不能弄成小的气泡直接放到没有配置好的 cell 旁边」。
+   * 顶部横幅的毛病是**信息离它描述的对象太远** —— 说「拓扑成品D 还没配辅料/包材」,
+   * 而要动手的 Cell 在画布另一头。
+   */
+  it('成品 Cell 上有 BOM 状态气泡, 且带「生效」动作', () => {
+    expect(NODE).toContain('data-testid="bom-status-bubble"');
+    expect(NODE).toContain('data-testid="bom-status-bubble-activate"');
+    expect(NODE).toContain('activateBomDraft: [];');
+  });
+
+  it('气泡由编辑器按 skuId 喂数据, 并接回同一个生效动作', () => {
+    expect(EDITOR).toContain(':bom-status-text=');
+    expect(EDITOR).toContain('@activate-bom-draft=');
+    expect(EDITOR).toContain('bomStatusBySku');
+  });
+
+  it('⛔ 只有需要动手的才冒泡 —— 纯陈述性差异不许挂气泡打扰', () => {
+    const at = EDITOR.indexOf('function bomBubbleNeedsAction');
+    expect(at).toBeGreaterThan(-1);
+    const block = EDITOR.slice(at, at + 260);
+    expect(block).toMatch(/activeVersion == null/);
+    expect(block).toMatch(/activeIsEmpty/);
+    expect(block).toMatch(/draftVersion != null/);
+    // mismatched(生效 BOM 与已启用工艺不一致)是发布时自动同步的, 不该冒泡
+    expect(block).not.toMatch(/mismatched/);
+  });
+
+  it('气泡要能定位在 Cell 外侧 —— .material-node 必须是定位上下文', () => {
+    // 加气泡时我在注释里写了「已有 position:relative」, 实际没有, grep 才发现。
+    // 钉住它: 少了这条, 气泡会跑到画布左上角。
+    // ⚠️ 不能用 indexOf('.material-node {') —— 文件里有多条同名规则, 第一条是
+    //    `.material-node { transition: ... }`, 从它往后切 400 字符压根到不了主样式块。
+    //    (同一形状本轮已踩过: 按关键字切文件时先问那个关键字出现过几次。)
+    //    直接整块匹配: 任意一条 .material-node 规则里有 position: relative 即可。
+    expect(NODE).toMatch(/\.material-node\s*\{[^}]*position:\s*relative/);
+  });
+});
+
 describe('画布内已闭环的入口不再把用户支走', () => {
   it('缺 BOM 横幅不再有「去 BOM 配置」按钮 —— 冷启动直接点 cell 即可', () => {
     // 2026-08-11: 「暂未读取到生效 BOM」这句话本身已被删除 —— 它是假警报,
