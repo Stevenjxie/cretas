@@ -2,7 +2,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
-import { BOM_OVERLAY_PREFIX, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
+import { BOM_OVERLAY_PREFIX, isBomOverlayNode, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -639,6 +639,46 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       expect(vm.flowNodes.some((n) => n.id === processId)).toBe(false);
       expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(false);
     });
+  });
+
+  /**
+   * 🔴 2026-08-12 (Steve 实测): 拖包材 Cell, 「卤制猪蹄(半成品)」Cell 跟着一起动。
+   *
+   * onNodeDragStart 的浮层分支【已经】在清选区了, 但那不够 —— vue-flow 在 drag-start
+   * 触发之前就算好了「这一拖带哪些节点」。真正把误拖固化下来的是 onNodeDragStop:
+   * 它把 dragged 里**每一个**节点的位置都写回 flowNodes, 包括被顺带拖走的真实 Cell。
+   *
+   * 判据: 不去赌"清选区赶不赶得上", 在结果层面兜底 —— 拖浮层时真实 Cell 一律还原。
+   */
+  it('🔴 拖浮层 Cell 时被顺带拖走的真实 Cell 必须还原', async () => {
+    const vm = await mountEditor() as unknown as EditorVm & {
+      onNodeDragStart: (p: { node: EditorNode }) => void;
+      onNodeDragStop: (p: { node: EditorNode; nodes?: EditorNode[] }) => void;
+      refreshBomOverlay: () => void;
+    };
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    await flushPromises();
+
+    const overlay = vm.flowNodes.find((n) => isBomOverlayNode(n));
+    if (!overlay) throw new Error('Expected a BOM overlay cell');
+    const real = vm.flowNodes.find((n) => !isBomOverlayNode(n) && n.id === 'raw');
+    if (!real) throw new Error('Expected the raw Cell');
+    const realBefore = { ...real.position };
+    const overlayBefore = { ...overlay.position };
+
+    // vue-flow 把浮层和真实 Cell 一起拖走(选区没清干净时的真实事件形状)
+    vm.onNodeDragStart({ node: overlay });
+    const draggedOverlay = { ...overlay, position: { x: overlayBefore.x + 120, y: overlayBefore.y + 80 } };
+    const draggedReal = { ...real, position: { x: realBefore.x + 120, y: realBefore.y + 80 } };
+    vm.onNodeDragStop({ node: draggedOverlay as EditorNode, nodes: [draggedOverlay, draggedReal] as EditorNode[] });
+    await flushPromises();
+
+    const realAfter = vm.flowNodes.find((n) => n.id === 'raw');
+    expect(realAfter!.position).toEqual(realBefore);          // 真实 Cell 原位不动
+    const overlayAfter = vm.flowNodes.find((n) => n.id === overlay.id);
+    expect(overlayAfter!.position.x).toBe(overlayBefore.x + 120);   // 浮层自己照常跟手
   });
 
   it('selecting a Cell also selects every directly connected line', async () => {
