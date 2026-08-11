@@ -112,6 +112,9 @@ class _FakeDbConn:
             factory_id, session_key = args
             # dict with original_query / clarification_question / created_at, or None
             return self._pool.pending.pop((factory_id, session_key), None)
+        if "DELETE FROM restaurant_scope_refinements" in sql and "RETURNING" in sql:
+            factory_id, session_key = args
+            return self._pool.refinements.pop((factory_id, session_key), None)
         raise AssertionError(f"unexpected fetchrow SQL in fake pool: {sql}")
 
     async def execute(self, sql, *args):
@@ -142,6 +145,20 @@ class _FakeDbConn:
             n = len(self._pool.pending)
             self._pool.pending.clear()
             return f"DELETE {n}"
+        if "INSERT INTO restaurant_scope_refinements" in sql:
+            factory_id, session_key, seed = args
+            self._pool.refinements[(factory_id, session_key)] = {
+                "resolver_query_seed": seed,
+                "created_at": datetime.now(timezone.utc),
+            }
+            return "INSERT 0 1"
+        if "DELETE FROM restaurant_scope_refinements" in sql and "created_at <" in sql:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            stale = [k for k, v in self._pool.refinements.items()
+                     if v["created_at"] < cutoff]
+            for k in stale:
+                del self._pool.refinements[k]
+            return f"DELETE {len(stale)}"
         raise AssertionError(f"unexpected execute SQL in fake pool: {sql}")
 
     async def fetch(self, sql, *_args):
@@ -173,6 +190,8 @@ class _FakeDbPool:
         relevant_store_names=None,
     ):
         self.pending: dict = {}
+        #: 门店范围 refinement（与 pending 分表 —— 消费语义相反, 见 V20261101_12）
+        self.refinements: dict = {}
         self.is_restaurant = is_restaurant
         self.store_names = list(store_names or [])
         self.relevant_store_names = list(
@@ -2390,3 +2409,118 @@ async def test_semantic_first_week_comparison_action_keeps_all_slots_after_store
     assert first.comparison == "previous_week"
     assert "这个星期营收比上周怎么提高" in first.resolver_query_seed
     assert pool.pending == {}
+
+
+# ── 2026-08-11 门店范围 refinement context ────────────────────────────────
+#
+# 多店租户首轮直接答全部门店并显式声明范围(PR #2368)。已知残余代价写在
+# `_apply_store_scope_guard` 的注释里 ——「拿到全店答案后再说店名收窄, 那是一个
+# 新问句, 要重走一次 T3」, 而 goal 的 hard criterion 明写在确定性路径上新增 LLM
+# 调用是设计失败(2026-08-07 为此撤回过一次)。下面两条一正一反地钉住修法。
+def _dish_plan_missing_store():
+    return {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": {"type": "named", "value": "this_month"},
+        "wants_margin": False, "asks_profitability": False,
+        "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
+        "dimensions": ["dish"], "dish": "米饭", "store": None, "stores": [],
+        "store_scope": None, "confidence": 0.98,
+        "clarification_needed": True, "missing_fields": ["store_scope"],
+        "clarification_question": "这次想看哪几家门店？",
+        "clarification_options": ["全部门店"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_unrelated_question_after_a_defaulted_answer_is_not_concatenated():
+    """🔴🔴 承重闸: 答完之后来一句无关的话, **绝不许**被拼到旧问句后面。
+
+    这是复用 `restaurant_pending_clarifications` 会踩的那个坑(它的消费端是
+    `combined_query = original + " " + new`, **无条件**拼接)。2026-08-07 撤回记录
+    写明: 给「已答完」的问题登记 pending, 下一个不相关的新问题会被拼到旧问句后面。
+
+    失败形状是最难发现的那种 —— 用户拿到一个**看着像答案的错答案**, 不报错、
+    不变红。所以这条闸先于实现写, 且必须永远绿。
+    """
+    pool = _FakeDbPool(is_restaurant=True,
+                       store_names=["模拟·静安嘉里中心店", "模拟·长宁龙之梦店"])
+    weather_plan = {
+        **_dish_plan_missing_store(),
+        "intent": "", "dish": None, "requested_metrics": [],
+        "dimensions": [], "clarification_needed": True,
+        "missing_fields": [], "clarification_question": "这个问题我帮不上",
+    }
+    planner = AsyncMock(side_effect=[_dish_plan_missing_store(), weather_plan])
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        await parse_restaurant_query(
+            "本月米饭的销量是多少", pool,
+            factory_id="DEMO_REST", session_key="refine-unrelated")
+        second = await parse_restaurant_query(
+            "今天天气怎么样", pool,
+            factory_id="DEMO_REST", session_key="refine-unrelated")
+
+    assert second is not None
+    assert "米饭" not in (second.resolver_query_seed or ""), (
+        "无关的新问题被拼到了上一问后面 —— 用户会拿到一个看着像答案的错答案")
+
+
+@pytest.mark.asyncio
+async def test_narrowing_after_a_defaulted_answer_costs_no_second_t3_call():
+    """🔴 功能: 说一个店名来收窄, 必须走确定性路径, **不再调 T3**。
+
+    这正是 2026-08-07 撤回那次的唯一技术阻塞。
+    """
+    pool = _FakeDbPool(is_restaurant=True,
+                       store_names=["模拟·静安嘉里中心店", "模拟·长宁龙之梦店"])
+    # ⚠️ refinement 行由**服务层**(`tiered_answer` 发答案时)写入, 本测试直接调
+    #    `parse_restaurant_query`, 走不到那一层 —— 所以在这里显式种一行, 模拟
+    #    「上一轮已经用默认范围答过了」。写入侧另有一条测试(见下)。
+    pool.refinements[("DEMO_REST", "refine-narrow")] = {
+        "resolver_query_seed": "本月米饭的销量是多少",
+        "created_at": datetime.now(timezone.utc),
+    }
+    planner = AsyncMock(side_effect=[AssertionError("收窄不该调 T3")])
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        second = await parse_restaurant_query(
+            "模拟·长宁龙之梦店", pool,
+            factory_id="DEMO_REST", session_key="refine-narrow")
+
+    assert planner.await_count == 0, (
+        f"收窄调了 {planner.await_count} 次 T3 —— 这正是 2026-08-07 撤回的那个代价")
+    assert second is not None
+    assert second.store_slots == ("模拟·长宁龙之梦店",)
+    assert "米饭" in (second.resolver_query_seed or ""), (
+        "收窄丢了原问句的菜品 —— 用户拿到的是另一个问题的答案")
+
+
+@pytest.mark.asyncio
+async def test_a_defaulted_answer_registers_the_refinement_row():
+    """🔴 接缝: 读取侧再对, 写入侧不写就等于没有这个功能。
+
+    ⛔ 不用源码检查代替 —— 「源码里出现了 _refinement_put」证明不了它在
+       `store_scope_defaulted` 为真时**真的被调到**(本仓 08-11 刚为同一形状
+       修过一条永不变红的断言)。这里直接跑写入那一层。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _refinement_put
+
+    pool = _FakeDbPool(is_restaurant=True, store_names=["模拟·长宁龙之梦店"])
+    await _refinement_put(pool, "DEMO_REST", "sess-w",
+                          resolver_query_seed="本月米饭的销量是多少")
+
+    assert ("DEMO_REST", "sess-w") in pool.refinements
+    assert pool.refinements[("DEMO_REST", "sess-w")]["resolver_query_seed"] == (
+        "本月米饭的销量是多少")
+
+    from smartbi.gold.restaurant.restaurant_intent import _refinement_pop
+
+    assert await _refinement_pop(pool, "DEMO_REST", "sess-w") == "本月米饭的销量是多少"
+    assert await _refinement_pop(pool, "DEMO_REST", "sess-w") is None, (
+        "消费即删没生效 —— 两个 worker 会同时去收窄")

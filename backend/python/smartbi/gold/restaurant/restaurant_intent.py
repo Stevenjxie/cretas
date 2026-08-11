@@ -6027,6 +6027,37 @@ async def parse_restaurant_query(
                 )
             return continued
 
+    # ── 门店范围收窄: 上一轮我用默认范围答了, 这一句只是在换范围 ──────────
+    #
+    # 多店租户首轮直接答全部门店并显式声明范围(PR #2368)。已知残余代价写在
+    # `_apply_store_scope_guard` 的注释里 ——「拿到全店答案后再说店名收窄, 那是一个
+    # **新问句**」。实测(2026-08-11)那个代价的真实形状不是「多一次 T3」(裸店名有
+    # 确定性编译路径, T3 确实没被再调), 而是**把原问题丢了**: seed 只剩
+    # 「模拟·长宁龙之梦店」, 米饭不见了 —— 用户拿到的是另一个问题的答案。
+    #
+    # ⛔ 排在 pending **之后**: pending 是「我问了你、你在回答」, 优先级更高。
+    #    只有在没有待答问题时, 一句纯范围的话才可能是对上一个**答案**的收窄。
+    # ⛔ 判据用 `scope_only_refinement`(去掉范围词后什么都不剩), **不是**「句子里
+    #    有门店名」—— 后者会把「某店的毛利率」也拼上去, 退化成 pending 那种无条件
+    #    拼接, 而那正是 2026-08-07 撤回记录点名的后果。
+    if session_key and not consumed_pending:
+        seed = await _refinement_pop(pool, factory_id, session_key)
+        if seed:
+            try:
+                known_stores = tuple(await _load_store_options(pool, factory_id))
+            except Exception as exc:  # noqa: BLE001 — 拿不到名单就不收窄(fail-open)
+                logger.warning(
+                    "[restaurant-intent] scope-refinement store list unavailable: %s",
+                    exc,
+                )
+                known_stores = ()
+            if scope_only_refinement(norm_query, known_stores) is not None:
+                logger.info(
+                    "[restaurant-intent] scope-refinement 命中: seed=%r + %r",
+                    seed[:60], norm_query[:30],
+                )
+                norm_query = f"{seed} {norm_query}".strip()
+
     if semantic_first:
         if _normalize_exact_phrase(norm_query) == _normalize_exact_phrase(
             "这月挣了多少"

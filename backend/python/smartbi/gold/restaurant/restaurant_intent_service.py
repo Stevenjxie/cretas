@@ -1677,6 +1677,20 @@ async def tiered_answer(
         # 本该被拦下的空答案会因为多了一句范围说明而蒙混过关。
         answer_text += _store_scope_disclosure(spec)
         answer_text += _time_range_disclosure(spec)
+
+        # 🔴 2026-08-11: 用默认范围答完了 —— 记一行, 让下一句「模拟·长宁龙之梦店」
+        #    能被认成对**这一问**的收窄, 而不是一个丢了菜品的裸店名新问句。
+        #    落点就在披露旁边: 二者的触发条件是同一个 `store_scope_defaulted`,
+        #    分开写迟早会漂成「披露了却没登记」或反过来。
+        # ⛔ fail-open 在 `_refinement_put` 里 —— 写不进去只是失去收窄捷径,
+        #    绝不该让已经算好的答案发不出去。
+        if session_key and getattr(spec, "store_scope_defaulted", False):
+            from smartbi.gold.restaurant.restaurant_intent import _refinement_put
+
+            await _refinement_put(
+                pool, factory_id, session_key,
+                resolver_query_seed=spec.resolver_query_seed or query,
+            )
         answer_text = _prepend_action_warning(answer_text, action_warning)
 
         # 优先级链第 1 层（会话/租户配置）—— 输出口径这一项。
