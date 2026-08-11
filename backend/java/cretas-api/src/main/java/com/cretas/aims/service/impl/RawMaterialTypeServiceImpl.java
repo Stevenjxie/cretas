@@ -268,6 +268,14 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (dto.getMaxStock() != null) materialType.setMaxStock(dto.getMaxStock());
         if (dto.getNotes() != null) materialType.setNotes(dto.getNotes());
         if (dto.getIsActive() != null) materialType.setIsActive(dto.getIsActive());
+        // 🔴 2026-08-11: 这一行以前**不存在** —— createMaterialType 写 isByproduct,
+        // updateMaterialType 却漏了, 于是物料档案里那个「这是副产（生产产出，无采购来源）」
+        // 开关**只有新建时才生效, 编辑已有物料点了不写库**。
+        // 后果不止是开关失灵: 画布副产 Cell 在没有副产物料时给的指引正是
+        // 「去『仓库 → 物料档案』编辑该物料, 勾上这是副产后再回来选」——
+        // 用户照做, 回来发现下拉还是空的, 因为那一勾从来没保存过。
+        // null-tolerant 与相邻字段一致: 不传就不动, 传了才改。
+        if (dto.getIsByproduct() != null) materialType.setIsByproduct(dto.getIsByproduct());
 
         // SP4-A8: 税率 + 含税单价 null-guard 更新 → 自动换算未税单价
         if (dto.getTaxRate() != null) materialType.setTaxRate(dto.getTaxRate());

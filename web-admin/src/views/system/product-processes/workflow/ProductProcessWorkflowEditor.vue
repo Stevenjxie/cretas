@@ -272,6 +272,7 @@
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @select-byproduct-sku="(materialTypeId) => selectByproductSku(slotProps.id, materialTypeId)"
+              @quick-mark-byproduct="() => openByproductQuickMark(slotProps.id)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
@@ -419,6 +420,55 @@
         </section>
       </div>
     </div>
+
+    <!--
+      副产就地标记 —— 替掉「去『仓库 → 物料档案』勾一下」那条 dead-end。
+      那条路当时不只是把用户支走, 它**走不通**: updateMaterialType 漏了 setIsByproduct,
+      勾完回来下拉还是空的。后端已在同 PR 修; 这里让这一步不必换页面。
+    -->
+    <el-dialog
+      v-model="byproductMarkVisible"
+      title="标记为副产"
+      width="520px"
+      append-to-body
+      data-testid="byproduct-quick-mark-dialog"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="选一个物料，把它标记成「副产（生产产出，无采购来源）」，标记后直接选入当前 Cell。"
+      />
+      <el-input
+        v-model="byproductMarkKeyword"
+        class="byproduct-mark-search"
+        placeholder="按编码或名称筛选"
+        clearable
+      />
+      <el-radio-group v-model="byproductMarkSelectedId" class="byproduct-mark-list">
+        <el-radio
+          v-for="item in byproductMarkFiltered"
+          :key="item.id"
+          :value="item.id"
+          class="byproduct-mark-item"
+        >
+          {{ item.code ? `${item.code} — ` : '' }}{{ item.name }} · {{ item.unit || '-' }}
+        </el-radio>
+      </el-radio-group>
+      <p v-if="byproductMarkFiltered.length === 0" class="byproduct-mark-empty">
+        没有匹配的物料。副产必须先存在于原料档案里；若确实没有这个物料，请先在「仓储管理 → 原料类型字典」建档。
+      </p>
+      <template #footer>
+        <el-button @click="byproductMarkVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!byproductMarkSelectedId"
+          :loading="byproductMarkSubmitting"
+          data-testid="byproduct-quick-mark-confirm"
+          @click="confirmByproductQuickMark"
+        >标记并选入</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
       <el-form label-width="90px">
@@ -2546,6 +2596,81 @@ async function loadBomOverlayMaterialArchive(): Promise<BomOverlayArchiveRow[] |
  * `raw_material_types(id)` 的硬外键, 报工时 ByproductBatchMaterializer 也是按
  * materialTypeId 建 MaterialBatch。副产在系统里始终是**物料**。
  */
+/**
+ * 就地把某个原料标记为副产 —— 替掉「去『仓库 → 物料档案』勾一下」那条 dead-end。
+ *
+ * ⛔ 那条指引不只是把用户支走, 它当时**走不通**: updateMaterialType 漏了 setIsByproduct,
+ * 用户照做勾完回来, 下拉还是空的 (后端已在同 PR 修)。既然这一步只是给一个物料打个标记,
+ * 就该在画布上完成, 不必换页面。
+ */
+const byproductMarkVisible = ref(false);
+const byproductMarkNodeId = ref<string | null>(null);
+const byproductMarkKeyword = ref('');
+const byproductMarkSelectedId = ref<string | null>(null);
+const byproductMarkSubmitting = ref(false);
+/** 候选 = 全部原料档案(不含已经是副产的) —— 已经是副产的走上面那个正常下拉。 */
+const byproductMarkCandidates = ref<ByproductMaterialOption[]>([]);
+
+async function openByproductQuickMark(materialNodeId: string): Promise<void> {
+  byproductMarkNodeId.value = materialNodeId;
+  byproductMarkKeyword.value = '';
+  byproductMarkSelectedId.value = null;
+  byproductMarkVisible.value = true;
+  try {
+    const rows = await loadBomOverlayMaterialArchive();
+    if (!rows) return;
+    const already = new Set(byproductMaterialOptions.value.map((item) => item.id));
+    byproductMarkCandidates.value = rows
+      .filter((row) => !already.has(String(row.id)))
+      .map((row) => ({
+        id: String(row.id),
+        name: row.name,
+        code: row.code ?? null,
+        unit: row.unit ?? null,
+      }));
+  } catch {
+    ElMessage.error('物料档案加载失败');
+  }
+}
+
+const byproductMarkFiltered = computed(() => {
+  const keyword = byproductMarkKeyword.value.trim().toLowerCase();
+  const list = byproductMarkCandidates.value;
+  if (!keyword) return list.slice(0, 50);
+  return list
+    .filter((item) => `${item.code ?? ''} ${item.name}`.toLowerCase().includes(keyword))
+    .slice(0, 50);
+});
+
+async function confirmByproductQuickMark(): Promise<void> {
+  const materialTypeId = byproductMarkSelectedId.value;
+  const nodeId = byproductMarkNodeId.value;
+  if (!materialTypeId || !nodeId || byproductMarkSubmitting.value) return;
+  byproductMarkSubmitting.value = true;
+  try {
+    // null-tolerant 更新: 只发这一个字段, 后端其余字段判空不动 (见 RawMaterialTypeServiceImpl)。
+    const res = await put(`/${props.factoryId}/raw-material-types/${materialTypeId}`, {
+      isByproduct: true,
+    });
+    if (!res.success) throw new Error(res.message || '标记失败');
+    // 标记完必须让候选重新加载, 否则刚标的那个还是选不到 —— 这正是旧路径的坑。
+    byproductMaterialsLoaded.value = false;
+    await ensureByproductMaterialOptions();
+    selectByproductSku(nodeId, materialTypeId);
+    byproductMarkVisible.value = false;
+    ElMessage.success('已标记为副产并选入本 Cell');
+  } catch (error) {
+    ElMessage({
+      message: error instanceof Error ? error.message : '标记失败',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    byproductMarkSubmitting.value = false;
+  }
+}
+
 async function ensureByproductMaterialOptions(): Promise<void> {
   if (byproductMaterialsLoaded.value) return;
   try {
@@ -4952,6 +5077,10 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 .workflow-bom-alert, .workflow-validation-alert { margin: 0 12px 12px; }
 /* 版本状态合并条 (2026-08-11) —— 取代原先纵向堆叠的 3 条 BOM 横幅 + 1 条工艺草稿横幅。
    折叠态一行, 展开才给细节; 画布上方从 ~140px 压到 ~32px。 */
+.byproduct-mark-search { margin: 12px 0 8px; }
+.byproduct-mark-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+.byproduct-mark-item { display: flex; height: auto; padding: 6px 4px; margin-right: 0; }
+.byproduct-mark-empty { margin: 12px 0 0; color: var(--el-text-color-secondary); line-height: 1.6; }
 .version-status-strip {
   margin: 4px 0 8px;
   border: 1px solid var(--el-border-color-lighter);
