@@ -10,8 +10,31 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 `MARK-NEEDS-ANNOTATION.json`。生产 tray ONNX 负责全图预标注；已淘汰的历史 tray v7
 只能用于分歧排序。LocateAnything 是可失败跳过的二级 teacher，只允许从固定离线路径
 `B:\AIModels\LocateAnything-3B`、固定 revision
-`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 1024 长边的局部 crop；
+`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 640 长边的局部 crop；
 禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
+
+固定目录首次就绪时，必须按“已验证 D snapshot 复制到 B → 封印关键文件 SHA-256 → 离线复核 →
+明确局部 crop smoke”的顺序执行。`smoke` 强制要求像素 crop，不提供全图入口：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py seal `
+  --model-path B:\AIModels\LocateAnything-3B `
+  --revision c32291ca5e996f5a7a485845b4f57a233936bba0
+
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py verify `
+  --model-path B:\AIModels\LocateAnything-3B
+
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py smoke `
+  --model-path B:\AIModels\LocateAnything-3B `
+  --image <local-readonly-image> `
+  --crop <x0,y0,x1,y1> `
+  --prompt all `
+  --receipt D:\CretasVisionLab\receipts\locateanything-crop-smoke.json
+```
+
+若 B 盘目录不可创建或不可读，必须停止并由操作员修复该目录权限；不得改用 D 缓存冒充稳定路径，
+不得联网重下。新队列优先保留约三分之一给经过多提示支持的 teacher-only proposal，其余继续覆盖
+蓝筐、边缘、孤立、遮挡和堆叠场景；该配额仍只是人工复核采样，不是真值。
 
 连续候选若都卡在蓝筐顶部孤立托盘，可对未使用且非保护集的本地副本启用
 `mine_tray_queue.py --prefer-blue-basket`。它只把确定性的蓝色区域当场景排序特征，不生成
