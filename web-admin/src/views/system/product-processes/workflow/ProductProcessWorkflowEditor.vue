@@ -1068,6 +1068,11 @@ const versionList = ref<WorkflowVersionSummary[]>([]);
 const versionLoading = ref(false);
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
+/**
+ * 拖【浮层】Cell 时真实 Cell 的原位置 —— 用于把被顺带拖走的真实 Cell 还原。
+ * 见 onNodeDragStart 的浮层分支; 普通 ref 即可(纯过程状态, 不需要响应式)。
+ */
+let overlayDragOrigins: Map<string, { x: number; y: number }> | null = null;
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const workProcessCategories = ref<string[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
@@ -3200,9 +3205,22 @@ function onNodeDragStart({ node }: { node: Node }): void {
     // 用 vue-flow 的 API 清选区, 不直接摸 node.selected —— 那是 GraphNode 的运行时字段,
     // Node 类型上没有 (vue-tsc -b 会红; 本地 `-p tsconfig.json` 跑不出来, CI 用的是 -b)。
     if (typeof removeSelectedNodes === 'function') removeSelectedNodes(getSelectedNodes?.value ?? []);
+    // 🔴 2026-08-12 (Steve 实测「拖包材 cell, 卤制猪蹄半成品 cell 会同步移动」):
+    // 上面那句清选区**不足以**挡住联动 —— vue-flow 在 drag-start 触发【之前】就已经
+    // 算好「这一拖要带哪些节点」, 这时候再清选区来不及。而 onNodeDragStop 的浮层分支
+    // 会把 dragged 里【每一个】节点的位置都写回去, 等于把这次误拖【固化】下来。
+    //
+    // 所以这里记下真实节点的原位置, 停下时凡是被顺带拖走的一律还原 ——
+    // 不依赖"清选区有没有赶上", 是结果层面的兜底。
+    overlayDragOrigins = new Map(
+      flowNodes.value
+        .filter((candidate) => !isBomOverlayNode(candidate))
+        .map((candidate) => [candidate.id, { x: candidate.position.x, y: candidate.position.y }]),
+    );
     dragStartSnapshot.value = null;
     return;
   }
+  overlayDragOrigins = null;
   dragStartSnapshot.value = currentDefinition();
 }
 
@@ -3219,12 +3237,22 @@ function onNodeDragStop({ node, nodes }: { node: Node; nodes?: Node[] }): void {
   const dragged = nodes && nodes.length ? nodes : [node];
   if (isBomOverlayNode(node)) {
     dragged.forEach((moved) => {
-      const overlay = flowNodes.value.find((candidate) => candidate.id === moved.id);
-      if (overlay) overlay.position = { x: moved.position.x, y: moved.position.y };
+      const target = flowNodes.value.find((candidate) => candidate.id === moved.id);
+      if (!target) return;
+      if (isBomOverlayNode(moved)) {
+        target.position = { x: moved.position.x, y: moved.position.y };
+        return;
+      }
+      // 真实 Cell 被浮层这一拖顺带带走了 —— 还原, 不要把误拖写进工艺定义。
+      // (拖浮层按设计不该产生 dirty/新版本, 所以这里也【不】置 dirty。)
+      const origin = overlayDragOrigins?.get(moved.id);
+      if (origin) target.position = { x: origin.x, y: origin.y };
     });
+    overlayDragOrigins = null;
     dragStartSnapshot.value = null;
     return;
   }
+  overlayDragOrigins = null;
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
   dragged.forEach((moved) => {
