@@ -283,7 +283,7 @@ def test_vl_chain_is_vision_only():
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 8, 9)  # registry audit date → not stale
+_TODAY = datetime.date(2026, 8, 12)  # registry audit date → not stale
 # (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
@@ -1020,7 +1020,11 @@ def test_ark_models_carry_a_dated_callable_id():
 # test_every_ark_chain_entry_is_registered, for the identical reason (Task 4
 # has not yet removed ark from SLOT_MODELS/_TEXT_TAIL) — recording the
 # measured fact here rather than omitting it to stay green.
-_ARK_VIABLE: set = set()
+# 2026-08-12: ark 从空集恢复 1 条。owner 复确认账号级「安心体验模式」ON(注释写明
+# 控制台每个模型旁边那个徽章不作数, 只认账号级确认), model id 取自 owner 提供的
+# 详情页 `deepseek-v4-flash-ga-260731` —— ⛔ 不是控制台显示名, 那是 _provider_config
+# 里 ark 段落警告过的 404 陷阱。生产同源探针 SLOT.REVIEW 连过两轮, 0.8s。
+_ARK_VIABLE: set = {"deepseek-v4-flash-ga-260731"}
 
 # The former chain is now paused per model by SetLimitExceeded. Keeping any of these
 # reachable would reintroduce a deterministic 429 before every healthy fallback.
@@ -1132,13 +1136,23 @@ def test_non_aliyun_floor_interleaves_two_independent_providers():
 
 
 def test_floor_is_exactly_the_2026_08_09_survivor_set():
-    """Pins the measured production floor after the 08-09 TokenHub/Ark
-    collapse (test above documents why it shrank from 7 to 2)."""
+    """Pins the measured production floor.
+
+    08-09 的 TokenHub/Ark 崩塌把它从 7 缩到 2(上一个测试记着为什么)。2026-08-12
+    owner 提供控制台余量 + 账号级计费开关确认后按双证判据加回 3 条, 且**顺序**
+    也被钉住: 三条 ≤1.2s 的排在 6.7s 的 minimax-m2.7 之前, zhipu 仍在最后。
+
+    顺序在这里承重, 因为三条新条目到期日都是 None, `_build_chain` 的稳定排序
+    原样保留 _TEXT_TAIL 的书写顺序 —— 换句话说这个列表就是链尾的真实顺序。
+    """
     floor = [
         (a, m) for (a, m) in llm_router._TEXT_TAIL
         if a not in llm_router._ALIYUN_ACCOUNTS
     ]
     assert floor == [
+        ("ark", "deepseek-v4-flash-ga-260731"),
+        ("tencent", "hy3"),
+        ("tencent", "deepseek-v4-flash-202605"),
         ("tencent", "minimax-m2.7"),
         ("zhipu", "glm-4.5-air"),
     ]

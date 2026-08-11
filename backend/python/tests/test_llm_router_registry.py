@@ -58,6 +58,10 @@ _FROZEN_ALIYUN_REGISTRY = {
     ("aliyun_c", "qwen3.7-max-2026-05-20"): datetime.date(2026, 8, 20),
     ("aliyun_c", "deepseek-v3.2-exp"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): datetime.date(2026, 8, 13),
+    # 2026-08-12 新增: owner 控制台余量截图 ∩ 生产同源探针(SLOT.REVIEW)连过两轮。
+    # 带日期的快照 403 而不带日期的别名 OK —— 控制台上是两行、两份独立免费额度。
+    ("aliyun_c", "qwen3.6-plus"): datetime.date(2026, 8, 13),
+    ("aliyun_c", "qwen3.6-max-preview"): datetime.date(2026, 8, 13),
     ("aliyun_c", "kimi-k2-thinking"): datetime.date(2026, 8, 13),
     ("aliyun_c", "deepseek-r1"): datetime.date(2026, 8, 13),
     ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): datetime.date(2026, 8, 13),
@@ -91,13 +95,41 @@ def test_aliyun_registry_matches_frozen_probe_result():
 
 
 def test_non_aliyun_registry_matches_frozen_probe_result():
-    """地板: tencent 收缩到 1 个, ark 清空(provider 配置保留), zhipu 只剩文本地板。"""
+    """地板: 2026-08-12 起 ark 恢复 1 条、tencent 3 条、zhipu 1 条。
+
+    08-09 那版是「tencent 收缩到 1 个, ark 清空(provider 配置保留)」。08-12
+    owner 给出控制台余量 + 账号级计费开关确认(ark 安心体验模式 / tencent 用完即停),
+    生产同源探针连过两轮, 按准入判据(控制台 ∩ 探针, 双证)加回。
+    """
     actual = {k: v for k, v in llm_router._SAFE_MODELS.items()
               if not k[0].startswith("aliyun_")}
     assert actual == {
         ("tencent", "minimax-m2.7"): None,
+        ("tencent", "deepseek-v4-flash-202605"): None,
+        ("tencent", "hy3"): None,
+        ("ark", "deepseek-v4-flash-ga-260731"): None,
         ("zhipu", "glm-4.5-air"): None,
     }
+
+
+def test_fast_non_dashscope_floor_precedes_the_slow_one():
+    """快地板必须排在 minimax-m2.7(6.7s) 和 zhipu 之前。
+
+    _TEXT_TAIL 三条新条目到期日都是 None, `_build_chain` 的稳定排序会原样保留
+    书写顺序 —— 所以顺序**由 _TEXT_TAIL 那几行决定**, 这条断言守的就是那个顺序。
+    判据来自 2026-08-09 的生产事故: 链是串行且共享同一个总预算, 把慢的排在前面
+    会让后面本来 1s 就能答的候选因为分不到时间而跟着超时、连续 2 次即被熔断。
+    """
+    tail = llm_router._TEXT_TAIL
+    idx = {pair: i for i, pair in enumerate(tail)}
+    slow_floor = idx[("tencent", "minimax-m2.7")]
+    for fast in (("ark", "deepseek-v4-flash-ga-260731"),
+                 ("tencent", "hy3"),
+                 ("tencent", "deepseek-v4-flash-202605")):
+        assert idx[fast] < slow_floor, (
+            f"{fast} 必须排在 minimax-m2.7 之前, 否则 6.7s 会把它们的预算吃掉"
+        )
+    assert idx[("zhipu", "glm-4.5-air")] == len(tail) - 1, "zhipu 必须留在最后一位"
 
 
 def test_registry_audit_date_is_not_stale():

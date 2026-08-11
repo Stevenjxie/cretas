@@ -101,7 +101,7 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 8, 9)   # 三控制台截图 ∩ 生产探针全量核对
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 8, 12)  # 08-09 全量 + 08-12 增补 5 条(见下)
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
 # (探针 200 但控制台无余量的最危险: 可能是「用完即停」没覆盖它、其实在计费,
@@ -165,6 +165,14 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # ── aliyun_c 08-13 到期 (优先榨干; _build_chain 会把它们排在最前) ──
     ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.6-plus-2026-04-02"): _d(2026, 8, 13),
+    # ── 2026-08-12 新增 (owner 控制台余量 ∩ 生产同源探针连过两轮) ──
+    # 🔑 发现路径值得记: 探针报死的全是**带日期快照**的型号, 而**不带日期的别名
+    #    还活着** —— qwen3.6-plus-2026-04-02 是 403, qwen3.6-plus 同账号 OK。
+    #    两者在控制台是两行、各有各的免费额度。⛔ 别把「某模型死了」推广成
+    #    「这个模型家族死了」, 快照与别名是不同的计费条目。
+    ("aliyun_c", "qwen3.6-plus"): _d(2026, 8, 13),          # 控制台 999,468/100万, 08-13
+    ("aliyun_c", "qwen3.6-max-preview"): _d(2026, 8, 13),   # 控制台 999,682/100万, 无自有
+                                                            # 日期 → 退 _BULK_EXPIRY[c]
     # ("aliyun_c", "qwen3-max-2025-09-23") 移除 08-10: 见下方段落。
     # ("aliyun_c", "qwen3-vl-32b-instruct") 移除 08-10: 见下方段落。
     ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),
@@ -181,6 +189,22 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # zhipu/glm-4.6v 已因 429 余额不足死亡, 从 VL 地板剔除(见 Task 5 VL 豁免)。
     ("tencent", "minimax-m2.7"): None,
     ("zhipu", "glm-4.5-air"): None,
+    # ── 2026-08-12: ark 从「清空」恢复 + tencent 从 1 条扩到 3 条 ──
+    # 上面那段注释写着「ark 条目清空, 但 _provider_config 里的配置与代码路径保留,
+    # 待 owner 提供完整可用清单后按判据加回(改数据即可, 不改代码)」—— 就是这次。
+    # 计费前提逐条对过:
+    #   · ark  : 账号级「安心体验模式」ON (owner 2026-08-12 复确认; 注释写明徽章
+    #            不作数, 只认账号级确认)。关掉的那天所有 ark 条目必须退出链。
+    #   · tencent: 账号级「用完即停」ON (owner 2026-08-12 确认), 与既有的
+    #            minimax-m2.7 同账号同前提。
+    #   · 探针证据: scripts.probe_llm_registry._probe 原函数(即生产的
+    #            normalize → _apply_slot_params 两步管线), SLOT.REVIEW, 连过两轮。
+    #            ⛔ 我第一版自己拼 payload 的探针漏了 _apply_slot_params, 把
+    #            tencent/deepseek-v4-flash-202605 误判成 empty —— 探针不走生产
+    #            管线就会造出假阴性, 这也是官方探针注释第 1 条的原话。
+    ("ark", "deepseek-v4-flash-ga-260731"): None,   # 0.8s, 控制台 478,139/50万
+    ("tencent", "deepseek-v4-flash-202605"): None,  # 1.2s, TPM 100万 运行中
+    ("tencent", "hy3"): None,                       # 1.0s, reasoning_tokens=0 不思考
 }
 
 # ── 2026-08-10 探针复审剔除 ──────────────────────────────────────────────
@@ -945,6 +969,18 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     #    判据: **把一个会超时的候选排在前面, 等于把它后面的健康候选一起拖下水。**
     #    注: 这两条到期日都是 None, 稳定排序会原样保留此处的书写顺序, 所以顺序
     #    由这一行决定, 不由 _build_chain 决定。
+    # ── 2026-08-12: 三条快地板插在最前 ────────────────────────────────────
+    # 上面那条判据反过来用: 「把会超时的排在前面 = 把后面的健康候选一起拖下水」,
+    # 那么把**快而健康**的排在前面就是把预算留给后面的。这三条到期日都是 None,
+    # 稳定排序原样保留书写顺序, 所以顺序由这几行决定。
+    #
+    # 🔴 这正是 2026-08-11 夜那次事故的解: 当晚 REVIEW 链走成
+    #    403(快) → kimi-k2.7-code timeout 20s → kimi-k2.7-code timeout 20s → 403,
+    #    两次 20s 叠加 40s > Java 侧 30s 客户端预算 → 规划器"不可用", 而池子里
+    #    其实一个活着的快模型都没有可退。现在每个非 VL 槽末尾都有 3 个 ≤1.2s 的活口。
+    ("ark", "deepseek-v4-flash-ga-260731"),   # 0.8s
+    ("tencent", "hy3"),                       # 1.0s, 不思考
+    ("tencent", "deepseek-v4-flash-202605"),  # 1.2s
     ("tencent", "minimax-m2.7"),
     ("zhipu", "glm-4.5-air"),
 ]
@@ -970,6 +1006,9 @@ _SLOW_MODELS: frozenset = frozenset({
 # qwen3.5-plus-2026-02-15 21.1s (关思考档全部 ~1s)。
 _THINKING_OFF_ONLY: frozenset = frozenset({
     "glm-4.6", "qwen3.6-plus-2026-04-02", "qwen3.5-plus-2026-02-15",
+    # 2026-08-12: 不带日期的 qwen3.6-plus 与上面那个快照是同一模型的两个计费条目,
+    # 开思考的病同源(快照实测 17.8s), 归同一档 —— 不等它在生产上先慢一次再补。
+    "qwen3.6-plus",
 })
 
 # 关思考会 400 → 只能进 REASONING(其 profile 为 {}, 不设 enable_thinking)。
@@ -983,6 +1022,9 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 # 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     # qwen3-max-2025-09-23 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
+    # 2026-08-12 新增两条 aliyun_c 别名(带日期的那两个快照当天 403, 别名活着):
+    ("aliyun_c", "qwen3.6-plus"),                  # 08-13  3.7s
+    ("aliyun_c", "qwen3.6-max-preview"),           # 08-13  2.9s
     ("aliyun_c", "qwen3.6-plus-2026-04-02"),       # 08-13  1.1s
     ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
     # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
