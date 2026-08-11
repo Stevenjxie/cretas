@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -40,6 +41,40 @@ class MineTrayQueueTests(unittest.TestCase):
             module.map_crop_box([0.25, 0.25, 0.75, 0.75], [0.2, 0.4, 0.6, 0.8]),
             [0.3, 0.5, 0.5, 0.7],
         )
+
+    def test_blue_basket_context_detects_top_scene_without_creating_label(self):
+        image = Image.new("RGB", (400, 300), (50, 50, 50))
+        ImageDraw.Draw(image).rectangle((250, 10, 390, 90), fill=(10, 80, 210))
+        result = module.blue_basket_features(image)
+        self.assertTrue(result["present"])
+        self.assertTrue(result["top_half"])
+        self.assertIs(type(result["top_half"]), bool)
+        self.assertGreater(result["risk_score"], 10)
+        self.assertNotIn("label", result)
+        json.dumps(result)
+
+    def test_reuse_selection_reads_full_source_ids_in_queue_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            annotations = root / "annotations-human"
+            annotations.mkdir()
+            for index, photo_id in enumerate(("full-photo-a", "full-photo-b"), 1):
+                (annotations / f"trayal_{index:03d}.json").write_text(
+                    json.dumps({"source_photo_id": photo_id}), encoding="utf-8",
+                )
+            self.assertEqual(module.reuse_selection_photo_ids(root), ["full-photo-a", "full-photo-b"])
+
+    def test_blue_basket_priority_fills_two_thirds_before_generic_risk(self):
+        rows = []
+        for index in range(6):
+            rows.append({
+                "photo_id": f"photo-{index}", "task_id": f"task-{index}",
+                "image_phash": hashlib.sha256(f"photo-{index}".encode()).hexdigest(),
+                "selection_score": float(100 - index),
+                "selection_tags": ["top_blue_basket"] if index in {4, 5} else ["edge"],
+            })
+        selected = module.select_queue(rows, queue_size=3, task_cap=1, priority_tag="top_blue_basket")
+        self.assertEqual([row["photo_id"] for row in selected[:2]], ["photo-4", "photo-5"])
 
     def test_teacher_parser_rejects_full_frame_and_keeps_tray_box(self):
         answer = (

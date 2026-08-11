@@ -351,6 +351,49 @@ def expand_local_crop(box: list[float], scale: float = 1.8) -> list[float] | Non
     return [round(value, 8) for value in crop]
 
 
+def blue_basket_features(image: Image.Image) -> dict[str, Any]:
+    """Detect blue-basket scene context only; this never creates an object label."""
+    import numpy as np
+
+    sample = image.convert("RGB")
+    sample.thumbnail((384, 384), Image.Resampling.LANCZOS)
+    pixels = np.asarray(sample)
+    red, green, blue = pixels[:, :, 0], pixels[:, :, 1], pixels[:, :, 2]
+    mask = (blue > 80) & (blue > red * 1.18) & (blue > green * 1.08)
+    ys, xs = np.where(mask)
+    minimum = max(100, int(sample.width * sample.height * 0.002))
+    if len(xs) < minimum:
+        return {"present": False, "top_half": False, "pixel_fraction": 0.0, "box": None, "risk_score": 0.0}
+    basket = [
+        float(xs.min()) / sample.width, float(ys.min()) / sample.height,
+        float(xs.max() + 1) / sample.width, float(ys.max() + 1) / sample.height,
+    ]
+    fraction = float(mask.mean())
+    top_half = bool(basket[1] <= 0.45)
+    risk = (14.0 if top_half else 6.0) + min(6.0, fraction * 120.0)
+    return {
+        "present": True, "top_half": top_half, "pixel_fraction": round(fraction, 6),
+        "box": [round(value, 8) for value in basket], "risk_score": round(risk, 6),
+    }
+
+
+def reuse_selection_photo_ids(queue: Path) -> list[str]:
+    annotations = queue / "annotations-human"
+    if not annotations.is_dir():
+        raise FileNotFoundError(annotations)
+    photo_ids: list[str] = []
+    paths = sorted(annotations.glob("*.json"), key=lambda path: int(path.stem.rsplit("_", 1)[-1]))
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        photo_id = str(payload.get("source_photo_id") or "")
+        if not photo_id or photo_id in photo_ids:
+            raise RuntimeError(f"invalid reusable tray selection: {path}")
+        photo_ids.append(photo_id)
+    if not photo_ids:
+        raise RuntimeError(f"no reusable tray selection: {queue}")
+    return photo_ids
+
+
 def teacher_crop_regions(record: dict[str, Any], image: Image.Image, limit: int = 8) -> list[dict[str, Any]]:
     detector = record.get("detector_boxes", [])
     comparison = record.get("comparison_boxes", [])
@@ -380,15 +423,9 @@ def teacher_crop_regions(record: dict[str, Any], image: Image.Image, limit: int 
 
     # Blue baskets are a known miss pattern. This is a deterministic crop proposal,
     # not an object label and never enters training without human review.
-    import numpy as np
-
-    pixels = np.asarray(image.convert("RGB"))
-    red, green, blue = pixels[:, :, 0], pixels[:, :, 1], pixels[:, :, 2]
-    mask = (blue > 80) & (blue > red * 1.18) & (blue > green * 1.08)
-    ys, xs = np.where(mask)
-    if len(xs) >= max(100, int(image.width * image.height * 0.002)):
-        basket = [xs.min() / image.width, ys.min() / image.height, (xs.max() + 1) / image.width, (ys.max() + 1) / image.height]
-        crop = expand_local_crop(basket, 1.25)
+    blue_context = blue_basket_features(image)
+    if blue_context["present"]:
+        crop = expand_local_crop(blue_context["box"], 1.25)
         if crop:
             candidates.append({"box": crop, "reasons": ["blue_basket"], "priority": 6})
 
@@ -466,7 +503,9 @@ def run_teacher(
     return output
 
 
-def select_queue(records: list[dict[str, Any]], queue_size: int, task_cap: int) -> list[dict[str, Any]]:
+def select_queue(
+    records: list[dict[str, Any]], queue_size: int, task_cap: int, priority_tag: str | None = None,
+) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
     task_counts: Counter[str] = Counter()
@@ -488,6 +527,8 @@ def select_queue(records: list[dict[str, Any]], queue_size: int, task_cap: int) 
             quota -= 1
 
     ordered = sorted(records, key=lambda row: row["selection_score"], reverse=True)
+    if priority_tag:
+        add([row for row in ordered if priority_tag in row["selection_tags"]], math.ceil(queue_size * 2 / 3))
     quotas = {"edge": math.ceil(queue_size / 3), "isolated": math.ceil(queue_size / 3), "stacked_occluded": queue_size // 3}
     for tag, quota in quotas.items():
         add([row for row in ordered if tag in row["selection_tags"]], quota)
@@ -557,6 +598,8 @@ def main() -> None:
     parser.add_argument("--detector-batch", type=int, default=8)
     parser.add_argument("--near-holdout-hamming", type=int, default=10)
     parser.add_argument("--annotator-url", default="http://127.0.0.1:8765")
+    parser.add_argument("--prefer-blue-basket", action="store_true")
+    parser.add_argument("--reuse-selection-from", type=Path)
     args = parser.parse_args()
 
     if args.queue_size <= 0 or args.teacher_shortlist < args.queue_size:
@@ -567,6 +610,17 @@ def main() -> None:
     candidates, excluded = load_candidates(
         args.database, protected, excluded_ids, args.max_photos_scanned, args.near_holdout_hamming,
     )
+    if args.reuse_selection_from:
+        reuse_ids = reuse_selection_photo_ids(args.reuse_selection_from)
+        available = {str(row["photo_id"]): row for row in candidates}
+        missing = [photo_id for photo_id in reuse_ids if photo_id not in available]
+        if missing:
+            raise RuntimeError(f"reusable tray selection is no longer eligible: {missing}")
+        candidates = [available[photo_id] for photo_id in reuse_ids]
+        if len(candidates) != args.queue_size:
+            raise RuntimeError(
+                f"reusable tray selection count {len(candidates)} does not match queue-size {args.queue_size}"
+            )
     detector = detector_predict(args.tray_model, candidates, args.detector_batch, "cpu")
     comparison = (
         detector_predict(args.comparison_model, candidates, args.detector_batch, "0")
@@ -584,6 +638,17 @@ def main() -> None:
             row["detector_features"]["base_risk_score"] = round(
                 row["detector_features"]["base_risk_score"]
                 + row["comparison_disagreement"]["risk_score"], 6,
+            )
+        row["blue_basket_features"] = {
+            "present": False, "top_half": False, "pixel_fraction": 0.0,
+            "box": None, "risk_score": 0.0,
+        }
+        if args.prefer_blue_basket:
+            with Image.open(row["local_path"]) as opened:
+                row["blue_basket_features"] = blue_basket_features(ImageOps.exif_transpose(opened))
+            row["detector_features"]["base_risk_score"] = round(
+                row["detector_features"]["base_risk_score"]
+                + row["blue_basket_features"]["risk_score"], 6,
             )
     shortlist = sorted(candidates, key=lambda row: row["detector_features"]["base_risk_score"], reverse=True)[:args.teacher_shortlist]
 
@@ -630,12 +695,17 @@ def main() -> None:
             tags.append("model_disagreement")
         if teacher_only:
             tags.append("teacher_added")
+        if row["blue_basket_features"]["present"]:
+            tags.append("top_blue_basket" if row["blue_basket_features"]["top_half"] else "blue_basket")
         row["teacher"] = teacher_row
         row["preannotations"] = preannotations
         row["selection_tags"] = sorted(set(tags)) or ["low_confidence"]
         row["selection_score"] = round(features["base_risk_score"] + 5.0 * teacher_only + 0.8 * supported_prompts, 6)
 
-    selected = select_queue(shortlist, args.queue_size, args.max_per_task)
+    selected = select_queue(
+        shortlist, args.queue_size, args.max_per_task,
+        priority_tag="top_blue_basket" if args.prefer_blue_basket else None,
+    )
     queue_root = args.output_root / f"tray-active-{stamp}"
     if queue_root.exists():
         raise RuntimeError(f"refusing to overwrite queue: {queue_root}")
@@ -675,6 +745,7 @@ def main() -> None:
             "packed_size": list(image.size), "packed_image_sha256": sha256_file(image_path),
             "selection_score": row["selection_score"], "selection_tags": row["selection_tags"],
             "detector_features": row["detector_features"],
+            "blue_basket_features": row["blue_basket_features"],
             "comparison_disagreement": row["comparison_disagreement"],
             "preannotations": row["preannotations"],
             "preannotation_count": len(row["preannotations"]),

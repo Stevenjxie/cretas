@@ -13,6 +13,11 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 `c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 1024 长边的局部 crop；
 禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
 
+连续候选若都卡在蓝筐顶部孤立托盘，可对未使用且非保护集的本地副本启用
+`mine_tray_queue.py --prefer-blue-basket`。它只把确定性的蓝色区域当场景排序特征，不生成
+托盘真值；最多先占队列三分之二，其余仍由边缘、孤立、遮挡与模型分歧补足。扫描已完成
+但在 manifest 写入前失败时，可用 `--reuse-selection-from` 复用完整 photo ID，避免重复推理。
+
 本地 tray 标注页只监听回环地址：
 
 ```powershell
