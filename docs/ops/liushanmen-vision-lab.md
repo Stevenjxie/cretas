@@ -25,6 +25,8 @@ B:\anaconda3\python.exe tools\vision-lab\tray_annotator_local.py `
 `annotations-human/*.json` 才会写入 `reviewed=true, source=human`。仅翻到下一张不会被
 流水线当作人工真值。连续轮次必须核对页面顶部的完整队列名；服务端保存返回非 200 时
 页面会直接弹错并停止“确认”，不得用浏览器内存里的旧页面计数代替服务端 `/api/stats`。
+框体使用可透视内容的红色半透明填充，选中时改为黄色；边线保持细线，拖拽热区保留但
+不绘制方块手柄。
 
 人工确认完成后运行 tray 候选闭环：
 
