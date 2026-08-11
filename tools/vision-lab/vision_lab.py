@@ -376,7 +376,9 @@ def queue_snapshot(queue_root: Path) -> dict[str, Any]:
     }
 
 
-def scan_queues(config: dict[str, Any], state: State) -> dict[str, Any]:
+def scan_queues(
+    config: dict[str, Any], state: State, *, manage_attention_mark: bool = True,
+) -> dict[str, Any]:
     root = Path(config["runtime_root"])
     snapshots = [queue_snapshot(path) for path in discover_queue_roots(config)]
     with state.db:
@@ -391,7 +393,7 @@ def scan_queues(config: dict[str, Any], state: State) -> dict[str, Any]:
     pending = [item for item in snapshots if item["remaining"] > 0]
     mark = root / "attention" / "MARK-NEEDS-ANNOTATION.json"
     mark_text = root / "attention" / "MARK-NEEDS-ANNOTATION.txt"
-    if pending:
+    if pending and manage_attention_mark:
         payload = {
             "version": VERSION, "created_at": utc_now(), "status": "NEEDS_ANNOTATION",
             "message": "有图片需要人工确认；完成后流水线会自动继续训练。",
@@ -404,11 +406,16 @@ def scan_queues(config: dict[str, Any], state: State) -> dict[str, Any]:
             f"完成后无需手工训练，下一轮会自动继续。\n",
             encoding="utf-8",
         )
-    else:
+    elif manage_attention_mark:
         for path in (mark, mark_text):
             if path.exists():
                 path.unlink()
-    return {"queues": snapshots, "pending_queues": len(pending), "mark": str(mark) if pending else None}
+    return {
+        "queues": snapshots,
+        "pending_queues": len(pending),
+        "mark": str(mark) if mark.exists() else None,
+        "attention_mark_managed": manage_attention_mark,
+    }
 
 
 def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
@@ -427,6 +434,21 @@ def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
                 if (resolved / "manifest.json").is_file():
                     found[str(resolved).lower()] = resolved
     return [found[key] for key in sorted(found)]
+
+
+def config_with_queue_roots(config: dict[str, Any], values: Sequence[Path] | None) -> dict[str, Any]:
+    if not values:
+        return config
+    roots = [Path(value).resolve() for value in values]
+    missing = [str(path) for path in roots if not (path / "manifest.json").is_file()]
+    if missing:
+        raise RuntimeError(f"explicit queue root missing manifest: {missing}")
+    if len({str(path).lower() for path in roots}) != len(roots):
+        raise RuntimeError("explicit queue roots contain duplicates")
+    overridden = dict(config)
+    overridden["queue_roots"] = [str(path) for path in roots]
+    overridden["queue_globs"] = []
+    return overridden
 
 
 def deterministic_split(task_id: str, validation_percent: int) -> str:
@@ -522,6 +544,7 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         raise FileNotFoundError(base_model)
     run_id = f"{dataset['dataset_id']}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     root = Path(config["runtime_root"])
+    os.environ["YOLO_OFFLINE"] = "true"
     try:
         from ultralytics import YOLO
     except ImportError as exc:
@@ -533,7 +556,7 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         device=training.get("device", 0), workers=int(training.get("workers", 0)),
         project=str(root / "runs"), name=run_id, exist_ok=False,
         seed=int(training.get("seed", 20260810)), deterministic=True,
-        patience=int(training.get("patience", 20)), pretrained=True, verbose=True,
+        patience=int(training.get("patience", 20)), pretrained=False, amp=False, verbose=True,
     )
     best = root / "runs" / run_id / "weights" / "best.pt"
     if not best.is_file():
@@ -557,6 +580,7 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         "base_model_sha256": sha256_file(base_model), "best_pt": str(best),
         "artifact": str(onnx), "artifact_sha256": sha256_file(onnx),
         "onnx_parity_mismatches": parity_mismatches, "status": "candidate",
+        "offline_only": True, "amp_enabled": False,
     }
     write_json(artifact_dir / "training-receipt.json", result)
     return result
@@ -855,9 +879,14 @@ def command_main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     cycle = sub.add_parser("cycle")
     cycle.add_argument("--skip-collect", action="store_true")
+    cycle.add_argument("--queue-root", action="append", type=Path)
+    cycle.add_argument("--preserve-attention-mark", action="store_true")
+    cycle.add_argument("--skip-mining", action="store_true")
     args = parser.parse_args(argv)
 
     config = load_config(args.config.resolve())
+    if args.command == "cycle":
+        config = config_with_queue_roots(config, args.queue_root)
     root = Path(config["runtime_root"])
     state = State(root)
     try:
@@ -884,7 +913,9 @@ def command_main(argv: list[str] | None = None) -> int:
                 stages: dict[str, Any] = {"started_at": utc_now()}
                 if not args.skip_collect:
                     stages["collect"] = collect(config, state)
-                stages["queues"] = scan_queues(config, state)
+                stages["queues"] = scan_queues(
+                    config, state, manage_attention_mark=not args.preserve_attention_mark,
+                )
                 if stages["queues"]["pending_queues"]:
                     stages["status"] = "attention-required"
                     stages["finished_at"] = utc_now()
@@ -893,9 +924,16 @@ def command_main(argv: list[str] | None = None) -> int:
                     return EXIT_ATTENTION_REQUIRED
                 stages["dataset"] = build_dataset(config)
                 if state.get_meta("last_trained_dataset_id") == stages["dataset"]["dataset_id"]:
-                    stages["mining"] = mine_next_queue(config, state)
-                    stages["queues_after_mining"] = scan_queues(config, state)
-                    stages["status"] = "attention-required" if stages["queues_after_mining"]["pending_queues"] else "no-new-reviewed-data"
+                    if args.skip_mining:
+                        stages["mining"] = {"status": "skipped-by-operator"}
+                        stages["queues_after_mining"] = None
+                        stages["status"] = "no-new-reviewed-data"
+                    else:
+                        stages["mining"] = mine_next_queue(config, state)
+                        stages["queues_after_mining"] = scan_queues(
+                            config, state, manage_attention_mark=not args.preserve_attention_mark,
+                        )
+                        stages["status"] = "attention-required" if stages["queues_after_mining"]["pending_queues"] else "no-new-reviewed-data"
                     stages["finished_at"] = utc_now()
                     write_json(root / "receipts" / "latest-cycle.json", stages)
                     print(json.dumps(stages, ensure_ascii=False, indent=2))
@@ -912,8 +950,14 @@ def command_main(argv: list[str] | None = None) -> int:
                     persist_candidate(state, stages["model"], "rejected", stages["evaluation"])
                     stages["status"] = "candidate-rejected"
                 state.set_meta("last_trained_dataset_id", stages["dataset"]["dataset_id"])
-                stages["mining"] = mine_next_queue(config, state)
-                stages["queues_after_mining"] = scan_queues(config, state)
+                if args.skip_mining:
+                    stages["mining"] = {"status": "skipped-by-operator"}
+                    stages["queues_after_mining"] = None
+                else:
+                    stages["mining"] = mine_next_queue(config, state)
+                    stages["queues_after_mining"] = scan_queues(
+                        config, state, manage_attention_mark=not args.preserve_attention_mark,
+                    )
                 stages["finished_at"] = utc_now()
                 write_json(root / "receipts" / "latest-cycle.json", stages)
                 result = stages

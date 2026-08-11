@@ -82,6 +82,20 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
 `reviewed=true, source=human` 才能进入后续 label 训练。不得因此覆盖 tray MARK、旧 label MARK、
 生产模型或原图。
 
+当旧队列需要继续保留为安全阻塞、但新建的独立队列已完成人工确认时，使用显式队列白名单运行
+候选闭环；三个参数必须成组使用，避免扫描/清除旧 MARK 或再生成一轮队列：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\vision_lab.py --config D:\CretasVisionLab\config.json cycle `
+  --skip-collect --preserve-attention-mark --skip-mining `
+  --queue-root <reviewed-queue-1> `
+  --queue-root <reviewed-queue-2>
+```
+
+显式路径缺少 manifest 或重复时会直接失败；启用白名单后不会再展开 `queue_globs`。
+训练进程固定设置 `YOLO_OFFLINE=true`、`amp=false` 和 `pretrained=false`；本地 PT 仍作为明确的
+`base_model` 加载，但禁止 Ultralytics 的 AMP 自检或版本检查联网下载额外权重。
+
 ## 首次初始化
 
 1. 将 `tools/vision-lab/config.liushanmen.example.json` 复制到本机 gitignored 的 `D:\CretasVisionLab\config.json`，核对模型与 holdout 路径。

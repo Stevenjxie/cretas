@@ -39,6 +39,27 @@ def config(root: Path) -> dict:
 
 
 class VisionLabTests(unittest.TestCase):
+    def test_training_source_forces_offline_without_amp_probe(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
+        self.assertIn("pretrained=False, amp=False", source)
+
+    def test_explicit_queue_roots_disable_globs_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            queue.mkdir()
+            (queue / "manifest.json").write_text("{}", encoding="utf-8")
+            config = {"queue_roots": ["old"], "queue_globs": ["*"]}
+            overridden = vision_lab.config_with_queue_roots(config, [queue])
+            self.assertEqual(overridden["queue_roots"], [str(queue.resolve())])
+            self.assertEqual(overridden["queue_globs"], [])
+            self.assertEqual(config["queue_globs"], ["*"])
+            with self.assertRaisesRegex(RuntimeError, "missing manifest"):
+                vision_lab.config_with_queue_roots(config, [root / "missing"])
+            with self.assertRaisesRegex(RuntimeError, "duplicates"):
+                vision_lab.config_with_queue_roots(config, [queue, queue])
+
     def test_collect_is_content_addressed_and_advances_watermark(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
