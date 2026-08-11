@@ -181,29 +181,45 @@ describe('从 BOM 派生浮层', () => {
       workflowNodes: [processNode('p1', 300, 1000)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
-      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 300 },
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 400 },
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
     const short = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 1000)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
-      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 80 },
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 250 },
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
 
     // 辅料越高 → 要放得越高(它是从自己的 y 往下长的, 底边才对着工序)
     expect(tall.position.y).toBeLessThan(short.position.y);
     // 底边正好落在工序上方: y = 工序Y - (辅料高 + GAP)
-    expect(short.position.y).toBeLessThanOrEqual(1000 - 80);
-    expect(tall.position.y).toBeLessThanOrEqual(1000 - 300);
+    expect(short.position.y).toBeLessThanOrEqual(1000 - 250);
+    expect(tall.position.y).toBeLessThanOrEqual(1000 - 400);
     // ⛔ 工序自己的高度不许参与 —— 传工序高度不该改变结果 (上一版就是拿错了这个,
     //    工序越高辅料被推得越远)
     const withProcessHeight = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 1000)],
       auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
       packagingByOutput: {},
-      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 80, p1: 900 },
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 250, p1: 900 },
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
     expect(withProcessHeight.position.y).toBe(short.position.y);
+  });
+
+  /**
+   * 🔴 实测量来自**上一帧**: 辅料 Cell 的内容(辅料行/状态提示/加辅料按钮)展开后会变高,
+   * 测早了就偏小, 留白被吃掉 —— Steve 实测只剩 ~10px「靠得太近」。
+   * 所以取 max(实测, 下限)。
+   */
+  it('实测高度偏小时用下限兜底 —— 不许因为测早了就贴到工序上', () => {
+    const aux = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 1000)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: {},
+      nodeHeights: { [`${BOM_OVERLAY_PREFIX}aux:p1`]: 85 },  // 实测偏小(真实渲染 123)
+    }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
+    // 即便实测只有 85, 留白也必须够: 工序顶边往上至少 200 + 72
+    expect(aux.position.y).toBeLessThanOrEqual(1000 - 200);
   });
 
   it('拿不到实测高度时退回兜底高度 —— 首帧也不许重叠', () => {

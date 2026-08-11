@@ -445,9 +445,11 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
    position:absolute 依赖 .material-node 的 position:relative —— 那条是本次一并加的。 */
 .bom-status-bubble {
   position: absolute;
-  left: 100%;
-  top: 8px;
-  margin-left: 10px;
+  /* 放在 Cell **正上方** —— 原来贴右侧(left:100%)会正好撞上包材 Cell
+     (Steve 实测: 成品的「还没建 BOM」黄框压在包材 Cell 上)。 */
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 8px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -467,12 +469,13 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
   z-index: 3;
 }
 .bom-status-bubble::before {
+  /* 小三角改成朝下, 指向它描述的 Cell。 */
   content: '';
   position: absolute;
-  right: 100%;
-  top: 10px;
+  top: 100%;
+  left: 16px;
   border: 5px solid transparent;
-  border-right-color: var(--el-color-warning-light-5);
+  border-top-color: var(--el-color-warning-light-5);
 }
 .bom-status-bubble__text { flex: 1; }
 
