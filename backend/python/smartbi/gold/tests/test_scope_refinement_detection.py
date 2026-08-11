@@ -42,7 +42,7 @@ _STORES = ("模拟·静安嘉里中心店", "模拟·长宁龙之梦店", "模�
 def test_pure_scope_answers_are_recognized(query, expected_scope, expected_names):
     got = scope_only_refinement(query, _STORES)
     assert got is not None, f"{query!r} 是纯范围收窄, 没认出来"
-    assert got == (expected_scope, expected_names)
+    assert got[:2] == (expected_scope, expected_names)
 
 
 @pytest.mark.parametrize("query", [
@@ -74,7 +74,7 @@ def test_unknown_store_name_is_not_a_refinement():
 
 def test_multiple_known_stores_are_kept_in_order():
     got = scope_only_refinement("模拟·静安嘉里中心店 模拟·长宁龙之梦店", _STORES)
-    assert got == ("multi", ("模拟·静安嘉里中心店", "模拟·长宁龙之梦店"))
+    assert got[:2] == ("multi", ("模拟·静安嘉里中心店", "模拟·长宁龙之梦店"))
 
 
 def test_empty_store_catalogue_never_matches():
@@ -102,7 +102,7 @@ def test_a_unique_fragment_resolves_to_the_full_store_name():
     """打不全但唯一命中 —— 必须认出来, 并给出**规范全名**(下游要拿它去查)。"""
     got = scope_only_refinement("龙之梦", _STORES)
     assert got is not None, "唯一命中的片段没被认成收窄 —— 用户会拿到一句内部黑话"
-    scope, names = got
+    scope, names, _inferred = got
     assert names == ("模拟·长宁龙之梦店",), f"没有归一到全名: {names}"
 
 
@@ -137,3 +137,27 @@ def test_a_typo_fragment_is_still_not_a_refinement():
 def test_a_fragment_plus_a_metric_is_still_a_new_question():
     """⛔ 承重不变: 片段匹配不许把「去掉范围词后什么都不剩」这条判据放松掉。"""
     assert scope_only_refinement("龙之梦的毛利率", _STORES) is None
+
+
+# ── 2026-08-11 推断出来的匹配要先确认 ────────────────────────────────────
+#
+# owner 拍板:「唯一命中也要反问用户是否要问的是那家, 然后给到按钮。」
+# 判据: **只在「我们推断出了用户没打的东西」时确认** —— 用户打了完整全名就不该
+# 再问一遍(那是他明确说的), 而按钮点下去正好是完整全名, 于是天然不会二次确认。
+def test_exact_full_name_is_not_flagged_as_inferred():
+    assert scope_only_refinement("模拟·长宁龙之梦店", _STORES)[2] is False
+
+
+def test_all_store_phrase_is_not_flagged_as_inferred():
+    """「全部门店」是用户明说的范围, 不是推断。"""
+    assert scope_only_refinement("全部门店", _STORES)[2] is False
+
+
+def test_a_fragment_match_is_flagged_as_inferred():
+    """🔴 承重: 片段命中是**我们推断的** —— 上层必须据此先确认再查。"""
+    assert scope_only_refinement("龙之梦", _STORES)[2] is True
+
+
+def test_an_ambiguous_fragment_is_also_inferred():
+    stores = ("模拟·宝山大场社区店", "模拟·普陀真如社区店", "模拟·长宁龙之梦店")
+    assert scope_only_refinement("社区店", stores)[2] is True

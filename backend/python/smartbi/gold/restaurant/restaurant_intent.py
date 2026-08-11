@@ -177,7 +177,7 @@ _REFINEMENT_FILLER = ("看", "改成", "换成", "只看", "那", "呢", "的", 
 
 def scope_only_refinement(
     query: Optional[str], known_stores: Sequence[str],
-) -> Optional[Tuple[str, Tuple[str, ...]]]:
+) -> Optional[Tuple[str, Tuple[str, ...], bool]]:
     """这一句是不是**只是**在换门店范围? 是则返回 (scope, 门店名), 否则 None。
 
     🔴 用途: 多店租户首轮会直接答全部门店并声明范围(PR #2368)。已知残余代价写在
@@ -213,7 +213,7 @@ def scope_only_refinement(
                 residue = residue.replace(phrase, " ")
             for filler in _REFINEMENT_FILLER:
                 residue = residue.replace(filler, "")
-            return ("all", ()) if not residue.strip() else None
+            return ("all", (), False) if not residue.strip() else None
 
         # 🔴 2026-08-11 打不全的门店名。prod 实测:「龙之梦」「长宁」在 MOCK_REST
         #    都**唯一命中一家店**, 信息完全够, 但此前不被认成收窄, 用户拿到的是
@@ -237,7 +237,9 @@ def scope_only_refinement(
             return None
         # ⛔ 命中多家时**全部带出**, 不许挑一个: 少报一家 = 把歧义压成确定,
         #    而「唯一命中 vs 多家命中」的处置(确认 / 候选按钮)只能由上层决定。
-        return ("single" if len(hits) == 1 else "multi"), hits
+        # 第三位 inferred=True: 这是**我们从片段推断的**, 不是用户打出来的 ——
+        # owner 拍板「唯一命中也要反问确认」, 上层据此决定先确认还是直接查。
+        return ("single" if len(hits) == 1 else "multi"), hits, True
 
     for filler in _REFINEMENT_FILLER:
         residue = residue.replace(filler, "")
@@ -246,7 +248,8 @@ def scope_only_refinement(
         return None
 
     ordered = tuple(name for name in known_stores if name in matched)
-    return ("single" if len(matched) == 1 else "multi"), ordered
+    # inferred=False: 用户把完整门店名打出来了, 没有任何推断成分, 不该再问一遍。
+    return ("single" if len(matched) == 1 else "multi"), ordered, False
 
 
 # ─── QuerySpec ────────────────────────────────────────────────────────────
@@ -6099,8 +6102,39 @@ async def parse_restaurant_query(
                 )
                 known_stores = ()
             narrowed = scope_only_refinement(norm_query, known_stores)
+            if narrowed is not None and narrowed[2] and narrowed[1]:
+                # 🔴 owner 拍板(2026-08-11):「唯一命中也要反问用户是否要问的是那家,
+                #    然后给到按钮。」—— 唯一命中**不等于**用户想的就是它。
+                #
+                # 判据: 只在「我们推断出了用户没打的东西」时确认。用户把完整门店名
+                # 打出来了(inferred=False)就直接查, 再问一遍是折腾; 而按钮点下去
+                # 正好是完整全名, 于是**天然不会二次确认**, 不构成死循环。
+                #
+                # ⛔ 问句里不出现任何技术内容(置信度/匹配方式/内部概念名) ——
+                #    owner 明确要求。用户看到的只有门店名本身。
+                await _refinement_put(  # 放回去, 让按钮那一轮还能续上原问句
+                    pool, factory_id, session_key, resolver_query_seed=seed,
+                )
+                candidates = narrowed[1][:4]
+                logger.info(
+                    "[restaurant-intent] scope-refinement 推断出 %d 家, 先确认: %r -> %s",
+                    len(narrowed[1]), norm_query[:20], list(candidates),
+                )
+                return _seal_query_plan(replace(
+                    _build_spec(
+                        "", norm_query, confidence=1.0, tier="keyword",
+                        clarification_needed=True,
+                        clarification_question=(
+                            f"你是想看「{candidates[0]}」吗？"
+                            if len(candidates) == 1
+                            else "你是想看这几家门店中的哪一家？"
+                        ),
+                    ),
+                    clarification_options=candidates,
+                    plan_hash="",
+                ))
             if narrowed is not None:
-                scope, names = narrowed
+                scope, names, _inferred = narrowed
                 # 🔴 拼**归一化后的全名**, 不是用户打的那几个字。
                 #    prod 实测:「龙之梦」唯一命中「模拟·长宁龙之梦店」, 但直接把
                 #    「龙之梦」拼上去等于让下游再解析一次片段 —— 而它此前正是在那里
