@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -60,6 +63,39 @@ class WorkAreaRoiQueueTests(unittest.TestCase):
                 "completed_roi_queues": ["queue-1", "queue-2"],
                 "selected_count": 1, "target_count": 1, "selected": [row],
             })
+
+    def test_raw_tray_mode_requires_reviewed_queue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({
+                "version": module.RAW_TRAY_PLAN_VERSION,
+                "plan_only": True, "queue_created": False, "mark_created": False,
+                "selected_count": 0, "selected": [],
+            }), encoding="utf-8")
+            digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(RuntimeError, "reviewed tray queue"):
+                module.build_queue(plan, digest, root / "queues", root)
+
+    def test_reviewed_tray_annotation_rejects_invalid_box(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            annotation = Path(temporary) / "sample.json"
+            annotation.write_text(json.dumps({
+                "photo_id": "sample", "format": "normalised_xyxy",
+                "reviewed": True, "source": "human", "boxes": [[0.2, 0.3, 1.2, 0.8]],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "outside the image"):
+                module.validate_reviewed_tray_annotation(annotation, "sample")
+
+    def test_reviewed_tray_annotation_requires_matching_stem(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            annotation = Path(temporary) / "sample.json"
+            annotation.write_text(json.dumps({
+                "photo_id": "other", "format": "normalised_xyxy",
+                "reviewed": True, "source": "human", "boxes": [[0.2, 0.3, 0.7, 0.8]],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "photo binding drift"):
+                module.validate_reviewed_tray_annotation(annotation, "sample")
 
 
 if __name__ == "__main__":

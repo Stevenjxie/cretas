@@ -197,6 +197,19 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_raw_tray_plan.py `
 `reviewed=false`，必须逐张完整复核所有托盘外框。只有服务端达到 30/30 并逐文件核验
 `reviewed=true, source=human` 后，才能从同一批 tray 真值建立独立四点 ROI 队列。
 
+原始库补样完成托盘复核后，不重新选样，也不伪造普通 ROI 计划。使用原始计划的完整 SHA 和已复核
+托盘队列建立同批独立 ROI 队列；入口会再次验证原始计划绑定的既有 manifest/保护集、全部
+photo/task/SKU/SHA、源图/打包图、人工托盘框，并拒绝同一原始计划重复建立第二个 ROI 队列：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_roi_queue.py `
+  --plan-receipt D:\CretasVisionLab\receipts\work-area-raw-tray-plan-<timestamp>.json `
+  --plan-sha256 <完整 64 位 SHA256> `
+  --reviewed-tray-queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --queue-parent D:\CretasVisionLab\tray-queues `
+  --runtime-root D:\CretasVisionLab
+```
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
