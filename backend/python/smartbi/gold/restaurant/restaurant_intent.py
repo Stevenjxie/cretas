@@ -5656,6 +5656,28 @@ def _semantic_spec_from_t3(
         and _missing
         and set(_missing) <= _AUTO_DEFAULTABLE
         and not store_names
+        # 🔴 2026-08-11 单源化: 延续轮不在这里补默认。
+        #
+        #    此前延续轮补不补默认取决于模型报的 `missing_fields` —— 报「只缺门店」
+        #    就在这里被补掉(于是下游 `_apply_store_scope_guard` 开头的
+        #    `or spec.store_scope` 短路, 它**专门为延续轮写的按钮分支根本没机会跑**);
+        #    报别的就落到那条分支给按钮。**同一句话的归宿随模型翻面** ——
+        #    08-11 电池 [02]/[11] 就是这么挂的。
+        #
+        # ⛔ 首轮**不受影响**: 「门店范围不再是必答题」是 2026-08-07 拿实测做的取舍
+        #    (15 个问句里反问类占 80%, 烧掉 34,113 token 零答案), owner 2026-08-11
+        #    也拍板「总部走乙」。这里只关**延续轮**那一格。
+        #
+        # ⛔ 为什么延续轮反而保留按钮: 用户已经在选择流程里,「时间 → 门店按钮 →
+        #    答案」整条是**零 LLM** 的确定性链, 而且是 T3 不可用时唯一还能走通的
+        #    路径(`test_semantic_first_dish_time_store_buttons_survive_t3_outage`
+        #    等 6 条守着它)。08-07 撤回记录的结论也在这里:「按钮链是产品的一部分,
+        #    不是待优化的摩擦」。
+        #
+        # 📌 与上面**时间**默认那个块对称 —— 那边早就有 `and not is_continuation`,
+        #    注释写着「澄清延续里时间是用户正在回答的槽位, 替他答就是抢答」。
+        #    同一条判据两个载体, 此前只有一处装了。
+        and not is_continuation
     ):
         logger.info(
             "[restaurant-intent] 缺项都有安全默认值 -> 补默认而不反问: missing=%s query=%r",
