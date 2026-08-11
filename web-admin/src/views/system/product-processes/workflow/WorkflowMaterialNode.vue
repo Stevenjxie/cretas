@@ -189,6 +189,28 @@
       </div>
     </template>
 
+    <!--
+      BOM 状态气泡 —— 只挂在成品 Cell 上, 内容来自原顶部黄色横幅。
+      ⛔ 只在「需要用户动手」时出现(未建 BOM / 没配辅料包材 / 有草稿待生效);
+         纯陈述性的差异不冒泡, 免得每个成品旁边都挂一颗没人看的气泡。
+    -->
+    <div
+      v-if="bomStatusText"
+      class="bom-status-bubble nodrag"
+      data-testid="bom-status-bubble"
+    >
+      <span class="bom-status-bubble__text">{{ bomStatusText }}</span>
+      <el-button
+        v-if="bomStatusCanActivate"
+        text
+        type="primary"
+        size="small"
+        :loading="bomStatusActivating"
+        data-testid="bom-status-bubble-activate"
+        @click.stop="emit('activateBomDraft')"
+      >生效</el-button>
+    </div>
+
     <div v-if="kind !== 'FINISHED_GOOD' && canWrite" class="node-actions nodrag">
       <el-button
         v-if="kind === 'RAW_MATERIAL' && data.skuId && !rawBindingEditing"
@@ -249,6 +271,13 @@ const props = withDefaults(defineProps<{
   finishedOptions: WorkflowSkuPickerOption[];
   /** 副产可选物料(按 isByproduct 标记筛出的物料档案, 不是产品 SKU)。 */
   byproductOptions?: ByproductMaterialOption[];
+  /**
+   * 这个成品的 BOM 状态气泡文案 —— 空串 = 不显示。
+   * 内容原本在画布顶部的黄色横幅里, 但那里离它描述的 Cell 太远, 用户得来回找。
+   */
+  bomStatusText?: string;
+  bomStatusCanActivate?: boolean;
+  bomStatusActivating?: boolean;
   unitError?: string;
   validationError?: string;
   validationAttention?: boolean;
@@ -258,6 +287,9 @@ const props = withDefaults(defineProps<{
   rawMaterialSegments: () => [],
   excludedRawMaterialIds: () => [],
   byproductOptions: () => [],
+  bomStatusText: '',
+  bomStatusCanActivate: false,
+  bomStatusActivating: false,
   validationAttention: false,
 });
 
@@ -273,6 +305,8 @@ const emit = defineEmits<{
   selectByproductSku: [materialTypeId: string];
   /** 就地把某个原料标记成副产 —— 不再把用户支去物料档案页。 */
   quickMarkByproduct: [];
+  /** 气泡上的「生效该草稿」—— 与顶部那颗按钮同一个动作。 */
+  activateBomDraft: [];
   selectSku: [skuId: string];
   delete: [];
   editSku: [];
@@ -407,6 +441,37 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
 </script>
 
 <style scoped>
+/* BOM 状态气泡: 贴在成品 Cell 右上角外侧, 带一个指向 Cell 的小三角。
+   position:absolute 依赖 .material-node 的 position:relative —— 那条是本次一并加的。 */
+.bom-status-bubble {
+  position: absolute;
+  left: 100%;
+  top: 8px;
+  margin-left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 190px;
+  padding: 4px 8px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 6px;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  z-index: 3;
+}
+.bom-status-bubble::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 10px;
+  border: 5px solid transparent;
+  border-right-color: var(--el-color-warning-light-5);
+}
+.bom-status-bubble__text { flex: 1; }
+
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
 /* 副产: 与主产出的绿色左条区分开(owner 要求颜色能分辨)。只改视觉, 不改任何图逻辑。 */
 .material-node.byproduct { border-left-color: #dc6803; background: #fffcf5; }
@@ -487,6 +552,9 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
 }
 
 .material-node {
+  /* BOM 状态气泡用 left:100% 挂在 Cell 右侧外部, 需要这里做定位上下文。
+     ⚠️ 这条以前不存在 —— 加气泡时我在注释里写了「已有」, 实际没有, grep 才发现。 */
+  position: relative;
   width: 210px;
   padding: 12px;
   border: 1px solid #d8e4ef;

@@ -139,6 +139,11 @@
             <strong>工艺</strong>
             当前编辑草稿 v{{ definition.version }}；生产继续使用已启用 Workflow v{{ activation.activeDefinitionVersion }}。
           </p>
+          <!--
+            逐产品那几行已经挂到对应成品 Cell 的气泡上(离要动手的地方更近)。
+            这里保留同样的行, 但只作为**总览**: 画布可能滚动到看不见某个 Cell,
+            顶部仍要能一眼看全。⛔ 不是重复 —— 气泡管「就近告诉你」, 这里管「不漏」。
+          -->
           <p
             v-for="line in bomVersionLines"
             :key="line.productId"
@@ -268,11 +273,16 @@
               :unit-error="unitIssueForNode(slotProps.id)"
               :validation-error="publishBindingErrorForNode(slotProps.id)"
               :validation-attention="publishBindingAttentionNodeIds.has(slotProps.id)"
+              :bom-status-text="bomBubbleNeedsAction(bomStatusBySku[slotProps.data.skuId])
+                ? bomBubbleText(bomStatusBySku[slotProps.data.skuId]) : ''"
+              :bom-status-can-activate="!!bomStatusBySku[slotProps.data.skuId]?.notice"
+              :bom-status-activating="activatingBomDraft"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @select-byproduct-sku="(materialTypeId) => selectByproductSku(slotProps.id, materialTypeId)"
               @quick-mark-byproduct="() => openByproductQuickMark(slotProps.id)"
+              @activate-bom-draft="() => activateBomDraft(bomStatusBySku[slotProps.data.skuId]?.notice)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
@@ -1216,6 +1226,35 @@ const bomVersionLines = computed<BomVersionLine[]>(() => {
   return [...byId.values()];
 });
 
+/**
+ * 成品 Cell 上那颗气泡要显示的内容 —— 按 skuId 索引。
+ *
+ * Steve 2026-08-11: 「黄色横幅的内容, 能不能弄成小的气泡直接放到没有配置好的 cell 旁边」。
+ * 顶部横幅的问题是**信息离它描述的对象太远**: 说「拓扑成品D 还没配辅料/包材」, 而用户要动手的
+ * 地方在画布右下角那个 Cell 上, 中间隔着整张图。挂到 Cell 上就不用来回找。
+ * 顶部只留跨对象的信息(工艺版本 / 归属搬迁), 那些本来就不属于任何单个 Cell。
+ */
+const bomStatusBySku = computed<Record<string, BomVersionLine>>(() => {
+  const map: Record<string, BomVersionLine> = {};
+  bomVersionLines.value.forEach((line) => { map[line.productId] = line; });
+  return map;
+});
+
+/** 气泡文案 —— 比顶部那行更短, 因为它就贴在对象旁边, 不需要重复说对象是谁。 */
+function bomBubbleText(line: BomVersionLine): string {
+  if (line.activeVersion == null) return '还没建 BOM';
+  const parts: string[] = [];
+  if (line.activeIsEmpty) parts.push('还没配辅料 / 包材');
+  if (line.draftVersion != null) parts.push(`草稿 v${line.draftVersion} 未生效`);
+  if (!parts.length && line.mismatched) parts.push('与已启用工艺不一致，发布时自动同步');
+  return parts.join(' · ') || `BOM 生效 v${line.activeVersion}`;
+}
+
+/** 只有「需要用户动手」的才冒泡; 纯陈述性的不打扰(它仍在顶部详情里可查)。 */
+function bomBubbleNeedsAction(line: BomVersionLine | undefined): boolean {
+  return !!line && (line.activeVersion == null || line.activeIsEmpty || line.draftVersion != null);
+}
+
 /** 每行右侧的一句话状态, 按严重度取最该说的那一句 (不叠加, 一行只说一件事)。 */
 function bomVersionLineText(line: BomVersionLine): string {
   if (line.activeVersion == null) {
@@ -1240,9 +1279,6 @@ const bomVersionNeedsAction = computed(() =>
  */
 const bomVersionPanelOpen = ref(false);
 const bomVersionPanelTouched = ref(false);
-watch(bomVersionNeedsAction, (needsAction) => {
-  if (needsAction && !bomVersionPanelTouched.value) bomVersionPanelOpen.value = true;
-}, { immediate: true });
 function toggleBomVersionPanel(): void {
   bomVersionPanelTouched.value = true;
   bomVersionPanelOpen.value = !bomVersionPanelOpen.value;
@@ -1536,6 +1572,13 @@ const pendingAnchorMove = computed<{ skuId: string; name: string } | null>(() =>
   });
   return { skuId: targetSkuId, name: nameBySku.get(targetSkuId) ?? targetSkuId };
 });
+
+// 2026-08-11: 逐产品的「需要动手」现在由成品 Cell 上的气泡就近提示, 顶部不再抢版面自动展开
+// —— 那正是 Steve 说的「占用了太多空间」。只有跨对象的事(归属搬迁)才值得默认展开,
+// 因为它不属于任何单个 Cell, 没有别的地方能说。
+watch(pendingAnchorMove, (move) => {
+  if (move && !bomVersionPanelTouched.value) bomVersionPanelOpen.value = true;
+}, { immediate: true });
 
 /** 顶部「本图产出：A、B」—— 研判结论驱动, 归属对象(存放位置)不参与。 */
 const terminalOutputNames = computed(() => terminalOutputLabels(
