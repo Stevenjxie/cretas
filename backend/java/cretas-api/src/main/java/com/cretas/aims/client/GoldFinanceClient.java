@@ -1440,8 +1440,23 @@ public class GoldFinanceClient {
      * resolver path, not the legacy 6-second mapper fast path.  Keep a
      * production-safe bound, but never let the old 6/10-second budget cancel
      * a valid high-quality semantic plan before its data query completes.
+     *
+     * <p><b>这个数必须 ≥ Python 侧的语义链总预算</b>
+     * ({@code restaurant_intent._SEMANTIC_TOTAL_TIMEOUT_SECONDS})。它是那条链的
+     * 出资方: Python 给自己批多少时间不重要, 这里先挂断, 那边算完也没人收。
+     *
+     * <p>2026-08-12 实测到的事故形态: Python 批了自己 45s, 这里 30s 就挂断 ——
+     * 用户看到的「餐饮语义规划暂时不可用」是<b>这一侧的秒表到点</b>写出来的,
+     * 不是 Python 失败。而 Python 那个 45s 常量<b>正上方的注释逐字写着</b>
+     * "Keep the whole cascade inside Java's independent 30 s deadline" ——
+     * 注释说 30, 常量是 45, 两处口径打架且没有任何东西会红。
+     *
+     * <p>现在: Python 总预算 12s(单跳 6s × 2), 这里给 15s 留 3s 网络与序列化余量。
+     * ⛔ 调这个数之前先去看 Python 那个常量, 两个数是一对, 不是各自独立的旋钮。
+     * 判据(owner 2026-08-12 拍板): 老板问一句话, 等到第 15 秒还没有就该诚实说
+     * 没算出来 —— 25 秒都嫌长, 45 秒里挣扎出来的「成功」和失败没区别。
      */
-    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 30_000L;
+    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 15_000L;
 
     long tieredAnswerTimeoutMs() {
         return Math.max(
