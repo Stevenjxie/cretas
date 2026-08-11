@@ -181,6 +181,49 @@ class RawMaterialTypeMasterDataGuardTest {
         verify(packagingRepository).deleteByMaterialTypeId("M-1");
     }
 
+    /**
+     * 🔴 2026-08-11: updateMaterialType 以前**完全没有** setIsByproduct —— create 写、update 漏。
+     * 后果不止是物料档案那个开关失灵: 画布副产 Cell 在没有副产物料时给的指引正是
+     * 「去『仓库 → 物料档案』编辑该物料, 勾上这是副产后再回来选」, 用户照做,
+     * 回来发现下拉还是空的, 因为那一勾从来没保存过 —— 一条**走不通的**指引。
+     */
+    @Test
+    void updateHonorsIsByproductFlag() {
+        stubSegmentChain("原料");
+        RawMaterialType existing = existing("原料");
+        existing.setIsByproduct(false);
+        when(repository.findById("M-1")).thenReturn(Optional.of(existing));
+        when(repository.save(any(RawMaterialType.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
+        dto.setCategory("原料");
+        dto.setClassificationId(L3);
+        dto.setIsByproduct(true);
+
+        RawMaterialTypeDTO result = service.updateMaterialType(FACTORY, "M-1", dto);
+
+        assertThat(result.getIsByproduct()).isTrue();
+        ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
+        verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getIsByproduct()).isTrue();
+    }
+
+    /** null-tolerant: 不传这个字段就不许动它, 与相邻字段口径一致(别的编辑不该顺手清掉副产标记)。 */
+    @Test
+    void updateWithoutIsByproductKeepsExistingFlag() {
+        stubSegmentChain("原料");
+        RawMaterialType existing = existing("原料");
+        existing.setIsByproduct(true);
+        when(repository.findById("M-1")).thenReturn(Optional.of(existing));
+        when(repository.save(any(RawMaterialType.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
+        dto.setCategory("原料");
+        dto.setClassificationId(L3);
+
+        RawMaterialTypeDTO result = service.updateMaterialType(FACTORY, "M-1", dto);
+
+        assertThat(result.getIsByproduct()).isTrue();
+    }
+
     private RawMaterialTypeDTO baseCreateDto(String name) {
         RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
         dto.setName(name);

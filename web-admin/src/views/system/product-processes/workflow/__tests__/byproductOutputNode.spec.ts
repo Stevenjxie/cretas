@@ -192,11 +192,27 @@ describe('入口与选择器', () => {
 
   it('档案里没有副产物料时给解释与去处, 不是一个空下拉', () => {
     // 继承自已删的 ByproductBindingDialog.spec 的同名判据(防呆规则 5)。
+    //
+    // 2026-08-11 判据升级: 「去处」不再是「去仓库→物料档案勾一下」那种跳页指引 ——
+    // 那条路当时**走不通**(updateMaterialType 漏了 setIsByproduct, 勾完回来下拉还是空的,
+    // 后端已修)。现在去处是**就地标记按钮**, 用户不必换页面。
+    // ⛔ 意图一字未改: 空下拉旁边必须有解释 + 一个真能走的下一步。
     expect(MATERIAL_NODE).toContain('data-testid="byproduct-material-empty"');
     const at = MATERIAL_NODE.indexOf('data-testid="byproduct-material-empty"');
-    const block = MATERIAL_NODE.slice(at, at + 400);
+    const block = MATERIAL_NODE.slice(at, at + 500);
     expect(block).toMatch(/物料档案/);
-    expect(block).toMatch(/这是副产/);
+    expect(block).toContain('data-testid="byproduct-quick-mark"');
+    expect(block).toMatch(/就地标记/);
+  });
+
+  it('就地标记是真入口: 事件声明、编辑器绑定、弹窗与写接口都在', () => {
+    expect(MATERIAL_NODE).toContain('quickMarkByproduct: [];');
+    expect(EDITOR).toContain('@quick-mark-byproduct=');
+    expect(EDITOR).toContain('data-testid="byproduct-quick-mark-dialog"');
+    // 真的会写库, 不是一个只弹窗不落地的假入口
+    expect(EDITOR).toMatch(/raw-material-types\/\$\{materialTypeId\}`,\s*\{\s*isByproduct: true/);
+    // 标记完必须重载候选, 否则刚标的那个还是选不到 —— 旧路径就是死在这
+    expect(EDITOR).toContain('byproductMaterialsLoaded.value = false;');
   });
 
   it('副产在画布上与主产出视觉可分 —— owner 明确要求颜色区分', () => {

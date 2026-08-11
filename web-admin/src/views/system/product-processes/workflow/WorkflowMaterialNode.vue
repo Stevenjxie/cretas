@@ -171,9 +171,21 @@
         给的是解释 + 去处, 不是一个空下拉。这条判据继承自已删的 ByproductBindingDialog
         的「档案里没有副产标记时: 给出解释与去处, 而不是一个空下拉」。
       -->
+      <!--
+        ⛔ 防呆规则 5 升级 (2026-08-11): 原来这里是「去『仓库 → 物料档案』编辑该物料,
+        勾上这是副产后再回来选」—— 那是把用户支去另一个页面, 而且那条路当时**走不通**:
+        updateMaterialType 漏了 setIsByproduct, 用户照做勾完回来下拉还是空的。
+        后端已修(同 PR); 这里进一步把它变成就地操作 —— 直接在画布上挑物料并标记, 不跳页。
+      -->
       <div v-else class="byproduct-empty" data-testid="byproduct-material-empty">
-        物料档案里还没有标记为副产的物料。<br>
-        去「仓库 → 物料档案」编辑该物料, 勾上「这是副产（生产产出，无采购来源）」后再回来选。
+        物料档案里还没有标记为副产的物料。
+        <el-button
+          text
+          type="primary"
+          size="small"
+          data-testid="byproduct-quick-mark"
+          @click="emit('quickMarkByproduct')"
+        >就地标记一个 →</el-button>
       </div>
     </template>
 
@@ -259,6 +271,8 @@ const emit = defineEmits<{
   addNext: [];
   selectRawSku: [skuId: string];
   selectByproductSku: [materialTypeId: string];
+  /** 就地把某个原料标记成副产 —— 不再把用户支去物料档案页。 */
+  quickMarkByproduct: [];
   selectSku: [skuId: string];
   delete: [];
   editSku: [];
