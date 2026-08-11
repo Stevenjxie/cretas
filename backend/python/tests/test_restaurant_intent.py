@@ -2571,7 +2571,11 @@ def test_conflicting_llm_intent_stays_fail_closed_when_plan_has_multiple_resolve
     )
     assert spec.intent == "RESTAURANT_OPS_REQUISITION_TREND"
     assert spec.clarification_needed is True
-    assert "不会用相邻指标替代" in spec.clarification_question
+    # ⚠️ 2026-08-11 改包裹不改主语: 原措辞是「我识别到的**问题对象**与准备执行的
+    #    **分析范围**不一致…我不会用相邻指标替代」—— 前半句是内部概念名, 店长读不懂
+    #    (prod 实测: 用户只是打了个不完整的门店名就拿到这句)。本条的主语是
+    #    **fail-closed**(上面 `clarification_needed is True` 已经断住), 这句只是包裹。
+    assert "不会拿别的数据顶替" in spec.clarification_question
 
 
 def test_llm_entity_slots_fix_scope_before_execution_plan_is_sealed():
