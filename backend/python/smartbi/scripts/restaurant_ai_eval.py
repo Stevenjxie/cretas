@@ -26,7 +26,7 @@ import string
 import sys
 import time
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 # ── 租户夹具：会随租户变的东西，只在这里定义一次 ────────────────────────
 #
@@ -754,6 +754,46 @@ def _provenance_since(start: Optional[int]) -> Dict[str, Any]:
     return summarize_provenance(raw.decode("utf-8", "replace"))
 
 
+def build_units(cases: Sequence[Dict[str, Any]]) -> List[Any]:
+    """预分组成「执行单元」: 独立用例各成一个; 同一 chain 的全部步骤合成一个。
+
+    链是有状态的 —— 单独重跑其中一步没有意义(会话里缺前置轮次), 要重试只能
+    整条链换新会话重来。
+    """
+    units: List[Any] = []
+    chain_steps: Dict[str, List[Any]] = {}
+    for idx, case in enumerate(cases, 1):
+        chain = case.get("chain")
+        if not chain:
+            units.append((None, [(idx, case)]))
+        elif chain in chain_steps:
+            chain_steps[chain].append((idx, case))
+        else:
+            chain_steps[chain] = [(idx, case)]
+            units.append((chain, chain_steps[chain]))
+    return units
+
+
+def select_units(units: Sequence[Any], only: Optional[str]) -> List[Any]:
+    """`--only` 选中的执行单元。
+
+    🔴 判据: 匹配是按**单元**做的 —— 链里任何一步命中, **整条链都跑**。
+       这正是「链必须整条跑」那条不变量的落实方式。
+
+    ⚠️ 2026-08-11: 这里原本还有一道 FATAL 守卫, 命中链式用例就直接拒绝运行,
+       理由是「单跑一步会话里缺前置轮次」。那道守卫是 07-28 加的, 当时过滤还是
+       **按单条用例**做的; 后来循环改成按单元(整条链一起跑), 守卫却没跟着删,
+       于是它挡住的是一个**本来就正确**的能力 —— 想验证某条链就只能跑全部 85 题。
+       实测代价: 08-11 一天为验证 15 个 PR 跑了 12 轮全量, 约 2100 次 LLM 调用、
+       4.3M token, 把当天的免费额度烧掉 8 个模型。
+       ⛔ 删守卫不等于放松不变量 —— 不变量改由 `test_only_pulls_in_the_whole_chain`
+          守着, 那条会**变红**, 而 FATAL 只会让人绕开。
+    """
+    if not only:
+        return list(units)
+    return [u for u in units if any(only in c["q"] for _i, c in u[1])]
+
+
 def run_eval(base: str, only: Optional[str] = None) -> int:
     # 本轮开始时的日志长度 —— 收尾时只读这之后追加的那一段, 用来说清
     # 「这一轮是在什么条件下取的数」(见 `summarize_provenance` 上面那段)。
@@ -816,31 +856,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
     # ── 预分组成"执行单元" ────────────────────────────────────────────
     # 独立用例各成一个单元; 同一 chain 的全部步骤合成一个单元, 因为链是有状态的:
     # 单独重跑其中一步没有意义(会话里缺前置轮次), 要重试只能整条链换新会话重来。
-    units: List[Any] = []
-    chain_steps: Dict[str, List[Any]] = {}
-    for idx, case in enumerate(CASES, 1):
-        chain = case.get("chain")
-        if not chain:
-            units.append((None, [(idx, case)]))
-        elif chain in chain_steps:
-            chain_steps[chain].append((idx, case))
-        else:
-            chain_steps[chain] = [(idx, case)]
-            units.append((chain, chain_steps[chain]))
-
-    # ⛔ --only 命中链式用例时直接拒绝。
-    # 链是有状态的: 只跑其中一步 = 会话里缺前置轮次, 得到的通过/失败都不可信。
-    # (本守卫补于 2026-07-28 审查: 之前 --only 会静默打断链, 结果误导人。)
-    hit_chains = sorted({
-        case["chain"]
-        for _chain, steps in units
-        for _idx, case in steps
-        if case.get("chain") and only and only in case["q"]
-    })
-    if hit_chains:
-        print(f"FATAL: --only '{only}' 命中链式用例 {hit_chains}; "
-              f"链必须整条跑, 单跑一步会话里缺前置轮次, 结果不可信。")
-        return 2
+    units = build_units(CASES)
 
     passed, failed = 0, 0
     failures: List[str] = []
@@ -863,9 +879,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
             passed += 1
             print(f"✓ [{idx:02d}] {outcome['elapsed']:5.1f}s {q}")
 
-    for chain, steps in units:
-        if only and not any(only in c["q"] for _i, c in steps):
-            continue
+    for chain, steps in select_units(units, only):
         if chain is None:
             idx, case = steps[0]
             # 蓝绿切换/熔断窗会产生瞬态失败 — 失败自动重试一次再定论。
