@@ -16,12 +16,14 @@ from food_kb.api.manual_chat import (
     _FACTORY_REPORTING_RUNTIME_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
+    _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
     _LABEL_QC_REVIEW_ANSWER,
     _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+    _RESTAURANT_COST_CATEGORY_ANSWER,
     _RESTAURANT_DISCOUNT_GUIDE_ANSWER,
     _RESTAURANT_DATA_AVAILABILITY_ANSWER,
     _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
@@ -33,6 +35,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_PLAN_ALERT_ANSWER,
     _RESTAURANT_PROACTIVE_FINDINGS_ANSWER,
     _RESTAURANT_PLATFORM_SYNC_ANSWER,
+    _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
@@ -48,12 +51,14 @@ from food_kb.api.manual_chat import (
     _needs_factory_reporting_runtime_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
+    _needs_factory_workflow_output_directory_guard,
     _needs_material_packaging_guard,
     _needs_label_qc_review_guard,
     _needs_multi_output_label_qc_guard,
     _needs_multi_output_warehouse_receipt_guard,
     _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
+    _needs_restaurant_cost_category_guard,
     _needs_restaurant_discount_guide_guard,
     _needs_restaurant_data_availability_guard,
     _needs_restaurant_department_stocktake_guard,
@@ -65,6 +70,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_plan_alert_guard,
     _needs_restaurant_proactive_findings_guard,
     _needs_restaurant_platform_sync_guard,
+    _needs_restaurant_output_clarification_guard,
     _needs_restaurant_query_contract_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
@@ -108,6 +114,9 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "当前 BOM 成本摘要只汇总包材" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
     assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
+    assert "“归属对象”只表示存放位置" in FACTORY_SYSTEM_PROMPT
+    assert "“本图产出”按画布终端生产节点计算" in FACTORY_SYSTEM_PROMPT
+    assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
     assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
     assert "`allowMultipleUpstreamSources`" in FACTORY_SYSTEM_PROMPT
@@ -137,6 +146,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "主动发现与行动建议" in SYSTEM_PROMPT
     assert "POS 流水或后厨事实任一类即可进入餐饮问答" in SYSTEM_PROMPT
     assert "导览助手不替用户计算毛利、损耗" in SYSTEM_PROMPT
+    assert "统一使用 GFM Markdown 表格" in SYSTEM_PROMPT
+    assert "门店简称匹配多家时返回最多 3 个真实候选按钮" in SYSTEM_PROMPT
+    assert "食材类只认“食材、原材料、食品、饮料、酒水、菜品”" in SYSTEM_PROMPT
 
 
 def test_scope_prompt_distinguishes_depth_and_business_line():
@@ -211,6 +223,28 @@ def test_factory_bom_canvas_and_cost_boundary_is_deterministic():
     assert "不能直接与正式报工、结算形成的实际完整成本比较" in (
         _FACTORY_BOM_CANVAS_COST_ANSWER
     )
+
+
+def test_factory_workflow_storage_and_output_directory_is_deterministic():
+    equivalent_questions = (
+        "Workflow 的存放位置为什么和本图产出不一样？",
+        "工艺图归属对象不是实际产出时怎样按产出反查？",
+        "存放在原料目录的 Workflow 怎样找到实际产出的成品路线？",
+    )
+    assert all(
+        _needs_factory_workflow_output_directory_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_factory_workflow_output_directory_guard(
+        "Workflow 和 BOM 的发布顺序是什么？"
+    )
+    assert "只表示工艺图的存放位置" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    assert "“本图产出”才是画布计算出的真实产出" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
+    assert "BOM 副产不计入" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    assert "不能冒充“没有工艺图”" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    assert "完全匹配或最小超集" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
 
 
 def test_material_packaging_questions_use_the_reviewed_factory_contract():
@@ -376,6 +410,7 @@ def test_factory_start_batch_reporting_and_receipt_stay_on_one_execution_chain()
         "开工后生产批次和逐道报工怎么衔接？",
         "逐道报工完成后什么时候能仓库确认入库？",
         "生产批次、报工和完工入库是不是同一条链？",
+        "中间 WIP 批次和下一道工序如何保持同一生产计划身份？",
     )
     assert all(_needs_factory_production_execution_guard(q) for q in equivalent_questions)
     assert not _needs_factory_production_execution_guard("仓库库存怎么盘点？")
@@ -386,6 +421,9 @@ def test_factory_start_batch_reporting_and_receipt_stay_on_one_execution_chain()
     assert "`batchRows`" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
     assert "不指定则交给服务端按 FEFO 自动分配" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
     assert "PENDING_WAREHOUSE_RECEIPT" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    assert "中间 WIP 批次必须保留同一生产计划身份" in (
+        _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    )
 
 
 def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contract():
@@ -629,6 +667,48 @@ def test_restaurant_exact_range_scope_and_output_use_current_contract():
     )
 
 
+def test_restaurant_table_and_ambiguity_clarification_use_current_contract():
+    equivalent_questions = (
+        "Markdown 表格排行里门店名匹配到多家时怎么澄清？",
+        "排行表格为什么用 GFM，门店简称有多个候选怎么办？",
+        "构成表格的追问怎样保留原指标并显示门店候选？",
+    )
+    assert all(
+        _needs_restaurant_output_clarification_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_output_clarification_guard("门店营收是多少？")
+    assert "GFM Markdown 表格" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    assert "缺失值显示“—”" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    assert "没有金额权限时，整列省略金额" in (
+        _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    )
+    assert "最多 3 个真实候选" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    assert "仍然查询销量" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    assert "不替用户查询、计算或分析真实经营数据" in (
+        _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    )
+
+
+def test_restaurant_cost_category_uses_java_authoritative_vocabulary():
+    equivalent_questions = (
+        "食材成本和人工成本用哪些费用名称分类？",
+        "费用名写原材料或工资会归哪类，采购算食材吗？",
+        "Java 和 Python 的食材成本分类词表为什么必须一致？",
+    )
+    assert all(_needs_restaurant_cost_category_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_cost_category_guard("本月食材成本是多少？")
+    assert "食材、原材料、食品、饮料、酒水、菜品" in (
+        _RESTAURANT_COST_CATEGORY_ANSWER
+    )
+    assert "人工、工资、薪、员工、劳务" in _RESTAURANT_COST_CATEGORY_ANSWER
+    assert "“采购”“原料”“人力”等未列入当前权威词表" in (
+        _RESTAURANT_COST_CATEGORY_ANSWER
+    )
+    assert "期初库存 + 本期采购 − 期末库存" in _RESTAURANT_COST_CATEGORY_ANSWER
+    assert "不读取或代算当前门店的真实费用" in _RESTAURANT_COST_CATEGORY_ANSWER
+
+
 def test_restaurant_flywheel_questions_use_the_reviewed_governance_contract():
     equivalent_questions = (
         "AI 飞轮运营台谁能使用，候选可以自动晋升吗？",
@@ -868,7 +948,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-10" in html
+    assert "origin/main · SOP sync 2026-08-11" in html
+    assert "存放位置不等于“本图产出”" in html
+    assert "中间 WIP 批次沿用同一生产计划身份" in html
     assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
     assert "配置格不改变 Workflow 节点或连线" in html
     assert "① 投入" in html
@@ -1339,6 +1421,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "Workflow 的存放位置为什么和本图产出不一样，怎样按产出反查？",
+            "factory",
+            _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "Workflow 缺 skuId、其它仓库过期批次和标签 ZIP 下载分别怎么处理？",
             "factory",
             _FACTORY_CURRENT_GATES_ANSWER,
@@ -1361,6 +1449,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant",
             _RESTAURANT_QUERY_CONTRACT_ANSWER,
             "restaurant-full-chain-sop.html",
+        ),
+        (
+            "餐饮排行为什么用 Markdown 表格，门店名匹配到多家会怎样？",
+            "restaurant",
+            _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "食材成本和人工成本用哪些费用名称分类？",
+            "restaurant",
+            _RESTAURANT_COST_CATEGORY_ANSWER,
+            "restaurant-metrics-glossary.html",
         ),
         (
             "餐饮月报怎样预览和导出 XLSX 或 PDF，数据截至时间是什么？",

@@ -161,7 +161,7 @@ _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 
 **操作步骤：**
 1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
-2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
+2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU；顶部“本图产出”与画布终端生产节点一致，存放位置不作为实际产出判断，关联工序处于启用状态。
 3. 在同一画布点击目标工序旁的辅料、包材或副产配置格。目标 SKU 没有 BOM 时，首次保存会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，再点“生效该草稿”。
 4. 返回 Workflow 并刷新，点击“自动同步并发布”。系统先按最后一次保存后的草稿与当前 ACTIVE BOM 做实时预检；READY 可直接继续，AUTO_MIGRATABLE 会创建或复用同步草稿并迁移可证明兼容的绑定。
 5. 若预检为 USER_INPUT_REQUIRED 或 CONFLICT，页面会列出缺失材料、歧义或单位冲突并停止，必须修正后由用户重新发起；不能绕过，也不能猜测映射。
@@ -178,6 +178,16 @@ _FACTORY_BOM_CANVAS_COST_ANSWER = """\
 4. **成本边界：** 当前 BOM 成本摘要只汇总包材；工序辅料在独立明细中维护，主原料没有固定数量，人工与制造费用也不在 BOM 中配置。因此该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；成本差异、差异率和状态在不可比时必须保持空值，不能补 0 或伪造结论。
 
 **验收结果：** 画布配置格、草稿/生效提示和发布状态一致；空的可选包材/副产不制造假阻塞；成本预览明确是有限范围，实际完整成本仍以正式报工与结算结果为准。"""
+
+_FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER = """\
+Workflow 顶部的“归属对象”现在只表示工艺图的存放位置；“本图产出”才是画布计算出的真实产出，两者可以不同。
+
+1. **存放位置：** 可选择成品或原料，只用于目录索引和打开工艺图，不代表实际产出，也不参与生产计划路线优先级。
+2. **本图产出：** 系统按画布终端生产节点汇总真实产出集合，BOM 副产不计入；没有有效终端产出时必须明确警告，不能用存放位置补出一个产出。
+3. **按产出反查：** 选择成品后，页面查询全部已启用 Workflow 的真实终端产出。命中但存放在别处的路线会显示存放位置并提供打开入口；查询失败要显示错误，不能冒充“没有工艺图”，确实无命中时才显示空态。
+4. **计划匹配：** 生产计划仍用“用户所选成品集合”对“Workflow 真实终端产出集合”做完全匹配或最小超集判断；Workflow 名称、归属类型和存放位置都不能替系统决定优先级。
+
+**验收结果：** 存放位置、本图产出和按产出反查三处显示一致；存放在其它目录下的有效路线不会漏掉，BOM 副产不会混入生产计划产出集合。"""
 
 
 _MATERIAL_PACKAGING_TRIGGERS = frozenset({
@@ -295,6 +305,7 @@ _FACTORY_REPORTING_RUNTIME_ANSWER = """\
 2. 只有一个可用候选时可以自动选中，但实际投入数量仍由操作员填写。过期库存单独展示为不可用，不能自动选中或扣减；应联系仓库补料或处理批次。
 3. 调料配方属于终端成品 SKU 的 BOM。中间工序需要调料时，系统沿生产计划找到最终成品 BOM；不要为半成品工序另建一份重复 BOM。
 4. BOM 激活前会拒绝指向不存在工序的孤儿槽位。结单成本仍保留未绑定工序的辅料与包材，原料槽位则必须精确匹配，不能静默漏算。
+5. 上游工序形成的中间 WIP 批次继续携带当前生产计划身份，下一道工序按同一计划链识别和领用；该身份由服务端沿报工链保留，不能把中间批次变成无计划库存。
 """
 _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER = """\
 逐道报工的投入来源按实际批次逐行提交，库存短缺以服务端校验为唯一真值。
@@ -314,7 +325,7 @@ _FACTORY_PRODUCTION_EXECUTION_ANSWER = """\
 
 **开工与批次：**
 1. 点击“开工”时，服务端在同一事务、同一计划锁内校验单位、数量、固定的 Workflow revision 和 BOM revision，并创建或复用该计划的生产批次；任一校验失败时计划与批次都不应部分生效。
-2. 逐道报工继续使用开工时的同一生产批次，不能临时另建批次，也不能把历史“已开始但无批次”的异常状态当成正常流程。
+2. 逐道报工继续使用开工时的同一生产批次，不能临时另建批次，也不能把历史“已开始但无批次”的异常状态当成正常流程。上游工序形成的中间 WIP 批次必须保留同一生产计划身份，供下一道工序在同一计划链中识别和领用。
 3. 进度报工 `PROGRESS` 要填大于 0 的产出数量；工时报工 `HOURS` 要填大于 0 的总工时分钟数，不能为了通过校验虚构产量。业务校验失败时显示服务端消息与 actionHint，不自动保存草稿；网络失败才保存本地草稿并明确提示。
 
 **领料与完工入库：**
@@ -388,6 +399,26 @@ _RESTAURANT_QUERY_CONTRACT_ANSWER = """\
 4. 输出偏好已经随分析结果传到呈现层，但具体页面只有接入对应渲染器后才能真正显示表格、图表或生成文件；没有实际渲染或下载结果时，不能宣称“表格/报告文件已生成”。
 
 例如“看 2026年7月1日到7月15日全部門店营收，给我表格”应理解为：指定区间 + 全部门店聚合 + 文字/表格偏好；导览助手只解释这一方法，不会返回该区间的真实营收。"""
+
+_RESTAURANT_OUTPUT_CLARIFICATION_ANSWER = """\
+餐饮导览助手只解释呈现和澄清规则，不替用户查询、计算或分析真实经营数据；真实结果请进入 SmartBI 餐饮 AI。
+
+1. **标准表格：** 排行、对比、构成和预警类结果统一使用 GFM Markdown 表格，并保留表格前后的空行。数字列右对齐，单元格中的竖线和换行会安全转义；缺失值显示“—”或明确无数据，不能补 0。
+2. **权限边界：** 用户没有金额权限时，整列省略金额，不保留空金额列，也不能通过换一种排行问法绕过权限。当前统一表格覆盖菜品/门店排行、渠道与优惠构成、时段表现、损耗、缺货、配方成本、领料和库存预警等真实结果。
+3. **门店歧义：** 门店简称同时匹配多家真实门店时，系统返回最多 3 个真实候选及按钮；唯一匹配才直接使用。目录查询失败时保留错误，不能冒充“没有门店”或擅自改成全部门店。
+4. **追问保持：** 澄清轮保留原问题已经封存的指标，例如“米饭销量 → 本月 → 全部门店”仍然查询销量，不能在补门店或时间时改成毛利。只有当前 resolver 的真实执行签名接收时间窗时，才显示“本月 / 上个月 / 最近7天 / 最近30天”按钮。
+
+**验收结果：** 表格结构在页面可正确渲染，缺失与无权限不伪装成 0；门店候选来自当前租户真实目录；完成澄清后的指标、时间和门店范围与原问题一致。"""
+
+_RESTAURANT_COST_CATEGORY_ANSWER = """\
+餐饮费用分类必须使用当前统一词表，Java 权威口径与 Python 查询镜像保持一致，不能各自猜一套分类。
+
+1. **食材类：** 只识别“食材、原材料、食品、饮料、酒水、菜品”。
+2. **人工类：** 只识别“人工、工资、薪、员工、劳务”。
+3. **其它名称：** “采购”“原料”“人力”等未列入当前权威词表的泛词，不能被静默归到食材或人工；没有正式分类时应显示未分类或要求补齐，不能补 0 或凭常识猜测。
+4. **指标边界：** 食材成本率和人工成本率只汇总各自正式分类命中的费用事实；期间总食材成本的可信第一口径仍是“期初库存 + 本期采购 − 期末库存”，单菜配方成本只是理论参考。
+
+餐饮导览助手只解释分类和指标方法，不读取或代算当前门店的真实费用。"""
 _RESTAURANT_MONTHLY_REPORT_ANSWER = """\
 餐饮月度经营报告已具备服务端预览与 XLSX/PDF 导出能力，但聊天里识别到“报告文件”偏好不等于文件已经生成。
 
@@ -583,6 +614,19 @@ def _needs_factory_bom_canvas_cost_guard(query: str) -> bool:
     return mentions_canvas_bom or mentions_cost_boundary
 
 
+def _needs_factory_workflow_output_directory_guard(query: str) -> bool:
+    """Keep Workflow storage anchors separate from canvas-derived outputs."""
+    normalized = (query or "").lower()
+    mentions_workflow = any(term in normalized for term in ("workflow", "工艺图", "工艺路线"))
+    mentions_directory = any(
+        term in normalized for term in ("归属对象", "归属", "存放位置", "存放在", "目录")
+    )
+    mentions_output_lookup = any(
+        term in normalized for term in ("本图产出", "实际产出", "按产出", "反查", "找到", "查找")
+    )
+    return mentions_workflow and mentions_directory and mentions_output_lookup
+
+
 def _needs_material_packaging_guard(query: str) -> bool:
     """Keep raw-material packaging separate from finished-goods SKU packaging."""
     normalized = (query or "").lower()
@@ -715,7 +759,10 @@ def _needs_factory_production_execution_guard(query: str) -> bool:
         any(term in normalized for term in ("逐道报工", "报工", "工时")),
         any(term in normalized for term in ("仓库确认", "完工入库", "入库")),
     )
-    return sum(stages) >= 2
+    mentions_wip_chain = any(term in normalized for term in ("wip", "中间批次", "在制批次")) and any(
+        term in normalized for term in ("生产计划", "计划身份", "下一道工序", "下游工序")
+    )
+    return sum(stages) >= 2 or mentions_wip_chain
 
 
 def _needs_factory_byproduct_lifecycle_guard(query: str) -> bool:
@@ -805,6 +852,39 @@ def _needs_restaurant_query_contract_guard(query: str) -> bool:
         )),
     )
     return sum(signals) >= 2
+
+
+def _needs_restaurant_output_clarification_guard(query: str) -> bool:
+    """Explain the current table renderer and ambiguity/continuation contract."""
+    normalized = (query or "").lower()
+    mentions_table = any(
+        term in normalized
+        for term in ("markdown", "gfm", "表格", "排行", "排名", "构成", "预警")
+    )
+    mentions_clarification = any(
+        term in normalized
+        for term in (
+            "门店简称", "门店名", "多家", "多个门店", "歧义", "候选",
+            "澄清", "追问", "原指标", "时间按钮",
+        )
+    )
+    return mentions_table and mentions_clarification
+
+
+def _needs_restaurant_cost_category_guard(query: str) -> bool:
+    """Keep Java-authoritative restaurant cost category vocabulary mirrored."""
+    normalized = (query or "").lower()
+    mentions_cost = any(
+        term in normalized for term in ("食材成本", "人工成本", "费用", "成本率")
+    )
+    mentions_category = any(
+        term in normalized
+        for term in (
+            "分类", "归类", "费用名称", "哪些名称", "哪些词", "词表",
+            "原材料", "工资", "采购", "人力", "java", "python",
+        )
+    )
+    return mentions_cost and mentions_category
 
 
 def _needs_restaurant_monthly_report_guard(query: str) -> bool:
@@ -1254,8 +1334,9 @@ SYSTEM_PROMPT = """\
 3f. 【餐饮 AI 飞轮治理】AI 飞轮运营台只对平台管理员开放，当前只接入餐饮域，“工厂（待接入）”不可选择。晋升候选必须人工通过后才能写入确定性路由；菜品别名机器初匹配只产生 pending，只有 confirmed 映射影响解析，rejected 不生效，门店级确认优先于租户级。接口、权限或依赖失败必须明确报错，禁止模拟数据或假成功。飞轮是治理工具，导览助手不能替用户分析经营数据。
 3g. 【餐饮月报与预警】当前月报固定 9 节且每节显式使用全部门店范围；损耗、领料和盘点三节已经恢复，并必须按指定月份的明确时间窗取数。计划预警是同一 sealed QuerySpec 的定时回放加阈值，不是第二套统计引擎；无数据或执行失败表示无法判定，不能当成正常或自动关闭既有告警。
 3h. 【平台同步边界】当前客如云风格 connector 由服务端受控配置，不得编造门店自助“POS 对接”设置页、已支持品牌或实时性承诺。模拟平台只用于测试；未开通正式 connector 时，引导用户通过 SmartBI → Excel 上传导入 POS 导出文件。
-3i. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
+3i. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。排行、对比、构成和预警类真实结果统一使用 GFM Markdown 表格，必须保留表格前后空行，数字右对齐，缺失显示“—”而不是 0；没有金额权限时省略金额列。门店简称匹配多家时返回最多 3 个真实候选按钮，唯一匹配才直接使用；澄清轮保持原问题已封存的指标，只有 resolver 真支持时间窗时才显示时间按钮。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
 3j. 【餐饮指标与实体合同】损耗金额按 `wastage_cost` 排序并展示数量，普通损耗最多按 `wastage_qty`；盘点亏损默认按同一窗口的 `shortage_cost` 回答金额，数量只作分物料明细，kg、L 等不同单位不得合计。食材金额轴未物化时拒绝金额排名，不得拿数量冒充。领料花费走 `requisition_cost`，堂食/外卖兼容 POS `order_type`；菜名与别名只在当前租户菜单目录裁决，业务词和疑问片段不得当成菜名或门店。
+3j-1. 【餐饮费用分类】Java 权威口径与 Python 查询镜像使用同一词表：食材类只认“食材、原材料、食品、饮料、酒水、菜品”，人工类只认“人工、工资、薪、员工、劳务”。其它泛词不得静默归类，缺正式分类时明确未分类，不能补 0 或猜测。
 3k. 【数据可用与范围动作】POS 流水或后厨事实任一类即可进入餐饮问答，缺少另一类时对应问题回答无记录，不能用 0 补齐。已登记缺口只在原本要走域外拒答时真查租户数据；确实无记录时，客户文案点名“供应商报价”或“实收金额”等缺失业务事实和补录动作，数据库表/字段只放工程侧元数据且不得对客户展示。有数据或查表失败时不得硬编码为缺失。导览助手只能解释合同，不能断言当前租户为空。只有 resolver 真支持门店维度、存在其它范围且能生成完整独立问句时才提供换范围按钮；只有执行签名真实接收时间窗时才提供“本月 / 上个月 / 最近7天 / 最近30天”按钮，不支持的能力不提供误导按钮。
 3l. 【导览助手边界】导览助手不替用户计算毛利、损耗或分析业务数据，只解释板块、口径和提问方法，并把真实分析指向 SmartBI 餐饮 AI。
 3m. 【五部门与金额权限】运营、市场、财务、人事、采购五个部门按各自事实源与权限展示；人事缺在岗人数和目标人效时显示缺项空态，财务缺成本覆盖时显示“—”，都不得造假 KPI。餐饮老板为全局读写角色；店长管运营并只读人事，市场、财务、人事、采购分别由对应部门角色管理，厨师长已退役。左侧顶层“AI 工作台”菜单进入 `/dashboard/ai-value` 查看 AI 价值汇总；餐饮运营 → 市场 → 营销员提成进入 `/restaurant/commission`，按营销员和月份查看复购阶梯提成，金额无价权时显示“—”，待发放记录必须确认后标记。两个页面当前菜单与路由均已接通；角色可见、可管理、可写和金额读取仍是不同权限，菜单、路由和金额请求都必须经过后端中央角色/模块/金额闸，不能靠前端隐藏代替授权。
@@ -1329,6 +1410,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - SKU 定义库存/销售基本单位和成品标准克重；BOM 定义物料及工序辅料；Workflow 定义 Cell 与工序连接和报工单位；实际投入产出在报工中形成。
 - 原料包装换算在“原料类型字典”中紧邻库存基本单位维护，采购/收货/调拨可按包装录入并折合为基本量；库存批次、BOM 可用量和生产领料只用基本单位。绝不能把原料的箱/袋换算指向成品 SKU 管理。
 - Workflow 节点和连线只维护工序拓扑及可能投入/产出的稳定接口；画布上的辅料、包材和副产配置格是 BOM 派生叠层，不属于拓扑。主料、替代料、辅料、包材和用量来自计划固定的 BOM。正式报工候选取 Workflow 接口、BOM 授权和当前仓可用批次的交集，至少提交一项正数实际投入和一项正数实际产出；未发生项留空。
+- Workflow 顶部“归属对象”只表示存放位置，可选成品或原料；“本图产出”按画布终端生产节点计算，BOM 副产不计入。选择成品时按真实产出反查所有已启用路线，存放在别处的路线仍须显示；查询失败不能冒充无路线。生产计划匹配不看存放位置。
 - BOM 至少需要一项主原料；辅料和包材按实际需要配置，没有辅料或包材本身不阻止激活。工序辅料的投入基准使用对应产出 SKU 的原始单位，支持 kg、g、只、袋和其它非空自定义单位，只有跨单位才要求换算。
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
@@ -1342,7 +1424,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 当前 BOM 成本摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；不可比时成本差异、差异率和状态保持空值。
 - 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
-- 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。
+- 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。上游工序形成的中间 WIP 批次继续携带同一生产计划身份，供下一道工序在同一计划链中领用。
 - 会计期间关账申请只创建 OA；APPROVE 后才 CLOSED 并生成库存台账快照和凭证，REJECT 保持 OPEN。CLOSED/LOCKED 不能靠重复审批重开，只能走专用重开流程。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。多产出仓库确认按终端产出行逐项核对，混合单位不合计；每行实收必须大于 0 且等于该行报工数量，任一行不符则整组不入库。
 - 副产物先在原料类型字典建立带“副产”标记的 SKU，再在画布的 BOM 副产配置中声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
@@ -1871,6 +1953,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_BOM_CANVAS_COST_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_workflow_output_directory_guard(request.question)
+    ):
+        guard_answer = _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_material_packaging_guard(request.question)
     ):
         guard_answer = _MATERIAL_PACKAGING_ANSWER
@@ -1981,6 +2068,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _RESTAURANT_METRIC_ENTITY_ANSWER
     elif (
         is_restaurant_request
+        and _needs_restaurant_cost_category_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_COST_CATEGORY_ANSWER
+    elif (
+        is_restaurant_request
         and _needs_restaurant_live_command_guard(request.question)
     ):
         guard_answer = _RESTAURANT_LIVE_COMMAND_ANSWER
@@ -2009,6 +2101,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_platform_sync_guard(request.question)
     ):
         guard_answer = _RESTAURANT_PLATFORM_SYNC_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_output_clarification_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_query_contract_guard(request.question)
