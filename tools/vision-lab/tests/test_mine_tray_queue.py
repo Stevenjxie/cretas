@@ -21,6 +21,9 @@ SPEC.loader.exec_module(module)
 class MineTrayQueueTests(unittest.TestCase):
     def test_teacher_default_is_stable_offline_b_drive_path(self):
         self.assertEqual(module.DEFAULT_TEACHER_PATH, Path(r"B:\AIModels\LocateAnything-3B"))
+        self.assertEqual(module.TEACHER_MAX_SIDE, 640)
+        self.assertEqual(module.TEACHER_MAX_NEW_TOKENS, 256)
+        self.assertEqual(module.TEACHER_MAX_CROPS_PER_IMAGE, 3)
 
     def test_teacher_model_seal_pins_revision_and_detects_weight_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -120,6 +123,7 @@ class MineTrayQueueTests(unittest.TestCase):
         answer = (
             "<ref>tray</ref><box><0><0><1000><1000></box>"
             "<ref>tray</ref><box><100><200><500><500></box>"
+            "<ref>tray repeated</ref><box><101><201><501><501></box>"
         )
         self.assertEqual(module.parse_teacher_boxes(answer), [[0.1, 0.2, 0.5, 0.5]])
 

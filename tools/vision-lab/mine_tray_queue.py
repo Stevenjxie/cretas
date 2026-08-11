@@ -25,7 +25,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 TEACHER_MODEL_ID = "nvidia/LocateAnything-3B"
 TEACHER_REVISION = "c32291ca5e996f5a7a485845b4f57a233936bba0"
 TEACHER_LICENSE = "NVIDIA non-commercial research use"
-TEACHER_MAX_SIDE = 1024
+TEACHER_MAX_SIDE = 640
+TEACHER_MAX_NEW_TOKENS = 256
+TEACHER_MAX_CROPS_PER_IMAGE = 3
 DEFAULT_TEACHER_PATH = Path(r"B:\AIModels\LocateAnything-3B")
 TEACHER_MODEL_RECEIPT = "VISIONLAB_MODEL_RECEIPT.json"
 TEACHER_PROMPTS = {
@@ -105,6 +107,8 @@ def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     if receipt.get("model_id") != TEACHER_MODEL_ID or receipt.get("revision") != revision:
         raise RuntimeError("teacher model id or fixed revision mismatch")
+    if receipt.get("offline_only") is not True or int(receipt.get("crop_max_side", -1)) != TEACHER_MAX_SIDE:
+        raise RuntimeError("teacher model safety policy mismatch")
     required = teacher_model_files(model_path)
     incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
     missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
@@ -187,7 +191,7 @@ def parse_teacher_boxes(answer: str) -> list[list[float]]:
     for match in BOX_PATTERN.finditer(answer):
         values = [int(value) / 1000.0 for value in match.groups()]
         box = valid_box(values, max_area=0.35)
-        if box is not None:
+        if box is not None and not any(box_iou(box, retained) >= 0.90 for retained in boxes):
             boxes.append(box)
     return boxes
 
@@ -420,7 +424,7 @@ class LocateAnythingTeacher:
             response = self.model.generate(
                 pixel_values=inputs["pixel_values"].to(self.dtype), input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"], image_grid_hws=inputs.get("image_grid_hws"),
-                tokenizer=self.tokenizer, max_new_tokens=2048, use_cache=True,
+                tokenizer=self.tokenizer, max_new_tokens=TEACHER_MAX_NEW_TOKENS, use_cache=True,
                 generation_mode="hybrid", do_sample=False, repetition_penalty=1.1, verbose=False,
             )
         return str(response[0] if isinstance(response, tuple) else response)
@@ -547,7 +551,9 @@ def run_teacher(
             image = ImageOps.exif_transpose(opened).convert("RGB")
         prompt_results = []
         grouped: list[dict[str, Any]] = []
-        for crop_index, crop_spec in enumerate(teacher_crop_regions(record, image)):
+        for crop_index, crop_spec in enumerate(
+            teacher_crop_regions(record, image, limit=TEACHER_MAX_CROPS_PER_IMAGE)
+        ):
             x0, y0, x1, y1 = crop_spec["box"]
             crop = image.crop((round(x0 * image.width), round(y0 * image.height), round(x1 * image.width), round(y1 * image.height)))
             if max(crop.size) > TEACHER_MAX_SIDE:
@@ -578,11 +584,16 @@ def run_teacher(
                 calls += 1
         output[str(record["photo_id"])] = {"crop_prompts": prompt_results, "proposals": grouped}
         write_json(receipt_path, {
-            "version": "locateanything-tray-teacher-v1", "created_at": utc_now(),
+            "version": "locateanything-tray-teacher-v1",
+            "status": "completed" if len(output) == len(records) else "in_progress",
+            "created_at": utc_now(),
             "model_id": TEACHER_MODEL_ID, "model_revision": revision,
             "license_scope": TEACHER_LICENSE, "teacher_is_ground_truth": False,
             "teacher_scope": "local_crops_only", "full_image_inference": False,
-            "teacher_max_side": TEACHER_MAX_SIDE, "cloud_calls": 0,
+            "teacher_max_side": TEACHER_MAX_SIDE,
+            "teacher_max_new_tokens": TEACHER_MAX_NEW_TOKENS,
+            "teacher_max_crops_per_image": TEACHER_MAX_CROPS_PER_IMAGE,
+            "cloud_calls": 0,
             "local_teacher_calls": calls, "model_integrity": model_integrity, "records": output,
         })
     return output

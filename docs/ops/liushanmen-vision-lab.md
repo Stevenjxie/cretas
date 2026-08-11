@@ -10,7 +10,7 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 `MARK-NEEDS-ANNOTATION.json`。生产 tray ONNX 负责全图预标注；已淘汰的历史 tray v7
 只能用于分歧排序。LocateAnything 是可失败跳过的二级 teacher，只允许从固定离线路径
 `B:\AIModels\LocateAnything-3B`、固定 revision
-`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 1024 长边的局部 crop；
+`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 640 长边的局部 crop；
 禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
 
 固定目录首次就绪时，必须按“已验证 D snapshot 复制到 B → 封印关键文件 SHA-256 → 离线复核 →
@@ -28,6 +28,7 @@ B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py smoke `
   --model-path B:\AIModels\LocateAnything-3B `
   --image <local-readonly-image> `
   --crop <x0,y0,x1,y1> `
+  --prompt all `
   --receipt D:\CretasVisionLab\receipts\locateanything-crop-smoke.json
 ```
 
