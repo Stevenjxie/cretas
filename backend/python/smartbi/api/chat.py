@@ -1553,6 +1553,17 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         return response
 
                     if request.table_type == "restaurant_ops":
+                        # ⛔ fail-closed 是对的, 但**静默的** fail-closed 让它永远
+                        #    查不出根因。2026-08-11: 同一句拒答有 4 个载体, 上一版
+                        #    (#2485)只给 restaurant_intent 那 2 处装了留痕, 当天
+                        #    电池 [40] 真的走到了**没装的这两处** —— 于是日志里
+                        #    一点痕迹都没有。判据: **载体要算出来, 不能凭印象数。**
+                        logger.warning(
+                            "[restaurant-intent] planner-outage fail-closed: "
+                            "continuation=False factory=%s session=%s query=%r",
+                            factory_id_hdr, trusted_restaurant_session_key,
+                            str(effective_user_q)[:80],
+                        )
                         answer_text = (
                             "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
                             "请稍后重试。"
@@ -2472,6 +2483,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         )
 
                         if tiered_ops is None and request.table_type == "restaurant_ops":
+                            # 见上一处同样的注释: 这是第 4 个载体, #2485 也漏了它。
+                            logger.warning(
+                                "[restaurant-intent] planner-outage fail-closed: "
+                                "continuation=False factory=%s session=%s query=%r",
+                                factory_id_hdr, trusted_restaurant_session_key,
+                                str(effective_user_q)[:80],
+                            )
                             answer_text_ops = (
                                 "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
                                 "请稍后重试。"
