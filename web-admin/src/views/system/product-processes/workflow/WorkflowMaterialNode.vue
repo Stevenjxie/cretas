@@ -451,7 +451,11 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
   display: flex;
   align-items: center;
   gap: 4px;
-  max-width: 190px;
+  /* ⛔ 必须给**显式宽度**, 不能只写 max-width。
+     position:absolute + left:100% 时, shrink-to-fit 的可用宽度 = 包含块宽度 - left 偏移
+     = 210 - 210 = 0, 于是盒子塌成一个字宽, 中文被排成竖列。
+     (2026-08-11 真机实测: 气泡确实渲染出来了, 但成了两条一字宽的竖条。) */
+  width: 180px;
   padding: 4px 8px;
   border: 1px solid var(--el-color-warning-light-5);
   border-radius: 6px;
