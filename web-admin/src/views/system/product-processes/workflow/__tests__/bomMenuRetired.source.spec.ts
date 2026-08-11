@@ -119,6 +119,15 @@ describe('BOM 状态就近提示 (2026-08-11)', () => {
     expect(block).not.toMatch(/mismatched/);
   });
 
+  it('气泡必须有显式宽度 —— 只写 max-width 会塌成一字宽的竖条', () => {
+    // left:100% 时 shrink-to-fit 可用宽度 = 包含块宽 - left = 0, max-width 救不了。
+    // 真机实测踩过: 气泡渲染出来了, 但中文被排成竖列。
+    const at = NODE.indexOf('.bom-status-bubble {');
+    expect(at).toBeGreaterThan(-1);
+    const rule = NODE.slice(at, at + 700);
+    expect(rule.includes('width: 180px')).toBe(true);
+  });
+
   it('气泡要能定位在 Cell 外侧 —— .material-node 必须是定位上下文', () => {
     // 加气泡时我在注释里写了「已有 position:relative」, 实际没有, grep 才发现。
     // 钉住它: 少了这条, 气泡会跑到画布左上角。
