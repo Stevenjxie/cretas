@@ -138,7 +138,18 @@ export function isDerivedBomOverlayConnection(
     && connection.targetHandle === AUX_OVERLAY_TARGET_HANDLE;
   if (isAuxiliary) return true;
 
-  return connection.target === `${BOM_OVERLAY_PREFIX}pack:${connection.source}`
+  // 🔴 2026-08-12 (Steve 实测「包材 cell 没有一条线连到成品 cell」):
+  //
+  // 包材连线方向在「包材挪到成品上方」那次改动里翻过 —— deriveBomOverlay 现在是
+  // source=包材 Cell → target=成品 Cell(见下方 edges.push)。但**这条白名单没跟着翻**,
+  // 还在按旧方向判 `target === pack:<source>`, 代入真实值:
+  //
+  //   'material:finished:X' === 'bom-overlay:pack:' + 'bom-overlay:pack:material:finished:X'
+  //
+  // 恒 false ⇒ vue-flow 把这条边静默过滤掉 ⇒ DOM 里一条线都没有 —— 正是本函数
+  // 上方注释预言的那个后果。辅料那条因为方向没翻, 所以一直是对的, 两者看起来"一样"
+  // 就更没人怀疑。判据: **翻转一条边的方向, 要把判它方向的【所有】地方一起翻。**
+  return connection.source === `${BOM_OVERLAY_PREFIX}pack:${connection.target}`
     && connection.sourceHandle === PACK_OVERLAY_SOURCE_HANDLE
     && connection.targetHandle === PACK_OVERLAY_TARGET_HANDLE;
 }
