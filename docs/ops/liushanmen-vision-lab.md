@@ -164,6 +164,39 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
 `work-area-active-20260811T185515823075Z`，构建后 `/api/stats` 初始为 `0/18`。完成后必须重新
 服务端核验 18/18 和逐文件 reviewed/source/四点非自交，再决定是否重跑累计 66 张的离线门禁。
 
+第四轮已完成服务端 18/18 和逐文件审计，新增台内 `303`、台外 `61`、unknown `0`；累计 66 个
+任务为台内 `1107`、台外 `253`、unknown `0`，审计回执为
+`work-area-audit-20260811T190400752959Z.json`。66 张四角热图容量拟合达到平均/最差 IoU
+`0.9973`/`0.9835`、所有托盘中心零错分；任务级 8 折却仍只有平均/最差 IoU `0.8134`/`0`、
+`98` 个中心错分、`3` 个非法多边形，最差台内与台外召回均为 `0`。回执
+`work-area-roi-corner-experiment-20260811T194100822073Z.json` 的 SHA256 为
+`301229e5d62cd0dead3918638331de89c2438ebed874a4433ccaae8408f07dd5`。因此 66 张仍不足以训练生产
+ROI 模型，未保存权重、未写 registry、未授权部署。
+
+补齐 0013/0014 证据时，原始数据库中的新任务还没有人工 tray 真值，必须先做托盘外框复核，
+不能直接用生产检测框生成 ROI。`work_area_raw_tray_plan.py` 以只读 SQLite 打开数据库，排除所有
+既有 manifest 的 photo/task/SHA、保护集 exact 与 pHash Hamming `<=10` 近重复；每任务只选一图，
+按 SKU 均衡并记录完整 task/SKU/SHA/ID/pHash 绑定。计划器只写 receipt，不建队列、不写 MARK：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_raw_tray_plan.py `
+  --database D:\CretasVisionLab\state\vision.db `
+  --existing-manifest <每个既有 tray、ROI 和旧 label MARK manifest；可重复> `
+  --protected-holdout D:\CretasVisionLab\evaluation\protected-holdout.json `
+  --sku-code CPLIUSHANMEN0013 --sku-code CPLIUSHANMEN0014 `
+  --count-per-sku 15 `
+  --runtime-root D:\CretasVisionLab
+```
+
+当前计划 `work-area-raw-tray-plan-20260811T191537291550Z.json`（SHA256
+`2dd4887df39c34073ad1f292a6650aeda80abe860b7e6c33a1ed629d92fc505e`）选中 30 个独立任务，
+0013/0014 各 15；最近保护集、既有 ROI、本轮内 pHash 距离分别为 `94`、`98`、`98`。用
+`mine_tray_queue.py --raw-work-area-plan ... --raw-work-area-plan-sha256 ...` 构建时会重新验证计划、
+全部 manifest 哈希、源图 SHA/pHash 和保护集排除；生产 tray ONNX 只生成 proposal。队列
+`tray-active-20260811T194228Z` 含 30 图/30 任务，30 份 `annotations-human` 初始均为
+`reviewed=false`，必须逐张完整复核所有托盘外框。只有服务端达到 30/30 并逐文件核验
+`reviewed=true, source=human` 后，才能从同一批 tray 真值建立独立四点 ROI 队列。
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
