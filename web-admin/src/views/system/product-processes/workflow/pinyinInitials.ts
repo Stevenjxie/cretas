@@ -10,7 +10,10 @@
  *
  * 命中效果：字面子串匹配（不区分大小写）optionally 或 拼音首字母子串匹配。
  * 例："猪蹄" -> 首字母 "ZT"，输入 "zt" / "ZT" 都能匹配上。
- * 局限：表里没收录的汉字不贡献首字母（不会报错，只是那个字对首字母匹配没有贡献）。
+ *
+ * ⚠️ 2026-08-12 更正：原来这里写的「局限：表里没收录的汉字不贡献首字母」**已经不成立**，
+ * 而那句"局限"本身就是缺陷来源 —— 真机上搜 `cg` 找不到「拆骨」（`骨` 收了、`拆` 没收）。
+ * 现在表之外的汉字由 {@link deriveInitial} 用 `Intl.Collator` 拼音排序兜底，仍然不加依赖。
  */
 
 const PINYIN_INITIAL_MAP: Record<string, string> = {
@@ -135,9 +138,57 @@ const PINYIN_INITIAL_MAP: Record<string, string> = {
 };
 
 /**
- * 把一段中文/中英文混合文本转成拼音首字母串（未收录的汉字不贡献字符，
- * 非中文字符原样透传，方便跟英文/数字型 SKU 编码一起搜）。
+ * 把一段中文/中英文混合文本转成拼音首字母串（非中文字符原样透传，
+ * 方便跟英文/数字型 SKU 编码一起搜）。
+ *
+ * 🔴 2026-08-12 真机: 在「增加后续工序」里搜 `cg` 找不到「拆骨」。
+ *
+ * <p>根因不是拼音没接上 —— {@link usePinyinFilter} 早就接在工序选择器上了。根因是上面那张
+ * **手写汉字表本身**: `骨` 收了、`拆` 没收, 于是「拆骨」的首字母算成 `G` 而不是 `CG`,
+ * 输入 `cg` 必然是「无数据」。同类漏字还有 `焯`(焯水) / `揉`(滚揉) 等。
+ *
+ * <p><b>判据</b>: 判据里出现手写清单, 清单本身就是缺陷源 —— 补几个字只是把下一次踩坑推后。
+ * 所以这里换成**兜底算法**: 用 `Intl.Collator` 的拼音排序把汉字落进 23 个首字母区间。
+ * 这是浏览器原生能力, 不引入依赖(原注释里不改 package.json 的约束仍然成立), 覆盖全部常用汉字。
+ *
+ * <p>上面那张表**保留且优先**: 它对多音字编码了刻意的选择(如 `长`→C、`调`→D、`度`→D),
+ * 排序兜底给不出这种语义。表里没有的字才走兜底。
+ *
+ * <p>拿不到 `Intl.Collator` 的 pinyin collation 时(老环境)静默退回「只用表」, 与改动前一致。
  */
+const PINYIN_BOUNDARIES: ReadonlyArray<readonly [string, string]> = [
+  ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'],
+  ['G', '噶'], ['H', '哈'], ['J', '击'], ['K', '喀'], ['L', '垃'], ['M', '妈'],
+  ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '期'], ['R', '然'], ['S', '撒'],
+  ['T', '塌'], ['W', '挖'], ['X', '昔'], ['Y', '压'], ['Z', '匝'],
+];
+
+const pinyinCollator: Intl.Collator | null = (() => {
+  try {
+    const collator = new Intl.Collator('zh-Hans-CN-u-co-pinyin');
+    // 自检: 拼音 collation 没生效时(退化成码位序)「阿」不会排在「八」前面。
+    return collator.compare('阿', '八') < 0 ? collator : null;
+  } catch {
+    return null;
+  }
+})();
+
+const derivedInitialCache = new Map<string, string>();
+
+/** 表里没有的汉字: 按拼音排序落进首字母区间。非汉字或拿不到 collator 时返回空串。 */
+function deriveInitial(ch: string): string {
+  if (!pinyinCollator || !/[一-鿿]/.test(ch)) return '';
+  const cached = derivedInitialCache.get(ch);
+  if (cached !== undefined) return cached;
+  let initial = '';
+  for (const [letter, boundary] of PINYIN_BOUNDARIES) {
+    if (pinyinCollator.compare(ch, boundary) >= 0) initial = letter;
+    else break;
+  }
+  derivedInitialCache.set(ch, initial);
+  return initial;
+}
+
 export function pinyinInitials(text: string): string {
   let result = '';
   for (const ch of text) {
@@ -146,6 +197,8 @@ export function pinyinInitials(text: string): string {
       result += mapped;
     } else if (/[a-zA-Z0-9]/.test(ch)) {
       result += ch;
+    } else {
+      result += deriveInitial(ch);
     }
   }
   return result;
