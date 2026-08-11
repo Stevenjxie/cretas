@@ -173,6 +173,19 @@ def center_metrics(
     }
 
 
+def center_supervision_mask(
+    samples: list[dict[str, Any]], width: int, height: int,
+) -> np.ndarray:
+    mask = np.zeros((len(samples), 1, height, width), dtype=bool)
+    for sample_index, sample in enumerate(samples):
+        for box in sample["boxes"]:
+            x0, y0, x1, y1 = work_area.validate_box(box)
+            x = min(width - 1, max(0, round(((x0 + x1) / 2) * (width - 1))))
+            y = min(height - 1, max(0, round(((y0 + y1) / 2) * (height - 1))))
+            mask[sample_index, 0, y, x] = True
+    return mask
+
+
 def leave_one_out_splits(samples: list[dict[str, Any]]) -> list[tuple[list[int], int]]:
     return [([index for index in range(len(samples)) if index != held_out], held_out)
             for held_out in range(len(samples))]
@@ -227,9 +240,12 @@ def _summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def build_tiny_unet(
-    torch, input_channels: int = 3, base_channels: int = 16, normalized_blocks: bool = False,
+    torch, input_channels: int = 3, base_channels: int = 16,
+    normalized_blocks: bool = False, unet_depth: int = 2,
 ):
     nn = torch.nn
+    if unet_depth < 2:
+        raise ValueError("U-Net depth must be at least two")
 
     class Block(nn.Module):
         def __init__(self, source_channels: int, target_channels: int) -> None:
@@ -258,23 +274,33 @@ def build_tiny_unet(
     class TinyUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            second_channels, bottleneck_channels = base_channels * 2, base_channels * 4
-            self.encoder1 = Block(input_channels, base_channels)
-            self.encoder2 = Block(base_channels, second_channels)
-            self.bottleneck = Block(second_channels, bottleneck_channels)
-            self.up2 = nn.ConvTranspose2d(bottleneck_channels, second_channels, 2, 2)
-            self.decoder2 = Block(second_channels * 2, second_channels)
-            self.up1 = nn.ConvTranspose2d(second_channels, base_channels, 2, 2)
-            self.decoder1 = Block(base_channels * 2, base_channels)
+            channels = [base_channels * (2 ** index) for index in range(unet_depth)]
+            self.encoders = nn.ModuleList()
+            source_channels = input_channels
+            for target_channels in channels:
+                self.encoders.append(Block(source_channels, target_channels))
+                source_channels = target_channels
+            bottleneck_channels = channels[-1] * 2
+            self.bottleneck = Block(channels[-1], bottleneck_channels)
+            self.ups = nn.ModuleList()
+            self.decoders = nn.ModuleList()
+            source_channels = bottleneck_channels
+            for target_channels in reversed(channels):
+                self.ups.append(nn.ConvTranspose2d(source_channels, target_channels, 2, 2))
+                self.decoders.append(Block(target_channels * 2, target_channels))
+                source_channels = target_channels
             self.output = nn.Conv2d(base_channels, 1, 1)
             self.pool = nn.MaxPool2d(2)
 
         def forward(self, value):
-            first = self.encoder1(value)
-            second = self.encoder2(self.pool(first))
-            value = self.bottleneck(self.pool(second))
-            value = self.decoder2(torch.cat((self.up2(value), second), dim=1))
-            value = self.decoder1(torch.cat((self.up1(value), first), dim=1))
+            skips = []
+            for encoder in self.encoders:
+                value = encoder(value)
+                skips.append(value)
+                value = self.pool(value)
+            value = self.bottleneck(value)
+            for up, decoder, skip in zip(self.ups, self.decoders, reversed(skips)):
+                value = decoder(torch.cat((up(value), skip), dim=1))
             return self.output(value)
 
     return TinyUNet()
@@ -289,9 +315,15 @@ def mean_per_image_dice_loss(probability, truth):
     return (1 - dice).mean()
 
 
-def train_model(torch, model, x, y, *, epochs: int, seed: int, device, augment: bool = True):
+def train_model(
+    torch, model, x, y, *, epochs: int, seed: int, device,
+    center_mask=None, center_loss_weight: float = 1.0, augment: bool = True,
+):
     nn = torch.nn
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+    has_center_supervision = (
+        center_mask is not None and center_mask.numel() > 0 and bool(center_mask.any())
+    )
     for epoch in range(epochs):
         model.train()
         if augment:
@@ -312,7 +344,11 @@ def train_model(torch, model, x, y, *, epochs: int, seed: int, device, augment: 
         bce = nn.functional.binary_cross_entropy_with_logits(logits, y)
         probability = logits.sigmoid()
         dice_loss = mean_per_image_dice_loss(probability, y)
-        loss = bce + dice_loss
+        center_loss = (
+            nn.functional.binary_cross_entropy_with_logits(logits[center_mask], y[center_mask])
+            if has_center_supervision else 0.0
+        )
+        loss = bce + dice_loss + center_loss_weight * center_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -322,7 +358,8 @@ def train_model(torch, model, x, y, *, epochs: int, seed: int, device, augment: 
 def run_experiment(
     queues: list[Path], *, epochs: int, width: int, height: int, device_name: str,
     coordinate_channels: bool = False, base_channels: int = 16, fold_count: int = 0,
-    normalized_blocks: bool = False,
+    normalized_blocks: bool = False, center_loss_weight: float = 0.05,
+    unet_depth: int = 2,
 ) -> dict[str, Any]:
     import torch
     _manifests, samples = load_combined_samples(queues)
@@ -338,6 +375,7 @@ def run_experiment(
     if coordinate_channels:
         images = add_coordinate_channels(images)
     masks = np.stack([rasterize_polygon(sample["polygon"], width, height) for sample in samples])
+    center_masks = center_supervision_mask(samples, width, height)
 
     fold_rows: list[dict[str, Any]] = []
     baseline_rows: list[dict[str, Any]] = []
@@ -345,13 +383,15 @@ def run_experiment(
     for fold_index, (train_indices, held_out_indices) in enumerate(splits):
         torch.manual_seed(20260812 + fold_index)
         model = build_tiny_unet(
-            torch, images.shape[-1], base_channels, normalized_blocks,
+            torch, images.shape[-1], base_channels, normalized_blocks, unet_depth,
         ).to(device)
         x = torch.from_numpy(images[train_indices].transpose(0, 3, 1, 2)).to(device)
         y = torch.from_numpy(masks[train_indices, None].astype(np.float32)).to(device)
+        train_center_mask = torch.from_numpy(center_masks[train_indices]).to(device)
         optimizer = train_model(
             torch, model, x, y, epochs=epochs,
             seed=20260812 + fold_index * epochs, device=device,
+            center_mask=train_center_mask, center_loss_weight=center_loss_weight,
         )
         model.eval()
         held_tensor = torch.from_numpy(
@@ -378,7 +418,7 @@ def run_experiment(
                 "mask": mask_metrics(average_mask, truth),
                 "centers": center_metrics(average_mask, truth, sample["boxes"]),
             })
-        del model, optimizer, x, y, held_tensor
+        del model, optimizer, x, y, train_center_mask, held_tensor
         if device.type == "cuda":
             torch.cuda.empty_cache()
     model_summary, baseline_summary = _summarise(fold_rows), _summarise(baseline_rows)
@@ -410,7 +450,9 @@ def run_experiment(
         "model": "tiny-unet-coordconv-random-init" if coordinate_channels else "tiny-unet-random-init",
         "coordinate_channels": coordinate_channels,
         "base_channels": base_channels,
+        "unet_depth": unet_depth,
         "normalized_blocks": normalized_blocks,
+        "tray_center_loss_weight": center_loss_weight,
         "experiment_script_sha256": sha256(Path(__file__)),
         "pretrained_weights": False,
         "downloaded_weights": 0,
@@ -447,7 +489,8 @@ def run_experiment(
 def run_fit_diagnostic(
     queues: list[Path], *, epochs: int, width: int, height: int, device_name: str,
     coordinate_channels: bool = False, base_channels: int = 16,
-    normalized_blocks: bool = False,
+    normalized_blocks: bool = False, center_loss_weight: float = 0.05,
+    unet_depth: int = 2,
 ) -> dict[str, Any]:
     import torch
 
@@ -462,13 +505,16 @@ def run_fit_diagnostic(
     if coordinate_channels:
         images = add_coordinate_channels(images)
     masks = np.stack([rasterize_polygon(sample["polygon"], width, height) for sample in samples])
+    center_masks = center_supervision_mask(samples, width, height)
     x = torch.from_numpy(images.transpose(0, 3, 1, 2)).to(device)
     y = torch.from_numpy(masks[:, None].astype(np.float32)).to(device)
+    train_center_mask = torch.from_numpy(center_masks).to(device)
     model = build_tiny_unet(
-        torch, images.shape[-1], base_channels, normalized_blocks,
+        torch, images.shape[-1], base_channels, normalized_blocks, unet_depth,
     ).to(device)
     optimizer = train_model(
-        torch, model, x, y, epochs=epochs, seed=20260812, device=device, augment=False,
+        torch, model, x, y, epochs=epochs, seed=20260812, device=device,
+        center_mask=train_center_mask, center_loss_weight=center_loss_weight, augment=False,
     )
     model.eval()
     with torch.inference_mode():
@@ -488,7 +534,7 @@ def run_fit_diagnostic(
         and summary["min_inside_recall"] >= 0.99
         and summary["min_outside_recall"] >= 0.99
     )
-    del model, optimizer, x, y
+    del model, optimizer, x, y, train_center_mask
     if device.type == "cuda":
         torch.cuda.empty_cache()
     return {
@@ -503,7 +549,9 @@ def run_fit_diagnostic(
         "model": "tiny-unet-coordconv-random-init" if coordinate_channels else "tiny-unet-random-init",
         "coordinate_channels": coordinate_channels, "device": str(device),
         "base_channels": base_channels,
+        "unet_depth": unet_depth,
         "normalized_blocks": normalized_blocks,
+        "tray_center_loss_weight": center_loss_weight,
         "experiment_script_sha256": sha256(Path(__file__)),
         "training_augmentation": False,
         "summary": summary, "rows": rows,
@@ -529,8 +577,10 @@ def main() -> None:
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     parser.add_argument("--fit-diagnostic", action="store_true")
     parser.add_argument("--coordinate-channels", action="store_true")
-    parser.add_argument("--base-channels", type=int, choices=(16, 24, 32), default=16)
+    parser.add_argument("--base-channels", type=int, choices=(8, 16, 24, 32), default=16)
+    parser.add_argument("--unet-depth", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--normalized-blocks", action="store_true")
+    parser.add_argument("--center-loss-weight", type=float, default=0.05)
     parser.add_argument("--folds", type=int, default=0,
                         help="0 means leave-one-task-out; otherwise use task-grouped K-fold")
     args = parser.parse_args()
@@ -538,6 +588,8 @@ def main() -> None:
         raise ValueError("epochs must be positive and image dimensions divisible by four")
     if args.folds == 1 or args.folds < 0:
         raise ValueError("folds must be zero or at least two")
+    if args.center_loss_weight < 0:
+        raise ValueError("center loss weight must be non-negative")
     queues = [queue.resolve() for queue in args.queue]
     runner = run_fit_diagnostic if args.fit_diagnostic else run_experiment
     receipt = runner(
@@ -545,7 +597,9 @@ def main() -> None:
         height=args.height, device_name=args.device,
         coordinate_channels=args.coordinate_channels,
         base_channels=args.base_channels,
+        unet_depth=args.unet_depth,
         normalized_blocks=args.normalized_blocks,
+        center_loss_weight=args.center_loss_weight,
         **({"fold_count": args.folds} if not args.fit_diagnostic else {}),
     )
     receipts = args.runtime_root / "receipts"

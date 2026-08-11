@@ -106,10 +106,14 @@ B:\anaconda3\python.exe tools\vision-lab\tray_workflow.py `
 B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
   --queue D:\CretasVisionLab\tray-queues\tray-active-<round-1> `
   --queue D:\CretasVisionLab\tray-queues\work-area-active-<round-2> `
+  --queue D:\CretasVisionLab\tray-queues\work-area-active-<round-3> `
   --runtime-root D:\CretasVisionLab `
   --epochs 480 `
   --coordinate-channels `
   --normalized-blocks `
+  --center-loss-weight 0.05 `
+  --base-channels 8 `
+  --unet-depth 4 `
   --folds 8 `
   --device cuda
 ```
@@ -130,6 +134,19 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_roi_experiment.py `
 平均 IoU `0.8479`、最差 `0.6285`，合计 `13` 个托盘中心错分，最差台外召回为 `0`。相对位置
 基线的平均 IoU 增益虽为 `0.1030`，仍不满足离线门禁，因此不得保存模型、恢复旧 tray 训练或
 启动 7+20 候选。下一轮应只收集交叉验证困难视角的人工 ROI，不再随机扩充同源普通画面。
+
+第三轮困难视角 16 张完成后，审计新增台内 `272`、台外 `50`、unknown `0`，累计 48 张为台内
+`804`、台外 `192`、unknown `0`。由于多边形 IoU 很高时边界附近的托盘中心仍可能错分，训练损失
+可用 `--center-loss-weight 0.05` 加入人工托盘中心监督；权重 `1.0` 的实测会破坏掩码拟合，已否决。
+权重 `0.05` 的 48 张容量门禁达到最差 IoU `0.969`、996 个中心零错分及台内/台外召回 `1.0`；
+这仍只是容量证据，必须重新通过任务级 8 折。
+
+两层模型的 48 张 8 折只有平均 IoU `0.8631`、最差 `0.6439`、`23` 个中心错分和最差台外
+召回 `0`。四层、base channel `8` 的全局视野模型先通过容量门禁（平均 IoU `0.9925`、最差
+`0.9874`、中心零错分），但相同 8 折仍只有平均 IoU `0.8613`、最差 `0.6368`、`19` 个中心
+错分和最差台外召回 `0`。因此结论继续为 `insufficient_image_conditioned_roi_evidence`。
+当前 132 图数据集中，失败更明显的 SKU 0013/0014 已无未标独立任务；0015/0016 虽还有任务，
+但不能替代失败 SKU 的证据。不得继续用同任务重复照片、盲目调参或不匹配 SKU 扩标。
 
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图

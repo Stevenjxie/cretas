@@ -29,6 +29,14 @@ class WorkAreaRoiExperimentTests(unittest.TestCase):
         self.assertEqual(result["inside_total"], 1)
         self.assertEqual(result["outside_total"], 1)
 
+    def test_center_supervision_mask_marks_each_tray_center(self):
+        samples = [{"boxes": [[0.0, 0.0, 0.2, 0.2], [0.8, 0.8, 1.0, 1.0]]}]
+        mask = module.center_supervision_mask(samples, width=11, height=11)
+        self.assertEqual(mask.shape, (1, 1, 11, 11))
+        self.assertEqual(int(mask.sum()), 2)
+        self.assertTrue(mask[0, 0, 1, 1])
+        self.assertTrue(mask[0, 0, 9, 9])
+
     def test_mask_metrics_penalise_position_only_drift(self):
         truth = np.zeros((10, 10), dtype=np.uint8)
         truth[2:8, 2:8] = 1
@@ -106,6 +114,16 @@ class WorkAreaRoiExperimentTests(unittest.TestCase):
         )
         output = model(torch.zeros((2, 5, 32, 40)))
         self.assertEqual(tuple(output.shape), (2, 1, 32, 40))
+
+    def test_deep_unet_preserves_mask_shape(self):
+        import torch
+
+        model = module.build_tiny_unet(
+            torch, input_channels=5, base_channels=8,
+            normalized_blocks=True, unet_depth=4,
+        )
+        output = model(torch.zeros((2, 5, 32, 48)))
+        self.assertEqual(tuple(output.shape), (2, 1, 32, 48))
 
 
 if __name__ == "__main__":
