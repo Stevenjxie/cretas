@@ -36,6 +36,9 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 
 `tray_annotator_local.py` 与 `label_annotator_local.py` 会按 manifest 互相拒绝错误队列。旧
 `label_hard_negative_annotator_legacy_adapter.py` 不支持缺标确认，已禁止作为 label 入口；不要恢复或调用。
+现代 label 页面使用不透明的蓝色“白标”标题、绿色“彩标”标题、黑色外沿和类别色粗边框；
+选中框改为黄色粗边及不透明手柄，框内仅轻度着色以保留标签细节。canonical 启动器会校验
+这些渲染能力，误用仍是细线框的旧页面时直接拒绝启动，避免操作员再次看错类别或漏框。
 
 每张修正完成后必须点“这张没问题”或按空格；只有页面显示 `已确认 24/24`，对应
 `annotations-human/*.json` 才会写入 `reviewed=true, source=human`。仅翻到下一张不会被

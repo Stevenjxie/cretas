@@ -66,6 +66,18 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
         raise RuntimeError("label annotator lacks the audited missing-class confirmation flow")
     if "new Set(classes).size<2" in page:
         raise RuntimeError("legacy two-class hard block detected")
+    opaque_markers = (
+        "OPAQUE_CLASS_RENDERING=true",
+        "function renderBox",
+        "fillRect(tagX,tagY,tagW,tagH)",
+    )
+    if (
+        getattr(module, "OPAQUE_CLASS_LABELS", False) is not True
+        or any(marker not in page for marker in opaque_markers)
+    ):
+        raise RuntimeError(
+            "label annotator lacks opaque high-contrast class rendering"
+        )
     if getattr(module, "WIREGUARD_HOST", None) != "":
         raise RuntimeError("local label annotator must be loopback-only")
 
