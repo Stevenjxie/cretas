@@ -10,7 +10,7 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 `MARK-NEEDS-ANNOTATION.json`。生产 tray ONNX 负责全图预标注；已淘汰的历史 tray v7
 只能用于分歧排序。LocateAnything 是可失败跳过的二级 teacher，只允许从固定离线路径
 `B:\AIModels\LocateAnything-3B`、固定 revision
-`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 1024 长边的局部 crop；
+`c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 640 长边的局部 crop；
 禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
 
 连续候选若都卡在蓝筐顶部孤立托盘，可对未使用且非保护集的本地副本启用
@@ -46,6 +46,31 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 页面会直接弹错并停止“确认”，不得用浏览器内存里的旧页面计数代替服务端 `/api/stats`。
 框体使用可透视内容的深青蓝半透明填充，选中时改为更深的黄色；边线保持细线，拖拽热区保留但
 不绘制方块手柄。
+
+### 金属工作区 ROI 与台外真实缺标
+
+工作区 ROI 是独立于 tray MARK 和 label MARK 的第三层人工真值。不得删除台外托盘框，也不得把
+台外缺白标/彩标样本改成正常或训练负样本。全图 tray/label 检出继续保留；ROI 只负责把结果分成：
+
+- `inside_work_area`：托盘中心位于人工四点多边形内，进入主计数和主缺标告警；
+- `outside_work_area`：托盘中心位于多边形外，保留为真实缺标训练样本和独立的次级召回统计；
+- `unknown_work_area`：工作台不在图中或无法可靠判断。不得静默归入台内，也不得据此自动发布。
+
+在 tray 框已完成 `reviewed=true, source=human` 后，用独立入口标四点透视多边形：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_annotator_local.py `
+  --queue D:\CretasVisionLab\tray-queues\tray-active-<timestamp> `
+  --port 8774
+```
+
+该入口只新增 `work-area-human/*.json` 和显示缓存；`annotations-human/`、label 标注、manifest、原图与
+保护集记录均只读。服务端固定校验四个有序角点、归一化坐标、非自交和最小面积，并以托盘中心点
+计算台内/台外数量。青色 tray 框在页面上只读；黄色多边形只表示本次主工作台可用台面。存在后方
+金属架、蓝筐或台外堆叠时不要把它们圈入主台面，但其托盘与缺标真值仍完整保留。
+
+ROI 数据不足以独立验证轻量分割模型时只能停在人工数据阶段；不得下载新权重、用粗矩形或启发式
+结果冒充生产 ROI。后续候选必须同时报告台内主门禁、台外缺标非回退和 `unknown_work_area` 数量。
 
 人工确认完成后运行 tray 候选闭环：
 
