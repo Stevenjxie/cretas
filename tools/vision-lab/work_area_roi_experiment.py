@@ -173,6 +173,33 @@ def center_metrics(
     }
 
 
+def polygon_center_metrics(
+    predicted_polygon: list[list[float]], truth_polygon: list[list[float]],
+    boxes: list[list[float]],
+) -> dict[str, Any]:
+    """Evaluate the exact normalized point-in-polygon production contract."""
+    predicted = work_area.validate_polygon(predicted_polygon)
+    truth = work_area.validate_polygon(truth_polygon)
+    labels = [
+        (
+            work_area.classify_box_center(box, predicted) == work_area.INSIDE_WORK_AREA,
+            work_area.classify_box_center(box, truth) == work_area.INSIDE_WORK_AREA,
+        )
+        for box in boxes
+    ]
+    correct = sum(predicted_label == truth_label for predicted_label, truth_label in labels)
+    inside = [pair for pair in labels if pair[1]]
+    outside = [pair for pair in labels if not pair[1]]
+    return {
+        "total": len(labels), "accuracy": correct / max(len(labels), 1),
+        "inside_total": len(inside),
+        "inside_recall": sum(pair[0] for pair in inside) / max(len(inside), 1),
+        "outside_total": len(outside),
+        "outside_recall": sum(not pair[0] for pair in outside) / max(len(outside), 1),
+        "errors": len(labels) - correct,
+    }
+
+
 def center_supervision_mask(
     samples: list[dict[str, Any]], width: int, height: int,
 ) -> np.ndarray:
@@ -242,6 +269,7 @@ def _summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
 def build_tiny_unet(
     torch, input_channels: int = 3, base_channels: int = 16,
     normalized_blocks: bool = False, unet_depth: int = 2,
+    output_channels: int = 1,
 ):
     nn = torch.nn
     if unet_depth < 2:
@@ -289,7 +317,7 @@ def build_tiny_unet(
                 self.ups.append(nn.ConvTranspose2d(source_channels, target_channels, 2, 2))
                 self.decoders.append(Block(target_channels * 2, target_channels))
                 source_channels = target_channels
-            self.output = nn.Conv2d(base_channels, 1, 1)
+            self.output = nn.Conv2d(base_channels, output_channels, 1)
             self.pool = nn.MaxPool2d(2)
 
         def forward(self, value):

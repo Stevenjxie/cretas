@@ -29,6 +29,16 @@ class WorkAreaRoiExperimentTests(unittest.TestCase):
         self.assertEqual(result["inside_total"], 1)
         self.assertEqual(result["outside_total"], 1)
 
+    def test_polygon_center_metrics_use_exact_normalized_contract(self):
+        truth = [[0.1, 0.1], [0.7, 0.1], [0.8, 0.9], [0.2, 0.9]]
+        predicted = [[0.101, 0.1], [0.7, 0.1], [0.8, 0.9], [0.2, 0.9]]
+        result = module.polygon_center_metrics(
+            predicted, truth, [[0.2, 0.2, 0.4, 0.4], [0.85, 0.1, 0.95, 0.2]],
+        )
+        self.assertEqual(result["accuracy"], 1.0)
+        self.assertEqual(result["inside_recall"], 1.0)
+        self.assertEqual(result["outside_recall"], 1.0)
+
     def test_center_supervision_mask_marks_each_tray_center(self):
         samples = [{"boxes": [[0.0, 0.0, 0.2, 0.2], [0.8, 0.8, 1.0, 1.0]]}]
         mask = module.center_supervision_mask(samples, width=11, height=11)
