@@ -79,7 +79,10 @@ describe('WorkflowSkuPicker (真·两级 cascader)', () => {
       setSearchQuery: (kind: 'SEMI' | 'FINISHED', value: string) => void;
     };
 
-    vm.setSearchQuery('SEMI', 'gscj');
+    // 2026-08-12: 原来这里写的是 'gscj' —— 那是**照着缺陷写的**期望值。
+    // 「干式熟成鸡半成品」真实首字母是 GSSCJBCP; 旧实现因为手写汉字表里没收 `式`,
+    // 算出来少一个 S, 于是 'gscj' 才能命中。表补上兜底后按真实拼音搜 'gsscj'。
+    vm.setSearchQuery('SEMI', 'gsscj');
     await wrapper.vm.$nextTick();
     let options = cascader(wrapper).props('options') as CascaderNode[];
     expect(options[0].children?.map((child) => child.value)).toEqual([

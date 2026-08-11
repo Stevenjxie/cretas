@@ -67,7 +67,13 @@ describe('画布接入 BOM 浮层', () => {
     // 900 字符已经切不到 dirty 那行了 —— 切片不够长会让断言拿到 -1, 看着像"没有 dirty"。
     const dragStopBody = source.slice(source.indexOf('function onNodeDragStop'), source.indexOf('function onNodeDragStop') + 2000);
     expect(dragStopBody).toContain('isBomOverlayNode(node)');
-    expect(dragStopBody).toContain('overlay.position');
+    // 2026-08-12: 原来钉的是字面量 `overlay.position` —— 那是**变量名**, 不是行为。
+    // 浮层分支现在要分两种情况(浮层自己跟手 / 被顺带拖走的真实 Cell 还原), 局部变量
+    // 改叫 target 了。这里改钉「浮层自己的位置确实被写回」这个行为。
+    expect(dragStopBody).toMatch(/isBomOverlayNode\(moved\)[\s\S]{0,200}position = \{ x: moved\.position\.x/);
+    // 🔴 拖浮层不该把真实 Cell 带走(Steve 实测「拖包材 cell 半成品 cell 跟着动」):
+    //    清选区赶不上 vue-flow 的拖动集合计算, 所以停下时要按原位置还原。
+    expect(dragStopBody).toContain('overlayDragOrigins');
     expect(dragStopBody.indexOf('return;')).toBeLessThan(dragStopBody.indexOf('dirty.value = true'));
     // 🔴 多选拖动必须整批提交: 只认事件里的 node, 其余被拖动的节点位置从未写回,
     //    下次重绘就弹回原处 (Steve 实测「拖动以后 cell 总是会自动布局到某个地方」)。

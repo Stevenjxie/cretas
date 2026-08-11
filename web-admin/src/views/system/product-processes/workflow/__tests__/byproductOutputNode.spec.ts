@@ -5,6 +5,7 @@ import {
   BOM_OVERLAY_PREFIX,
   deriveBomOverlay,
   PACK_OVERLAY_SOURCE_HANDLE,
+  PACK_OVERLAY_TARGET_HANDLE,
   stripBomOverlay,
 } from '../bomOverlay';
 import { validateWorkflow } from '../workflowModel';
@@ -288,9 +289,13 @@ describe('浮层遗留物已清干净', () => {
    * 副产已改真实节点, 但**包材还是浮层**, 同样的坑还在。所以这条闸留给它。
    */
   it('剩下的浮层 handle 在组件里真有对应的 <Handle>(bom-byp-out 就是栽在这条上)', () => {
+    // 2026-08-11: 包材 Cell 挪到成品上方, 连线方向翻转 —— 出线端从成品 Cell 换到包材 Cell。
+    // ⛔ 意图不变, 而且**两端都要钉**: 翻方向时最容易只改一半, 留下一个没有 <Handle>
+    //    承接的常量 (bom-byp-out 当年就是这么栽的)。
     expect(PACK_OVERLAY_SOURCE_HANDLE).toBe('bom-pack-out');
-    expect(MATERIAL_NODE).toContain('PACK_OVERLAY_SOURCE_HANDLE');
-    // 断言它真的挂在一个 <Handle> 上, 而不只是被 import 进来
-    expect(MATERIAL_NODE).toMatch(/<Handle[\s\S]{0,220}:id="PACK_OVERLAY_SOURCE_HANDLE"/);
+    expect(PACK_OVERLAY_TARGET_HANDLE).toBe('bom-pack-in');
+    const PACKAGING_NODE = read('WorkflowPackagingNode.vue');
+    expect(PACKAGING_NODE).toMatch(/<Handle[\s\S]{0,220}:id="PACK_OVERLAY_SOURCE_HANDLE"/);
+    expect(MATERIAL_NODE).toMatch(/<Handle[\s\S]{0,220}:id="PACK_OVERLAY_TARGET_HANDLE"/);
   });
 });

@@ -1077,6 +1077,32 @@ elif [ "$JAVA_DEPLOY_OUTCOME" = no-op ] || [ "$WEB_DEPLOY_OUTCOME" = no-op ]; th
 else
     FINAL_STATUS=failed
 fi
+# 🔴 2026-08-12: 「CI 已经构建过一遍, 这里又本地重建了一遍」必须说人话。
+#
+# 实测(#2517/#2518 两次发布): merge 之后【立刻】--phase deploy, 而 main 的 CI 制品
+# 要 ~100s(web) / ~4min(java) 才产出 —— 取回时它还不存在, 于是每次都退回本地构建
+# (web 多花 86s, java 多花 61s 的跨境运输)。
+#
+# 为什么之前没人发现: 回退只在 stderr 打一行, 而 RELEASE_BUILD_MODE=*-fallback 是个
+# 机器字段。真机上我用 `| tail -22` 看输出, 那一行正好被截掉 —— 「这条链其实没生效」
+# 就这么长期无人察觉(release-web-manifest.sh 自己的注释早就警告过这个形状)。
+#
+# 判据: 优化有没有生效, 得让**看回执的人**一眼看见, 不能只留给 grep。
+case "$BUILD_MODE" in
+    *fallback)
+        if [ "$PREFER_CI_ARTIFACT" = true ]; then
+            printf '\n' >&2
+            printf '⚠️  本次【没有】复用 CI 制品, 走的是本地构建 (BUILD_MODE=%s)。\n' "$BUILD_MODE" >&2
+            printf '   最常见的原因: merge 之后立刻部署, 而 main 的 CI 制品还没产出\n' >&2
+            printf '   (web-dist 约 100s, ci.yml 的 Java 制品约 4min)。\n' >&2
+            printf '   下次这样做, 把那趟运输挪出发布窗口:\n' >&2
+            printf '     merge 之后立刻后台跑 → ./scripts/deploy/prewarm-main-artifact.sh --tests %s --wait 420 &\n' \
+                "${TESTS:-<同发布用的选择器>}" >&2
+            printf '     去干别的, 回头再 --phase deploy (实测命中 2.6s, 本地构建 86s)\n' >&2
+            printf '\n' >&2
+        fi
+        ;;
+esac
 printf 'RELEASE_BUILD_MODE=%s\n' "$BUILD_MODE"
 printf 'RELEASE_DEPLOY_MODE=%s\n' "$DEPLOY_MODE"
 printf 'RELEASE_MODE_REASON=%s\n' "$MODE_REASON"

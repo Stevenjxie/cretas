@@ -1440,8 +1440,31 @@ public class GoldFinanceClient {
      * resolver path, not the legacy 6-second mapper fast path.  Keep a
      * production-safe bound, but never let the old 6/10-second budget cancel
      * a valid high-quality semantic plan before its data query completes.
+     *
+     * <p><b>这个数必须 ≥ Python 侧的语义链总预算</b>
+     * ({@code restaurant_intent._SEMANTIC_TOTAL_TIMEOUT_SECONDS})。它是那条链的
+     * 出资方: Python 给自己批多少时间不重要, 这里先挂断, 那边算完也没人收。
+     *
+     * <p>2026-08-12 实测到的事故形态: Python 批了自己 45s, 这里 30s 就挂断 ——
+     * 用户看到的「餐饮语义规划暂时不可用」是<b>这一侧的秒表到点</b>写出来的,
+     * 不是 Python 失败。而 Python 那个 45s 常量<b>正上方的注释逐字写着</b>
+     * "Keep the whole cascade inside Java's independent 30 s deadline" ——
+     * 注释说 30, 常量是 45, 两处口径打架且没有任何东西会红。
+     *
+     * <p>2026-08-12 二次调整 (owner: 「前期不考虑这个, 后面再优化」): 15s → 60s,
+     * 与 nginx 默认 upstream 超时对齐 —— 也就是<b>这一侧实际上不再是瓶颈</b>。
+     *
+     * <p>⛔ 为什么不是真的去掉: 去掉 = 无限等, 而 Python 卡住时这个调用会
+     * <b>永久占住一个 Java 请求线程</b>; 并发一上来线程池耗尽, 挂的不是餐饮 AI
+     * 而是整个后端。而且真去掉也没有意义 —— 上游 nginx 60s 会先切, 前端 75~180s
+     * 也在等。所以「对齐 nginx」在行为上等于「Java 不设限」, 但不拿线程池冒险。
+     *
+     * <p>📌 Python 侧仍是 12s(单跳 6s × 2) —— 真正决定用户等多久的是那个数,
+     * 不是这个。这里只负责「别比它更早挂断」。要放宽用户等待时间, 改 Python 那个。
+     * ⛔ 两个数仍是一对, 由 tests/test_tiered_budget_alignment.py 守着
+     * (Java ≥ Python + 2s), 改任何一边都会红。
      */
-    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 30_000L;
+    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 60_000L;
 
     long tieredAnswerTimeoutMs() {
         return Math.max(

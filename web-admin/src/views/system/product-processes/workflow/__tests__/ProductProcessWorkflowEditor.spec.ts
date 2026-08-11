@@ -2,7 +2,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
-import { BOM_OVERLAY_PREFIX, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
+import { BOM_OVERLAY_PREFIX, isBomOverlayNode, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -549,6 +549,136 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.undo();
     expect(stripBomOverlay(vm.flowNodes)).toHaveLength(beforeDelete);
     expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
+  });
+
+  /**
+   * 🔴 2026-08-12 (Steve): 每个工序 Cell 至少保留一个产出 Cell。
+   *
+   * 探针实测: 建完工序后删掉那个产出 Cell, 工序原样留在画布上、OUTPUT 端口 = []。
+   * 业务上工序没有产出不成立 —— 报工时无处填本次产出的 SKU 与数量。
+   *
+   * ⚠️ 规则有三个承载点, 三条都要钉: 单个删 / 框选批量删 / 删那根产出连线。
+   * 只钉一条的话, 另两条就是绕过口。
+   */
+  describe('🔴 工序至少要有一个产出 Cell', () => {
+    async function buildOneProcess(): Promise<{
+      vm: EditorVm & { removeNode: (id: string) => void; removeEdgeById: (id: string) => void };
+      processId: string; outCellId: string; outPortId: string;
+    }> {
+      const vm = await mountEditor() as unknown as EditorVm & {
+        removeNode: (id: string) => void; removeEdgeById: (id: string) => void;
+      };
+      vm.openAddProcess('raw');
+      vm.selectedWorkProcessId = 'WP-PACK';
+      vm.confirmAddProcess();
+      await flushPromises();
+      const proc = vm.flowNodes.find((n) => (n.data as { processName?: string })?.processName);
+      if (!proc) throw new Error('Expected a process node');
+      const ports = (proc.data as { ports: Array<{ id: string; direction: string; materialNodeId: string }> }).ports;
+      const out = ports.find((p) => p.direction === 'OUTPUT');
+      if (!out) throw new Error('Expected an OUTPUT port');
+      return { vm, processId: proc.id, outCellId: out.materialNodeId, outPortId: out.id };
+    }
+    const outputsOf = (vm: EditorVm, processId: string): unknown[] => {
+      const proc = vm.flowNodes.find((n) => n.id === processId);
+      return (proc!.data as { ports: Array<{ direction: string }> }).ports.filter((p) => p.direction === 'OUTPUT');
+    };
+
+    it('承载点1 单个删: 删唯一产出 Cell 被拦, 端口与 Cell 都还在', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+
+      vm.removeNode(outCellId);
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(true);
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('承载点2 框选批量删: 同样被拦', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+      const cell = vm.flowNodes.find((n) => n.id === outCellId);
+      cell!.selected = true;
+
+      vm.removeSelectedElements();
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(true);
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('承载点3 删那根产出连线: 同样被拦', async () => {
+      const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+      const { vm, processId, outPortId } = await buildOneProcess();
+      const edge = vm.flowEdges.find((e) => e.sourceHandle === outPortId);
+      if (!edge) throw new Error('Expected the process→output edge');
+
+      vm.removeEdgeById(edge.id);
+      await flushPromises();
+
+      expect(alert).toHaveBeenCalled();
+      expect(outputsOf(vm, processId)).toHaveLength(1);
+    });
+
+    it('放行对照: 连整个工序 Cell 一起删, 不该被这条规则拦住', async () => {
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+      const { vm, processId, outCellId } = await buildOneProcess();
+      const proc = vm.flowNodes.find((n) => n.id === processId);
+      const cell = vm.flowNodes.find((n) => n.id === outCellId);
+      proc!.selected = true;
+      cell!.selected = true;
+
+      vm.removeSelectedElements();
+      await flushPromises();
+
+      expect(vm.flowNodes.some((n) => n.id === processId)).toBe(false);
+      expect(vm.flowNodes.some((n) => n.id === outCellId)).toBe(false);
+    });
+  });
+
+  /**
+   * 🔴 2026-08-12 (Steve 实测): 拖包材 Cell, 「卤制猪蹄(半成品)」Cell 跟着一起动。
+   *
+   * onNodeDragStart 的浮层分支【已经】在清选区了, 但那不够 —— vue-flow 在 drag-start
+   * 触发之前就算好了「这一拖带哪些节点」。真正把误拖固化下来的是 onNodeDragStop:
+   * 它把 dragged 里**每一个**节点的位置都写回 flowNodes, 包括被顺带拖走的真实 Cell。
+   *
+   * 判据: 不去赌"清选区赶不赶得上", 在结果层面兜底 —— 拖浮层时真实 Cell 一律还原。
+   */
+  it('🔴 拖浮层 Cell 时被顺带拖走的真实 Cell 必须还原', async () => {
+    const vm = await mountEditor() as unknown as EditorVm & {
+      onNodeDragStart: (p: { node: EditorNode }) => void;
+      onNodeDragStop: (p: { node: EditorNode; nodes?: EditorNode[] }) => void;
+      refreshBomOverlay: () => void;
+    };
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    await flushPromises();
+
+    const overlay = vm.flowNodes.find((n) => isBomOverlayNode(n));
+    if (!overlay) throw new Error('Expected a BOM overlay cell');
+    const real = vm.flowNodes.find((n) => !isBomOverlayNode(n) && n.id === 'raw');
+    if (!real) throw new Error('Expected the raw Cell');
+    const realBefore = { ...real.position };
+    const overlayBefore = { ...overlay.position };
+
+    // vue-flow 把浮层和真实 Cell 一起拖走(选区没清干净时的真实事件形状)
+    vm.onNodeDragStart({ node: overlay });
+    const draggedOverlay = { ...overlay, position: { x: overlayBefore.x + 120, y: overlayBefore.y + 80 } };
+    const draggedReal = { ...real, position: { x: realBefore.x + 120, y: realBefore.y + 80 } };
+    vm.onNodeDragStop({ node: draggedOverlay as EditorNode, nodes: [draggedOverlay, draggedReal] as EditorNode[] });
+    await flushPromises();
+
+    const realAfter = vm.flowNodes.find((n) => n.id === 'raw');
+    expect(realAfter!.position).toEqual(realBefore);          // 真实 Cell 原位不动
+    const overlayAfter = vm.flowNodes.find((n) => n.id === overlay.id);
+    expect(overlayAfter!.position.x).toBe(overlayBefore.x + 120);   // 浮层自己照常跟手
   });
 
   it('selecting a Cell also selects every directly connected line', async () => {

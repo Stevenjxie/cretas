@@ -29,9 +29,30 @@ describe('workflow pinyin initials search', () => {
   });
 
   it('does not crash on unmapped characters and does not falsely match', () => {
-    // 表里没收录的生僻字不贡献首字母, 但不应报错, 也不应该凭空产生匹配。
+    // 生僻字现在也能由排序兜底给出首字母(见下一条), 但不应报错, 更不该凭空产生匹配。
     expect(() => pinyinInitials('鼗')).not.toThrow();
     expect(matchesSearchText('zzzz', '鼗')).toBe(false);
+  });
+
+  /**
+   * 🔴 2026-08-12 真机: 「增加后续工序」里搜 `cg` 找不到「拆骨」——
+   * `骨` 在手写表里、`拆` 不在, 首字母算成 `G`。
+   *
+   * ⚠️ 这几条钉的是**表之外**的字, 所以不能靠往表里补字来变绿 ——
+   * 补字只是把同一个缺陷推到下一个没收录的汉字上。
+   */
+  it('🔴 derives initials for characters missing from the hand-written table', () => {
+    expect(pinyinInitials('拆骨')).toBe('CG');      // 拆 不在表里
+    expect(pinyinInitials('焯水')).toBe('CS');      // 焯 不在表里
+    expect(pinyinInitials('滚揉')).toBe('GR');      // 揉 不在表里
+    expect(matchesSearchText('cg', '拆骨')).toBe(true);
+    expect(matchesSearchText('cs', '【示例】焯水')).toBe(true);
+  });
+
+  it('🔴 keeps the hand table authoritative where it encodes a deliberate reading', () => {
+    // 表里 长→C(cháng) 是刻意的; 排序兜底给不出这种多音字语义, 不能被兜底覆盖。
+    expect(pinyinInitials('长')).toBe('C');
+    expect(pinyinInitials('猪蹄')).toBe('ZT');
   });
 });
 
