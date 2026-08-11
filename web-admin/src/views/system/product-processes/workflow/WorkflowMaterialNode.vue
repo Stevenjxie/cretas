@@ -26,9 +26,9 @@
          真实节点内部, 不是挂了浮层前缀的节点。见 final-fix-report.md must-fix #2。 -->
     <Handle
       v-if="kind === 'FINISHED_GOOD'"
-      type="source"
-      :position="Position.Right"
-      :id="PACK_OVERLAY_SOURCE_HANDLE"
+      type="target"
+      :position="Position.Top"
+      :id="PACK_OVERLAY_TARGET_HANDLE"
       :connectable="false"
     />
 
@@ -227,7 +227,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
-import { PACK_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
+import { PACK_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import { usePinyinFilter } from './pinyinInitials';
 import {
   filterRawMaterialsBySegment,

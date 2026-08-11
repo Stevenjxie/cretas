@@ -1,6 +1,7 @@
 <template>
   <div class="packaging-node" :class="{ selected }">
-    <Handle type="target" :position="Position.Left" :id="PACK_OVERLAY_TARGET_HANDLE" />
+    <!-- 包材挪到成品上方后由它出线, 进成品顶部 —— 与辅料 Cell 完全一致。 -->
+    <Handle type="source" :position="Position.Bottom" :id="PACK_OVERLAY_SOURCE_HANDLE" />
 
     <div class="packaging-heading">
       <span class="step-mark">包</span>
@@ -70,7 +71,7 @@
  */
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
-import { PACK_OVERLAY_TARGET_HANDLE } from './bomOverlay';
+import { PACK_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
 import type { PackagingCellData, PackagingCellRow } from './bomOverlayTypes';
 
 // 沿用 bomOverlayTypes.ts 的唯一权威定义(理由同 WorkflowAuxiliaryNode.vue)。

@@ -1242,19 +1242,32 @@ const bomStatusBySku = computed<Record<string, BomVersionLine>>(() => {
   return map;
 });
 
-/** 气泡文案 —— 比顶部那行更短, 因为它就贴在对象旁边, 不需要重复说对象是谁。 */
+/**
+ * 成品 Cell 气泡文案 —— **只说产品级的事**。
+ *
+ * 🔴 2026-08-11 收窄 (Steve 指出): 原来这里还会说「还没配辅料 / 包材」, 有两个毛病:
+ *
+ * 1. **说错了地方** —— 辅料配在工序的辅料 Cell 上, 包材配在包材 Cell 上, 两个 Cell
+ *    自己都已经在说 (辅料:「尚未建立配方」/ 包材:「0 种 · 未配」)。在成品 Cell 上再说
+ *    一遍辅料, 用户会去成品 Cell 上找加辅料的入口 —— 那儿没有。
+ * 2. **把两件事揉成一个判据** —— 判据是「配方明细行数 = 0」, 于是**配了辅料就等于
+ *    连包材也不提了**。F006 拓扑成品C 实测: 1 行辅料、0 行包材, 气泡什么都不说,
+ *    而包材确实没配。一个字段盖住了另一个字段的缺失。
+ *
+ * 现在成品 Cell 只留**没有别处能说**的两件: 还没建 BOM / 草稿未生效。
+ */
 function bomBubbleText(line: BomVersionLine): string {
   if (line.activeVersion == null) return '还没建 BOM';
-  const parts: string[] = [];
-  if (line.activeIsEmpty) parts.push('还没配辅料 / 包材');
-  if (line.draftVersion != null) parts.push(`草稿 v${line.draftVersion} 未生效`);
-  if (!parts.length && line.mismatched) parts.push('与已启用工艺不一致，发布时自动同步');
-  return parts.join(' · ') || `BOM 生效 v${line.activeVersion}`;
+  if (line.draftVersion != null) return `草稿 v${line.draftVersion} 未生效`;
+  return `BOM 生效 v${line.activeVersion}`;
 }
 
-/** 只有「需要用户动手」的才冒泡; 纯陈述性的不打扰(它仍在顶部详情里可查)。 */
+/**
+ * 只有「需要用户动手」且**只能在成品 Cell 上动手**的才冒泡。
+ * ⛔ 不含 activeIsEmpty —— 辅料/包材各自的 Cell 已经在说, 见 bomBubbleText 注释。
+ */
 function bomBubbleNeedsAction(line: BomVersionLine | undefined): boolean {
-  return !!line && (line.activeVersion == null || line.activeIsEmpty || line.draftVersion != null);
+  return !!line && (line.activeVersion == null || line.draftVersion != null);
 }
 
 /** 每行右侧的一句话状态, 按严重度取最该说的那一句 (不叠加, 一行只说一件事)。 */

@@ -96,6 +96,15 @@ describe('BOM 状态就近提示 (2026-08-11)', () => {
    * 顶部横幅的毛病是**信息离它描述的对象太远** —— 说「拓扑成品D 还没配辅料/包材」,
    * 而要动手的 Cell 在画布另一头。
    */
+  it('成品气泡只说产品级的事 —— 不提辅料/包材', () => {
+    const at = EDITOR.indexOf('function bomBubbleText');
+    expect(at).toBeGreaterThan(-1);
+    const body = EDITOR.slice(at, at + 400);
+    expect(body).toMatch(/还没建 BOM/);
+    expect(body).toMatch(/草稿 v/);
+    expect(body).not.toMatch(/还没配辅料/);
+  });
+
   it('成品 Cell 上有 BOM 状态气泡, 且带「生效」动作', () => {
     expect(NODE).toContain('data-testid="bom-status-bubble"');
     expect(NODE).toContain('data-testid="bom-status-bubble-activate"');
@@ -113,10 +122,15 @@ describe('BOM 状态就近提示 (2026-08-11)', () => {
     expect(at).toBeGreaterThan(-1);
     const block = EDITOR.slice(at, at + 260);
     expect(block).toMatch(/activeVersion == null/);
-    expect(block).toMatch(/activeIsEmpty/);
     expect(block).toMatch(/draftVersion != null/);
     // mismatched(生效 BOM 与已启用工艺不一致)是发布时自动同步的, 不该冒泡
     expect(block).not.toMatch(/mismatched/);
+    // 🔴 2026-08-11 收窄: 辅料/包材的缺失**不许**在成品 Cell 上说 ——
+    //    辅料配在工序的辅料 Cell 上、包材配在包材 Cell 上, 两个 Cell 自己都已经在说;
+    //    在成品 Cell 说一遍会把用户支去一个没有该入口的地方。
+    //    更糟的是它和包材共用「明细行数=0」这一个判据 → **配了辅料就等于连包材也不提了**
+    //    (F006 拓扑成品C 实测: 1 行辅料 / 0 行包材, 气泡什么都不说)。
+    expect(block).not.toMatch(/activeIsEmpty/);
   });
 
   it('气泡必须有显式宽度 —— 只写 max-width 会塌成一字宽的竖条', () => {
