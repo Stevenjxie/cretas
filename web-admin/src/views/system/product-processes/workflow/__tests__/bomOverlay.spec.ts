@@ -74,13 +74,30 @@ describe('Vue Flow 连接门只放行派生浮层边', () => {
     })).toBe(true);
   });
 
-  it('放行成品到所属包材 cell 的精确 handle 组合', () => {
+  /**
+   * 🔴 2026-08-12: 这条原来断言的是**旧方向**(成品在 source、包材在 target)。
+   * 包材连线在「包材挪到成品上方」那次改动里翻成了 source=包材 → target=成品,
+   * deriveBomOverlay 跟着翻了, 这条白名单**没翻** ⇒ 恒 false ⇒ vue-flow 静默过滤,
+   * 真机上「包材 Cell 一条线都没有」。
+   *
+   * 两侧各自都有测试、各自都绿 —— 因为它们测的是相反的方向, 谁也没跟谁对过。
+   */
+  it('放行包材 cell 到所属成品的精确 handle 组合(方向: 包材 → 成品)', () => {
+    expect(isDerivedBomOverlayConnection({
+      source: `${BOM_OVERLAY_PREFIX}pack:o1`,
+      sourceHandle: 'bom-pack-out',
+      target: 'o1',
+      targetHandle: 'bom-pack-in',
+    })).toBe(true);
+  });
+
+  it('旧方向(成品 → 包材)必须被拒 —— 否则等于两个方向都放行, 白名单就没有约束力', () => {
     expect(isDerivedBomOverlayConnection({
       source: 'o1',
       sourceHandle: 'bom-pack-out',
       target: `${BOM_OVERLAY_PREFIX}pack:o1`,
       targetHandle: 'bom-pack-in',
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it.each([
@@ -230,6 +247,32 @@ describe('从 BOM 派生浮层', () => {
       packagingByOutput: {},
     }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
     expect(aux.position.y).toBeLessThan(1000 - 100);
+  });
+
+  /**
+   * 🔴 2026-08-12 真机「包材 Cell 一条线都没有」的**根治性**断言。
+   *
+   * 上面两组测试各自都在, 各自都绿, 但测的是相反的方向 ——
+   * deriveBomOverlay 产出 source=包材→target=成品, 而 isDerivedBomOverlayConnection
+   * 还在按 source=成品→target=包材 放行, 于是 vue-flow 把边静默过滤, DOM 里一条都没有。
+   *
+   * 这一条把两边【对起来】: deriveBomOverlay 实际产出的每一条边, 白名单都必须放行。
+   * 任何一侧再翻方向、改 handle 常量, 这里立刻红 —— 而不是等到真机上"线不见了"。
+   */
+  it('🔴 deriveBomOverlay 产出的每一条浮层边, 白名单都必须放行', () => {
+    const { edges } = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 400), outputNode('o1', 900, 200)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: { o1: { rows: [] } },
+    });
+    expect(edges.length).toBeGreaterThanOrEqual(2);   // 辅料 + 包材, 少一条说明夹具退化了
+    const rejected = edges.filter((edge) => !isDerivedBomOverlayConnection({
+      source: edge.source,
+      sourceHandle: edge.sourceHandle,
+      target: edge.target,
+      targetHandle: edge.targetHandle,
+    }));
+    expect(rejected.map((e) => e.id)).toEqual([]);
   });
 
   it('派生连线与普通 Workflow 连线使用同一实线样式且两端 handle 正确', () => {
