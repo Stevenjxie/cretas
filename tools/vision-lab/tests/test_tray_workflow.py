@@ -20,6 +20,12 @@ SPEC.loader.exec_module(module)
 
 
 class TrayWorkflowTests(unittest.TestCase):
+    def test_training_source_forces_offline_without_amp_probe(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
+        self.assertIn("pretrained=False", source)
+        self.assertIn("amp=False", source)
+
     def test_build_dataset_accumulates_multiple_reviewed_queues(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

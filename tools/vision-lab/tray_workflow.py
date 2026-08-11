@@ -330,6 +330,7 @@ def refresh_candidate_parity(
 
 
 def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    os.environ["YOLO_OFFLINE"] = "true"
     from ultralytics import YOLO
     tray = config["tray_active_learning"]
     training = tray["training"]
@@ -343,14 +344,14 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: 
         patience=int(training.get("patience", 10)), imgsz=960,
         batch=int(training.get("batch", 4)), device=training.get("device", 0),
         workers=int(training.get("workers", 2)), project=str(root / "runs"), name=run_id,
-        exist_ok=False, pretrained=True, optimizer="AdamW", lr0=float(training.get("lr0", 0.00015)),
+        exist_ok=False, pretrained=False, optimizer="AdamW", lr0=float(training.get("lr0", 0.00015)),
         lrf=0.10, weight_decay=0.0005, warmup_epochs=1.0,
         freeze=int(training.get("freeze", 10)),
         seed=int(training.get("seed", 20260811)), deterministic=True,
         close_mosaic=5, mosaic=0.10, mixup=0.0, copy_paste=0.0,
         degrees=0.5, translate=0.02, scale=0.10, shear=0.0, perspective=0.0,
         fliplr=0.5, flipud=0.0, hsv_h=0.004, hsv_s=0.15, hsv_v=0.12,
-        amp=True, cache=False, save=True, save_period=1, plots=False, verbose=True,
+        amp=False, cache=False, save=True, save_period=1, plots=False, verbose=True,
     )
     save_dir = Path(result.save_dir)
     best = save_dir / "weights" / "best.pt"
