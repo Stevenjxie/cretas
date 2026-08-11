@@ -61,10 +61,60 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
+- 存在 `D:\CretasVisionLab\MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json`：只处理 MARK 指向的独立
+  label-side-view 队列和 URL；不要打开或复用旧 29 张 label 难例，也不要把它与 tray MARK 混用。
 - MARK 消失：不需要人工操作，流水线会自行训练、评测。
 - `D:\CretasVisionLab\receipts\latest-cycle.json`：本轮最终状态。
-- `candidate-rejected`：新模型没有变好，没有部署，生产模型不变。
+- `candidate-rejected`：候选未通过完整自动门槛，没有部署，生产模型不变。
 - `deployed`：所有门禁通过并已完成健康检查。
+
+## 人工接受不完整召回
+
+默认自动部署仍要求全部门槛通过。若操作员根据完整保护集结果明确接受候选取舍，只能用
+`deploy` 子命令显式豁免 `required_full_recall_groups` 的未满召回；哈希/制品漂移、生产回放、
+PT/ONNX parity、总缺陷回退、误报、延迟及其他错误一律不可豁免。命令必须同时提供固定 token
+和不少于 20 个字符的具体原因，原始 `gate=false`、失败项、原因、旧/新 SHA 与回滚文件会保留
+在部署回执中：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
+  --config D:\CretasVisionLab\config.json deploy `
+  --model-receipt D:\CretasVisionLab\models\registry\<model-id>\training-receipt.json `
+  --gate-receipt D:\CretasVisionLab\models\registry\<model-id>\promotion-gate.json `
+  --operator-override ACCEPT-INCOMPLETE-RECALL `
+  --operator-reason "<本次风险接受的具体依据>"
+```
+
+该入口仍执行生产现有 SHA 防漂移、备份、暂存文件 SHA、原子替换、服务重启、健康检查和失败
+自动回滚；它不会把原始 promotion gate 改写成通过。
+
+## 侧视白标主动学习
+
+仅当完整 tray→label 回放证明“tray 已检出但白标漏检”是独立瓶颈时，才运行
+`mine_label_side_view_queue.py plan`。计划阶段只读本地 VisionLab 数据库，候选必须来自人工确认的
+`NO_DEFECT` 新来源；240+83+57 已完成来源、旧 29 张队列、保护集 exact ID/SHA 与 pHash 距离
+不大于 10 的近重复全部排除，队列内部 pHash 距离不大于 4 的 crop 也排除。先检查 preflight
+回执中的数量、来源、去重距离和 `cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
+
+`build` 会以 preflight 的候选 digest、源图 SHA、crop 像素 SHA 和感知哈希重新验证内容，生成
+`label-side-view-active-<timestamp>`、独立的 `MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json` 和
+`annotations-human`。生产 YOLO 预框始终是 proposal；只有标注服务器落盘的
+`reviewed=true, source=human` 才能进入后续 label 训练。不得因此覆盖 tray MARK、旧 label MARK、
+生产模型或原图。
+
+当旧队列需要继续保留为安全阻塞、但新建的独立队列已完成人工确认时，使用显式队列白名单运行
+候选闭环；三个参数必须成组使用，避免扫描/清除旧 MARK 或再生成一轮队列：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\vision_lab.py --config D:\CretasVisionLab\config.json cycle `
+  --skip-collect --preserve-attention-mark --skip-mining `
+  --queue-root <reviewed-queue-1> `
+  --queue-root <reviewed-queue-2>
+```
+
+显式路径缺少 manifest 或重复时会直接失败；启用白名单后不会再展开 `queue_globs`。
+训练进程固定设置 `YOLO_OFFLINE=true`、`amp=false` 和 `pretrained=false`；本地 PT 仍作为明确的
+`base_model` 加载，但禁止 Ultralytics 的 AMP 自检或版本检查联网下载额外权重。
 
 ## 首次初始化
 

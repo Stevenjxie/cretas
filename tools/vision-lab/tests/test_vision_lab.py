@@ -39,6 +39,27 @@ def config(root: Path) -> dict:
 
 
 class VisionLabTests(unittest.TestCase):
+    def test_training_source_forces_offline_without_amp_probe(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
+        self.assertIn("pretrained=False, amp=False", source)
+
+    def test_explicit_queue_roots_disable_globs_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            queue.mkdir()
+            (queue / "manifest.json").write_text("{}", encoding="utf-8")
+            config = {"queue_roots": ["old"], "queue_globs": ["*"]}
+            overridden = vision_lab.config_with_queue_roots(config, [queue])
+            self.assertEqual(overridden["queue_roots"], [str(queue.resolve())])
+            self.assertEqual(overridden["queue_globs"], [])
+            self.assertEqual(config["queue_globs"], ["*"])
+            with self.assertRaisesRegex(RuntimeError, "missing manifest"):
+                vision_lab.config_with_queue_roots(config, [root / "missing"])
+            with self.assertRaisesRegex(RuntimeError, "duplicates"):
+                vision_lab.config_with_queue_roots(config, [queue, queue])
+
     def test_collect_is_content_addressed_and_advances_watermark(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -172,6 +193,115 @@ class VisionLabTests(unittest.TestCase):
             metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
             result = vision_lab.evaluate_gate(config(root), model, metrics_path)
             self.assertTrue(result["passed"], result["errors"])
+
+    def test_failed_gate_still_refuses_deployment_without_explicit_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            cfg = config(root)
+            cfg["deployment"] = {"auto_deploy": True}
+            state = vision_lab.State(root)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "promotion gate did not pass"):
+                    vision_lab.deploy_candidate(
+                        cfg, state,
+                        {"model_id": "m3", "artifact": str(artifact),
+                         "artifact_sha256": vision_lab.sha256_file(artifact)},
+                        {"passed": False, "errors": [
+                            "required defect group did not reach full recall: new_blind_defect"
+                        ]},
+                    )
+            finally:
+                state.close()
+
+    def test_operator_override_cannot_waive_non_recall_gate_errors(self):
+        with self.assertRaisesRegex(RuntimeError, "cannot waive non-recall"):
+            vision_lab.validate_operator_recall_override(
+                {"passed": False, "errors": ["latency regressed against production"]},
+                vision_lab.OPERATOR_RECALL_OVERRIDE_TOKEN,
+                "User accepted the measured candidate tradeoff for this release.",
+            )
+
+    def test_operator_override_rejects_a_gate_receipt_for_another_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            model = {
+                "model_id": "mismatch", "artifact": str(artifact),
+                "artifact_sha256": vision_lab.sha256_file(artifact),
+            }
+            state = vision_lab.State(root)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "artifact hash does not match"):
+                    vision_lab.deploy_candidate(
+                        config(root) | {"deployment": {"auto_deploy": True}}, state, model,
+                        {
+                            "passed": False,
+                            "errors": ["required defect group did not reach full recall: new_blind_defect"],
+                            "model_id": model["model_id"],
+                            "metrics": {"artifact_sha256": "b" * 64},
+                        },
+                        operator_override_token=vision_lab.OPERATOR_RECALL_OVERRIDE_TOKEN,
+                        operator_override_reason=(
+                            "User accepts incomplete new-blind recall because total defect hits improved."
+                        ),
+                    )
+            finally:
+                state.close()
+
+    def test_operator_recall_override_is_recorded_in_deployment_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "receipts").mkdir()
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            candidate_sha = vision_lab.sha256_file(artifact)
+            previous_sha = "a" * 64
+            cfg = config(root)
+            cfg["deployment"] = {
+                "auto_deploy": True,
+                "confirm_token": "YES-PROD",
+                "ssh_host": "root@example",
+                "remote_model_path": "/models/label.onnx",
+                "service": "cretas-python",
+                "health_url": "http://127.0.0.1:8083/health",
+            }
+            model = {"model_id": "m4", "artifact": str(artifact), "artifact_sha256": candidate_sha}
+            gate_error = "required defect group did not reach full recall: new_blind_defect"
+            gate = {
+                "passed": False,
+                "errors": [gate_error],
+                "model_id": model["model_id"],
+                "metrics": {"artifact_sha256": candidate_sha},
+            }
+            state = vision_lab.State(root)
+            state.set_meta("production_model_sha256", previous_sha)
+            try:
+                with (
+                    mock.patch.object(vision_lab, "ssh_run", side_effect=[
+                        previous_sha, "", candidate_sha, "", "active", "200", candidate_sha,
+                    ]),
+                    mock.patch.object(
+                        vision_lab.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="")
+                    ),
+                ):
+                    result = vision_lab.deploy_candidate(
+                        cfg, state, model, gate,
+                        operator_override_token=vision_lab.OPERATOR_RECALL_OVERRIDE_TOKEN,
+                        operator_override_reason=(
+                            "User accepts incomplete new-blind recall because total defect hits improved."
+                        ),
+                    )
+                self.assertTrue(result["succeeded"])
+                self.assertFalse(result["promotion_gate_passed"])
+                self.assertEqual(result["promotion_gate_errors"], [gate_error])
+                self.assertEqual(result["operator_override"]["waived_errors"], [gate_error])
+                self.assertEqual(state.get_meta("production_model_sha256"), candidate_sha)
+                self.assertTrue(Path(result["receipt"]).is_file())
+            finally:
+                state.close()
 
     def test_queue_globs_are_discovered_without_duplicates(self):
         with tempfile.TemporaryDirectory() as temporary:
