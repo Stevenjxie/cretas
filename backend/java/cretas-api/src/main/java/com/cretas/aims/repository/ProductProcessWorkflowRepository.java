@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -96,6 +97,30 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String factoryId,
             String productTypeId,
             Integer definitionVersion);
+
+    /** 这个 owner 名下有没有工艺图 —— 重锚前判目标是否已被占用(activations 上有唯一键)。 */
+    boolean existsByFactoryIdAndProductTypeId(String factoryId, String productTypeId);
+
+    /**
+     * 整条版本谱系换归属对象。
+     *
+     * <p>⛔ 必须整条搬: {@code (factoryId, productTypeId)} 就是谱系键
+     * (见 {@code findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc} 等全部版本查询),
+     * 只搬新发布的那一版会把谱系劈成两半, 旧版本从此在新 owner 下查不到。
+     *
+     * @return 搬动的行数
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ProductProcessWorkflow workflow
+               set workflow.productTypeId = :newOwnerId
+             where workflow.factoryId = :factoryId
+               and workflow.productTypeId = :oldOwnerId
+            """)
+    int reanchorLineage(
+            @Param("factoryId") String factoryId,
+            @Param("oldOwnerId") String oldOwnerId,
+            @Param("newOwnerId") String newOwnerId);
 
     interface VersionSummaryProjection {
         Long getId();
