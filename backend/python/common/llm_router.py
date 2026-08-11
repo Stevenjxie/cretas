@@ -290,27 +290,56 @@ def _expiry_of(account: str, model: str) -> datetime.date:
 #
 # 值 = (契约通过率, 中位延迟秒)。REVIEW/MAPPER 两槽分别测过, 同一 (账号,模型)
 # 跨槽 p50 差 ≤0.1s, 故合成一张表; 未在此表中的条目 = 没测过, 见 `_capability_tier`。
-_CAPABILITY_MEASURED_AT = datetime.date(2026, 8, 10)
+_CAPABILITY_MEASURED_AT = datetime.date(2026, 8, 12)
 _CAPABILITY_MAX_AGE_DAYS = 21   # 超龄 → 忽略本表, 退回纯到期日排序(旧行为)
 _CAPABILITY_PASS_FLOOR = 0.5
 
+# 2026-08-12 重测(同一脚本、同一 slot、同一 6 道电池真题, 22 个候选全覆盖 ——
+# 这次把 _TEXT_TAIL 的地板也测进来了, 上一版只测了池内候选, 于是地板三条一直
+# 「没测过」躺在 band 1)。
+#
+# ⚠️ **这张表能说什么, 不能说什么** —— 达标的 14 个**全是 6/6**。契约仍然是
+#    地板题, 它测的是「能不能用」, 不是「谁更会规划」。⛔ 不要因为某条排在前面
+#    就说它能力强 —— 排序里真正由本表决定的只有两件事: 达不达标(0.0 沉底) 和
+#    落在哪个延迟档。
+#
+# 🔴 两轮同源读数暴露出一个真信号: **kimi-k2.7-code 是抖的, 不是慢的**。
+#    同一晚两轮: aliyun_c 5.8s → 9.2s, aliyun_a 5.8s → 7.8s, 而同轮里
+#    qwen3.7-flash-2026-07-15 是 1.7 → 1.5、qwen3.6-plus 是 4.0 → 4.1 (±0.1)。
+#    08-10 记的 12.9/16.1/19.2 与今天任一轮都对不上。抖的候选放在链头最坏 ——
+#    但**不需要手写黑名单**: 单跳预算 6s 一上它自己落进 band 3 沉底。
+#    (owner 2026-08-12: 「别用 kimi k2.7 code」。判据成立, 只是理由是「不稳」
+#     而不是「慢」。)
+#
+# 📌 zhipu/glm-4.5-air 今天 6/6 1.8s, 是地板里最快的 —— 但**不据此把它前移**:
+#    它被钉在 _TEXT_TAIL 最后一位是 08-09 一次生产事故的结论(某些槽稳定超时,
+#    连累后面 4 个健康候选被熔断)。一次好读数推翻不了那条判据。
 _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
-    ("aliyun_a", "qwen3.7-flash-2026-07-15"): (1.0, 1.6),
-    ("aliyun_a", "qwen3.7-flash"): (1.0, 1.7),
-    ("aliyun_b", "deepseek-v4-flash-0731"): (1.0, 1.9),
-    ("aliyun_a", "deepseek-v4-flash-0731"): (1.0, 1.9),
-    ("aliyun_c", "qwen3.7-max-2026-05-20"): (1.0, 2.7),
-    ("aliyun_a", "qwen3.8-max"): (1.0, 2.8),
-    ("aliyun_c", "qwen3.8-max"): (1.0, 2.8),
-    ("aliyun_b", "qwen3.8-max"): (1.0, 2.9),
-    ("aliyun_c", "qwen3.6-plus-2026-04-02"): (1.0, 4.1),
-    ("aliyun_c", "deepseek-v3.2-exp"): (1.0, 4.7),
-    ("aliyun_b", "qwen3.7-max-2026-05-17"): (1.0, 9.7),
-    ("aliyun_c", "qwen3.7-max-2026-05-17"): (1.0, 10.7),
-    ("aliyun_a", "qwen3.7-max-2026-05-17"): (1.0, 12.4),
-    ("aliyun_a", "kimi-k2.7-code"): (1.0, 12.9),
-    ("aliyun_b", "kimi-k2.7-code"): (1.0, 16.1),
-    ("aliyun_c", "kimi-k2.7-code"): (1.0, 19.2),
+    ("aliyun_a", "qwen3.7-flash-2026-07-15"): (1.0, 1.5),
+    ("zhipu", "glm-4.5-air"): (1.0, 1.8),
+    ("ark", "deepseek-v4-flash-ga-260731"): (1.0, 1.8),
+    ("tencent", "deepseek-v4-flash-202605"): (1.0, 1.8),
+    ("aliyun_b", "deepseek-v4-flash-0731"): (1.0, 1.8),
+    ("aliyun_a", "deepseek-v4-flash-0731"): (1.0, 1.8),
+    ("tencent", "hy3"): (1.0, 2.7),
+    ("aliyun_c", "qwen3.6-plus"): (1.0, 4.1),
+    ("aliyun_c", "qwen3.6-max-preview"): (1.0, 4.9),
+    ("aliyun_a", "kimi-k2.7-code"): (1.0, 7.8),
+    ("aliyun_c", "kimi-k2.7-code"): (1.0, 9.2),
+    ("aliyun_b", "kimi-k2.7-code"): (1.0, 10.8),
+    ("aliyun_a", "qwen3.7-max-2026-05-17"): (1.0, 12.2),
+    ("tencent", "minimax-m2.7"): (1.0, 15.0),
+    # ── 当天 0/6, 原因全是 quota 403(不是答错) —— 达标线 0.5 之下 → 沉底 ──
+    # 移除只需探针证据, 但**沉底**比移除更保守: 额度按日/按批恢复, 它们明天
+    # 可能又活。沉底让它们留在链里但排最后, 不占链头。
+    ("aliyun_b", "qwen3.7-max-2026-05-17"): (0.0, 0.1),
+    ("aliyun_c", "qwen3.7-max-2026-05-17"): (0.0, 0.1),
+    ("aliyun_c", "qwen3.7-max-2026-05-20"): (0.0, 0.1),
+    ("aliyun_b", "qwen3.8-max"): (0.0, 0.1),
+    ("aliyun_a", "qwen3.8-max"): (0.0, 0.1),
+    ("aliyun_c", "qwen3.6-plus-2026-04-02"): (0.0, 0.1),
+    ("aliyun_c", "qwen3.8-max"): (0.0, 0.1),
+    ("aliyun_a", "qwen3.7-flash"): (0.0, 0.1),
 }
 
 
@@ -373,7 +402,15 @@ _PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
 #
 # ⛔ 但放宽**不等于**让慢模型往前排: 一个 19.2s 的模型排在 2.8s 的前面, 只会让
 #    降级路径上的用户多等 16 秒。所以 `_latency_band` 把「快」单独分一档。
-_SLOT_HOP_BUDGET_SECONDS = 20.0    # 单跳预算; restaurant_intent 直接 import 它,
+# 2026-08-12: 20.0 → 6.0。上面那段把 20 的理由写成「kimi-k2.7-code 实测 19.2s,
+# 正好卡在这条线上」—— 也就是**整条链的预算是被一个候选撑起来的**。当天重测:
+# kimi 在 c/a 上是 5.8s、b 上 10.2s(08-10 记的 12.9/16.1/19.2 已过期), 而池子里
+# 现在有 1.7s / 1.8s / 1.8s 的 6/6 候选。为了等一个抖到 20s 的候选让所有人等 45s,
+# 这笔账不成立。
+# ⛔ 这个数同时是 `_latency_band` 的 2/3 分界(实测可接受 vs 实测必然超时), 所以
+#    砍它会连带改链顺序 —— 改完必须看 golden 快照的 diff, 那正是上一次发现
+#    「新加的快模型被排到链尾」的方式。
+_SLOT_HOP_BUDGET_SECONDS = 6.0     # 单跳预算; restaurant_intent 直接 import 它,
                                    # 不另写一份(两份必漂, 漂了就是「排序按 A 算、
                                    # 真超时按 B 算」)
 _FAST_LATENCY_SECONDS = 5.0        # 「快」档门槛
@@ -1029,11 +1066,25 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     ("aliyun_c", "qwen3.7-max-2026-05-20"),        # 08-20  1.1s
     # qwen3.7-max 移除 08-10(探针 403, 见 _SAFE_MODELS 段落)
     ("aliyun_c", "qwen3.7-max-2026-05-17"),        # 08-24  1.9s
-    ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 08-24  3.2s
     ("aliyun_b", "qwen3.7-max-2026-05-17"),        # 08-24  3.9s
-    ("aliyun_c", "kimi-k2.7-code"),                # 09-14  1.8s
-    ("aliyun_b", "kimi-k2.7-code"),                # 09-14  1.8s
-    ("aliyun_a", "kimi-k2.7-code"),                # 09-14  2.1s
+    # ── 2026-08-12 移出交互池: p50 > 单跳预算 6s, 留着只会白烧一跳 ──
+    #   ("aliyun_a", "qwen3.7-max-2026-05-17")   12.2s
+    #   ("aliyun_c", "kimi-k2.7-code")            9.2s   (第一轮 5.8s)
+    #   ("aliyun_a", "kimi-k2.7-code")            7.8s   (第一轮 5.8s)
+    #   ("aliyun_b", "kimi-k2.7-code")           10.8s
+    #
+    # ⛔ 为什么是"移出池"而不是"靠排序压下去": 试过了, 不行。把「必然超时」提到
+    #    排序键前面会同时踩坏两条既有不变量 —— 它压过了**存活档**(于是额度已死的
+    #    模型反而排在能答但慢的前面, test_measured_failures_never_precede_
+    #    measured_passes 红) 和**合法性档**(于是实测会编枚举值的排在零越界的前面,
+    #    test_schema_violators_never_precede_schema_clean_models 红)。两条闸都是
+    #    对的。**一个候选如果注定接不住这一跳, 正确做法是不选它, 不是选了再压。**
+    #
+    # 📌 kimi 的判据是「抖」不是「慢」: 同一晚两轮 aliyun_c 5.8s → 9.2s、
+    #    aliyun_a 5.8s → 7.8s, 而同轮 qwen3.7-flash-2026-07-15 是 1.7 → 1.5。
+    #    08-10 记的 12.9/16.1/19.2 与今天任一轮都对不上。它仍留在 _SAFE_MODELS
+    #    与 REASONING 槽(那里没有交互延迟契约), 只是不再进交互链。
+    #    (owner 2026-08-12: 「别用 kimi k2.7 code」)
     ("aliyun_a", "qwen3.7-flash"),                 # 10-23  0.5s
     ("aliyun_a", "qwen3.7-flash-2026-07-15"),      # 10-23  0.6s
     ("aliyun_b", "deepseek-v4-flash-0731"),        # 10-31  1.3s
