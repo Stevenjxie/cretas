@@ -171,6 +171,41 @@ describe('从 BOM 派生浮层', () => {
     expect(pack!.type === 'bomPackaging' && pack!.data.outputName).toBe('酱鸭腿');
   });
 
+  /**
+   * 🔴 Steve 2026-08-11: 「辅料的位置一定要和工序的 cell 有一定距离, 确保自动布局是
+   * 完好的好看的一个布局」。旧实现是 `y - 220` 固定偏移, 而工序 Cell 高度随内容变化
+   * 很大(投入/产出/单位关系/副产全展开能到 600px+), 220 不够 → 辅料 Cell 压在工序上面。
+   */
+  it('辅料 Cell 的间距跟着工序 Cell 的实测高度走, 不是固定偏移', () => {
+    const tall = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 1000)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: {},
+      nodeHeights: { p1: 600 },
+    }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
+    const short = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 1000)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: {},
+      nodeHeights: { p1: 120 },
+    }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
+
+    // 高工序 → 辅料要放得更高; 两者必须真的不同, 否则就是又退回固定偏移了
+    expect(tall.position.y).toBeLessThan(short.position.y);
+    // 留白至少一个工序高度 + 间隙, 保证不重叠
+    expect(short.position.y).toBeLessThanOrEqual(1000 - 120);
+    expect(tall.position.y).toBeLessThanOrEqual(1000 - 600);
+  });
+
+  it('拿不到实测高度时退回兜底高度 —— 首帧也不许重叠', () => {
+    const aux = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 1000)],
+      auxiliaryByProcess: { p1: { usageSupported: true, rows: [] } },
+      packagingByOutput: {},
+    }).nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`)!;
+    expect(aux.position.y).toBeLessThan(1000 - 300);
+  });
+
   it('派生连线与普通 Workflow 连线使用同一实线样式且两端 handle 正确', () => {
     const { edges } = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 400), outputNode('o1', 900, 200)],
@@ -181,14 +216,18 @@ describe('从 BOM 派生浮层', () => {
     expect(auxEdge!.target).toBe('p1');
     expect(auxEdge!.sourceHandle).toBe('bom-aux-out');
     expect(auxEdge!.targetHandle).toBe('bom-aux-in');
-    expect(auxEdge!.type).toBe('smoothstep');
+    // 2026-08-11: 「同一样式」现在包含**线型** —— 浮层边曾经是 smoothstep(直角折线),
+    // 主流程边不设 type 走 vue-flow 默认曲线, 同屏两种线型, 辅料/包材那两根看着像
+    // 别的系统画的 (Steve: 「希望和其他的线一样, 统一的就好」)。
+    // 统一的表达 = **不设 type**, 跟主流程边继承同一个默认值。
+    expect(auxEdge).not.toHaveProperty('type');
     expect(auxEdge!.style).toEqual({ stroke: '#1b65a8', strokeWidth: 2 });
     expect(auxEdge!.style).not.toHaveProperty('strokeDasharray');
     const packEdge = edges.find((e) => e.target === `${BOM_OVERLAY_PREFIX}pack:o1`);
     expect(packEdge!.source).toBe('o1');
     expect(packEdge!.sourceHandle).toBe('bom-pack-out');
     expect(packEdge!.targetHandle).toBe('bom-pack-in');
-    expect(packEdge!.type).toBe('smoothstep');
+    expect(packEdge).not.toHaveProperty('type');
     expect(packEdge!.style).toEqual({ stroke: '#1b65a8', strokeWidth: 2 });
   });
 

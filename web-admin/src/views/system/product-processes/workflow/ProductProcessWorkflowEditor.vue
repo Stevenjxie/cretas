@@ -109,7 +109,7 @@
         现在: 一行摘要, 需要动手时才默认展开; 每个产品一行, 版本号全部带归属前缀。
       -->
       <div
-        v-if="bomVersionLines.length > 0 || (definition?.status === 'DRAFT' && activation?.enabled)"
+        v-if="bomVersionLines.length > 0 || pendingAnchorMove || (definition?.status === 'DRAFT' && activation?.enabled)"
         class="version-status-strip"
         :class="{ 'is-actionable': bomVersionNeedsAction }"
         data-testid="workflow-version-status"
@@ -127,6 +127,9 @@
           <span v-for="line in bomVersionLines" :key="line.productId" class="version-chip">
             {{ line.productName }}：<template v-if="line.activeVersion == null">未建 BOM</template>
             <template v-else>BOM v{{ line.activeVersion }}<template v-if="line.draftVersion != null"> → 草稿 v{{ line.draftVersion }}</template></template>
+          </span>
+          <span v-if="pendingAnchorMove" class="version-chip version-chip--move">
+            发布后移到「{{ pendingAnchorMove.name }}」
           </span>
           <span class="version-status-more">{{ bomVersionPanelOpen ? '收起' : '详情' }}</span>
         </button>
@@ -154,6 +157,11 @@
             >
               生效该草稿 →
             </el-button>
+          </p>
+          <p v-if="pendingAnchorMove" class="version-status-row" data-testid="pending-anchor-move">
+            <strong>存放位置</strong>
+            发布后这张图会自动移到「{{ pendingAnchorMove.name }}」名下（系统研判：{{ workflowClassificationLabel }}）。
+            版本历史整条跟着走，已启用记录与在跑的生产计划不受影响。
           </p>
           <p class="version-status-hint">
             画布上的辅料 / 包材显示的是可编辑版本的内容；用量与锅序直接在下方工序的
@@ -950,7 +958,7 @@ const props = defineProps<{
 }>();
 
 const router = useRouter();
-const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
+const { fitView, getViewport, setViewport, findNode } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
 const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
@@ -1455,6 +1463,30 @@ const derivedWorkflowClassification = computed(() => classifyCanvasTopology(
   // 的用例。留在这里的话「分类器认得字段 / 画布传不到字段」这种断层没有任何测试照得出。
   stripBomOverlayEdges(flowEdges.value),
 ));
+/**
+ * 发布后归属对象会被搬到哪 —— null = 不会搬。
+ *
+ * 后端 PR #2488 在发布时按研判自动重锚(单原料多成品 → 归到那个共享原料), 那是一次真实的
+ * 数据搬迁: 整条版本谱系换 product_type_id, 图会从「成品X 的工艺图」挪到「原料Y 的工艺图」下。
+ * ⛔ 这种事不能等发布完才让用户发现 —— 界面必须提前说出来。
+ *
+ * 规则与后端 WorkflowAnchorPolicy 一一对应: 单成品→成品; 单原料多成品→主根原料;
+ * 联产/不完整→不动。
+ */
+const pendingAnchorMove = computed<{ skuId: string; name: string } | null>(() => {
+  const cls = derivedWorkflowClassification.value;
+  let targetSkuId: string | null = null;
+  if (cls.type === 'PRODUCT') targetSkuId = cls.terminalOutputSkuIds[0] ?? null;
+  else if (cls.type === 'RAW_SPLIT') targetSkuId = cls.primaryRootSkuId;
+  if (!targetSkuId || targetSkuId === props.productTypeId) return null;
+  const nameBySku = new Map<string, string>();
+  stripBomOverlay(flowNodes.value).forEach((node) => {
+    const data = node.data as { skuId?: string; name?: string };
+    if (data?.skuId && !nameBySku.has(data.skuId)) nameBySku.set(data.skuId, data.name || data.skuId);
+  });
+  return { skuId: targetSkuId, name: nameBySku.get(targetSkuId) ?? targetSkuId };
+});
+
 /** 顶部「本图产出：A、B」—— 研判结论驱动, 归属对象(存放位置)不参与。 */
 const terminalOutputNames = computed(() => terminalOutputLabels(
   stripBomOverlay(flowNodes.value),
@@ -2735,10 +2767,20 @@ function refreshBomOverlay(): void {
     position: { x: node.position.x, y: node.position.y },
     data: node.data as BomOverlaySourceNodeData,
   }));
+  // 工序 Cell 的高度随内容变化很大, 固定偏移会让辅料 Cell 压在工序上面。
+  // 取 vue-flow 的实测尺寸传进去; 首帧还没测量时为空, 派生自己会退回兜底高度。
+  // ⛔ findNode 要判存在再调 —— 它是 useVueFlow 的可选成员, 直接调会在没提供它的宿主
+  //    (含单测 mock) 上抛 TypeError, 把整个 definition 加载带挂 (74 条测试当场红)。
+  const nodeHeights: Record<string, number> = {};
+  workflowNodes.forEach((node) => {
+    const measured = typeof findNode === 'function' ? findNode(node.id)?.dimensions?.height : undefined;
+    if (typeof measured === 'number' && measured > 0) nodeHeights[node.id] = measured;
+  });
   const { nodes: overlayNodes, edges: overlayEdges } = deriveBomOverlay({
     workflowNodes,
     auxiliaryByProcess: bomOverlayAuxiliaryByProcess.value,
     packagingByOutput: bomOverlayPackagingByOutput.value,
+    nodeHeights,
   });
   flowNodes.value = [
     ...strippedNodes,
@@ -2762,7 +2804,7 @@ function refreshBomOverlay(): void {
       sourceHandle: edge.sourceHandle,
       target: edge.target,
       targetHandle: edge.targetHandle,
-      type: edge.type,
+      // 不设 type —— 与主流程边一样走 vue-flow 默认曲线, 见 bomOverlay.OVERLAY_EDGE_STYLE。
       style: edge.style,
       markerEnd: MarkerType.ArrowClosed,
       selectable: false,
@@ -4932,6 +4974,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   background: var(--el-fill-color-light); color: var(--el-text-color-regular);
   white-space: nowrap;
 }
+.version-chip--move { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .version-status-more { margin-left: auto; color: var(--el-color-primary); flex: none; }
 .version-status-detail { padding: 2px 12px 10px 28px; border-top: 1px dashed var(--el-border-color-lighter); }
 .version-status-row { margin: 6px 0; line-height: 1.6; color: var(--el-text-color-regular); }

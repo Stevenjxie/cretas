@@ -60,10 +60,27 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  * 包材 cell 挂在它服务的终端产出右侧（x + PACK_OFFSET_X）。投影连线使用与
  * 普通 Workflow 一致的蓝色实线和箭头；它仍只表达归属，不代表执行物料流。
  */
-const AUX_OFFSET_Y = 220;
+/**
+ * 辅料 Cell 距离工序 Cell 顶部的留白。
+ *
+ * ⚠️ 2026-08-11: 旧实现是 `y - 220` 的**固定偏移**, 但工序 Cell 的高度随内容变化很大
+ * (投入/产出/单位关系/副产几段全展开时能到 600px+), 220 根本不够 —— 辅料 Cell 直接
+ * 压在工序 Cell 上面, 自动布局一跑就是一团 (F006 拓扑成品C/D 实撞)。
+ * 现在改成 `y - (工序实测高度 + AUX_GAP_Y)`; 拿不到实测高度时退回
+ * AUX_FALLBACK_HEIGHT, 保证首帧(还没测量)也不会重叠。
+ */
+const AUX_GAP_Y = 64;
+const AUX_FALLBACK_HEIGHT = 360;
 // 成品 Cell 的实际盒模型宽度约 236px。旧值 220 会让包材 Cell 与成品 Cell
 // 重叠，两个 handle 几乎落在同一点，视觉上像“没有线”。
 const PACK_OFFSET_X = 300;
+/**
+ * 浮层连线的线型 —— **必须与主流程连线一致**。
+ * 旧值是 'smoothstep'(直角折线), 而主流程边不设 type 走 vue-flow 默认贝塞尔曲线,
+ * 于是同一张画布上两种线型并存, 辅料/包材那两根看着像是别的系统画的。
+ * 统一成默认曲线(不设 type), 只保留同样的蓝色实线 + 箭头。
+ */
+const OVERLAY_EDGE_STYLE = { stroke: '#1b65a8', strokeWidth: 2 } as const;
 
 /**
  * 派生边挂靠的 handle id —— 必须与组件里 <Handle> 的 id 字面量一致
@@ -151,6 +168,11 @@ export interface BomOverlayInput {
   workflowNodes: BomOverlaySourceNode[];
   auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput>;
   packagingByOutput: Record<string, BomOverlayPackagingInput>;
+  /**
+   * 工序节点的**实测**高度 (nodeId → px)，用来把辅料 Cell 放在工序上方且不重叠。
+   * 首帧还没测量时传空即可 —— 派生会退回 AUX_FALLBACK_HEIGHT。
+   */
+  nodeHeights?: Record<string, number>;
   /** 可选: 老调用方不传时按「没有副产」派生空 cell, 与包材/辅料一致(防呆: 空 cell 也要画)。 */
 }
 
@@ -170,7 +192,7 @@ export interface OverlayEdge {
   sourceHandle?: string;
   target: string;
   targetHandle?: string;
-  type: 'smoothstep';
+  /** 不设 type —— 与主流程边一样走 vue-flow 默认曲线。 */
   style: { stroke: string; strokeWidth: number };
 }
 
@@ -198,7 +220,11 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
       nodes.push({
         id: auxId,
         type: 'bomAuxiliary',
-        position: { x: node.position.x, y: node.position.y - AUX_OFFSET_Y },
+        position: {
+          x: node.position.x,
+          y: node.position.y
+            - ((input.nodeHeights?.[node.id] ?? AUX_FALLBACK_HEIGHT) + AUX_GAP_Y),
+        },
         data: {
           processName: node.data.processName ?? '未命名工序',
           // ⛔ 三态, 不能默认成 false: 没有 meta 只代表"没有可确认的结论"(数据未加载/
@@ -217,8 +243,7 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         sourceHandle: AUX_OVERLAY_SOURCE_HANDLE,
         target: node.id,
         targetHandle: AUX_OVERLAY_TARGET_HANDLE,
-        type: 'smoothstep',
-        style: { stroke: '#1b65a8', strokeWidth: 2 },
+        style: OVERLAY_EDGE_STYLE,
       });
     }
 
@@ -242,8 +267,7 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
         target: packId,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
-        type: 'smoothstep',
-        style: { stroke: '#1b65a8', strokeWidth: 2 },
+        style: OVERLAY_EDGE_STYLE,
       });
     }
   }

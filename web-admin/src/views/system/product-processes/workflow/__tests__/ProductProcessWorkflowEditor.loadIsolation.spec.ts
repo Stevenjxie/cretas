@@ -55,6 +55,8 @@ vi.mock('@vue-flow/core', () => ({
   SelectionMode: { Partial: 'partial' },
   VueFlow: defineComponent({ name: 'VueFlow', template: '<div />' }),
   useVueFlow: () => ({
+      // 实测尺寸: 单测里给一个稳定高度, 让辅料 Cell 的间距计算走真实分支
+      findNode: () => ({ dimensions: { width: 240, height: 400 } }),
     fitView: apiMocks.fitView,
     getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
     setViewport: vi.fn(),
