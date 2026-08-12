@@ -216,6 +216,41 @@ def _fmt(value: Any, unit: str) -> str:
 
 
 def render(result: CellResult, window_label: str) -> str:
+    """正文 = 主体 + **出处限定语**。
+
+    🔴 单一出口, 不在每个 return 上各加一次 —— `_render_body` 有 6 个 return 分支,
+       逐个加必然漏一个, 而漏掉的表现是「这个数没说自己是估的」, 不报错。
+       形态 B 的预防写法: 让新分支**默认**带上限定语, 而不是靠记得。
+
+    ⛔ 限定语由 `CellResult.provenance` 生成, 不手写 —— 见 `provenance.py`。
+    """
+    body = _render_body(result, window_label)
+    if not body:
+        return body
+    # ⚠️ 缺列那条分支已经有自己的开价, 而且此时根本没算出数, 不该谈出处。
+    if result.missing_columns:
+        return body
+
+    parts = [body]
+    # ② 限定语 —— 由 provenance 字段生成, 不手写。
+    qualifier = result.qualifier(coverage_ratio=None)
+    if qualifier:
+        parts.append(qualifier)
+    # ③ 开价 —— 估出来的数配一条「补什么能从估变实」。
+    #    ⛔ 与 ② 同一个出口: 分开写会出现「说了是估的、却没说怎么变实」,
+    #       而那正是店长看完限定语之后立刻会问的那句。
+    from smartbi.gold.restaurant.fill_offers import build_fill_offers
+
+    offers = build_fill_offers(
+        provenance=result.provenance,
+        estimation_basis=result.estimation_basis,
+        estimated_metric_labels=[result.metric_label],
+    )
+    parts.extend(f"> {o['text']}" for o in offers)
+    return "\n\n".join(parts)
+
+
+def _render_body(result: CellResult, window_label: str) -> str:
     """叙述层：每种聚合形态一套句式，所有指标共用。
 
     ⛔ 缺列时**如实说缺**，绝不拿 0 充数（与执行器那条约束是同一条纪律的下游）。

@@ -25,6 +25,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from smartbi.gold.restaurant.provenance import (
+    ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
     qualifier as provenance_qualifier,
     validate as validate_provenance,
@@ -358,7 +359,66 @@ async def execute_cell(
     rows = await conn.fetch(sql, *args)
     # 值列名: 派生量用它自己的 key, 基础指标用它的 key —— 两者都是 item.key。
     processed = _post_process([dict(r) for r in rows], agg, getattr(item, "key", metric_key))
+    provenance, basis = _provenance_of(metric_key)
     return CellResult(
         metric_key, label, dimension_key, aggregation_key, unit,
-        processed, (), sql,
+        processed, (), sql, provenance, basis,
     )
+
+
+#: 成本卡那一列。⛔ 它是**理论用量**的来源, 不是实际耗用。
+#:
+#: 🔴 owner 2026-08-13 定的口径: 当日毛利的成本项来自成本卡时,
+#:    `provenance = ESTIMATED`。理由: **成本卡 × 销量是理论耗用, 实际耗用要盘点
+#:    才知道**(邓总店里 10 天盘一次库 —— 当日实际耗用根本拿不到)。
+#: ⛔ 这**不是**「算不出」, 正是 provenance 存在的理由: 算得出, 但要说清是估的。
+_COST_CARD_COLUMN = "agg_restaurant_product_cost.food_cost"
+
+#: 人话, 不是术语。店长要能据此判断这个数能不能用来做决定。
+#: ⚠️ 写成**名词短语**(不是整句) —— 限定语模板是「用{basis}估算，…」,
+#:    塞一句完整的话进去会读成「用按成本卡的理论用量算的，实际用了多少要等盘点估算」。
+#:    实测过一次, 当场读不通。
+_COST_CARD_BASIS = "成本卡的理论用量（实际用了多少要等盘点）"
+
+
+def _effective_requires(metric_key: str) -> Tuple[str, ...]:
+    """这个指标**实际依赖的列**, 派生量递归展开到基础指标。
+
+    🔴 不展开就会漏: `gross_profit = revenue - food_cost` 是 `Derived`,
+       它**没有 `requires`**(空元组), 于是「毛利」会被判成 MEASURED ——
+       而毛利的成本项正来自成本卡。实测当场抓到这一条。
+    ⛔ 与 `fill_offers` 那边的闭包是同一件事的两面, 但**不共用实现**:
+       那边问「补这一列能解锁什么」, 这边问「这个数依赖哪些列」——
+       方向相反, 合并会让两边都变得难读。⚠️ 两边都要跟着 registry 走, 别手写。
+    """
+    seen: set = set()
+    stack = [metric_key]
+    cols: set = set()
+    while stack:
+        key = stack.pop()
+        if key in seen:
+            continue
+        seen.add(key)
+        base = METRICS.get(key)
+        if base is not None:
+            cols.update(base.requires)
+            continue
+        derived = DERIVED.get(key)
+        if derived is not None:
+            stack.extend((derived.left, derived.right))
+    return tuple(sorted(cols))
+
+
+def _provenance_of(metric_key: str) -> Tuple[str, str]:
+    """从**这个指标实际依赖的列**推出出处 —— ⛔ 不是查一张手写的指标名单。
+
+    判据可推导: 依赖里出现成本卡那一列, 这个数就含理论耗用 -> ESTIMATED。
+    手写「哪些指标是估的」会在新增指标时静默漏掉, 而漏掉的方向是
+    **把估的说成实的** —— 那正是最坏的方向。
+
+    ⚠️ 覆盖率(有多少菜有成本卡)是**另一件事**, 由 `coverage_ratio` 表达;
+       这里回答的是「这个数的成本项是怎么来的」。两者都进限定语, 不互相替代。
+    """
+    if _COST_CARD_COLUMN in _effective_requires(metric_key):
+        return PROV_ESTIMATED, _COST_CARD_BASIS
+    return PROV_MEASURED, ""
