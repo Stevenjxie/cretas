@@ -52,6 +52,12 @@ LEDGER=/www/wwwroot/cretas/logs/daily-close-ledger.jsonl
     echo "WARN: 拿不到活服务进程 environ (pid=${svc_pid:-none}) —— 库名可能落到默认值(测试库)"
   fi
 
+  # ⛔ 先删上一次的产出。python 侧现在**总会**写它, 但两道都要有 ——
+  #    只要有一条路径没写文件, 台账就会把**上一次**的计数配上**这一次**的 rc,
+  #    而那种行看起来完全正常。2026-08-13 实测出现过一次:
+  #    {"rc": 2, "factories": 1, "sections_computed": 1} —— rc 是这次的, 计数是上次的。
+  rm -f /tmp/daily_close_push.json
+
   out=$(DAILY_CLOSE_OUT=/tmp/daily_close_push.json PYTHONIOENCODING=utf-8 \
         python -X utf8 -u -m smartbi.scripts.daily_close_push 2>&1)
   rc=$?
