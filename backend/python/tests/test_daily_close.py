@@ -291,25 +291,35 @@ async def test_no_business_day_does_not_push():
 
 
 @pytest.mark.asyncio
-async def test_no_data_is_distinguished_from_no_business():
-    """🔴 两者计数上都是 notified=0, 但处置相反。
+async def test_no_data_branch_is_defensive_only_not_an_etl_detector():
+    """🔴 这条记录一个**我写错了的判据**, 免得下一个人再照它推理。
 
-    ⛔ 合成一个布尔, 「执行链没跑通」就会长得和「今天没营业」一模一样,
-       于是静默失效永远没人发现。
+    我原本写的是:「营收算不出来是 None, 分不清没营业和执行链没跑通;
+    订单数分得清(0 vs None)」。**订单数分不清** —— `orders` 是 `COUNT(...)`,
+    空集上返回 0 而不是 NULL。
+
+    2026-08-13 prod 实测: 拿一个根本不存在的租户跑, 得到 `no_business`。
+    而这条单测之所以能构造出 `no_data`, 是因为 `_FakeConn` 直接喂了
+    `orders: None` —— **真实 SQL 永远不会产出这个形状**。
+
+    ⛔ 所以 `no_data` 是防御性分支(rows 为空/取不到值), 不是 ETL 探测器。
+       「没营业」和「数据没落库」在事实表上同形, 分不开; 要分得看营业日历
+       或 ETL 水位。已挂账。
     """
     from smartbi.gold.restaurant.daily_close import build_daily_close
 
-    # 执行链没跑通: 连订单数都是 None
+    # 防御性分支: 只有在拿不到值时才到得了(真实 COUNT 到不了)
     dead = await build_daily_close(
         _FakeConn({"revenue": None, "orders": None, "gross_profit": None}),
         factory_id="T_DAILY", today=date(2026, 8, 13))
     assert dead["status"] == "no_data"
 
-    # 没营业: 订单数是 0(**不是** None)
+    # 🔴 生产上真正会发生的形状: 没有行 → COUNT 给 0, SUM 给 None
     closed = await build_daily_close(
         _FakeConn({"revenue": None, "orders": 0, "gross_profit": None}),
         factory_id="T_DAILY", today=date(2026, 8, 13))
-    assert closed["status"] == "no_business"
+    assert closed["status"] == "no_business", (
+        "这是 prod 上「没营业」和「租户不存在」共同的长相 —— 两者分不开")
 
     # 阳性对照: 有营业的那天不许被判成上面任何一种
     ok = await build_daily_close(
