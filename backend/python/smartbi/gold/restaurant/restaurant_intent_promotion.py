@@ -646,9 +646,16 @@ def _current_routing_fingerprint() -> str:
     ⛔ 与计划缓存用的是**同一个函数**——两处各算一份就会出现「缓存失效了、晋升
     没失效」这种半吊子状态，而那正是本次要消除的不对称。
     """
-    from smartbi.gold.restaurant.restaurant_intent import _routing_rules_fingerprint
+    # 🔴 2026-08-13 指纹分层: 写入端存**两段** `<语义段>.<prompt段>`。
+    #    校验只比第一段 —— prompt 侧改动(扩词汇表等)让计划过时而不是错,
+    #    不该让人审过的晋升作废。第二段不参与校验, 存着是为了让
+    #    「这条是在哪套 prompt 下审的」可回溯。
+    # ⛔ 仍然与计划缓存**共用同一份原料定义**(compose_ 内部调的就是那两个
+    #    materials 函数) —— 两处各算一份就会出现「缓存失效了、晋升没失效」
+    #    这种半吊子状态, 那正是当初要消除的不对称。
+    from smartbi.gold.restaurant.restaurant_intent import compose_routing_fingerprint
 
-    return _routing_rules_fingerprint()
+    return compose_routing_fingerprint()
 
 
 async def apply_route_promotions(

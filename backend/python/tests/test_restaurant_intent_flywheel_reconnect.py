@@ -29,6 +29,7 @@ import pytest
 from smartbi.gold.restaurant import restaurant_intent as ri
 from smartbi.gold.restaurant import restaurant_ops_router as ops_router
 from smartbi.gold.restaurant.restaurant_intent import (
+    compose_routing_fingerprint,
     DEFAULT_TIME_PHRASE,
     TRUSTED_PLANNER_AUTHORITIES,
     _build_spec,
@@ -185,7 +186,12 @@ class _FakeConn:
                     plan_json=json.dumps(plan),
                     routing_fingerprint=self.owner.promoted_fingerprint
                     if self.owner.promoted_fingerprint is not _UNSET
-                    else _routing_rules_fingerprint(),
+                    # 🔴 2026-08-13 指纹分层: 夹具要模拟**今天的写入端**会写下的形态
+                    #    `<语义段>.<prompt段>`。此前用的是全料指纹(裸 8-hex) ——
+                    #    分层后那是**旧格式**, 按格式判失效, 于是这些测试全都变成
+                    #    「回落 planner」。那不是缺陷, 是分层的正确后果:
+                    #    旧格式行必须失效, 复活要由人按台账逐条盖章。
+                    else compose_routing_fingerprint(),
                 )
                 for phrase, plan in self.owner.promoted_rows
             ]
