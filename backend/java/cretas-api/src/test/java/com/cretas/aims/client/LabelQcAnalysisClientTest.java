@@ -10,6 +10,7 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.InetSocketAddress;
+import java.net.URI;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
@@ -41,7 +42,8 @@ class LabelQcAnalysisClientTest {
                 restTemplate,
                 "http://python.test",
                 "internal-secret",
-                new ObjectMapper());
+                new ObjectMapper(),
+                false);
 
         server.expect(requestTo("http://python.test/api/label-qc/analyze"))
                 .andExpect(method(HttpMethod.POST))
@@ -83,5 +85,27 @@ class LabelQcAnalysisClientTest {
         } finally {
             imageServer.stop(0);
         }
+    }
+
+    @Test
+    void rewritesShanghaiOssHostWithoutChangingSignedPathOrQuery() {
+        URI source = URI.create("https://cretas-media.oss-cn-shanghai.aliyuncs.com/LIUSHANMEN/photo.jpg"
+                + "?Expires=123&OSSAccessKeyId=test%2Fid&Signature=a%2Bb%3D");
+
+        URI rewritten = LabelQcAnalysisClient.toInternalOssUri(source);
+
+        assertThat(rewritten.getHost())
+                .isEqualTo("cretas-media.oss-cn-shanghai-internal.aliyuncs.com");
+        assertThat(rewritten.getRawPath()).isEqualTo(source.getRawPath());
+        assertThat(rewritten.getRawQuery()).isEqualTo(source.getRawQuery());
+    }
+
+    @Test
+    void doesNotRewriteNonOssOrOtherRegionHosts() {
+        URI customDomain = URI.create("https://media.example.com/photo.jpg?Signature=x");
+        URI otherRegion = URI.create("https://bucket.oss-cn-hangzhou.aliyuncs.com/photo.jpg?Signature=x");
+
+        assertThat(LabelQcAnalysisClient.toInternalOssUri(customDomain)).isSameAs(customDomain);
+        assertThat(LabelQcAnalysisClient.toInternalOssUri(otherRegion)).isSameAs(otherRegion);
     }
 }
