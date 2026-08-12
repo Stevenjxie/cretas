@@ -3283,12 +3283,28 @@ def _replay_plan_spec(
         query,
         available_stores=available_stores,
         suggested_stores=suggested_stores,
-        # ⛔ 零 token 回放**不许发明默认窗口**。人审批准的是「这句话 → 这个意图」，
-        #    没有批准「并且按最近30天算」——替人审多批一个窗口，等于偷偷放大授权。
-        #    2026-08-07 实测: 我的时间窗默认在这条路径上生效了，撞坏了
-        #    test_promoted_route_still_enforces_the_deterministic_time_gate，
-        #    而那条测试**不在我当时跑的任何套件里**，改动因此带着回归上了 prod。
-        allow_time_default=False,
+        # 🔴 2026-08-13 owner 裁定, 上面那条(原文保留在下方)**作废**。
+        #
+        #    原文: 「零 token 回放不许发明默认窗口。人审批准的是「这句话 → 这个意图」，
+        #           没有批准「并且按最近30天算」——替人审多批一个窗口，等于偷偷放大授权。
+        #           2026-08-07 实测: 我的时间窗默认在这条路径上生效了，撞坏了
+        #           test_promoted_route_still_enforces_the_deterministic_time_gate，
+        #           而那条测试不在我当时跑的任何套件里，改动因此带着回归上了 prod。」
+        #
+        #    作废依据是**存量计划自己的字段**, 不是谁的意见。实测三条反向差异的
+        #    plan_json 逐条为:
+        #        clarification_needed = false
+        #        missing_fields       = []
+        #        time_range           = null
+        #    人审批的就是「直接答」。回放却产出反问 —— 因为回放拿到 time_range=null
+        #    之后走了「没指定时间范围」那条分支, 而默认窗口的逻辑只装在规划路径上。
+        #    所以打开它不是拿裁定覆盖人审, 是**让回放兑现人审本来的意图**。
+        #
+        # ⛔ 「偷偷放大授权」这个顾虑由**披露**消解, 不是被忽略: `time_range_defaulted`
+        #    是 `_time_range_disclosure` 的唯一触发条件, 二者在构造上耦合 ——
+        #    补了默认就一定会说出来, 不存在「只接前者」的形态。
+        #    (2549 刚踩过它的正面版本: 披露说 30 天、实际按全部历史算。这是背面。)
+        allow_time_default=True,
     )
     authorities = _REPLAYABLE_PLAN_AUTHORITIES.get(spec.planner_authority)
     if authorities is None:
