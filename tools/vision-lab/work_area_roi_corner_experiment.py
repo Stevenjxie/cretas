@@ -49,9 +49,51 @@ def spatial_soft_argmax(torch, logits, temperature: float = 0.1):
     return torch.stack((x, y), dim=-1)
 
 
+def tray_center_targets(samples: list[dict[str, Any]]):
+    """Return padded normalized tray centers and their exact human ROI labels."""
+    max_boxes = max(len(sample["boxes"]) for sample in samples)
+    centers = np.zeros((len(samples), max_boxes, 2), dtype=np.float32)
+    labels = np.zeros((len(samples), max_boxes), dtype=np.float32)
+    valid = np.zeros((len(samples), max_boxes), dtype=bool)
+    for sample_index, sample in enumerate(samples):
+        polygon = common.work_area.validate_polygon(sample["polygon"])
+        for box_index, box in enumerate(sample["boxes"]):
+            x0, y0, x1, y1 = common.work_area.validate_box(box)
+            centers[sample_index, box_index] = ((x0 + x1) / 2, (y0 + y1) / 2)
+            labels[sample_index, box_index] = float(
+                common.work_area.classify_box_center(box, polygon)
+                == common.work_area.INSIDE_WORK_AREA
+            )
+            valid[sample_index, box_index] = True
+    return centers, labels, valid
+
+
+def center_membership_loss(
+    torch, predicted, centers, labels, valid, *, margin: float = 5e-4,
+):
+    """Penalize tray centers that cross a predicted convex-quad boundary.
+
+    Canonical polygons have positive signed area in normalized image space, so
+    their interior lies on the positive side of every directed edge. The
+    minimum signed edge distance is therefore a differentiable classification
+    score that directly represents the production center-in-polygon contract.
+    """
+    edges = torch.roll(predicted, shifts=-1, dims=1) - predicted
+    relative = centers[:, :, None, :] - predicted[:, None, :, :]
+    signed_cross = (
+        edges[:, None, :, 0] * relative[:, :, :, 1]
+        - edges[:, None, :, 1] * relative[:, :, :, 0]
+    )
+    edge_lengths = torch.linalg.vector_norm(edges, dim=-1).clamp_min(1e-6)
+    membership_score = (signed_cross / edge_lengths[:, None, :]).amin(dim=-1)
+    direction = labels.mul(2).sub(1)
+    violations = torch.relu(margin - direction * membership_score)
+    return violations[valid].mean()
+
+
 def train_model(
-    torch, model, images, heatmaps, points, *, epochs: int, seed: int,
-    device, augment: bool,
+    torch, model, images, heatmaps, points, centers, center_labels, center_valid,
+    *, epochs: int, seed: int, device, augment: bool,
 ):
     nn = torch.nn
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
@@ -76,7 +118,10 @@ def train_model(
         predicted_edges = torch.roll(predicted, -1, 1) - predicted
         target_edges = torch.roll(points, -1, 1) - points
         edge_loss = nn.functional.smooth_l1_loss(predicted_edges, target_edges, beta=0.01)
-        loss = heatmap_loss + 10.0 * coordinate_loss + 2.5 * edge_loss
+        membership_loss = center_membership_loss(
+            torch, predicted, centers, center_labels, center_valid,
+        )
+        loss = heatmap_loss + 10.0 * coordinate_loss + 2.5 * edge_loss + 10.0 * membership_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -92,7 +137,8 @@ def prepare_data(queues: list[Path], width: int, height: int, sigma: float):
     masks = np.stack([
         common.rasterize_polygon(polygon.tolist(), width, height) for polygon in points
     ]).astype(bool)
-    return samples, images, points, heatmaps, masks
+    centers, center_labels, center_valid = tray_center_targets(samples)
+    return samples, images, points, heatmaps, masks, centers, center_labels, center_valid
 
 
 def evaluate(predicted: np.ndarray, truth_mask: np.ndarray, sample: dict[str, Any], width: int, height: int):
@@ -136,7 +182,8 @@ def run(
 ) -> dict[str, Any]:
     import torch
 
-    samples, images, points, heatmaps, masks = prepare_data(queues, width, height, sigma)
+    (samples, images, points, heatmaps, masks, centers, center_labels,
+     center_valid) = prepare_data(queues, width, height, sigma)
     if len(samples) < 8:
         raise RuntimeError("corner ROI experiment requires at least 8 independent reviewed images")
     if device_name == "cuda" and not torch.cuda.is_available():
@@ -160,8 +207,11 @@ def run(
         x = torch.from_numpy(images[train_indices].transpose(0, 3, 1, 2)).to(device)
         h = torch.from_numpy(heatmaps[train_indices]).to(device)
         p = torch.from_numpy(points[train_indices]).to(device)
+        c = torch.from_numpy(centers[train_indices]).to(device)
+        cl = torch.from_numpy(center_labels[train_indices]).to(device)
+        cv = torch.from_numpy(center_valid[train_indices]).to(device)
         optimizer = train_model(
-            torch, model, x, h, p, epochs=epochs,
+            torch, model, x, h, p, c, cl, cv, epochs=epochs,
             seed=20260812 + fold_index * epochs, device=device, augment=not fit,
         )
         held = torch.from_numpy(images[held_indices].transpose(0, 3, 1, 2)).to(device)
@@ -177,7 +227,7 @@ def run(
                 "held_out_photo_id": sample["source_photo_id"],
                 "sku_code": sample["sku_code"], **metrics,
             })
-        del model, optimizer, x, h, p, held
+        del model, optimizer, x, h, p, c, cl, cv, held
         if device.type == "cuda":
             torch.cuda.empty_cache()
     summary = common._summarise(rows)
@@ -193,10 +243,15 @@ def run(
         base_channels=base_channels, depth=depth, sigma=sigma, device=str(device),
     )
     receipt.update({
-        "version": "vision-lab-work-area-roi-corner-v1",
+        "version": "vision-lab-work-area-roi-corner-v2",
         "mode": "training-fit-diagnostic" if fit else "task-grouped-cross-validation",
         "folds": len(splits), "split": "all-to-all" if fit else "deterministic-sku-stratified-task-k-fold",
         "training_augmentation": False if fit else "rgb-brightness-and-noise-only",
+        "loss": {
+            "heatmap_distribution": 1.0, "corner_coordinate": 10.0,
+            "edge_vector": 2.5, "tray_center_membership": 10.0,
+            "tray_center_margin_normalized": 5e-4,
+        },
         "invalid_polygon_count": invalid, "thresholds": thresholds,
         "summary": summary, "rows": rows, "passed": passed,
         "sufficient_for_production": False, "deployment_authorized": False,

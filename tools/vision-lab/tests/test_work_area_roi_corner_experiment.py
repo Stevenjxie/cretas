@@ -42,6 +42,34 @@ class WorkAreaRoiCornerExperimentTests(unittest.TestCase):
         output = model(torch.zeros((2, 5, 32, 40)))
         self.assertEqual(tuple(output.shape), (2, 4, 32, 40))
 
+    def test_center_membership_loss_enforces_inside_and_outside_margin(self):
+        import torch
+
+        polygon = torch.tensor([[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]]])
+        centers = torch.tensor([[[0.5, 0.5], [0.1, 0.5]]])
+        labels = torch.tensor([[1.0, 0.0]])
+        valid = torch.tensor([[True, True]])
+        loss = module.center_membership_loss(
+            torch, polygon, centers, labels, valid, margin=0.01,
+        )
+        self.assertEqual(float(loss), 0.0)
+
+        wrong_labels = torch.tensor([[0.0, 1.0]])
+        wrong_loss = module.center_membership_loss(
+            torch, polygon, centers, wrong_labels, valid, margin=0.01,
+        )
+        self.assertGreater(float(wrong_loss), 0.1)
+
+    def test_tray_center_targets_use_exact_polygon_contract(self):
+        samples = [{
+            "polygon": [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+            "boxes": [[0.4, 0.4, 0.6, 0.6], [0.0, 0.4, 0.1, 0.6]],
+        }]
+        centers, labels, valid = module.tray_center_targets(samples)
+        self.assertTrue(np.allclose(centers[0], [[0.5, 0.5], [0.05, 0.5]]))
+        self.assertEqual(labels.tolist(), [[1.0, 0.0]])
+        self.assertEqual(valid.tolist(), [[True, True]])
+
 
 if __name__ == "__main__":
     unittest.main()

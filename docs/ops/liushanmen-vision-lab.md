@@ -231,6 +231,21 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_effective_queue.py `
 unjudgeable、重复 photo/task/SHA/stem 和任何源文件漂移。派生队列只用于审计/实验，源队列与
 原始 unknown sidecar 保持不变。
 
+2026-08-12 的派生有效集合与前四轮组成 `96` 图/任务，正式审计为 inside `1596`、outside
+`296`、unknown `0`。首轮四角热图容量拟合仅剩一个中心错分：照片
+`085f6e10-42fb-4380-a8b1-b4c8992143ee` 的第 11 个托盘中心距人工多边形边界约 `0.12px`，预测
+边界偏移不到 `1px` 即翻转 side。人工四点和托盘框保持不变；实验 v2 增加与生产
+`tray_center_in_polygon` 契约一致的可微中心侧别裕量损失，不以矩形或启发式替代 ROI。
+
+v2 容量拟合通过：平均/最差 IoU `0.9957/0.9795`、中心错分 `0`、inside/outside 最低召回
+`1.0`、非法多边形 `0`；回执 `work-area-roi-corner-fit-20260812T031109570146Z.json`，SHA256
+`9c9b74ab5a2c00860b2ada78a3dc6d882fbb43010593bed5d5858024ac30ff26`。但独立任务级 8 折仍失败：
+平均/最差 IoU `0.8185/0`、中心错分 `129`、最差中心准确率 `0.0526`、inside/outside 最低召回
+均为 `0`、非法多边形 `1`；回执 `work-area-roi-corner-experiment-20260812T035652390852Z.json`，
+SHA256 `fad43b1f89b598278a2df833416ca13c1649dac5ae758a7aea4bd9f6c8371088`。结论仍为
+`insufficient_image_conditioned_roi_evidence`：不得运行完整 7+20、保存权重、恢复旧 YOLO 或部署；
+下一步应回到图像条件 ROI 方法/数据覆盖设计，而不是继续盲目调同一损失权重。
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
