@@ -1,5 +1,26 @@
 <template>
-  <div class="aux-node" :class="{ 'is-greyed': usageState !== 'supported' }">
+  <!--
+    🔴 2026-08-12 (Steve): 不用辅料的工序, 那个空 Cell 一直挂在上面, 看着像没配完。
+    折叠成一条细窄的条 —— 但**不隐藏**: 隐藏之后「已确认不用」和「浮层还没加载出来」
+    长得一模一样, 用户没法区分, 也找不到地方恢复。
+    ⚠️ 这是**视图偏好**(存本地), 不是业务声明 —— 换个人看仍然会看到完整 Cell。
+  -->
+  <div
+    v-if="collapsed"
+    class="aux-node aux-node--collapsed"
+    data-testid="aux-collapsed"
+  >
+    <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
+    <span class="aux-collapsed-text">{{ data.processName }} · 本工序不用辅料</span>
+    <button
+      type="button"
+      class="aux-collapsed-toggle nodrag"
+      data-testid="aux-expand"
+      @click.stop="emit('set-collapsed', false)"
+    >展开</button>
+  </div>
+
+  <div v-else class="aux-node" :class="{ 'is-greyed': usageState !== 'supported' }">
     <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
 
     <div class="aux-heading">
@@ -16,6 +37,14 @@
         data-testid="aux-open-detail"
         @click.stop="emit('open-detail')"
       >详情</button>
+      <button
+        v-if="canWrite"
+        type="button"
+        class="aux-detail nodrag"
+        title="本工序不用辅料 —— 折叠这个 Cell(只影响你自己的视图, 随时可展开)"
+        data-testid="aux-collapse"
+        @click.stop="emit('set-collapsed', true)"
+      >不用辅料</button>
     </div>
 
     <div class="aux-subtitle" :class="{ 'is-warning': isEmptySubtitle }">{{ subtitleText }}</div>
@@ -101,12 +130,15 @@ const props = defineProps<{
   data: AuxiliaryCellData;
   /** 只读用户不给「加辅料」入口 —— 画布层传 canEdit 下来。 */
   canWrite: boolean;
+  /** 折叠成一条细窄的条 —— 视图偏好, 由画布层持久化到本地。 */
+  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
   'add-row': [];
   'edit-row': [rowId: string];
   'open-detail': [];
+  'set-collapsed': [collapsed: boolean];
 }>();
 
 const hasPotMarker = computed(() =>
@@ -141,6 +173,21 @@ function formatDosage(row: AuxiliaryCellRow): string {
 </script>
 
 <style scoped>
+/* 折叠态: 一条细窄的条, 高度远小于完整 Cell —— 让它明显是「收起了」而不是「空的」。 */
+.aux-node--collapsed {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; min-height: 0;
+  border: 1px dashed #e0cfa6; border-radius: 8px; background: #fffdf7;
+}
+.aux-collapsed-text {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #8a5a17; font-size: 11px;
+}
+.aux-collapsed-toggle {
+  flex: none; border: 1px solid #e0cfa6; border-radius: 5px; background: #fff;
+  color: #8a5a17; font-size: 11px; padding: 1px 7px; cursor: pointer;
+}
+.aux-collapsed-toggle:hover { background: #fdf6e6; }
 .aux-node {
   position: relative;
   width: 320px;
