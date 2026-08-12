@@ -29,6 +29,7 @@ import pytest
 from smartbi.gold.restaurant import restaurant_intent as ri
 from smartbi.gold.restaurant import restaurant_ops_router as ops_router
 from smartbi.gold.restaurant.restaurant_intent import (
+    DEFAULT_TIME_PHRASE,
     TRUSTED_PLANNER_AUTHORITIES,
     _build_spec,
     clear_promoted_routes_cache,
@@ -361,9 +362,21 @@ async def test_promoted_route_replays_the_reviewed_plan_without_the_planner():
     }
 
 
-async def test_promoted_route_still_enforces_the_deterministic_time_gate():
-    """The bare reviewed phrase carries no window. The promotion is an intent
-    grant, not permission to invent a default month."""
+async def test_promoted_route_answers_with_the_disclosed_default_window():
+    """🔴 2026-08-13 owner 裁定: 回放兑现人审本来的意图, 不再反问。
+
+    此前这条断言的是「回放仍然反问」, 理由写作「晋升是意图授权, 不是发明默认
+    月份的许可」。作废依据是**存量计划自己的字段** —— 那三条反向差异的
+    plan_json 逐条为 `clarification_needed=false` / `missing_fields=[]` /
+    `time_range=null`: 人审批的就是「直接答」。回放却产出反问, 是因为默认窗口
+    的逻辑只装在规划路径上, 回放够不着 —— 形态 B「机制在, 没接上」第八例。
+
+    ⛔ 「替人审多批一个窗口」这个顾虑由**披露**消解, 不是被忽略:
+       `time_range_defaulted` 是 `_time_range_disclosure` 的唯一触发条件,
+       补了默认就一定会说出来。本条把这个耦合钉死。
+    ⛔ `planner.call_count == 0` 原样保留 —— 零 token 是这条路径存在的理由,
+       接默认窗口不许把它换掉。
+    """
     pool = _FakePool(promoted_rows=SEED_ROWS)
     with patch.object(
         ri, "_t3_llm_parse", new=AsyncMock(return_value=None)
@@ -371,10 +384,37 @@ async def test_promoted_route_still_enforces_the_deterministic_time_gate():
         spec = await parse_restaurant_query(
             "哪个菜卖得好", pool, factory_id=FACTORY, semantic_first=True,
         )
-    assert planner.call_count == 0
-    assert spec.clarification_needed is True
-    assert spec.window_label == "全部历史"
-    assert any("本月" in o for o in spec.clarification_options)
+    assert planner.call_count == 0, "零 token 回放的前提没了"
+    assert spec.clarification_needed is False
+    assert spec.time_range_defaulted is True, (
+        "补了默认却没标 —— 那样 _time_range_disclosure 不会触发, "
+        "就成了「悄悄用了最近30天却不告诉用户」")
+    assert spec.window_label == DEFAULT_TIME_PHRASE, (
+        f"标了默认却把窗口算成 {spec.window_label!r} —— 披露与实际不符")
+    assert spec.date_range[0] is not None and spec.date_range[1] is not None
+
+
+async def test_promoted_route_default_window_actually_reaches_the_disclosure():
+    """阴性对照: 把 `time_range_defaulted` 摘掉, 披露必须消失。
+
+    ⛔ 没有这条, 上一条只证明了「字段被置位」, 没证明「用户看得到」。
+    """
+    from dataclasses import replace as _dc_replace
+
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _time_range_disclosure,
+    )
+
+    pool = _FakePool(promoted_rows=SEED_ROWS)
+    with patch.object(ri, "_t3_llm_parse", new=AsyncMock(return_value=None)):
+        spec = await parse_restaurant_query(
+            "哪个菜卖得好", pool, factory_id=FACTORY, semantic_first=True,
+        )
+    shown = _time_range_disclosure(spec)
+    assert DEFAULT_TIME_PHRASE in shown, f"回放的默认窗口没被披露出来: {shown!r}"
+
+    muted = _dc_replace(spec, time_range_defaulted=False)
+    assert _time_range_disclosure(muted) == "", "摘掉字段披露却还在 —— 它是手写的"
 
 
 async def test_promoted_route_never_matches_a_substring():
