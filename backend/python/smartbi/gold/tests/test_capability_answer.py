@@ -18,7 +18,9 @@ import pytest
 
 from smartbi.gold.restaurant.capability_answer import (
     computable_labels,
+    missing_capability_labels,
     render_capability_refusal,
+    should_use_capability_refusal,
 )
 
 
@@ -139,3 +141,36 @@ def test_refusal_carries_no_contract_jargon(jargon):
     """§9.9 明列的五个词，一个都不许出现在拒答里。"""
     text = render_capability_refusal(["净利润（缺少费用、税费及其他收支）"], ["营收", "食材损耗"])
     assert jargon not in text
+
+
+# ── 什么时候该接管：只在能力缺口 ────────────────────────────────────────
+
+
+def test_capability_refusal_only_fires_for_a_real_capability_gap():
+    """🔴 承重: 缺时间/缺门店那类澄清**不许**被拒答模板顶掉。
+
+    那些不是「我做不到」, 是「再说清楚点」—— 换成拒答模板等于把一句
+    「你再说说」变成一句关门的话。
+
+    变异实测: 把 `should_use_capability_refusal` 改成 `return True`
+      → 红:「没有能力缺口时不该走拒答模板」
+    """
+    assert should_use_capability_refusal(("net_profit",)) is True
+    assert should_use_capability_refusal(()) is False, "没有能力缺口时不该走拒答模板"
+    assert should_use_capability_refusal(None) is False
+
+
+def test_unknown_capability_code_is_dropped_not_leaked():
+    """🔴 承重: 翻不成店长话的能力码要**丢掉**, 不能把裸码透给用户。
+
+    变异实测: 去掉 `if item in _UNSUPPORTED_REQUIREMENT_LABELS` 过滤
+      → 红: 裸码 'some_new_code' 出现在标签里
+    """
+    labels = missing_capability_labels(("net_profit", "some_new_code"))
+    assert all("some_new_code" not in x for x in labels), f"裸码漏给用户了: {labels}"
+    assert labels, "已登记的那个也被一起丢了"
+
+
+def test_only_unknown_codes_means_no_refusal_template():
+    """全是翻不出来的码 → 不接管(宁可走原澄清, 也不端一句没有内容的拒答)。"""
+    assert should_use_capability_refusal(("some_new_code",)) is False

@@ -1266,13 +1266,37 @@ async def tiered_answer(
         action_warning = _read_only_action_warning_for_spec(query, spec)
 
         if spec.clarification_needed or not spec.intent:
+            # ── 能力缺口(用户只问了算不出来的东西) → 走 §9.9 拒答模板 ──────────
+            #
+            # 🔴 换掉的是一段**死代码**: `_unsupported_requirement_question` 里
+            #    「现在能算的：…」那份清单, 三个调用点都要求「没有任何受支持的指标」,
+            #    而 available_labels 的键与 _UNSUPPORTED_REQUIREMENTS **交集为空**
+            #    ⇒ available 恒为 [] ⇒ 硬编码兜底恒定触发。
+            #    于是那句话**恰恰在它与本问题完全无关时才出现** —— 一句会被当真的话。
+            #    (prod 实测: 「这月挣了多少」与「翻台率」拿到的前半句逐字相同。)
+            #
+            # ⚠️ 只在**确实一个都算不出来**时接管; 别的澄清(缺时间/缺门店)照旧,
+            #    那些不是能力缺口, 用拒答模板会把「再说清楚点」说成「我做不到」。
+            from smartbi.gold.restaurant.capability_answer import (
+                missing_capability_labels,
+                render_capability_refusal,
+                should_use_capability_refusal,
+                tenant_capability,
+            )
+            capability_text = None
+            if should_use_capability_refusal(spec.unsupported_requirements):
+                available = await tenant_capability(
+                    pool, factory_id, spec.unsupported_requirements)
+                capability_text = render_capability_refusal(
+                    missing_capability_labels(spec.unsupported_requirements), available)
+
             clarification_result = {
                 "kind": "clarification",
                 # ⛔ 走 `clarification_answer_text`, 不要在这里自己拼 ——
                 #    它负责 sanitize。2026-08-12 之前这里是直接拼的,
                 #    「维度」因此漏到店长面前(见该函数的注释)。
                 "answer_text": clarification_answer_text(
-                    spec.clarification_question, action_warning),
+                    capability_text or spec.clarification_question, action_warning),
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }

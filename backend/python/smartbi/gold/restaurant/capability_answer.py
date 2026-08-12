@@ -122,6 +122,34 @@ def render_capability_refusal(
     return "\n".join(lines)
 
 
+def missing_capability_labels(unsupported: Sequence[str]) -> List[str]:
+    """把「算不出来」的能力码翻成店长看得懂的标签。翻不出来的**丢掉**，不透传裸码。
+
+    ⛔ 抽成纯函数是为了让「什么时候该用拒答模板」这个判断可测：
+       内联在那个要发 HTTP、要连库的 async 分支里时，它没有任何办法被单测覆盖，
+       而「本该只在能力缺口时接管，结果把缺时间/缺门店的澄清也顶掉了」正是
+       这种改动最容易犯的错 —— 那会把「再说清楚点」说成「我做不到」。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _UNSUPPORTED_REQUIREMENT_LABELS,
+    )
+    return [
+        _UNSUPPORTED_REQUIREMENT_LABELS[item]
+        for item in (unsupported or ())
+        if item in _UNSUPPORTED_REQUIREMENT_LABELS
+    ]
+
+
+def should_use_capability_refusal(unsupported: Sequence[str]) -> bool:
+    """这次澄清该不该换成 §9.9 拒答模板。
+
+    ⚠️ **只在确实有「算不出来的能力」时**接管。缺时间、缺门店、说不清要看什么 ——
+       那些都不是能力缺口，用拒答模板会把「再说清楚点」说成「我做不到」，
+       而后者是一句关门的话。
+    """
+    return bool(missing_capability_labels(unsupported))
+
+
 async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
     """查三层，返回本租户算得出来的指标标签。查不动 → 空元组（不猜）。"""
     try:
