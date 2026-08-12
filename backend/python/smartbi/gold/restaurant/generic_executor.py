@@ -24,6 +24,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
+from smartbi.gold.restaurant.provenance import (
+    MEASURED as PROV_MEASURED,
+    qualifier as provenance_qualifier,
+    validate as validate_provenance,
+)
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
     DERIVED,
@@ -50,10 +55,31 @@ class CellResult:
     rows: List[Dict[str, Any]]
     missing_columns: Tuple[str, ...] = ()
     sql: str = ""
+    # 🔴 2026-08-12 架构收口 C: 这个格子里的数是**账上的**还是**估出来的**。
+    #    此前 CellResult 表达不了这个区别 —— 于是同一个店长问毛利, 经营看板
+    #    (dish_margin 用行业默认成本率估) 和 AI 问答 (排除未覆盖成本的菜) 会给出
+    #    两个不同的数字, 而系统不告诉他为什么。MOCK_REST 覆盖率 100% 所以今天
+    #    不发作, 换真租户就发作。见 `provenance.py` 顶部。
+    # ⛔ 默认 MEASURED: 新写的格子不标出处就是账上的数 —— 这是安全的一侧。
+    #    反过来默认 ESTIMATED 会让没人管的格子悄悄带上「这是估的」。
+    provenance: str = PROV_MEASURED
+    #: ESTIMATED 时**必填**的依据(如「行业默认成本率 32%」)。限定语由它生成。
+    estimation_basis: str = ""
+
+    def __post_init__(self) -> None:
+        # 出处不自洽当场炸, 不静默降级 —— 一个估出来的数被当成账上的数端出去,
+        # 比不给数字更糟。
+        validate_provenance(self.provenance, self.estimation_basis)
 
     @property
     def ok(self) -> bool:
         return not self.missing_columns
+
+    def qualifier(self, *, coverage_ratio: Optional[float] = None) -> str:
+        """这个格子的限定语。⛔ 由字段生成 —— 调用方不许再手写一份。"""
+        return provenance_qualifier(
+            self.provenance, self.estimation_basis, coverage_ratio=coverage_ratio
+        )
 
 
 class UnsupportedCell(ValueError):
