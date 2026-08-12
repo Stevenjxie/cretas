@@ -243,6 +243,19 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
+    /**
+     * 2026-08-12: 卖原料/辅料/包材时从【物料批次】扣, 不是成品批次 (optional for test ctor)。
+     *
+     * <p>Steve/六膳门张权:「有啥不能卖的 给钱 我都能卖」。销售订单可以选到物料字典里的条目,
+     * 而那些货在 material_batches 里 —— LIUSHANMEN 实测成品批次 12 条 / 物料批次 92 条。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository salesRawMaterialTypeRepository;
+
+    /** 同上: 物料 FIFO 与扣减原语 (getFIFOBatches / useBatchQuantity)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.MaterialBatchService salesMaterialBatchService;
+
     /** N9: configurable sales approval threshold via legacy approval chain + graph workflow. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalChainService approvalChainService;
@@ -2937,6 +2950,11 @@ public class SalesServiceImpl implements SalesService {
         if (batchAllocationService != null) {
             for (SalesDeliveryItem item : record.getItems()) {
                 String itemIdStr = String.valueOf(item.getId());
+                // 物料行没有【成品】批次可分配 —— 它走 material_batches 的 FIFO,
+                // 在 deductMaterialInventory 里扣。不豁免的话这道闸会把物料发货全部拦死。
+                if (isMaterialLine(factoryId, item.getProductTypeId())) {
+                    continue;
+                }
                 if (!batchAllocationService.isFullyAllocated(factoryId, itemIdStr)) {
                     // R49 BUG-22 fix: 之前 productName null 时 message 显示 "产品：null".
                     // 现 fallback 到 productTypeId, 再 fallback 到 itemIdStr.
@@ -3670,7 +3688,83 @@ public class SalesServiceImpl implements SalesService {
      * (预留它的 SO = 发货的 SO) 完全正确; 极端并发场景 (同批被多 SO 预留, 某 SO 超发) 理论上可能
      * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
+    /**
+     * 这一行卖的是物料(原料/辅料/包材)还是成品?
+     *
+     * <h2>判据: 启用商品优先, 否则物料</h2>
+     * {@code product_type_id} 列没有外键, 两张表的 id 空间理论上可以重叠。全库实测:
+     * 重叠 3 个, <b>全部是画布生成的占位</b>({@code __RAW_WORKFLOW_OWNER__*})<b>且全部停用</b>;
+     * 「既是启用商品又是物料」的数量是 <b>0</b>。所以这条判据当前无歧义。
+     *
+     * <p>⚠️ 它依赖「没人会去启用那些画布占位」这个前提。前提一旦破裂, 后果是<b>扣错库存</b> ——
+     * 所以这里不写注释了事, 而是撞上就 ERROR 日志 + 按成品处理(保持既有行为, 不静默改道)。
+     */
+    private boolean isMaterialLine(String factoryId, String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank() || salesRawMaterialTypeRepository == null) {
+            return false;
+        }
+        boolean isMaterial = salesRawMaterialTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).isPresent();
+        if (!isMaterial) {
+            return false;
+        }
+        boolean isActiveProduct = productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(pt -> Boolean.TRUE.equals(pt.getIsActive()))
+                .orElse(false);
+        if (isActiveProduct) {
+            log.error("同一个 id 既是启用商品又是物料, 按【成品】扣库存(前提破裂, 需人工核查): "
+                    + "factoryId={}, id={}", factoryId, productTypeId);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 物料行的 FIFO 扣减 —— 与成品发货同一个位置、同一个语义, 只是库存源换成 material_batches。
+     *
+     * <p>用的是物料侧现成的原语: {@code getFIFOBatches} 挑批次, {@code useBatchQuantity} 扣数量
+     * (它自带工厂隔离、超扣断言, 并会发库存变更事件触发低库存报警)。
+     */
+    private void deductMaterialInventory(String factoryId, SalesDeliveryItem item) {
+        java.math.BigDecimal needed = item.getDeliveredQuantity();
+        if (needed == null || needed.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        // ⛔ 依赖没接上时必须炸, 不能静默跳过 —— 那等于「发了货但没扣库存」, 比发不出货糟得多。
+        if (salesMaterialBatchService == null) {
+            throw new IllegalStateException(
+                    "MaterialBatchService is required to ship a material line: " + item.getProductTypeId());
+        }
+
+        java.util.List<com.cretas.aims.dto.material.MaterialBatchDTO> batches =
+                salesMaterialBatchService.getFIFOBatches(factoryId, item.getProductTypeId(), needed);
+        java.math.BigDecimal remaining = needed;
+        for (com.cretas.aims.dto.material.MaterialBatchDTO batch : batches) {
+            if (remaining.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                break;
+            }
+            java.math.BigDecimal available = batch.getCurrentQuantity();
+            if (available == null || available.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            java.math.BigDecimal take = available.min(remaining);
+            salesMaterialBatchService.useBatchQuantity(factoryId, batch.getId(), take);
+            remaining = remaining.subtract(take);
+        }
+        if (remaining.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            throw new BusinessException(409, "物料库存不足, 无法发货: " + item.getProductName()
+                    + " 还差 " + remaining.toPlainString() + " " + item.getUnit())
+                    .withCode("MATERIAL_STOCK_INSUFFICIENT")
+                    .withHint("请先入库或调整发货数量");
+        }
+    }
+
     private void deductFinishedGoodsInventory(String factoryId, String salesOrderId, SalesDeliveryItem item) {
+        // 🔴 2026-08-12: 物料行(原料/辅料/包材)的货在 material_batches, 不在成品批次里。
+        // 在这里分叉后 return, 下面整段成品逻辑(批次分配/FEFO/客户自有库存)一个字不动。
+        if (isMaterialLine(factoryId, item.getProductTypeId())) {
+            deductMaterialInventory(factoryId, item);
+            return;
+        }
         SalesOrder salesOrder = salesOrderId == null || salesOrderId.isBlank()
                 ? null
                 : salesOrderRepository.findById(salesOrderId)

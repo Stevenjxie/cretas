@@ -681,6 +681,30 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 销售订单商品选择用的口径 —— 与上面 {@code getActiveProductTypes} 是<b>两条</b>口径, 别合并。
+     *
+     * <p>上面那条(findVisible…)服务于<b>生产侧</b>: 生产计划/批次/工时/毛利红线/成本差异/餐饮,
+     * 共 11 个前端调用点。它排除 RAW_MATERIAL 而<b>保留半成品</b> —— 因为生产计划就是要生产半成品。
+     *
+     * <p>销售侧恰好相反(2026-08-12 Steve 拍板):「出了半成品全开吧」——
+     * 原料/辅料/包材都卖, 只有半成品不卖。
+     *
+     * <p>所以这里不能复用 findVisible…: 它把要卖的 RAW_MATERIAL 挡在外面, 又把不卖的半成品放进来,
+     * <b>两个方向都反</b>。改它会波及那 11 处生产侧调用。
+     *
+     * <p>类别口径的唯一权威是 {@link ProductCategory#isSellable} —— 不在 JPQL 里再写一份。
+     */
+    @Override
+    public List<ProductTypeDTO> getSellableProductTypes(String factoryId) {
+        log.info("获取可销售的产品类型: factoryId={}", factoryId);
+
+        return productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId).stream()
+                .filter(p -> ProductCategory.isSellable(p.getProductCategory()))
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+    }
+
     @Override
     public List<ProductTypeDTO> getProductTypesByCategory(String factoryId, String category) {
         log.info("根据类别获取产品类型: factoryId={}, category={}", factoryId, category);

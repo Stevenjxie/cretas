@@ -221,6 +221,11 @@ function onReturnReasonCategoryChange(val: string): void {
 
 // 批次分配对话框 (P0-13 强制批次追溯 — R16 深度测试后补完)
 const batchAllocDialogVisible = ref(false);
+// 2026-08-12: 物料(原料/辅料/包材)行没有【成品】批次可分配 —— 它的货在 material_batches,
+// 发货时由后端 FIFO 自动扣(SalesServiceImpl.deductMaterialInventory)。
+// 不认出来的话, 分配对话框会对物料行显示「全厂无可发货成品库存, 请先完成生产入库」——
+// 那句话是错的(货就在物料仓里), 会把仓管直接劝退。
+const materialIdSet = ref<Set<string>>(new Set());
 const batchAllocLoading = ref(false);
 // 🔴 C1 (2026-07-05): unit = 该行数量的计量单位 (与发货行 item.unit 同口径, 后端已按此换算过
 // availableQuantity/allocatedQty — 见 recommendFifo unit 参数)。batchNativeUnit = 该批次入库时
@@ -228,7 +233,7 @@ const batchAllocLoading = ref(false);
 type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number; unit: string; batchNativeUnit: string };
 // 🔴 G1: sourceWarehouseCode (发货行声明的来源仓, 空=未声明) + stockWarehouses (该产品实际有货的仓库 code,
 // 仅在无推荐批次时查, 用于诚实空态提示「成品在 X 仓」而非误导的「请先生产」)。
-type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[] };
+type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[]; isMaterial: boolean };
 const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: AllocItem[] }>({
   deliveryId: '', deliveryNumber: '', items: [],
 });
@@ -381,9 +386,18 @@ const isDraft = computed(() => String((order.value as any)?.status || '').toUppe
 async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
-    // Mirror list.vue loadProducts — same endpoint / response shape.
-    const res = await get(`/${factoryId.value}/product-types/active`, { _silent: true } as never);
-    const list = Array.isArray(res?.data) ? res.data : (res?.data?.content ?? []) as any[];
+    // Mirror list.vue loadProducts — same endpoints / response shape.
+    // ⚠️ /sellable 不是 /active: /active 是生产侧口径(保留半成品、排除原料), 销售侧相反。
+    // ⚠️ 并且要和列表页一样把【物料】也并进来 —— 列表页能选到而详情页编辑时选不到,
+    //    是最难查的那种不一致(salesProductEndpoint.source.spec.ts 守这条)。
+    const [res, matRes] = await Promise.all([
+      get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never),
+      get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
+    ]);
+    const unwrap = (d: any) => (Array.isArray(d) ? d : (d?.content ?? [])) as any[];
+    const mats = unwrap(matRes?.data);
+    materialIdSet.value = new Set(mats.map((m: any) => String(m.id)));
+    const list = [...unwrap(res?.data), ...mats];
     products.value = list.map((p: any) => ({
       id: String(p.id),
       name: String(p.name ?? p.productName ?? ''),
@@ -946,6 +960,10 @@ async function handleDelivered(deliveryId: string) {
 async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) {
   batchAllocLoading.value = true;
   try {
+    // 物料集合必须先就绪 —— 空集合会让所有行都被当成成品, 物料行又会看到那句错的空态。
+    if (!materialIdSet.value.size) {
+      await loadProductsForEdit();
+    }
     const detailRes = await get<TableRow>(`/${factoryId.value}/sales/deliveries/${deliveryId}`);
     if (!detailRes.success || !detailRes.data) { ElMessage.error('加载发货单明细失败'); return; }
     const rawItems = (detailRes.data.items as TableRow[]) || [];
@@ -967,7 +985,9 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
 
       let allocations: AllocRow[] = [];
       let stockWarehouses: string[] = [];
-      if (productTypeId && deliveredQuantity > 0) {
+      // 物料行不查成品批次 —— 查了必然是空, 然后显示一句误导仓管的空态。
+      const isMaterial = materialIdSet.value.has(String(productTypeId));
+      if (!isMaterial && productTypeId && deliveredQuantity > 0) {
         const existingRes = await get<Array<TableRow>>(
           `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations`
         );
@@ -1012,7 +1032,7 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
           } catch { /* 非关键: 查不到就退回通用提示 */ }
         }
       }
-      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, unit, sourceWarehouseCode, allocations, stockWarehouses });
+      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, unit, sourceWarehouseCode, allocations, stockWarehouses, isMaterial });
     }
     batchAllocForm.value = { deliveryId, deliveryNumber, items };
     batchAllocDialogVisible.value = true;
@@ -1053,6 +1073,11 @@ async function handleBatchAllocate() {
   }
   // Validation: per-item total must equal deliveredQuantity (backend enforces)
   for (const item of activeItems) {
+    // 物料行不参与成品批次分配 —— 不跳过的话它永远「分配合计 0 ≠ 发货量」, 整个对话框提交不了,
+    // 同一张子发运单里只要有一行物料就会把成品行也一起卡死。
+    if (item.isMaterial) {
+      continue;
+    }
     if (item.allocations.length === 0) {
       return ElMessage.warning(`${item.productName}: ${emptyStateDesc(item)}`);
     }
@@ -2339,7 +2364,8 @@ async function handleQuickPayFull() {
           <span style="font-weight: 500;">{{ item.productName }}</span>
           <span>
             发货数量: <strong>{{ item.deliveredQuantity }}{{ displayUnit(item.unit) }}</strong>
-            <span style="margin-left: 16px;" :style="{ color: Math.abs(sumAllocated(item) - item.deliveredQuantity) < 0.001 ? '#67c23a' : '#f56c6c' }">
+            <span v-if="item.isMaterial" style="margin-left: 16px; color: #67c23a;">物料 · 自动扣减</span>
+            <span v-else style="margin-left: 16px;" :style="{ color: Math.abs(sumAllocated(item) - item.deliveredQuantity) < 0.001 ? '#67c23a' : '#f56c6c' }">
               分配合计: <strong>{{ sumAllocated(item) }}{{ displayUnit(item.unit) }}</strong>
             </span>
           </span>
@@ -2348,7 +2374,14 @@ async function handleQuickPayFull() {
              F006 现场确认) — 可用/分配数量已由后端换算为本行单位(item.unit); 当某批次的入库
              原生单位(batchNativeUnit)与本行单位不同, 额外标注原生单位, 避免仓管/销售误判"批次
              实际按什么单位入库的" (fool-proof Rule 2: 上下文必带身份信息)。 -->
-        <el-table v-if="item.allocations.length > 0" :data="item.allocations" border size="small">
+        <!-- 2026-08-12: 物料(原料/辅料/包材)不参与成品批次分配 —— 它的货在物料仓,
+             确认发货时按 FIFO 自动扣。这里必须说清楚, 否则会落到下面那条
+             「全厂无可发货成品库存, 请先完成生产入库」的空态上, 把仓管指向错误的方向。 -->
+        <el-alert v-if="item.isMaterial" type="success" :closable="false" show-icon
+          title="物料无需分配批次"
+          description="原料 / 辅料 / 包材在确认发货时按先进先出自动扣减物料库存，本行可直接提交。"
+        />
+        <el-table v-else-if="item.allocations.length > 0" :data="item.allocations" border size="small">
           <el-table-column prop="batchNumber" label="批次号" width="200" />
           <el-table-column prop="productionDate" label="生产日期" width="120" />
           <el-table-column label="可用数量" width="150" align="right">
