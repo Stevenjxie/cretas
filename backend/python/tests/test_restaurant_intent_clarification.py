@@ -349,7 +349,12 @@ async def test_combined_named_dish_scope_time_buttons_omit_unrelated_store_catal
         "store_scope": None,
         "confidence": 0.99,
         "clarification_needed": True,
-        "missing_fields": ["time_range"],
+        # 🔴 2026-08-12 owner 裁定: **只缺时间**的问句不再反问, 直接答 +
+        #    明示默认窗口 + 给换窗按钮。本条守的不是「首轮问时间」, 是它后面
+        #    那条延续链 —— 所以把首轮改成「时间 + 另一项」, 让它仍然反问,
+        #    链的覆盖原样保住。时间-only 的新行为由
+        #    test_time_only_question_answers_with_disclosed_default 单独守。
+        "missing_fields": ["time_range", "metric"],
         "clarification_question": TIME_CLARIFICATION_QUESTION,
         "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
     }
@@ -642,7 +647,12 @@ async def test_natural_store_question_keeps_full_semantics_after_time_button(
         "store_scope": "single",
         "confidence": 0.97,
         "clarification_needed": True,
-        "missing_fields": ["time_range"],
+        # 🔴 2026-08-12 owner 裁定: **只缺时间**的问句不再反问, 直接答 +
+        #    明示默认窗口 + 给换窗按钮。本条守的不是「首轮问时间」, 是它后面
+        #    那条延续链 —— 所以把首轮改成「时间 + 另一项」, 让它仍然反问,
+        #    链的覆盖原样保住。时间-only 的新行为由
+        #    test_time_only_question_answers_with_disclosed_default 单独守。
+        "missing_fields": ["time_range", "metric"],
         "clarification_question": TIME_CLARIFICATION_QUESTION,
         "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
     }
@@ -1786,7 +1796,12 @@ async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
         "store_scope": None,
         "confidence": 0.99,
         "clarification_needed": True,
-        "missing_fields": ["time_range"],
+        # 🔴 2026-08-12 owner 裁定: **只缺时间**的问句不再反问, 直接答 +
+        #    明示默认窗口 + 给换窗按钮。本条守的不是「首轮问时间」, 是它后面
+        #    那条延续链 —— 所以把首轮改成「时间 + 另一项」, 让它仍然反问,
+        #    链的覆盖原样保住。时间-only 的新行为由
+        #    test_time_only_question_answers_with_disclosed_default 单独守。
+        "missing_fields": ["time_range", "metric"],
         "clarification_question": TIME_CLARIFICATION_QUESTION,
         "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
     }
@@ -2007,7 +2022,12 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
         "store_scope": None,
         "confidence": 0.98,
         "clarification_needed": True,
-        "missing_fields": ["time_range"],
+        # 🔴 2026-08-12 owner 裁定: **只缺时间**的问句不再反问, 直接答 +
+        #    明示默认窗口 + 给换窗按钮。本条守的不是「首轮问时间」, 是它后面
+        #    那条延续链 —— 所以把首轮改成「时间 + 另一项」, 让它仍然反问,
+        #    链的覆盖原样保住。时间-only 的新行为由
+        #    test_time_only_question_answers_with_disclosed_default 单独守。
+        "missing_fields": ["time_range", "metric"],
         "clarification_question": "想看哪个时间范围的整体毛利率？",
         "clarification_options": ["本月", "上个月"],
     }
@@ -2565,7 +2585,12 @@ async def test_store_default_outcome_does_not_depend_on_what_the_model_reported(
             "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
             "dimensions": ["dish"], "dish": "米饭", "store": None, "stores": [],
             "store_scope": None, "confidence": 0.98,
-            "clarification_needed": True, "missing_fields": ["time_range"],
+            # 🔴 2026-08-12 owner 裁定: **只缺时间**的问句不再反问, 直接答 +
+            #    明示默认窗口 + 给换窗按钮。本条守的不是「首轮问时间」, 是它后面
+            #    那条延续链 —— 所以把首轮改成「时间 + 另一项」, 让它仍然反问,
+            #    链的覆盖原样保住。时间-only 的新行为由
+            #    test_time_only_question_answers_with_disclosed_default 单独守。
+            "clarification_needed": True, "missing_fields": ["time_range", "metric"],
             "clarification_question": "想看哪个时间范围？",
             "clarification_options": ["本月"],
         }
@@ -2639,3 +2664,79 @@ async def test_continuation_turn_keeps_the_store_button_chain():
     assert turn2.clarification_needed is True
     assert turn2.missing_slot == "store"
     assert turn2.store_scope_defaulted is False, "延续轮不该把门店提前定死"
+
+
+@pytest.mark.asyncio
+async def test_time_only_question_answers_with_disclosed_default():
+    """🔴 owner 2026-08-12 裁定: **只缺时间**的问句直接答, 不反问。
+
+    三条理由(裁定原文):
+      (a)「禁止降级处理」防的是**编造不存在的数据**, 不是「在都存在的答案里选默认」;
+      (b) 反问不是免费的 —— 它把负担推回给一个不知道该怎么问的人;
+      (c) 那批问句是**人审通过的**晋升路由, 恢复它是恢复人审的判断。
+
+    ⛔ 这条守的是「不反问」+「补了默认要标出来」两件事一起成立。
+       只补默认不标 = 偷偷替用户选口径, 那才是降级处理。
+    """
+    pool = _FakeDbPool(is_restaurant=True, store_names=["模拟·静安嘉里中心店"])
+    plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None, "wants_margin": False, "asks_profitability": False,
+        "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
+        "dimensions": ["dish"], "dish": None, "store": None, "stores": [],
+        "store_scope": "all", "confidence": 0.98,
+        "clarification_needed": True, "missing_fields": ["time_range"],
+        "clarification_question": "你想看哪个时间范围？",
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+    planner = AsyncMock(return_value=plan)
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        spec = await parse_restaurant_query(
+            "哪个菜卖得好", pool, factory_id="DEMO_REST",
+            session_key="time-only", semantic_first=True)
+
+    assert spec.clarification_needed is False, (
+        "只缺时间还在反问 —— 模型说要澄清, 而这个决定不该在模型手里")
+    assert spec.time_range_defaulted is True, (
+        "不反问却没标 defaulted —— 那就没人会去披露默认窗口, 等于偷偷选口径")
+    # 补的窗口必须**真的落到**算数的那几个字段上, 不是只标个旗子。
+    # (说的和算的不是同一个窗口, 比反问更糟 —— 模块自己的判据。)
+    assert spec.window_label == "最近30天"
+    assert spec.date_range[0] is not None and spec.date_range[1] is not None
+
+
+@pytest.mark.asyncio
+async def test_time_plus_another_gap_still_clarifies():
+    """阴性对照: 还缺别的槽位时**照旧反问**。
+
+    ⛔ 没有这条, 上一条可能只是「我把所有澄清都关掉了」。
+       裁定说的是「不带时间范围的问句」, 不是「什么都没说的问句」。
+    """
+    pool = _FakeDbPool(is_restaurant=True, store_names=["模拟·静安嘉里中心店"])
+    plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None, "wants_margin": False, "asks_profitability": False,
+        "requested_metrics": ["sales_volume"], "analysis_action": "lookup",
+        "dimensions": ["dish"], "dish": None, "store": None, "stores": [],
+        "store_scope": "all", "confidence": 0.98,
+        "clarification_needed": True,
+        "missing_fields": ["time_range", "metric"],
+        "clarification_question": "你想看哪个时间范围？",
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+    planner = AsyncMock(return_value=plan)
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        spec = await parse_restaurant_query(
+            "哪个菜卖得好", pool, factory_id="DEMO_REST",
+            session_key="time-plus", semantic_first=True)
+
+    assert spec.clarification_needed is True, (
+        "还缺指标却直接答了 —— 指标没有无歧义的默认, 补错等于给一个看着像答案的错答案")

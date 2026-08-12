@@ -514,6 +514,15 @@ _TIME_SCOPED_INTENTS = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
+    # 🔴 2026-08-12 加这两个: 它们**本来就是按时间窗算的**(折扣占营收的比例 /
+    #    外卖堂食占比都只在一个窗口内成立), 却不在这个集合里。
+    #    后果实测: 把 time_range 加进 `_AUTO_DEFAULTABLE` 之后, 这两个意图
+    #    `time_range_defaulted=True` 而 `window_label='全部历史'` ——
+    #    **披露说「最近30天」, 实际按全部历史算**。那正是本模块自己写下的
+    #    「说的和算的不是同一个窗口, 比反问更糟」, 是真正的降级处理。
+    #    不加进来就只能让它们继续反问, 与 owner 裁定冲突; 加进来两侧同源。
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY",
+    "RESTAURANT_OPS_CHANNEL_MIX",
     # Staffing uses an explicit future horizon parsed from the effective user
     # question (tomorrow / next week / next month), not this legacy historical
     # window contract.  It therefore remains outside _TIME_SCOPED_INTENTS.
@@ -5708,7 +5717,30 @@ def _semantic_spec_from_t3(
     #      「澄清延续链」整条打断 —— 用户点了「本月」之后那一轮不再是延续,
     #      要重走 T3(既有测试 test_semantic_first_dish_time_store_buttons_survive_t3_outage
     #      当场抓到)。`_build_spec` 那处带 `not clarification_needed`, 不抢这一类。
+    #
+    # 🔴 2026-08-12 owner 裁定, 上面「时间窗不在这里补」那条**作废**:
+    #    「不带时间范围的问句直接答 + 明示默认 + 可改」。三条理由:
+    #      (a)「禁止降级处理」防的是**编造不存在的数据**, 不是「在都存在的答案里
+    #          选默认」—— 这两件事被混成一件了;
+    #      (b) 反问不是免费的, 它把负担推回给一个不知道该怎么问的人;
+    #      (c) 那批问句是**人审通过的**晋升路由, 恢复它是恢复人审的判断。
+    #
+    #    ⚠️ 上面理由 1(「这里补了没用, 真正做决定的是 `_build_spec` 的时间闸」)
+    #       **已经过期**: 那道闸后来加了 `and not time_range_defaulted` 出口。
+    #       实测过才改的 —— 见本轮 [TIMEGATE] 读数: 6 条全部卡在
+    #       `5_not_clarification_needed=False`(模型先要求了澄清), 而不是卡在
+    #       time_phrase 上。理由 2 仍然有效, 由下面的 `not is_continuation` 守着。
+    #
+    #    ⛔ 指标/对象仍然**不进**: 它们没有无歧义的默认。时间有 —— `DEFAULT_TIME_PHRASE`
+    #       是一个固定的、会被 `_time_range_disclosure` 显式披露、且有换窗按钮的值。
     _AUTO_DEFAULTABLE = {"store_scope"}
+
+    # ⛔ 时间**单独一格**, 不并进 `_AUTO_DEFAULTABLE`。
+    #    并进去等于连「时间+门店都缺」也一起补 —— 实测那会打翻四条既有断言,
+    #    其中 `test_store_default_outcome_does_not_depend_on_what_the_model_reported`
+    #    报「延续轮把门店定死了: ('all', True)」。裁定说的是「不带时间范围的问句」,
+    #    没说「什么都没说的问句」。收窄到**唯一缺项就是时间**。
+    _TIME_ONLY_MISSING = ("time_range",)
 
     store_scope_defaulted = False
     time_range_defaulted = False
@@ -5751,6 +5783,27 @@ def _semantic_spec_from_t3(
         if "store_scope" in _missing and not store_scope:
             store_scope = "all"
             store_scope_defaulted = True
+
+    # ── 只缺时间 → 不反问, 补默认窗口并**明示** ────────────────────────
+    # owner 2026-08-12 裁定(理由见 `_AUTO_DEFAULTABLE` 上方)。
+    # ⚠️ 只置标记, **不在这里写 time_phrase**。窗口短语由 `_build_spec` 顶部那个
+    #    块统一补 —— 它同时把 date_range / window_label / resolver seed 一起变成
+    #    同一个窗口。在这里各写一份 = 说的和算的迟早不是同一个窗口, 那才是真正的
+    #    降级处理。(清掉 clarification_needed 之后, 那个块的第 5 个条件就通了。)
+    # ⛔ 守卫与门店那一格逐条相同: 延续轮不抢(用户正在回答这个槽位)。
+    if (
+        clarification_needed
+        and tuple(missing_fields) == _TIME_ONLY_MISSING
+        and not is_continuation
+    ):
+        logger.info(
+            "[restaurant-intent] 只缺时间 -> 补默认窗口并明示, 不反问: query=%r",
+            query[:60],
+        )
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
+        time_range_defaulted = True
 
 
     if daypart_contract_repair:
