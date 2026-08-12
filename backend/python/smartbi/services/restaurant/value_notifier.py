@@ -122,6 +122,98 @@ ON CONFLICT (factory_id, period_month, recipient_role) DO NOTHING
 """
 
 
+async def maybe_notify(
+    pool: Any,
+    factory_id: str,
+    period_key: str,
+    *,
+    render: Callable[[str], Optional[tuple[str, str]]],
+    roles: Optional[list[str]] = None,
+    action_url: str = _ACTION_URL,
+    java_notify: Optional[JavaNotifyFn] = None,
+    snapshot_id: Optional[int] = None,
+    log_tag: str = "value-notify",
+) -> dict[str, Any]:
+    """通用推送 —— **幂等防重 + D2 角色路由 + Java 通道**, 文案由调用方给。
+
+    2026-08-13 从 `maybe_notify_monthly` 里原样提出来的, 一行行为都没改:
+    月报把自己的 `build_title`/`build_message` 作为 `render` 传进来, 结果逐字相同。
+
+    ## 为什么要提这一层
+
+    打烊日结要的正是这三样(角色路由/防重/通道), **唯独文案不一样**。
+    原来的 `maybe_notify_monthly` 把文案写死在里面(`build_message` 完全不看
+    调用方给的正文), 直接复用会把「今天赚多少」推成「2026-08-13 价值回馈月报」——
+    机制接上了, 推出去的却是别人的话。
+
+    ⛔ 另一条路是日结自己写一遍推送+防重 —— 那是同一件事两份实现, 而漂的表现是
+       **店长一天收到两遍**。
+
+    Args:
+        period_key: 幂等周期键。月报写 `YYYY-MM`, 日结写 `YYYY-MM-DD`。
+        render: `role -> (title, body)`; 返回 `None` 表示**这个角色没有可报的东西**
+            → 跳过不推。⚠️ 按角色而不是全局判断, 是因为 RBAC 下
+            非金额角色可能确实没内容可看(见 `_role_sees_amount`)。
+
+    Returns:
+        {notified:[...], skipped:[...], failed:[...]}。永不抛。
+    """
+    notify_fn = java_notify or _default_java_notify
+    target_roles = roles if roles is not None else list(NOTIFY_ROLES)
+
+    notified: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+
+    for role in target_roles:
+        try:
+            rendered = render(role)
+            if rendered is None:
+                # 这个角色没有可报的内容 —— 不推空通知。
+                skipped.append(role)
+                continue
+
+            async with pool.acquire() as conn:
+                existing = await conn.fetchrow(
+                    _ALREADY_NOTIFIED_SQL, factory_id, period_key, role
+                )
+            if existing is not None:
+                skipped.append(role)
+                continue
+
+            title, body = rendered
+            ok = await notify_fn(
+                factory_id=factory_id, role=role, title=title, body=body,
+                action_url=action_url,
+            )
+            if not ok:
+                failed.append(role)
+                logger.warning(
+                    "[%s] Java notify failed factory=%s role=%s — not logging "
+                    "(retry next time)", log_tag, factory_id, role,
+                )
+                continue
+
+            # 成功才写防重日志
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    _WRITE_LOG_SQL, factory_id, period_key, role, snapshot_id
+                )
+            notified.append(role)
+        except Exception as e:  # noqa: BLE001 — fire-and-forget per role
+            failed.append(role)
+            logger.error(
+                "[%s] role=%s factory=%s failed: %s",
+                log_tag, role, factory_id, e, exc_info=True,
+            )
+
+    logger.info(
+        "[%s] factory=%s period=%s notified=%s skipped=%s failed=%s",
+        log_tag, factory_id, period_key, notified, skipped, failed,
+    )
+    return {"notified": notified, "skipped": skipped, "failed": failed}
+
+
 async def maybe_notify_monthly(
     pool: Any,
     factory_id: str,
@@ -133,6 +225,9 @@ async def maybe_notify_monthly(
 ) -> dict[str, Any]:
     """月度通知 (幂等防重 + D2 角色路由)。
 
+    ⚠️ 2026-08-13 起是 `maybe_notify` 的薄包装 —— **对外行为一字未改**:
+    `_has_value` 的短路、`reason: "no_value"`、文案、`action_url` 全在原位。
+
     Args:
         summary: get_value_summary 的返回 (含 month/annual/criticalCount...)。
         java_notify: 可注入的 Java 通知函数 (测试用); None → 真实 client。
@@ -141,58 +236,18 @@ async def maybe_notify_monthly(
     Returns:
         {notified:[...], skipped:[...], failed:[...], reason?}。永不抛。
     """
-    notify_fn = java_notify or _default_java_notify
-    target_roles = roles if roles is not None else list(NOTIFY_ROLES)
-
     if not _has_value(summary):
         logger.info(
             "[value-notify] factory=%s period=%s no value → skip", factory_id, period_month
         )
         return {"notified": [], "skipped": [], "failed": [], "reason": "no_value"}
 
-    notified: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-
-    for role in target_roles:
-        try:
-            async with pool.acquire() as conn:
-                existing = await conn.fetchrow(
-                    _ALREADY_NOTIFIED_SQL, factory_id, period_month, role
-                )
-            if existing is not None:
-                skipped.append(role)
-                continue
-
-            title = build_title(summary)
-            body = build_message(role, summary)
-            ok = await notify_fn(
-                factory_id=factory_id, role=role, title=title, body=body,
-                action_url=_ACTION_URL,
-            )
-            if not ok:
-                failed.append(role)
-                logger.warning(
-                    "[value-notify] Java notify failed factory=%s role=%s — not logging "
-                    "(retry next time)", factory_id, role,
-                )
-                continue
-
-            # 成功才写防重日志
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    _WRITE_LOG_SQL, factory_id, period_month, role, snapshot_id
-                )
-            notified.append(role)
-        except Exception as e:  # noqa: BLE001 — fire-and-forget per role
-            failed.append(role)
-            logger.error(
-                "[value-notify] role=%s factory=%s failed: %s",
-                role, factory_id, e, exc_info=True,
-            )
-
-    logger.info(
-        "[value-notify] factory=%s period=%s notified=%s skipped=%s failed=%s",
-        factory_id, period_month, notified, skipped, failed,
+    return await maybe_notify(
+        pool,
+        factory_id,
+        period_month,
+        render=lambda role: (build_title(summary), build_message(role, summary)),
+        roles=roles,
+        java_notify=java_notify,
+        snapshot_id=snapshot_id,
     )
-    return {"notified": notified, "skipped": skipped, "failed": failed}

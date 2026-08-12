@@ -165,10 +165,16 @@ def offers_for_estimated(
         return []
     if not metric_labels:
         return []
+    # ⚠️ 2026-08-13: **不再复述 basis**。开价紧跟在限定语后面, 而限定语已经把
+    #    「按什么估的」说过一遍了 —— 复述读成啰嗦:
+    #      「…按成本卡的理论用量（实际用了多少要等盘点）估算，这部分是估出来的…」
+    #      「这些数字里有一部分是按成本卡的理论用量（实际用了多少要等盘点）估的；…」
+    #    开价要回答的是**下一句**:「那我该做什么」。
+    # ⛔ `basis` 仍然原样带在结构化字段里 —— 前端/下游要对上时拿得到, 只是不进正文。
     return [{
         "kind": "upgrade",
-        "text": (f"这些数字里有一部分是按{estimation_basis}估的；"
-                 f"补齐对应的成本卡，{'、'.join(metric_labels)}就能从估变实"),
+        "text": (f"补齐对应的成本卡，{'、'.join(metric_labels)}就能从估变实 —— "
+                 f"那时这个数就是账上的了"),
         "basis": estimation_basis,
     }]
 

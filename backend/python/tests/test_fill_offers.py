@@ -99,9 +99,18 @@ def test_estimated_offer_says_from_estimate_to_actual():
         ESTIMATED, "行业默认成本率 32%", ["毛利", "毛利率"])
     assert len(offers) == 1
     text = offers[0]["text"]
-    assert "行业默认成本率 32%" in text, "没带上限定语里那句 basis, 店长对不上"
+    # 🔴 2026-08-13 按形态 C‴ 改: 原文断言 `"行业默认成本率 32%" in text`,
+    #    理由是「没带上 basis 店长对不上」。那在**开价单独出现**时成立;
+    #    现在开价紧跟在限定语后面, 限定语已经说过「按什么估的」——
+    #    再复述一遍读成啰嗦。守的性质从「带上 basis」抬到
+    #    「说清补什么、变成什么」, 而**对得上**由**相邻**保证。
+    # ⛔ basis 仍在结构化字段里(下游要对上时拿得到), 只是不进正文。
+    assert offers[0]["basis"] == "行业默认成本率 32%", "basis 字段丢了, 下游对不上"
+    assert "补齐" in text and "成本卡" in text, f"没说清该补什么: {text}"
     assert "从估变实" in text
     assert "毛利率" in text
+    # 阴性对照: 正文里不该复述 basis(那正是这次要消掉的重复)
+    assert "行业默认成本率" not in text, f"又复述了一遍 basis: {text}"
 
 
 def test_measured_never_offers_an_upgrade():
