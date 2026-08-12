@@ -69,6 +69,7 @@
  *    (naturalHint, 如「= 1 个 / 20 kg」)必须留在 title 里；没有 naturalHint
  *    时不设 title,而不是设成空串——空 tooltip 比没有 tooltip 更具误导性。
  */
+import { workflowDisplayUnit } from './workflowUnits';
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { PACK_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
@@ -99,7 +100,7 @@ const levelRows = computed(() =>
 );
 
 const subtitleText = computed(() => {
-  const denominator = `每 1 ${props.data.baseUnit}成品`;
+  const denominator = `每 1 ${workflowDisplayUnit(props.data.baseUnit)}成品`;
   if (levelRows.value.length > 0) {
     return `分 ${levelRows.value.length} 层 · ${denominator}`;
   }

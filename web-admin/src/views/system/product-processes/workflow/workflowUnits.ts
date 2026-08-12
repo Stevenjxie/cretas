@@ -67,8 +67,18 @@ const PHYSICAL_BASE_FACTORS: Record<string, number> = {
   mm: 1, cm: 10, m: 1000, km: 1_000_000,
 };
 
+/**
+ * 规范码 → 中文显示名。
+ *
+ * ⚠️ 这张表必须与后端 `UnitDisplayNames.java` **逐条一致** —— 它是同一份权威的第二份拷贝。
+ * 2026-08-12 实测: 后端 16 条, 这里只抄了 6 条, `pack` / `roll` / `crate` / `can` 等全缺,
+ * 而 F006 与 LIUSHANMEN 正在用 `pack`(成品) 和 `roll`(透明气调膜) —— 缺的那些会**原样显示英文**。
+ * 判据: 手写清单就是缺陷源; 改这里必须同时对一遍后端那份。
+ */
 const CHINESE_UNIT_LABELS: Record<string, string> = {
-  pcs: '件', portion: '份', box: '盒', case: '箱', bag: '袋', bottle: '瓶',
+  pcs: '件', portion: '份', box: '盒', case: '箱', bag: '袋', pack: '包',
+  bottle: '瓶', can: '罐', crate: '框', pail: '桶', roll: '卷', slice: '片',
+  sheet: '张', tray: '托盘', plate: '板', item: '项',
 };
 
 export function forkWorkflowUnitReviewDraft(
@@ -263,6 +273,26 @@ function normalizeUnit(value: string | null | undefined, aliases: Record<string,
   if (!value?.trim()) return null;
   const normalized = key(value);
   return aliases[normalized] || normalized;
+}
+
+/**
+ * 🔴 2026-08-12 (Steve 实测「一会儿显示 kg→box, 一会儿又变回盒产出」):
+ *
+ * 画布各处直接渲染**原始存储字符串** —— `product_types.unit` 存的是规范码 `box`,
+ * 而 `work_processes.unit` / 端口上存的是中文 `盒`。两处都对(后端 `alias(box,盒)` 把它们
+ * 归一到同一个码, 发布闸/报工/结算都过), **只是显示层没统一**, 于是同一个单位在同一张画布上
+ * 两种写法, 看着像在反复横跳。
+ *
+ * prod 实测受影响的不只是 F006: LIUSHANMEN(真人在用)有 2 张启用画布共 4 个端口
+ * 是 `端口=盒 / SKU=box`。
+ *
+ * 这里把已有的 displayUnit 导出给画布组件用 —— 中文原样保留, 规范码翻成中文, 两端都收敛成「盒」。
+ */
+export function workflowDisplayUnit(
+  value: string | null | undefined,
+  aliases: Record<string, string> = {},
+): string {
+  return displayUnit(value, aliases);
 }
 
 function displayUnit(value: string | null | undefined, aliases: Record<string, string>): string {
