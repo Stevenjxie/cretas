@@ -538,6 +538,52 @@ def _execution_receipt(
     return receipt
 
 
+#: 结构化行的上限。正文表格自己就有 limit(排行默认前 5/10), 这个上限是给
+#: `rows`(通用执行器那条路, 行数不由排行 limit 约束)兜底的。
+#: ⛔ 截断必须显式报出来(`rows_truncated` / `rows_total`), 不许静默。
+_STRUCTURED_ROWS_LIMIT = 50
+
+#: resolver 把「正文表格的机器可读版」放在 meta 的哪些键里。
+#: ⚠️ 顺序有意义 —— 前面的更贴近正文那张表。
+_STRUCTURED_ROW_KEYS = ("ranked_entities", "rows", "table_rows")
+
+
+def _raw_structured_rows(result_meta: Dict[str, Any]) -> list:
+    """resolver 产出的结构化行, 未截断。找不到就是空列表(这次没有表格)。"""
+    if not isinstance(result_meta, dict):
+        return []
+    for key in _STRUCTURED_ROW_KEYS:
+        value = result_meta.get(key)
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            return value
+    return []
+
+
+def _structured_rows(result_meta: Dict[str, Any]) -> list:
+    return _raw_structured_rows(result_meta)[:_STRUCTURED_ROWS_LIMIT]
+
+
+def _generic_rows(generic: Optional[Dict[str, Any]]) -> list:
+    """通用执行器那条路的 `rows` 摊平成一维。
+
+    `generic_answer.py:413` 返回的是 ``[r.rows for r in results]`` ——
+    **每个 CellResult 一段**的嵌套列表。不摊平的话 `_raw_structured_rows`
+    会因为 `value[0]` 不是 dict 而当成「没有结构化行」直接跳过, 于是修了等于没修。
+    """
+    if not isinstance(generic, dict):
+        return []
+    raw = generic.get("rows")
+    if not isinstance(raw, list):
+        return []
+    flat: list = []
+    for segment in raw:
+        if isinstance(segment, list):
+            flat.extend(item for item in segment if isinstance(item, dict))
+        elif isinstance(segment, dict):
+            flat.append(segment)
+    return flat
+
+
 def _structured_context(
     spec: RestaurantQuerySpec,
     result_meta: Dict[str, Any],
@@ -585,10 +631,27 @@ def _structured_context(
         or spec.store_scope in {"all", "multiple"}
     ):
         topic_kind = "store_ranking"
+    # 🔴 2026-08-12 投影丢失修复。
+    #    上面那段**读到了** `ranked_entities`(resolver 里逐行构造的、和正文表格
+    #    同一批数据), 但只取 top-1 当 `focus_entity`, 整张表在这一层被丢掉。
+    #    实测长相: 问「卖得最好的几个菜」, 正文印着 5 行 markdown 表格, 而响应的
+    #    机器可读侧 `kpis: []` / `charts: 0` —— 下钻、图表、数字出处校验全都无米下锅。
+    # ⛔ 不新开一条管道: `structured_context` 本来就在 gold_reads 的字段白名单里,
+    #    数据搭它的车就到得了 Java。新开槽位要三层各接一次(那正是这个缺陷的成因)。
+    # ⚠️ 这里**不做正文 parse**。数据来自 resolver 的结构化产物, 不来自渲染结果 ——
+    #    从正文 parse 数字是把渲染当数据源, 正文格式一改就静默失效。
+    rows = _structured_rows(result_meta)
     return {
         "plan_hash": spec.plan_hash,
         "plan_version": spec.plan_version,
         "focus_entity": focus,
+        # 正文里那张表的机器可读版。空列表 = 这次的答案本来就没有表格。
+        "rows": rows,
+        # ⚠️ 截断要显式报出来, 不许静默 —— 「只有 20 条」和「一共就 20 条」
+        #    在下游是两件事。
+        "rows_truncated": bool(
+            len(_raw_structured_rows(result_meta)) > _STRUCTURED_ROWS_LIMIT),
+        "rows_total": len(_raw_structured_rows(result_meta)),
         "window_label": spec.window_label,
         "requested_metrics": list(spec.requested_metrics),
         "analysis_action": spec.analysis_action,
@@ -1681,6 +1744,18 @@ async def tiered_answer(
                     # ⚠️ 标出来是兜底路径 —— 不标的话没人能量它命中多少次,
                     #    而「接住了几条」正是判断这条路值不值得存在的唯一依据。
                     "served_by": "generic_executor_fallback",
+                    # 🔴 2026-08-12 投影丢失修复(第二个丢点)。
+                    #    `try_generic_answer` 返回里有 `"rows": [r.rows for r in results]`
+                    #    (generic_answer.py:413), 而这个 out 只取 answer_text ——
+                    #    正文有表格、机器可读侧空着, 与主路径同一个病。
+                    # ⚠️ 那个 rows 是**每个 CellResult 一段**的嵌套结构, 要摊平;
+                    #    摊平在 `_generic_rows` 里做, 不在这里手写。
+                    "structured_context": _structured_context(
+                        spec,
+                        {"rows": _generic_rows(generic)},
+                        dish_mention=dish_mention,
+                        store_mention=store_mention,
+                    ),
                 }
                 if action_warning:
                     out["warning"] = action_warning
