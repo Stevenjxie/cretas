@@ -1,0 +1,31 @@
+-- 发货明细去掉指向 product_types 的外键 —— 让物料行走完发货
+--
+-- 🔴 2026-08-13 真机 E2E 抓到(LIUSHANMEN 生产)
+-- 销售订单可以卖物料之后, 点「创建发货单」报:
+--   「新建失败: 引用的『SKU 管理』数据不存在, 请到『SKU 管理』确认该数据是否已被删除」
+-- 那句话不是业务校验, 是 GlobalExceptionHandler 把**外键冲突**翻译出来的
+-- (它把 product_types 映射成「SKU 管理」)。真正拦住的是:
+--
+--   sales_delivery_items . FOREIGN KEY (product_type_id) REFERENCES product_types(id)
+--
+-- 而它的兄弟表 sales_order_items 上**没有**这条外键 —— 这就是为什么订单行能存物料 id、
+-- 发货行存不进去: 同一个 id 在同一条链路的两张表上口径不一致, 物料在半路被卡住。
+--
+-- 处置: 去掉这条外键, 让 sales_delivery_items 与 sales_order_items 口径一致。
+--
+-- ⚠️ 这确实降低了一层数据库级完整性。判断依据:
+--   · sales_order_items 早就没有这条约束, 系统已经在这条链路上依赖应用层保证引用有效
+--   · 该列的取值由订单行拷贝而来(createDeliveryShipment 直接 setProductTypeId(source...)),
+--     不是用户自由输入 —— 订单行有效, 发货行就有效
+--   · 全库实测: sales_delivery_items 共 23 行, 指不到 product_types 的孤儿 0 行
+--   · 其余三条外键(delivery_record / sales_order_item / finished_goods_batch)全部保留
+--
+-- ⚠️ 替代方案与放弃理由:
+--   · 把物料镜像成 product_types —— Steve 明确否掉两次("不需要做成商品表"),
+--     而且实测那条路能开单发不出货(成品批次里一条都没有)
+--   · 给 sales_delivery_items 加 raw_material_type_id + product_type_id 改可空 ——
+--     更"正确"的多态模型, 但要改 NOT NULL、加列、并让所有消费者认两种来源;
+--     在只有 23 行的表上为此改结构, 与"别搞复杂"的取舍不符
+
+ALTER TABLE sales_delivery_items
+    DROP CONSTRAINT IF EXISTS fk_sdi_product;
