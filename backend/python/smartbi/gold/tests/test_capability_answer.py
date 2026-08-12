@@ -37,7 +37,10 @@ _METRICS = {
     "net_profit": _FakeMetric("净利润", ("fact_pos_transaction.net_amount",)),
 }
 _SCHEMA = {"fact_pos_transaction.net_amount", "fact_wastage.qty"}
-_FULL = {"fact_pos_transaction": 100, "fact_wastage": 20}
+#: ⚠️ 键是**列**不是表 —— 表有行 ≠ 那一列有值。
+#:    (prod 实测 MOCK_REST 的 tax_amount / actual_receive 填充率 0,
+#:     按表计数会把「税额」「实收」写进「我这儿有的是」, 那是假承诺。)
+_FULL = {"fact_pos_transaction.net_amount": 100, "fact_wastage.qty": 20}
 
 
 def test_capability_list_is_computed_not_constant():
@@ -53,7 +56,7 @@ def test_capability_list_is_computed_not_constant():
 
     # 租户层：损耗表这个租户一行都没有
     no_wastage = computable_labels(
-        _SCHEMA, {**_FULL, "fact_wastage": 0}, metrics=_METRICS, unsupported=("net_profit",))
+        _SCHEMA, {**_FULL, "fact_wastage.qty": 0}, metrics=_METRICS, unsupported=("net_profit",))
     assert no_wastage != full, "抽掉损耗数据后清单没变 —— 它是常量，不是算出来的"
     assert "食材损耗" not in no_wastage
     assert "营收" in no_wastage, "只该少掉没数据的那一项，不该整份塌掉"
@@ -90,7 +93,7 @@ def test_two_tenants_with_different_coverage_get_different_lists():
        那用**两个覆盖度不同的租户**才测得出来。
     """
     rich = computable_labels(_SCHEMA, _FULL, metrics=_METRICS)
-    poor = computable_labels(_SCHEMA, {"fact_pos_transaction": 5, "fact_wastage": 0},
+    poor = computable_labels(_SCHEMA, {"fact_pos_transaction.net_amount": 5, "fact_wastage.qty": 0},
                              metrics=_METRICS)
     assert rich != poor, "两个覆盖度不同的租户拿到同一份清单 —— 它退回成常量了"
 

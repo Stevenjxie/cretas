@@ -32,7 +32,11 @@ if not available:
 |---|---|---|
 | registry | 指标登记了吗、它 `requires` 哪些 `表.列` | `metric_registry.METRICS/DERIVED` |
 | schema | 那些列在库里真的存在吗 | `generic_executor.existing_columns`（查 information_schema） |
-| 租户 | 这个租户在源表里有行吗 | 与 `data_gaps._row_count` 同法 |
+| 租户 | 这个租户在**每一个所需列**上有非空值吗 | 与 `data_gaps._row_count` 同法 |
+
+⚠️ 租户层数的是**列的非空值**不是表的行数。表有行 ≠ 那一列有值 ——
+   prod 实测 MOCK_REST 的 `tax_amount`/`actual_receive` 填充率 0,
+   按行数算会把「税额」「实收」写进「我这儿有的是」, 而那是一句假承诺。
 
 ⛔ **不再维护第二张「我们支持什么」的手写表** —— 那正是被替换掉的东西。
    手写表错了没有任何东西会红；这里错了，闸会红（见
@@ -59,14 +63,14 @@ def _source_tables(requires: Sequence[str]) -> Tuple[str, ...]:
 
 def computable_labels(
     schema_columns: set,
-    tenant_row_counts: Dict[str, int],
+    tenant_value_counts: Dict[str, int],
     *,
     metrics: Optional[Dict[str, Any]] = None,
     unsupported: Sequence[str] = (),
 ) -> Tuple[str, ...]:
     """这个租户**现在真的算得出来**的指标标签。纯函数 —— 三层输入全部由调用方查好。
 
-    抽成纯函数是为了让闸能红：`schema_columns` / `tenant_row_counts` 都能在测试里
+    抽成纯函数是为了让闸能红：`schema_columns` / `tenant_value_counts` 都能在测试里
     抽掉，从而验证「清单是算出来的」而不是一个常量
     （断言「输出里有这几项」是恒真式，测不出这件事）。
     """
@@ -85,9 +89,14 @@ def computable_labels(
         # schema 层：登记的列必须真的在库里
         if not all(col in schema_columns for col in requires):
             continue
-        # 租户层：源表里得有这个租户的行
-        tables = _source_tables(requires)
-        if not tables or not all(tenant_row_counts.get(t, 0) > 0 for t in tables):
+        # 租户层：这个租户在**每一个所需列**上都得有非空值
+        #
+        # 🔴 2026-08-12 prod 实测改的: 第一版只数「源表有没有行」, 于是
+        #    「税额」「实收」「平台抽佣」全被算成能算 —— 而 metric_registry 自己的
+        #    注释就写着 MOCK_REST 这几列**填充率 0**(`tax_amount`/`actual_receive`)。
+        #    表有行 ≠ 那一列有值。把它们写进「我这儿有的是」是一句假承诺,
+        #    而这一段恰恰是最不能说错的一段。
+        if not all(tenant_value_counts.get(col, 0) > 0 for col in requires):
             continue
         label = str(getattr(metric, "label", "") or key)
         if label not in out:
@@ -205,26 +214,33 @@ async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
         from smartbi.gold.restaurant.generic_executor import existing_columns
         from smartbi.gold.restaurant.metric_registry import METRICS
 
-        needed: Dict[str, None] = {}
+        needed: Dict[str, List[str]] = {}
         for key, metric in METRICS.items():
             if key in set(unsupported):
                 continue
-            for table in _source_tables(getattr(metric, "requires", ()) or ()):
-                needed.setdefault(table, None)
+            for col in (getattr(metric, "requires", ()) or ()):
+                needed.setdefault(str(col).split(".", 1)[0], []).append(str(col))
 
         async with tenant_conn(pool, factory_id) as conn:
             schema_columns = await existing_columns(conn)
             counts: Dict[str, int] = {}
-            for table in needed:
-                if not any(col.startswith(table + ".") for col in schema_columns):
-                    counts[table] = 0
+            # ⛔ 数的是**每一列的非空值个数**, 不是表的行数 —— 表有行 ≠ 那一列有值。
+            #    (prod 实测: MOCK_REST 的 tax_amount / actual_receive 填充率 0,
+            #     按行数算会把「税额」「实收」写进「我这儿有的是」, 那是假承诺。)
+            #    一次查一张表, 所有需要的列放在同一个 SELECT 里, 不逐列打一次库。
+            for table, cols in needed.items():
+                live = [c for c in cols if c in schema_columns]
+                if not live:
+                    for c in cols:
+                        counts[c] = 0
                     continue
-                # table 来自 registry 的固定字面量, 不接受外部输入。
+                # table/列名均来自 registry 的固定字面量, 不接受外部输入。
+                exprs = ", ".join(
+                    f'count({c.split(".", 1)[1]})::int AS "{c}"' for c in live)
                 row = await conn.fetchrow(
-                    f"SELECT count(*)::int AS n FROM {table} WHERE factory_id = $1",
-                    factory_id,
-                )
-                counts[table] = int((row or {}).get("n") or 0)
+                    f"SELECT {exprs} FROM {table} WHERE factory_id = $1", factory_id)
+                for c in cols:
+                    counts[c] = int((row or {}).get(c) or 0) if c in live else 0
     except Exception as exc:  # noqa: BLE001
         # ⛔ 查不动就返回空 —— 「我这儿有的是…」是承诺, 猜错比不说更糟。
         logger.warning("[capability] 无法确认本租户能算什么, 省掉那一段: %s", exc)
