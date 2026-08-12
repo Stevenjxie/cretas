@@ -142,7 +142,6 @@ public class FormAssistantService {
         sb.append("""
                 请以 JSON 格式返回解析结果：
                 {
-                    "success": true,
                     "field_values": {
                         "字段名": "解析出的值",
                         ...
@@ -172,7 +171,18 @@ public class FormAssistantService {
             }
 
             FormParseResult result = new FormParseResult();
-            result.setSuccess(json.path("success").asBoolean(true));
+            // 🔴 2026-08-13 真机抓到: 这里原本采信模型自报的 "success"。
+            // prompt 的输出 schema 里有这个键, 却从没告诉模型它是什么意思 ——
+            // 于是模型在【字段全部解析正确】的情况下照样返 "success": false
+            // (实测: customerName + 2 条 items 全对, success=false, message=null)。
+            // 前端把它当失败, 而 message 是 null, 兜底链落到 ApiResponse 包装层的
+            // 通用文案 —— 用户看到的是一句「操作成功」, 然后什么也没发生。
+            //
+            // 判定改成确定性的: 能走到这里就说明 JSON 解出来了 = 解析成功。
+            // 真正的失败有自己的载体 —— 上面两处 error(...) 会设 success=false + message。
+            // 同时已把 "success" 从 prompt schema 里删掉: 不要向模型索取我们不采信的东西,
+            // 写进去它就会去动它。
+            result.setSuccess(true);
             result.setConfidence(json.path("confidence").asDouble(0.8));
             result.setUnparsedText(json.path("unparsed_text").asText(null));
             result.setFollowUpQuestion(json.path("follow_up_question").asText(null));
@@ -265,7 +275,6 @@ public class FormAssistantService {
         sb.append("""
                 请以 JSON 格式返回:
                 {
-                    "success": true,
                     "extracted_text": "图片中识别到的所有文字",
                     "field_values": {
                         "字段名": "提取的值",
@@ -288,7 +297,18 @@ public class FormAssistantService {
             }
 
             OCRParseResult result = new OCRParseResult();
-            result.setSuccess(json.path("success").asBoolean(true));
+            // 🔴 2026-08-13 真机抓到: 这里原本采信模型自报的 "success"。
+            // prompt 的输出 schema 里有这个键, 却从没告诉模型它是什么意思 ——
+            // 于是模型在【字段全部解析正确】的情况下照样返 "success": false
+            // (实测: customerName + 2 条 items 全对, success=false, message=null)。
+            // 前端把它当失败, 而 message 是 null, 兜底链落到 ApiResponse 包装层的
+            // 通用文案 —— 用户看到的是一句「操作成功」, 然后什么也没发生。
+            //
+            // 判定改成确定性的: 能走到这里就说明 JSON 解出来了 = 解析成功。
+            // 真正的失败有自己的载体 —— 上面两处 error(...) 会设 success=false + message。
+            // 同时已把 "success" 从 prompt schema 里删掉: 不要向模型索取我们不采信的东西,
+            // 写进去它就会去动它。
+            result.setSuccess(true);
             result.setExtractedText(json.path("extracted_text").asText(""));
             result.setConfidence(json.path("confidence").asDouble(0.8));
 
@@ -418,7 +438,6 @@ public class FormAssistantService {
 
                 如果字段与实体类型相关:
                 {
-                    "success": true,
                     "relevant": true,
                     "fields": [
                         {
@@ -439,7 +458,6 @@ public class FormAssistantService {
 
                 如果字段与实体类型不相关:
                 {
-                    "success": true,
                     "relevant": false,
                     "rejectionReason": "该字段与质检检查无关，质检检查应关注产品质量指标...",
                     "suggestedEntityType": "PROCESSING_BATCH",
@@ -508,7 +526,18 @@ public class FormAssistantService {
             }
 
             SchemaGenerateResult result = new SchemaGenerateResult();
-            result.setSuccess(json.path("success").asBoolean(true));
+            // 🔴 2026-08-13 真机抓到: 这里原本采信模型自报的 "success"。
+            // prompt 的输出 schema 里有这个键, 却从没告诉模型它是什么意思 ——
+            // 于是模型在【字段全部解析正确】的情况下照样返 "success": false
+            // (实测: customerName + 2 条 items 全对, success=false, message=null)。
+            // 前端把它当失败, 而 message 是 null, 兜底链落到 ApiResponse 包装层的
+            // 通用文案 —— 用户看到的是一句「操作成功」, 然后什么也没发生。
+            //
+            // 判定改成确定性的: 能走到这里就说明 JSON 解出来了 = 解析成功。
+            // 真正的失败有自己的载体 —— 上面两处 error(...) 会设 success=false + message。
+            // 同时已把 "success" 从 prompt schema 里删掉: 不要向模型索取我们不采信的东西,
+            // 写进去它就会去动它。
+            result.setSuccess(true);
 
             // 解析相关性判断结果
             boolean relevant = json.path("relevant").asBoolean(true); // 默认为true
@@ -652,7 +681,6 @@ public class FormAssistantService {
         sb.append("""
                 请分析校验错误并提供修正建议，以 JSON 格式返回:
                 {
-                    "success": true,
                     "correction_hints": {
                         "字段名": "修正建议"
                     },
@@ -677,7 +705,18 @@ public class FormAssistantService {
             }
 
             ValidationFeedbackResult result = new ValidationFeedbackResult();
-            result.setSuccess(json.path("success").asBoolean(true));
+            // 🔴 2026-08-13 真机抓到: 这里原本采信模型自报的 "success"。
+            // prompt 的输出 schema 里有这个键, 却从没告诉模型它是什么意思 ——
+            // 于是模型在【字段全部解析正确】的情况下照样返 "success": false
+            // (实测: customerName + 2 条 items 全对, success=false, message=null)。
+            // 前端把它当失败, 而 message 是 null, 兜底链落到 ApiResponse 包装层的
+            // 通用文案 —— 用户看到的是一句「操作成功」, 然后什么也没发生。
+            //
+            // 判定改成确定性的: 能走到这里就说明 JSON 解出来了 = 解析成功。
+            // 真正的失败有自己的载体 —— 上面两处 error(...) 会设 success=false + message。
+            // 同时已把 "success" 从 prompt schema 里删掉: 不要向模型索取我们不采信的东西,
+            // 写进去它就会去动它。
+            result.setSuccess(true);
             result.setExplanation(json.path("explanation").asText(""));
             result.setConfidence(json.path("confidence").asDouble(0.8));
 
