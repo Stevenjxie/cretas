@@ -8,6 +8,68 @@
 
 ---
 
+---
+
+## ⛔ 硬约束（三条，执行项，不是提醒）
+
+下面三条**不是**用来识别问题的形态，是每次都要照做的动作。
+它们各自都已经先以「形态」的身份写进过本文件，然后**在写进去之后又被踩了一次** ——
+所以升级成硬约束。**读到形态会点头，读到硬约束才会动手。**
+
+### 硬约束 1：诊断输出一律落文件再查，禁止管道直接 `head` / `tail`
+
+```bash
+#  ❌ 报错正好在被截掉的那一段里
+./scripts/deploy/release-cretas.sh ... 2>&1 | tail -30
+
+#  ✅ 全量落盘, 再让「我看了多少」变成显式的数
+./scripts/deploy/release-cretas.sh ... > /tmp/deploy.log 2>&1; echo "EXIT=$?"
+wc -l /tmp/deploy.log
+grep -n -E "ERROR|FAIL|拒绝" /tmp/deploy.log
+```
+
+**为什么是硬约束**：同一天栽了**四次**，其中第三、第四次发生在把
+「形态 A⁗ 我看到的是全部吗」写进本文件**之后**：
+`sorted(v.keys())[:9]` / `grep "^DUMP"`（pytest 进度点粘在行首） /
+逐意图遍历同一句问句 / **部署命令尾部的 `| tail -30` 把失败原因整段吃掉** ——
+最后那次代价是一次 3 分 29 秒的白构建加一轮误诊。
+
+### 硬约束 2：部署判据是「在运行中的东西里找到这次改动的标记」
+
+`DEPLOY_EXIT=0` **不是**判据。`RELEASE_FINAL_STATUS=deployed` 也不是。
+
+```bash
+# 每次部署后必做, 二选一或都做:
+#  a) 进程启动时间 晚于 制品/代码 mtime
+ssh <host> "ps -o lstart= -p \$(systemctl show -p MainPID --value <svc>); stat -c '%y' <artifact>"
+#  b) 在运行中的制品里 grep 到这次改动的标记
+ssh <host> "unzip -p <jar> '<class>' | strings | grep -c '<标记>'"
+```
+
+**为什么是硬约束**：`release-cretas.sh` **只发 Java + web-admin**，
+纯 Python 的 PR 合完跑它会得到 `DEPLOY_EXIT=0` / `RELEASE_FINAL_STATUS=deployed`
+而**东西根本没上线**（Python 走 `deploy-smartbi-python.sh --env prod`）。
+所有判据全绿，改动没上 —— 实测踩过。
+另有一次 `RELEASE_FINAL_STATUS=no-op` 被误读成「部署了」，靠比进程启动时间才认出来。
+
+### 硬约束 3：跨样本批量读数，开跑前清缓存并**贴出清了哪几个**
+
+```python
+# 模块自带 helper 就用 helper —— 拼错的属性名不会报错, 只会让清理静默失效
+for fn in ("clear_semantic_plan_cache", "clear_route_cache", "clear_tenant_gate_cache"):
+    getattr(ri, fn)()      # ⛔ 不要 getattr(..., None) 然后 if callable
+```
+
+并且**参数化遍历要断言被参数化的那一维真的不同**（例：`intent` 列逐行不同），
+否则「N 次全绿」可能只是同一个样本跑了 N 遍。
+
+**为什么是硬约束**：三次实测。①`_PLAN_CACHE` 是个不存在的名字，`getattr` 默认
+`None` 静默 no-op，同时漏清 `_ROUTE_CACHE` → 读数 25/13 修正后是 29/9；
+②19 个意图同一句问句 → 路由缓存 replay 18 次，两个读数全作废；
+③更早一次：r2 有 59/85 命中 r1 刚写进去的计划缓存，「两轮完全一致」是构造出来的。
+
+---
+
 ## 形态 A：我量的这个数，不是我真正想知道的那个数
 
 **判据（动手前做，一次）**: 把这两句并排写下来读一遍 ——
