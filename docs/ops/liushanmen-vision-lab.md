@@ -282,6 +282,29 @@ SHA256 `fad43b1f89b598278a2df833416ca13c1649dac5ae758a7aea4bd9f6c8371088`。结�
 不得仅因池中仍有任务就要求继续人工标注；下一轮数据必须先取得独立相机、独立台面或明确受控
 视角覆盖证据。
 
+在累计 `108` 个独立人工 ROI 后，又验证了一个不训练权重的模板配准候选。评估器先用托盘检测
+proposal 屏蔽重复包装特征（proposal 只参与特征屏蔽，绝不作为 ROI 真值），再以背景缩略图检索
+候选模板，使用 SIFT + RANSAC 单应性迁移人工四点多边形；没有通过预先固定的内点数、内点率、
+重投影误差和画面面积变化门禁时，整图 fail closed 为 `unknown_work_area`：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_roi_registration_experiment.py `
+  --queue <每个已完成且互不重复的 ROI 队列，可重复传入> `
+  --runtime-root D:\CretasVisionLab `
+  --folds 8 `
+  --candidate-count 35
+```
+
+任务隔离 8 折只允许 `23/108` 图、`527/2103` 个托盘中心自动判定，其余 `85` 图、`1576` 个
+中心正确进入 unknown；但自动子集仍只有平均/最差 IoU `0.6579/0.4501`、`74` 个中心错分、
+最差中心准确率 `0.3333`、最差 inside recall `0.2222`。新增的 12 图全部因低置信进入 unknown，
+没有静默退化为台内。回执 `work-area-roi-registration-experiment-20260812T194913530548Z.json`
+SHA256 为 `9913a5a369833d59e0623d4d02195e7b079b6010fc615497fa4e1af39194aa3e`，结论固定为
+`template_registration_insufficient_fail_closed`。因此模板复用、全图局部特征配准及 proposal 屏蔽
+配准路线均停止；不得通过放宽配准置信门禁提升表面覆盖率，也不得运行完整 7+20、保存模型、
+恢复旧 YOLO 或部署。该 108 图池不含 `df1f6029-389d-45b5-995e-be19b2f5b943`，前置门禁既已
+失败，不得用本次回执宣称已单列验证该台外样本。
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
