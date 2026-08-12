@@ -2067,6 +2067,11 @@ async function handleQuickDelivery(row: TableRow) {
         productTypeId: item.productTypeId || item.productType?.id,
         productName: item.productName || item.productType?.name,
         deliveredQuantity: item.quantity || 0,
+        // 🔴 2026-08-13 真机 E2E: 计划数量输入框需要一个上限, 否则可以随手填出
+        // 后端必然 409 的数。后端真正的闸是 `下单量 - 已安排`, 前端拿不到「已安排」,
+        // 所以这里只兜「不超过下单量」这一层, 精确判定仍由后端
+        // DELIVERY_QUANTITY_EXCEEDS_REMAINING 负责。
+        maxQuantity: Number(item.quantity) > 0 ? Number(item.quantity) : undefined,
         unit: item.unit || 'kg',
         packagingSpecId: item.packagingSpecId,
         unitPrice: Number(item.unitPrice || 0),
@@ -2709,7 +2714,23 @@ function handleMergePurchase() {
         <el-form-item label="计划发货数量">
           <div v-for="(item, idx) in deliveryForm.items" :key="idx" style="margin-bottom: 4px">
             {{ Number(idx) + 1 }}. {{ item.productName || '产品' }} —
-            <el-input-number v-model="item.deliveredQuantity" :min="1" size="small" style="width: 120px" /> {{ displayUnit(item.unit) }}
+            <!--
+              🔴 2026-08-13 真机 E2E 抓到的死结: 这里原本是 :min="1"。
+              el-input-number 会把模型值【向上钳到 min】—— 0.5kg 的订单行一打开
+              就被改写成 1, 手动再填 0.5 也会被弹回 1。而后端只接受 ≤ 剩余可安排量,
+              于是 0.5 的行【永远发不出货】: 界面把唯一合法的值变成填不进去的值。
+              下单量按 kg 计小数是这门生意的常态, 成品行同样中招 (物料开卖后更高频)。
+              口径与仓库端「确认发货」的实际数量输入保持一致 (min 0 / max 计划量 / 小数)。
+            -->
+            <el-input-number
+              v-model="item.deliveredQuantity"
+              :min="0"
+              :max="item.maxQuantity"
+              :precision="3"
+              :step="0.1"
+              size="small"
+              style="width: 140px"
+            /> {{ displayUnit(item.unit) }}
           </div>
         </el-form-item>
         <el-form-item label="备注">
