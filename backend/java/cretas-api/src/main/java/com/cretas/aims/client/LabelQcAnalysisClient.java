@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.LabelQcLabel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
@@ -27,18 +28,22 @@ import java.util.List;
 public class LabelQcAnalysisClient {
 
     private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+    private static final String OSS_PUBLIC_SUFFIX = ".oss-cn-shanghai.aliyuncs.com";
+    private static final String OSS_INTERNAL_SUFFIX = ".oss-cn-shanghai-internal.aliyuncs.com";
 
     private final RestTemplate restTemplate;
     private final HttpClient imageHttpClient;
     private final String baseUrl;
     private final String internalSecret;
     private final ObjectMapper objectMapper;
+    private final boolean internalOssDownloadEnabled;
 
     public LabelQcAnalysisClient(
             @Qualifier("labelQcRestTemplate") RestTemplate restTemplate,
             @Qualifier("pythonAiBaseUrl") String baseUrl,
             @Qualifier("pythonAiInternalSecret") String internalSecret,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            @Value("${aliyun.oss.internal-download-enabled:false}") boolean internalOssDownloadEnabled) {
         this.restTemplate = restTemplate;
         this.imageHttpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
@@ -47,6 +52,7 @@ public class LabelQcAnalysisClient {
         this.baseUrl = baseUrl;
         this.internalSecret = internalSecret;
         this.objectMapper = objectMapper;
+        this.internalOssDownloadEnabled = internalOssDownloadEnabled;
     }
 
     public AnalysisResult analyze(String signedDownloadUrl, String factoryId, String photoId) {
@@ -103,7 +109,8 @@ public class LabelQcAnalysisClient {
             throw new LabelQcClientException("图片下载地址无效", ex);
         }
 
-        HttpRequest request = HttpRequest.newBuilder(uri)
+        URI downloadUri = internalOssDownloadEnabled ? toInternalOssUri(uri) : uri;
+        HttpRequest request = HttpRequest.newBuilder(downloadUri)
                 .timeout(Duration.ofSeconds(30))
                 .GET()
                 .build();
@@ -140,6 +147,29 @@ public class LabelQcAnalysisClient {
         } catch (Exception ex) {
             throw new LabelQcClientException("图片下载暂时不可用", ex);
         }
+    }
+
+    /**
+     * Server-side downloads run on the Shanghai ECS. Keep the signed URL and
+     * query string intact, but route known Shanghai OSS hosts over the free
+     * same-region internal endpoint. Browser-facing URLs are never changed.
+     */
+    static URI toInternalOssUri(URI uri) {
+        String host = uri.getHost();
+        if (host == null || !host.endsWith(OSS_PUBLIC_SUFFIX)) {
+            return uri;
+        }
+        String internalHost = host.substring(0, host.length() - OSS_PUBLIC_SUFFIX.length())
+                + OSS_INTERNAL_SUFFIX;
+        String raw = uri.toString();
+        int authorityStart = raw.indexOf("://") + 3;
+        int hostStart = raw.indexOf(host, authorityStart);
+        if (authorityStart < 3 || hostStart < authorityStart) {
+            return uri;
+        }
+        return URI.create(raw.substring(0, hostStart)
+                + internalHost
+                + raw.substring(hostStart + host.length()));
     }
 
     private AnalysisResult parse(String responseBody) throws Exception {
