@@ -21,7 +21,8 @@ class RawMaterialTaxTreatmentValidationTest {
             mock(com.cretas.aims.repository.MaterialPackagingHierarchyRepository.class),
             mock(com.cretas.aims.repository.material.MaterialCodeSegmentRepository.class),
             mock(com.cretas.aims.utils.ExcelUtil.class),
-            mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
+            mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class),
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
     @Test
     void exemptRequiresReasonButNotNumericTaxRate() {

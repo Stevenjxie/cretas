@@ -54,7 +54,8 @@ class RawMaterialTypeSegmentContractTest {
     void setUp() {
         service = new RawMaterialTypeServiceImpl(materialTypeRepository, materialBatchRepository,
                 conversionRepository, packagingRepository, segmentRepository, excelUtil,
-                workflowUnitReviewService);
+                workflowUnitReviewService,
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         lenient().when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(anyString(), anyString()))
                 .thenReturn(List.of());
         lenient().when(materialTypeRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));

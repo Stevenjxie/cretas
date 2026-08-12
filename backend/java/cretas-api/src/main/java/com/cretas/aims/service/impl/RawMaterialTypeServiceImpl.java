@@ -66,6 +66,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     private final MaterialCodeSegmentRepository materialCodeSegmentRepository; // 可选分类字典
     private final ExcelUtil excelUtil;
     private final WorkflowUnitReviewService workflowUnitReviewService;
+    // 2026-08-12: 物料字典就是原料 SKU 的录入口 —— 保存后自动镜像一份可售 SKU。
+    // ⛔ 用事件而不是直接调用: 镜像必须在【本事务提交之后】另开事务做, 否则镜像失败
+    // (最常见是产品名撞唯一约束)会把本事务标成 rollback-only —— 用户的物料就存不进去了。
+    // 见 MaterialSkuMirrorService 的 AFTER_COMMIT + REQUIRES_NEW。
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     /** Optional field injection preserves compatibility with narrow legacy unit tests. */
     @Autowired
@@ -204,6 +209,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setAssociatedCustomerId(dto.getAssociatedCustomerId());
 
         materialType = materialTypeRepository.save(materialType);
+        eventPublisher.publishEvent(new com.cretas.aims.service.product.MaterialSkuMirrorService.MaterialSaved(
+                factoryId, materialType.getId(), materialType.getCreatedBy()));
 
         log.info("原材料类型创建成功: id={}", materialType.getId());
         return convertToDTO(materialType);
@@ -319,6 +326,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         materialType.setUpdatedAt(LocalDateTime.now());
         materialType = materialTypeRepository.save(materialType);
+        eventPublisher.publishEvent(new com.cretas.aims.service.product.MaterialSkuMirrorService.MaterialSaved(
+                factoryId, materialType.getId(), materialType.getCreatedBy()));
 
         if (wasPackaging && !packaging) {
             packagingRepository.deleteByMaterialTypeId(id);
@@ -774,6 +783,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             materialType.setIsActive(isActive);
             materialType.setUpdatedAt(LocalDateTime.now());
             materialTypeRepository.save(materialType);
+            // 物料停用 → 镜像 SKU 也要停, 否则销售下拉里还能选到一个已停用的物料
+            eventPublisher.publishEvent(new com.cretas.aims.service.product.MaterialSkuMirrorService.MaterialSaved(
+                    factoryId, materialType.getId(), materialType.getCreatedBy()));
         }
 
         log.info("批量更新原材料类型状态成功: count={}", ids.size());
