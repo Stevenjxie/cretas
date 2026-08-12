@@ -71,6 +71,29 @@ def daily_close_window(today: Optional[date] = None) -> Tuple[date, date]:
     return (day, day)
 
 
+#: 「今天有没有营业」看这个指标。⛔ 不看营收: 营收算不出来时是 None,
+#: 而 None 分不清「没营业」和「执行链没跑通」—— 订单数分得清(0 vs None)。
+_PRESENCE_METRIC = "orders"
+
+
+def _screen_status(sections: List[Dict[str, Any]]) -> str:
+    """`no_data` / `no_business` / `ok`。
+
+    🔴 为什么必须三态: `no_data` 和 `no_business` 在**计数上都是 notified=0**,
+       但一个是「这次没量到东西」(要告警), 一个是「今天没营业」(正常)。
+       混成一个布尔, 静默失效就会长得和正常一模一样。
+    """
+    presence = next((s for s in sections if s["metric_key"] == _PRESENCE_METRIC), None)
+    if presence is None or presence["value"] is None:
+        return "no_data"
+    try:
+        if float(presence["value"]) <= 0:
+            return "no_business"
+    except (TypeError, ValueError):
+        return "no_data"
+    return "ok"
+
+
 async def build_daily_close(
     conn,
     *,
@@ -102,6 +125,13 @@ async def build_daily_close(
             #    ⛔ 这个判断只能来自 registry —— 在推送侧手写一张「哪些是金额」
             #       的名单, 新登记一个金额指标就会悄悄漏出去(而且不报错)。
             "unit": cell.unit,
+            # 🔴 这一段到底有没有数。`missing_columns` 空**不等于**有数:
+            #    列都在、当天没营业, 一样算不出来(渲染成「—」)。
+            #    2026-08-13 实测: 当天 MOCK_REST 三段是「— / 0 / —」而
+            #    `sections_computed=3` —— 我的仪器把「schema 在」当成了「有数可说」。
+            # ⚠️ 取值口径与 `_render_body` 的 `all` 分支一致(`rows[0].get(key)`),
+            #    ⛔ 不去 match 正文里的「—」: 那是拿呈现层当数据层, 换个占位符就失效。
+            "value": (cell.rows[0].get(metric_key) if cell.rows else None),
             # ⚠️ 出处一起带出去 —— 前端要打灰 tag 时不用再猜。
             #    ⛔ 但正文里的限定语**不依赖**它: 限定语已经在 text 里了。
             "provenance": cell.provenance,
@@ -114,6 +144,13 @@ async def build_daily_close(
         "date": date_range[0].isoformat(),
         "factory_id": factory_id,
         "sections": sections,
+        # 三态, 刻意分开 —— 它们的处置完全不同, 混成一个布尔就分不出来了:
+        #   no_data    : 连订单数都算不出来 → **执行链没跑通**, 是仪器问题
+        #   no_business: 订单数是 0 → 今天没营业, 正常, 但没什么可推的
+        #   ok         : 有营业
+        # ⛔ 第一版把这两种都当成「推」, 于是没营业的那天店长收到
+        #    「营收 — / 订单数 0 / 毛利 —」—— 噪音, 而且看起来像系统坏了。
+        "status": _screen_status(sections),
         "answer_text": "\n\n".join(s["text"] for s in sections),
         # 整屏的出处 = 只要有一段是估的, 这一屏就不能被当成账上的数。
         # ⛔ 取「最保守」的那个, 不取多数 —— 一段估的就足以让店长误判。
@@ -148,6 +185,16 @@ async def push_daily_close(
 
     async with pool.acquire() as conn:
         screen = await build_daily_close(conn, factory_id=factory_id, today=today)
+
+    # ⛔ 没营业 / 没数据都**不推**。推一屏「营收 — / 订单数 0 / 毛利 —」
+    #    对店长是噪音, 而且看起来像系统坏了 —— 比不推更糟。
+    #    ⚠️ 不写防重日志: 数据晚到时补跑还能推(失败不写日志是原有行为, 这里一致)。
+    if screen["status"] != "ok":
+        logger.info("[daily-close] 不推送: factory=%s date=%s status=%s",
+                    factory_id, screen["date"], screen["status"])
+        return {"screen": screen,
+                "notify": {"notified": [], "skipped": [], "failed": [],
+                           "reason": screen["status"]}}
 
     def _render_for(role: str) -> Optional[Tuple[str, str]]:
         """按角色裁剪那一屏。

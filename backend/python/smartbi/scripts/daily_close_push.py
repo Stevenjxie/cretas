@@ -52,11 +52,14 @@ async def main() -> int:
             out = await push_daily_close(pool, factory_id=factory_id)
             screen = out["screen"]
             notify = out["notify"]
-            # 一段都没算出来 = 这一屏是空的。推不推都不对, 记成仪器问题。
-            computed = [s for s in screen["sections"] if not s["missing_columns"]]
+            # 🔴 「有数可说」按**值**数, 不按 `missing_columns` 数。
+            #    2026-08-13 实测踩过: 当天三段是「— / 0 / —」而按 missing_columns
+            #    数出来是 3/3 —— 仪器把「schema 在」当成了「有数」, rc=0 通过。
+            computed = [s for s in screen["sections"] if s["value"] is not None]
             rows.append({
                 "factory_id": factory_id,
                 "date": screen["date"],
+                "status": screen["status"],
                 "provenance": screen["provenance"],
                 "sections_total": len(screen["sections"]),
                 "sections_computed": len(computed),
@@ -78,13 +81,17 @@ async def main() -> int:
 
     errored = [r for r in rows if r.get("error")]
     failed = [r for r in rows if r.get("failed")]
-    # 阳性对照: 至少有一个租户真的算出了东西。全 0 = 这次没量到, 不是「没什么可推」。
-    any_computed = any(r.get("sections_computed", 0) > 0 for r in rows)
+    # 🔴 `no_data` = 连订单数都算不出来 → **执行链没跑通**, 是仪器问题。
+    #    `no_business` = 订单数 0 → 今天没营业, 正常, 不推也不告警。
+    #    ⛔ 这两个在计数上都是 notified=0, 合成一个就再也分不出来了。
+    no_data = [r for r in rows if r.get("status") == "no_data"]
 
-    if not any_computed:
-        print("INSTRUMENT: 没有任何租户算出哪怕一段 —— 本次读数作废")
-        return 2
-    if errored or failed:
+    if errored or no_data:
+        for r in no_data:
+            print(f"INSTRUMENT: {r['factory_id']} 连订单数都没算出来 —— "
+                  f"要么执行链没跑通, 要么 ETL 今天没落数")
+        return 2 if no_data and not errored else 1
+    if failed:
         return 1
     return 0
 

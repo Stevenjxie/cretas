@@ -266,6 +266,74 @@ def _sent_recorder():
 
 
 @pytest.mark.asyncio
+async def test_no_business_day_does_not_push():
+    """🔴 2026-08-13 prod 实测抓到的: 当天没数据时那一屏是「— / 0 / —」,
+    而推送照发。店长收到一屏空数字, 比不推更糟 —— 看起来像系统坏了。
+
+    ⛔ 而且我的仪器当时报 rc=0 / sections_computed=3 —— 因为它按
+       `missing_columns` 数(列都在), 把「schema 在」当成了「有数可说」。
+    """
+    from smartbi.gold.restaurant.daily_close import build_daily_close, push_daily_close
+
+    # 没营业: 订单数 0, 金额全 None(SUM 无行 → NULL)
+    conn = _FakeConn({"revenue": None, "orders": 0, "gross_profit": None})
+    screen = await build_daily_close(conn, factory_id="T_DAILY", today=date(2026, 8, 13))
+    assert screen["status"] == "no_business", screen["status"]
+
+    sent, java_notify = _sent_recorder()
+    out = await push_daily_close(_FakePool(_FakeConn(
+        {"revenue": None, "orders": 0, "gross_profit": None})),
+        factory_id="T_DAILY", today=date(2026, 8, 13),
+        java_notify=java_notify, roles=["restaurant_manager"])
+
+    assert sent == [], "没营业还是推了一屏空数字"
+    assert out["notify"]["reason"] == "no_business"
+
+
+@pytest.mark.asyncio
+async def test_no_data_is_distinguished_from_no_business():
+    """🔴 两者计数上都是 notified=0, 但处置相反。
+
+    ⛔ 合成一个布尔, 「执行链没跑通」就会长得和「今天没营业」一模一样,
+       于是静默失效永远没人发现。
+    """
+    from smartbi.gold.restaurant.daily_close import build_daily_close
+
+    # 执行链没跑通: 连订单数都是 None
+    dead = await build_daily_close(
+        _FakeConn({"revenue": None, "orders": None, "gross_profit": None}),
+        factory_id="T_DAILY", today=date(2026, 8, 13))
+    assert dead["status"] == "no_data"
+
+    # 没营业: 订单数是 0(**不是** None)
+    closed = await build_daily_close(
+        _FakeConn({"revenue": None, "orders": 0, "gross_profit": None}),
+        factory_id="T_DAILY", today=date(2026, 8, 13))
+    assert closed["status"] == "no_business"
+
+    # 阳性对照: 有营业的那天不许被判成上面任何一种
+    ok = await build_daily_close(
+        _FakeConn({"revenue": 31200.0, "orders": 128, "gross_profit": 8642.0}),
+        factory_id="T_DAILY", today=date(2026, 8, 13))
+    assert ok["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_status_is_not_derived_from_the_rendered_text():
+    """⛔ 判「有没有数」只能看**值**, 不能 match 正文里的「—」。
+
+    拿呈现层当数据层, 换个占位符(或者加个千分位)这道判断就静默失效。
+    """
+    import inspect
+
+    from smartbi.gold.restaurant import daily_close
+
+    src = _code_only(daily_close)
+    assert "—" not in src, "用正文里的占位符判有没有数 —— 那是拿呈现层当数据层"
+    assert '"value"' in src or "'value'" in src
+
+
+@pytest.mark.asyncio
 async def test_push_reuses_the_existing_channel_not_a_new_one():
     """判据 3 的接线面: 走的是 `value_notifier` 那条链, 不是日结自己写的推送。"""
     import inspect
