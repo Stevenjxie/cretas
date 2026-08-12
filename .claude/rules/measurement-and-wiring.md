@@ -68,6 +68,52 @@ for fn in ("clear_semantic_plan_cache", "clear_route_cache", "clear_tenant_gate_
 ②19 个意图同一句问句 → 路由缓存 replay 18 次，两个读数全作废；
 ③更早一次：r2 有 59/85 命中 r1 刚写进去的计划缓存，「两轮完全一致」是构造出来的。
 
+### 硬约束 4：定时跑批的退出码是**三态**，不是两态
+
+```
+rc=0  没问题
+rc=1  有问题（读数有效，且指向缺陷）
+rc=2  这次没量到东西 —— 阳性对照没通过 / 样本 0 条 / 仪器起不来
+```
+
+`rc=2` **必须单独告警**，用与 `rc=1` 不同的措辞。
+
+```bash
+if [ "$rc" -eq 2 ]; then
+    echo "XXX INSTRUMENT DEAD $(date '+%F %T') — 阳性对照未通过, 本次读数作废" >> "$ALERTS"
+elif [ "$rc" -ne 0 ]; then
+    echo "XXX DRIFT $(date '+%F %T') — 有条目不再等价" >> "$ALERTS"
+fi
+```
+
+**为什么是硬约束**：两态跑批把「没量到」折叠进「没问题」。
+一个连不上库 / 阳性对照为 0 的跑批会**安静地天天绿**，而它一个样本都没看过 ——
+本仓已有先例：52 断言的回归电池随租户收敛一起死了 4 天，每天报一次没人处理。
+
+⛔ **`rc=2` 那一态要主动构造一次**（例：把库名指到不存在的库、把样本源清空），
+   确认它真的到得了。三态的价值全在第三态，而第三态平时永远不会自然发生 ——
+   不构造就不知道它能不能到达。**与「让闸红一次」是同一条判据。**
+
+### 硬约束 5：变异 / 改写脚本一律**文本模式 + `newline=''`**，禁止 `bytes` 字面量
+
+```python
+#  ❌ 中文注释进 bytes 字面量 → SyntaxError: bytes can only contain ASCII
+d = open(p, 'rb').read()
+d = d.replace(b'old', b'new  # 说明')
+
+#  ✅ 文本模式 + newline='' —— 不做任何行尾转换（与二进制 IO 同样不污染 CRLF），
+#     又能处理非 ASCII
+s = open(p, 'r', encoding='utf-8', newline='').read()
+open(p, 'w', encoding='utf-8', newline='').write(s.replace('old', 'new  # 说明'))
+```
+
+**为什么是硬约束**：`bytes` 字面量只能含 ASCII，写中文注释当场 `SyntaxError` ——
+**同一天栽了四次**。它最初是为了躲 CRLF 污染（`pathlib.write_text` 在 Windows
+把整文件转 CRLF，两个 PR 因此被打回）而选的，但 `newline=''` 同样不转换行尾，
+**而且没有 ASCII 限制**。源码改写不需要字节精度。
+
+⇒ 换成 `newline=''` 之后，「中文不能进 bytes」这个坑**从物理上消失**，不靠记得。
+
 ---
 
 ## 形态 A：我量的这个数，不是我真正想知道的那个数
