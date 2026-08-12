@@ -305,6 +305,27 @@ SHA256 为 `9913a5a369833d59e0623d4d02195e7b079b6010fc615497fa4e1af39194aa3e`，
 恢复旧 YOLO 或部署。该 108 图池不含 `df1f6029-389d-45b5-995e-be19b2f5b943`，前置门禁既已
 失败，不得用本次回执宣称已单列验证该台外样本。
 
+同一累计 `108` 图还验证了不预测 ROI 的逐托盘 membership 候选。人工四点多边形只在训练折
+产生中心点真值和训练折多边形共识；推理候选使用托盘位置、尺寸、同图托盘排列上下文与固定
+非对称置信门禁，任何不同时满足分类概率和训练折共识的中心都进入 `unknown_work_area`：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_tray_membership_experiment.py `
+  --queue <每个已完成且互不重复的 ROI 队列，可重复传入> `
+  --runtime-root D:\CretasVisionLab `
+  --folds 8
+```
+
+任务隔离 8 折共有人工真值台内 `1806`、台外 `297` 个中心；保守门禁自动判定 `1044/2103`
+（覆盖 `0.4964`），`1059` 个进入 unknown，自动子集台外判台内和台内判台外均为 `0`。但相对
+全部真值的台内/台外召回仅 `0.4961/0.4983`，SKU 0013/0014 台外召回仅 `0.1351/0.12`；
+新增 12 图的唯一台外中心也只能判 unknown。该评估使用人工复核托盘框，是 detector-time 的
+乐观上界，而且置信阈值来自同一 108 图探索，并非锁定独立测试。回执
+`work-area-tray-membership-experiment-20260812T201252081868Z.json` SHA256 为
+`5f9ac5bb322b6e38bfa94386dedc60f051f992fb6e1193a9d046c2a18e44b693`，结论固定为
+`per_tray_membership_insufficient_fail_closed`。不得因零自动误分而忽略过低覆盖，也不得运行完整
+7+20、使用保护集调参、保存分类器、恢复旧 YOLO 或部署。该池仍不含 `df1f6029-389d-45b5-995e-be19b2f5b943`。
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
