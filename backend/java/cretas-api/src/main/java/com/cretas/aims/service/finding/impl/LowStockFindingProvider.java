@@ -1,5 +1,6 @@
 package com.cretas.aims.service.finding.impl;
 
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.finding.Finding;
 import com.cretas.aims.service.finding.FindingProvider;
@@ -30,6 +31,7 @@ public class LowStockFindingProvider implements FindingProvider {
     private static final int ACTIONABILITY = 50;
 
     private final MaterialBatchService materialBatchService;
+    private final MaterialBatchRepository materialBatchRepository;
 
     @Override
     public String domain() {
@@ -41,11 +43,34 @@ public class LowStockFindingProvider implements FindingProvider {
         return "低库存";
     }
 
+    /**
+     * 只保留**进过货**的物料。
+     *
+     * <p>🔴 2026-08-12 prod 实测（cretas_prod_db，库名取自活 jar 进程 environ）：
+     * MOCK_REST 的 25 个物料里 24 个有进货历史，只有「罗氏虾」一条批次都没有，
+     * 却挂着安全线 2288.42 —— 于是每条回答末尾都在报
+     * 「罗氏虾 剩 0kg，低于安全线 2288.42kg（缺 2288.42kg）」，缺口恰等于安全线全额。
+     * 那是**种子数据残留**，不是缺货。上一轮 LLM-judge 量出的「同一条发现重复 19 次、
+     * 命中率 100%」，来源就是它；而在所有样本上都响的东西不区分好坏。
+     *
+     * <p>⛔ **判据是「有没有进货历史」，不是「当前余额是不是 0」**：真缺货也是 0，
+     * 拿余额消音会把真信号一起干掉。这里用的是
+     * {@link MaterialBatchRepository#findMaterialTypeIdsEverStocked}（不看状态、
+     * 不看余量），所以「买过、用光了」照旧报。
+     *
+     * <p>⛔ 修在 provider 侧不修 {@code getLowStockWarnings}：那个方法有 5 个消费者，
+     * 其中 4 个是工厂端 Tool（本轮红线：工厂端不碰）。
+     */
     @Override
     public List<Finding> detect(String factoryId) {
         List<Map<String, Object>> warnings = materialBatchService.getLowStockWarnings(factoryId);
+        java.util.Set<String> everStocked = new java.util.HashSet<>(
+                materialBatchRepository.findMaterialTypeIdsEverStocked(factoryId));
         List<Finding> findings = new ArrayList<>();
         for (Map<String, Object> w : warnings) {
+            if (!everStocked.contains((String) w.get("materialTypeId"))) {
+                continue;
+            }
             Map<String, Object> facts = new LinkedHashMap<>();
             facts.put("currentStock", w.get("currentStock"));
             facts.put("safetyStock", w.get("safetyStock"));

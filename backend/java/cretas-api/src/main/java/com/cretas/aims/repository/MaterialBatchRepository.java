@@ -466,6 +466,23 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<Object[]> sumQuantityByMaterialType(@Param("factoryId") String factoryId);
 
     /**
+     * 这个工厂**曾经进过货**的物料类型 id（不看当前余量、不看状态）。
+     *
+     * <p>🔴 2026-08-12 prod 实测加的：低库存发现对 MOCK_REST 报「罗氏虾 剩 0kg，
+     * 低于安全线 2288.42kg（缺 2288.42kg）」——缺口恰等于安全线全额，因为它
+     * <b>一条批次记录都没有</b>（25 个物料里 24 个有进货历史、只有它是 0）。
+     * 安全线是种子数据残留，那条告警是死信号，而它每条回答都响。
+     *
+     * <p>⛔ 不能用 {@code sumQuantityByMaterialType} 代替：那个带
+     * {@code status = 'AVAILABLE'} 过滤，于是「从没买过」和「买过用光了」
+     * 在它眼里一模一样 —— 而后者是<b>真缺货</b>，必须继续报。
+     * 判据是<b>有没有进货历史</b>，不是<b>当前余额是不是 0</b>。
+     */
+    @Query("SELECT DISTINCT m.materialTypeId FROM MaterialBatch m "
+           + "WHERE m.factoryId = :factoryId")
+    List<String> findMaterialTypeIdsEverStocked(@Param("factoryId") String factoryId);
+
+    /**
      * 工厂级原料总库存汇总 (按物料类型聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
      *
      * <p>每个原料类型一行: 把该物料在所有仓库的所有在库批次的当前剩余量 / 价值 汇总。

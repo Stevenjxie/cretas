@@ -2044,11 +2044,48 @@ public class IntentExecutionOrchestrator {
         // 挂在这里而不是某个 Tool 上: 本方法有 7 个调用点但全部汇入此处组装响应,
         // 而餐饮提问在到达 Java Tool 之前就被 tiered 路由委派走了 (2026-08-06 实测
         // RESTAURANT_WASTAGE_ANOMALY 的 Tool 日志 0 次调用)。挂 Tool = 挂在没人走的路上。
+        // 🔴 2026-08-12 §9.9: **拒答/反问的正文不附加发现块** —— 带一堆发现读起来
+        //    像是回答了, 店长会以为拿到了东西。
+        //    抑制开关(appender 的 awaitingClarification)一直都在, 它 javadoc 写的意图
+        //    也正是这个; 但此前它读的是 `clarificationContinuation`, 而 Python 只在
+        //    **延续轮**才发那个字段 —— 首轮拒答因此漏网(prod 实测三句全中)。
+        //    改判 `kind == "clarification"`, 两种轮次都盖住。
+        String delegatedKind = String.valueOf(delegated.get("kind"));
+        boolean isClarification = "clarification".equals(delegatedKind)
+                || delegated.get("clarificationContinuation") != null;
+        // 🔴 系统故障（执行链挂了 / LLM 熔断）也不挂发现块 —— 但**不出按钮**。
+        //    clarification 出按钮是因为「缺数据」是可行动的；「系统挂了」不是：
+        //    在「餐饮执行链暂时不可用」下面放一颗「顺带 2 件事」按钮、点下去生成
+        //    行动建议，等于**在故障页上卖建议**。
+        // ⚠️ 这两条路必须分开：Python 侧同一个文件里 `unavailable` 早就存在
+        //    （LLM 额度不可用那条），它的注释写着「用户分不清『这条是可信的事实』
+        //    和『那条是因为 AI 挂了才这么答』」——同一条理由。
+        boolean isUnavailable = "unavailable".equals(delegatedKind);
         String messageWithHint = restaurantFindingHintAppender == null
                 ? delegatedMessage
                 : restaurantFindingHintAppender.append(
-                        delegatedMessage, factoryId,
-                        delegated.get("clarificationContinuation") != null);
+                        delegatedMessage, factoryId, isClarification || isUnavailable);
+        // 发现是**真算出来的**, 整块扔掉是白丢价值 —— 降级成可点的追问按钮(§9.9 ④)。
+        if (isClarification && restaurantFindingHintAppender != null) {
+            java.util.Map<String, Object> hintFollowup =
+                    restaurantFindingHintAppender.refusalFollowup(delegatedMessage, factoryId);
+            if (hintFollowup != null) {
+                java.util.List<Object> merged = new java.util.ArrayList<>();
+                Object existing = delegatedData.get("suggestedFollowups");
+                if (existing instanceof java.util.List<?> list) {
+                    merged.addAll(list);
+                }
+                // 🔴 **排第一位, 不是追加**。前端 `normalizeFollowUpActions` 拼完
+                //    四路来源之后 `.slice(0, 4)` —— 追加在末尾时, 这一轮若已有 ≥4 条
+                //    建议, 这颗按钮会被**静默切掉**(不报错、不留痕, 只是没了)。
+                //    而它是拒答唯一的下一步(§9.9 ④「必须可点」), 掉了就等于没做。
+                // ⚠️ 前端去重键是 `question`, 而本按钮的 question 是固定串
+                //    「这些问题怎么办」—— 同一轮别处若也产出这句, **先到先得**,
+                //    排第一位同时也保证了冲突时活下来的是这颗。
+                merged.add(0, hintFollowup);
+                delegatedData.put("suggestedFollowups", merged);
+            }
+        }
 
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
