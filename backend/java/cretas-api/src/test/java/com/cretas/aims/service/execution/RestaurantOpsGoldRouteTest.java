@@ -194,6 +194,64 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("UT-RFH-31: 系统故障(unavailable)抑制发现块, 且**不出按钮**")
+    void unavailableSuppressesFindingsAndGivesNoButton() {
+        // 🔴 §2: 「系统挂了」与「缺数据」必须分开。
+        //    clarification 出按钮是因为缺数据可行动; 「执行链暂时不可用」不是 ——
+        //    在故障页下面放一颗「顺带 2 件事」点下去生成行动建议, 等于在故障页上卖建议。
+        // ⚠️ 改之前 Python 兜底分支发的是 kind="clarification", 于是系统故障
+        //    走的是**拒答那条路**: 发现块抑制了, 但按钮照出。
+        com.cretas.aims.service.finding.FindingService findingService =
+                mock(com.cretas.aims.service.finding.FindingService.class);
+        // 🔴 发现层**必须打桩成有货**, 否则「按钮没出现」这条断言是恒真式:
+        //    refusalFollowup 在 findings 为空时一律返回 null(见其 `if (n <= 0)`),
+        //    不打桩的 mock 回 null → 无论走 clarification 还是 unavailable 都没按钮,
+        //    变异对照当场失效。第一版就是这么写的: 把 unavailable 改回 clarification
+        //    之后, 红的是下面那条 `verify(never())`, 按钮断言**纹丝不动**——
+        //    我拿一条永远为真的断言当了判据。数据抄 UT-RFH-30(那条已证明按钮出得来)。
+        com.cretas.aims.service.finding.Finding stocked =
+                new com.cretas.aims.service.finding.Finding(
+                        "LOW_STOCK", "inventory",
+                        com.cretas.aims.service.finding.Finding.Severity.WARNING,
+                        50, "罗氏虾", "罗氏虾", Map.of());
+        when(findingService.detectInline(anyString(), anyCollection(), any()))
+                .thenReturn(new com.cretas.aims.service.finding.FindingService.Result(
+                        List.of(stocked), List.of("低库存"), 1, Map.of(), List.of(), List.of()));
+        RestaurantFindingHintAppender appender = new RestaurantFindingHintAppender(
+                findingService,
+                mock(com.cretas.aims.service.finding.FindingTextRenderer.class),
+                mock(com.cretas.aims.service.finding.FindingOccurrenceTracker.class));
+        ReflectionTestUtils.setField(orchestrator, "restaurantFindingHintAppender", appender);
+
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        when(delegate.tryDelegate(
+                eq("DEMO_REST"), any(), any(), eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "餐饮执行链暂时不可用，这次什么都没算。",
+                        "kind", "unavailable"));
+
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator, "tryRestaurantTieredDelegate", "DEMO_REST", "怎么优化它",
+                IntentExecuteRequest.builder()
+                        .userInput("怎么优化它")
+                        .sessionId("unavailable-no-button")
+                        .build());
+
+        assertThat(response).isNotNull();
+        assertThat(response.getMessage())
+                .as("系统故障的正文不该挂发现块")
+                .doesNotContain("顺带");
+        Map<?, ?> resultData = (Map<?, ?>) response.getResultData();
+        Object fups = resultData.get("suggestedFollowups");
+        assertThat(fups == null || ((List<?>) fups).isEmpty())
+                .as("系统挂了还给行动建议按钮 —— 那是在故障页上卖建议: " + fups)
+                .isTrue();
+        // ⛔ 阴性对照: 发现层根本不该被问 —— 抑制发生在**调它之前**。
+        verify(findingService, never()).detectInline(anyString(), anyCollection(), any());
+    }
+
+    @Test
     @DisplayName("UT-RFH-30: 拒答时那颗按钮真的会出现在响应里, 且排第一位")
     void findingButtonReachesTheResponseAndComesFirst() {
         // 🔴 这条**跑在产品真实入口**上(executeRestaurantOwnerActionChat →

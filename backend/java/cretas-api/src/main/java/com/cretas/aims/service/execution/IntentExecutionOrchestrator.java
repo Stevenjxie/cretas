@@ -2050,13 +2050,21 @@ public class IntentExecutionOrchestrator {
         //    也正是这个; 但此前它读的是 `clarificationContinuation`, 而 Python 只在
         //    **延续轮**才发那个字段 —— 首轮拒答因此漏网(prod 实测三句全中)。
         //    改判 `kind == "clarification"`, 两种轮次都盖住。
-        boolean isClarification = "clarification".equals(
-                String.valueOf(delegated.get("kind")))
+        String delegatedKind = String.valueOf(delegated.get("kind"));
+        boolean isClarification = "clarification".equals(delegatedKind)
                 || delegated.get("clarificationContinuation") != null;
+        // 🔴 系统故障（执行链挂了 / LLM 熔断）也不挂发现块 —— 但**不出按钮**。
+        //    clarification 出按钮是因为「缺数据」是可行动的；「系统挂了」不是：
+        //    在「餐饮执行链暂时不可用」下面放一颗「顺带 2 件事」按钮、点下去生成
+        //    行动建议，等于**在故障页上卖建议**。
+        // ⚠️ 这两条路必须分开：Python 侧同一个文件里 `unavailable` 早就存在
+        //    （LLM 额度不可用那条），它的注释写着「用户分不清『这条是可信的事实』
+        //    和『那条是因为 AI 挂了才这么答』」——同一条理由。
+        boolean isUnavailable = "unavailable".equals(delegatedKind);
         String messageWithHint = restaurantFindingHintAppender == null
                 ? delegatedMessage
                 : restaurantFindingHintAppender.append(
-                        delegatedMessage, factoryId, isClarification);
+                        delegatedMessage, factoryId, isClarification || isUnavailable);
         // 发现是**真算出来的**, 整块扔掉是白丢价值 —— 降级成可点的追问按钮(§9.9 ④)。
         if (isClarification && restaurantFindingHintAppender != null) {
             java.util.Map<String, Object> hintFollowup =
