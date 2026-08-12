@@ -161,6 +161,39 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     return f"**{warning}**\n\n{answer_text}"
 
 
+#: 说不清用户想看什么时的兜底反问。
+_GENERIC_CLARIFICATION = "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+
+
+def clarification_answer_text(
+    clarification_question: Optional[str], warning: Optional[str] = None
+) -> str:
+    """澄清分支真正发给店长的那句话。**过 sanitize。**
+
+    🔴 2026-08-12 prod 实测抓到的缺陷（打真接口把答案存下来再扫）：
+
+        当前可以可靠分析：…。当前不能可靠分析：翻台率（…）。
+        …补齐括号内明细后可以继续；也可以明确只分析当前已有的**维度**。
+
+    `维度` 是内部概念词，店长读不懂。而扫这个词的源码闸
+    `test_no_internal_jargon_in_customer_text` **一直是绿的** ——
+    它的判据是「源码里的串**经 sanitize 之后**不含内部词」，
+    而 `sanitize_customer_ai_text("…已有的维度。")` 确实会改写成「…已有的方面。」。
+
+    **闸、清洗函数、词表三样各自都是对的，坏在它们没有装在同一条路上**：
+    澄清分支把 `spec.clarification_question` 直接当成 `answer_text`，
+    从来没调用过 sanitize（同一个文件里 `_business_optimization` 那条分支调了）。
+
+    ⛔ 修在**构造点**，不是修在调用方。全仓有 10 处 `sanitize_customer_ai_text(`
+       调用点，靠「每个出口都记得调一次」是本仓反复失败过的形态
+       （契约靠调用方记得）。这里让「拿到澄清文案」和「清洗」变成同一个动作。
+
+    ⚠️ sanitize 幂等：下游若再调一次（`chat.py` 有几处会）不会改变结果。
+    """
+    text = clarification_question or _GENERIC_CLARIFICATION
+    return _prepend_action_warning(sanitize_customer_ai_text(text), warning)
+
+
 def _llm_capacity_available() -> bool:
     """LLM 链路现在还有没有一档能用。
 
@@ -1229,16 +1262,13 @@ async def tiered_answer(
         action_warning = _read_only_action_warning_for_spec(query, spec)
 
         if spec.clarification_needed or not spec.intent:
-            clarification_text = (
-                spec.clarification_question
-                or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
-            )
             clarification_result = {
                 "kind": "clarification",
-                "answer_text": _prepend_action_warning(
-                    clarification_text,
-                    action_warning,
-                ),
+                # ⛔ 走 `clarification_answer_text`, 不要在这里自己拼 ——
+                #    它负责 sanitize。2026-08-12 之前这里是直接拼的,
+                #    「维度」因此漏到店长面前(见该函数的注释)。
+                "answer_text": clarification_answer_text(
+                    spec.clarification_question, action_warning),
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
