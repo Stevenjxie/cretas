@@ -3,6 +3,7 @@ import type { ProcessNodeData, ProductProcessWorkflowDefinition } from '../types
 import { applyWorkflowPatches } from '../workflowModel';
 import {
   forkWorkflowUnitReviewDraft,
+  workflowDisplayUnit,
   parseFixedRatioQuantities,
   reconcileProcessPortQuantities,
   reconcileWorkflowUnits,
@@ -279,3 +280,43 @@ function materialUnit(definition: ProductProcessWorkflowDefinition): string | un
 function processData(definition: ProductProcessWorkflowDefinition): ProcessNodeData {
   return definition.nodes.find((node) => node.kind === 'PROCESS')?.data as ProcessNodeData;
 }
+
+/**
+ * 🔴 2026-08-12 (Steve 实测「一会儿 kg→box, 一会儿又变回盒产出」)。
+ *
+ * 存储里 `box`(product_types.unit) 与 `盒`(work_processes.unit / 端口) 都合法 ——
+ * 后端 `alias(box, 盒)` 把两者归一到同一个规范码, 发布闸/报工/结算都过。
+ * 坏的只是**显示层**: 画布直接渲染原始串, 于是同一个单位在同一张画布上两种写法。
+ *
+ * prod 实测受影响的不只是 F006: LIUSHANMEN(真人在用)有 2 张启用画布共 4 个端口
+ * 是「端口=盒 / SKU=box」。
+ */
+describe('🔴 workflowDisplayUnit —— 单位显示收敛', () => {
+  it('规范码翻成中文, 中文原样保留 —— 两端收敛成同一个字', () => {
+    expect(workflowDisplayUnit('box')).toBe('盒');
+    expect(workflowDisplayUnit('盒')).toBe('盒');
+    expect(workflowDisplayUnit('box')).toBe(workflowDisplayUnit('盒'));
+  });
+
+  /**
+   * ⚠️ 这条钉的是**表的覆盖面**, 不是某一个字。
+   * 前端这张表是后端 UnitDisplayNames.java 的第二份拷贝, 2026-08-12 实测它只抄了 6/16 条,
+   * 而 F006 用 `pack`(成品)、LIUSHANMEN 用 `roll`(透明气调膜) —— 缺的会原样显示英文。
+   */
+  it('后端 UnitDisplayNames 里的每一条都要能翻译, 不能只覆盖一部分', () => {
+    const backendMap: Record<string, string> = {
+      pcs: '件', portion: '份', box: '盒', case: '箱', bag: '袋', pack: '包',
+      bottle: '瓶', can: '罐', crate: '框', pail: '桶', roll: '卷', slice: '片',
+      sheet: '张', tray: '托盘', plate: '板', item: '项',
+    };
+    const untranslated = Object.keys(backendMap)
+      .filter((code) => workflowDisplayUnit(code) !== backendMap[code]);
+    expect(untranslated).toEqual([]);
+  });
+
+  it('kg 这类本来就通用的单位不被改写', () => {
+    expect(workflowDisplayUnit('kg')).toBe('kg');
+    expect(workflowDisplayUnit('')).toBe('');
+    expect(workflowDisplayUnit(null)).toBe('');
+  });
+});
