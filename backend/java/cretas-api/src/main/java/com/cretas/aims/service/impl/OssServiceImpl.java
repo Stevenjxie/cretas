@@ -51,7 +51,7 @@ import java.util.*;
 // 是运气。
 //
 // 修法: 换成与 ossClient() 完全相同的属性条件。语义等价(本 bean 存在 ⟺ OSS 存在),
-// 但属性条件与注册顺序无关。守卫见 ConditionalOnBeanOnScannedComponentTest。
+// 但属性条件与注册顺序无关。守卫见 ConditionalOnBeanStartupGuardTest。
 @ConditionalOnProperty(prefix = "aliyun.oss", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class OssServiceImpl implements OssService {
 

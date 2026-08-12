@@ -43,7 +43,7 @@ import org.junit.jupiter.api.Test;
  * <p>这条闸读源文件、不起 Spring 上下文、不连库, 与 {@code FlywayVersionUniquenessTest}
  * 同一类 —— 都是「要到启动才炸」的缺陷, 必须在构建期就拦下。
  */
-class ConditionalOnBeanOnScannedComponentTest {
+class ConditionalOnBeanStartupGuardTest {
 
     private static final Path SOURCE_ROOT = Path.of("src/main/java");
 

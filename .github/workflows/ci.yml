@@ -126,6 +126,21 @@ jobs:
       # Produce the deployable JAR before the long full-suite verify. The PR
       # gates and JPA startup gate still authorize merges; this step only makes
       # the exact-main artifact available early so deploy does not rebuild it.
+      #
+      # 🔴 2026-08-12: selector 从只有 '*RepositoryQueryValidationTest' 扩到三项。
+      # 那天 prod 部署失败(OssServiceImpl 上的 @ConditionalOnBean 依赖 jar 条目物理
+      # 顺序, 重新构建把顺序翻了过来 → bean 被静默跳过 → APPLICATION FAILED TO START)。
+      # 修复带了一条守卫测试, 然后发现**它不会在任何地方跑** —— 通配符匹配不上它,
+      # FlywayVersionUniquenessTest 同样一直没被 CI 跑过(只存在于人工的部署前命令里)。
+      #
+      # 这两条都属于同一类: **编译通过、单测通过, 要到【启动】那一刻才炸, 而那一刻是
+      # prod 部署**。所以它们必须跟 JPA 那批一起进这个 selector。
+      #
+      # `*StartupGuardTest` 是给这类闸立的命名约定 —— 以后新写的启动期守卫按这个后缀
+      # 命名就自动被捞进来, 不用再改 CI(改 CI 这件事没人会记得, 于是新闸又不跑)。
+      #
+      # ⚠️ 下面两处 TARGET_TESTS 必须**逐字相同**: 后者写进制品 manifest 的
+      # target_tests, 预热的覆盖检查(requested ⊆ ci_ran)拿它做判据。
       # target_tests is passed through the environment, never interpolated into
       # the shell: a selector is operator-supplied text and ${{ }} inside run:
       # would be a command-injection sink.
@@ -134,7 +149,7 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 30
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest' || '') }}
         run: |
           started=$(date +%s)
           if [ -n "$TARGET_TESTS" ]; then
@@ -159,7 +174,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         working-directory: backend/java/cretas-api/target
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest' || '') }}
         run: |
           JAR=cretas-backend-system-1.0.0.jar
           test -f "$JAR"
