@@ -379,8 +379,14 @@ public class FormAssistantController {
             result.setMissingRequiredFields(parseResult.getMissingRequiredFields());
             result.setFollowUpQuestion(parseResult.getFollowUpQuestion());
 
-            log.info("AI表单解析成功: factoryId={}, fieldCount={}, confidence={}, missingFields={}",
+            // 🔴 2026-08-13: 这句原本无条件写「解析成功」—— 它只读 fieldValues.size()
+            // 和 missingFields, 从不看 result.isSuccess()。于是排查时日志一路写着
+            // 「AI表单解析成功, fieldCount=2, confidence=0.95」, 而同一次响应体里
+            // success=false, 前端把它当失败 —— 仪器和被测对象各说各话, 这是最难查的一种。
+            // 报数就要报口径: 把 success 一起打出来。
+            log.info("AI表单解析: factoryId={}, success={}, fieldCount={}, confidence={}, missingFields={}",
                     factoryId,
+                    result.isSuccess(),
                     result.getFieldValues() != null ? result.getFieldValues().size() : 0,
                     result.getConfidence(),
                     result.getMissingRequiredFields() != null ? result.getMissingRequiredFields().size() : 0);

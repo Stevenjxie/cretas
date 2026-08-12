@@ -107,7 +107,12 @@ export function useAiChat(config: AiEntryConfig) {
       // 后端在 AI 不可用/解析失败时返回 success=false + message（HTTP 仍 200）。
       // 按「禁止降级处理」原样显示，不要伪装成一次正常回答。
       if (!response.success || !result || result.success === false) {
-        say(result?.message || response.message || 'AI 解析失败，请重试或手动填写表单。');
+        // 🔴 2026-08-13: 兜底链原本第二项是 `response.message` —— 那是 ApiResponse
+        // 【包装层】的文案, 这个接口恒为「操作成功」。于是一次解析失败在界面上
+        // 显示成「操作成功」, 然后什么也没发生: 用户看到"成功"却拿不到结果,
+        // 排查的人也不会想到去看一个写着成功的气泡。
+        // 包装层文案描述的是 HTTP 调用本身, 与业务成败无关, 不能进这条链。
+        say(result?.message || 'AI 解析失败，请重试或手动填写表单。');
         return;
       }
 
