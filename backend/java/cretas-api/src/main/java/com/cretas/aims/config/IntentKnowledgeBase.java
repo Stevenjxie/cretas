@@ -8712,7 +8712,19 @@ public class IntentKnowledgeBase {
 
         // 2. 先在业态专用 Map 中匹配
         Optional<String> result = doMatchPhrase(input, businessSpecificMap);
-        if (result.isPresent()) return result;
+        if (result.isPresent()) {
+            // 📊 [NarrowPath] 埋点 3/3 —— 只打 taken=true 一侧, 且只打餐饮那张表。
+            // 这条是「601 条兜底短语到底有没有人走」的**唯一**读数来源:
+            // 观察窗跑满之前不许删那张表(见 restaurantPhraseMapping 的 601 个 .put)。
+            // ⚠️ factoryId 打 "n/a": 本方法没有租户在作用域里, 而它有 11 个调用点,
+            //    为一个观察窗给它加参数不划算。需要按租户拆时再说。
+            if ("RESTAURANT".equals(businessDomain)) {
+                log.info("[NarrowPath] gate=restaurantPhrase taken=true factoryId=n/a "
+                        + "intentCode={} q={}", result.get(),
+                        input.length() <= 40 ? input : input.substring(0, 40));
+            }
+            return result;
+        }
 
         // 3. 回退到公共 Map
         result = doMatchPhrase(input, commonPhraseMapping);
