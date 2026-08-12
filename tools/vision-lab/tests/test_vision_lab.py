@@ -79,9 +79,12 @@ class VisionLabTests(unittest.TestCase):
                         "annotations": [],
                     },
                 ]
-                with mock.patch.object(vision_lab, "download_bytes", return_value=b"image-bytes"):
+                with mock.patch.object(vision_lab, "download_bytes", return_value=b"image-bytes") as download:
                     result = vision_lab.collect(cfg, state, rows)
                 self.assertEqual(result["records_prepared"], 2)
+                self.assertEqual(result["object_downloads"], 2)
+                self.assertEqual(result["object_cache_hits"], 0)
+                self.assertEqual(download.call_count, 2)
                 self.assertEqual(state.get_meta("watermark"), "2026-08-02T01:02:04")
                 self.assertEqual(state.db.execute("SELECT COUNT(*) FROM photos").fetchone()[0], 2)
                 self.assertEqual(len(list((root / "raw" / "sha256").rglob("*.jpg"))), 1)
@@ -89,6 +92,40 @@ class VisionLabTests(unittest.TestCase):
                 self.assertNotIn("secret", row["object_ref"])
                 self.assertTrue(Path(row["local_path"]).is_file())
                 self.assertTrue(Path(result["receipt"]).is_file())
+            finally:
+                state.close()
+
+    def test_collect_reuses_completed_object_download_after_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = config(root)
+            state = vision_lab.State(root)
+            try:
+                vision_lab.init_layout(cfg, state)
+                rows = [
+                    {
+                        "photo_id": "p1", "task_id": "t1", "reviewed_at": "2026-08-02T01:02:03",
+                        "file_url": "https://objects.example/photo.jpg?signature=first", "annotations": [],
+                    },
+                    {
+                        "photo_id": "p2", "task_id": "t2", "reviewed_at": "2026-08-02T01:02:04",
+                        "file_url": "https://objects.example/photo-2.jpg", "annotations": [],
+                    },
+                ]
+                with mock.patch.object(
+                    vision_lab, "download_bytes", side_effect=[b"first-image", RuntimeError("interrupted")],
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                        vision_lab.collect(cfg, state, rows)
+                self.assertEqual(state.get_meta("watermark"), "2026-08-01T00:00:00")
+
+                rows[0]["file_url"] = "https://objects.example/photo.jpg?signature=refreshed"
+                with mock.patch.object(vision_lab, "download_bytes", return_value=b"second-image") as download:
+                    result = vision_lab.collect(cfg, state, rows)
+                self.assertEqual(download.call_count, 1)
+                self.assertEqual(result["object_cache_hits"], 1)
+                self.assertEqual(result["object_downloads"], 1)
+                self.assertEqual(state.get_meta("watermark"), "2026-08-02T01:02:04")
             finally:
                 state.close()
 
