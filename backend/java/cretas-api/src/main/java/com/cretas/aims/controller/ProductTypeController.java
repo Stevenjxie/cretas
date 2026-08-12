@@ -62,6 +62,7 @@ public class ProductTypeController {
     private final ProductWorkProcessRecommendTool productWorkProcessRecommendTool;
     private final ProductPackagingSpecService productPackagingSpecService;
     private final SkuImportService skuImportService;
+    private final com.cretas.aims.service.product.MaterialSkuPublishService materialSkuPublishService;
 
     @RequirePermission({"production:read_write", "rd:read_write"})
     @GetMapping("/import/template")
@@ -299,6 +300,31 @@ public class ProductTypeController {
         log.info("获取可销售的产品类型: factoryId={}", factoryId);
         List<ProductTypeDTO> result = productTypeService.getSellableProductTypes(factoryId);
         return ApiResponse.success(result);
+    }
+
+    /**
+     * 把物料字典里的原料/辅料/包材发布成可售 SKU。
+     *
+     * <p>销售订单明细只能指向 product_types, 所以要卖物料就得让它在商品目录里有一份。
+     * 发布出来的一律是 RAW_MATERIAL 类别 —— 生产侧的 /active 排除该类别, 所以哪怕全发布,
+     * 生产计划/批次/工时那些下拉一条都不会多。
+     *
+     * <p>幂等: 已发布过的(编号 M-&lt;物料编号&gt; 已存在)走 alreadyPublished, 不重复建。
+     * 单条失败不影响其余 —— 见 MaterialSkuPublishService 关于事务边界的说明。
+     */
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @PostMapping("/publish-from-materials")
+    @Operation(summary = "物料发布为可售SKU", description = "把原料/辅料/包材在商品目录里建一份, 使其可在销售订单中选择")
+    public ApiResponse<com.cretas.aims.service.product.MaterialSkuPublishService.Result> publishFromMaterials(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader("Authorization") String authorization) {
+        @SuppressWarnings("unchecked")
+        List<String> materialTypeIds = (List<String>) body.get("materialTypeIds");
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        log.info("物料发布为可售SKU: factoryId={}, 数量={}", factoryId,
+                materialTypeIds == null ? 0 : materialTypeIds.size());
+        return ApiResponse.success(materialSkuPublishService.publish(factoryId, materialTypeIds, userId));
     }
 
     /**

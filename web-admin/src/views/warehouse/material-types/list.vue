@@ -33,7 +33,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
+import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View, Sell } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES } from '@/utils/materialCategory';
 import { displayUnit, sameUnit } from '@/utils/unitPricing';
@@ -59,6 +59,84 @@ const permissionStore = usePermissionStore();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+
+// ==================== 发布为可售商品 (2026-08-12 Steve 拍板) ====================
+// 六膳门张权:「老问题 销售订单 选择不了原料」——「有啥不能卖的 给钱 我都能卖」。
+// 销售订单明细只能指向 product_types(sales_order_items.product_type_id NOT NULL,
+// 没有任何指向物料的列), 所以要卖物料就得让它在商品目录里有一份。
+//
+// 发布出来的一律是 RAW_MATERIAL 类别 —— 生产侧的 /product-types/active 排除该类别,
+// 所以哪怕把全部物料发布了, 生产计划/批次/工时/毛利红线那些下拉一条都不会多,
+// 只会出现在销售侧的 /product-types/sellable 里。这是「全转是安全的」的依据。
+const publishDialogVisible = ref(false);
+const publishing = ref(false);
+const publishCategories = ref<string[]>([]);
+const publishPool = ref<Array<{ id: string; category?: string }>>([]);
+
+const publishCategoryOptions = computed(() => {
+  const counts = new Map<string, number>();
+  for (const m of publishPool.value) {
+    const key = m.category || '(未分类)';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([label, count]) => ({ label, count }));
+});
+
+const publishSelectedCount = computed(() =>
+  publishPool.value.filter((m) => publishCategories.value.includes(m.category || '(未分类)')).length);
+
+async function openPublishSku() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/raw-material-types/active`);
+    const raw = res?.data as unknown;
+    publishPool.value = Array.isArray(raw)
+      ? (raw as Array<{ id: string; category?: string }>)
+      : (((raw as { content?: Array<{ id: string; category?: string }> })?.content) ?? []);
+  } catch {
+    publishPool.value = [];
+  }
+  if (!publishPool.value.length) {
+    ElMessage.warning('没有可发布的启用物料');
+    return;
+  }
+  // 默认全选 —— 用户口径是「除了半成品全开」, 物料这边没有半成品, 所以默认就是全部。
+  publishCategories.value = publishCategoryOptions.value.map((o) => o.label);
+  publishDialogVisible.value = true;
+}
+
+async function confirmPublishSku() {
+  const ids = publishPool.value
+    .filter((m) => publishCategories.value.includes(m.category || '(未分类)'))
+    .map((m) => m.id);
+  if (!ids.length) {
+    ElMessage.warning('请至少选择一个类别');
+    return;
+  }
+  publishing.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/product-types/publish-from-materials`, {
+      materialTypeIds: ids,
+    });
+    const r = res?.data as { created?: string[]; alreadyPublished?: string[]; failed?: Array<{ materialName?: string; reason?: string }> } | undefined;
+    const created = r?.created?.length ?? 0;
+    const already = r?.alreadyPublished?.length ?? 0;
+    const failed = r?.failed ?? [];
+    // 三个数都报出来 —— 只报「成功」会让「一条都没新建(全是已存在)」看起来像干了活。
+    let msg = `新建 ${created} 个可售商品，已存在 ${already} 个`;
+    if (failed.length) {
+      msg += `，失败 ${failed.length} 个：${failed.slice(0, 3).map((f) => `${f.materialName ?? ''}(${f.reason ?? ''})`).join('；')}`;
+      ElMessage.warning({ message: msg, duration: 8000 });
+    } else {
+      ElMessage.success(msg);
+    }
+    publishDialogVisible.value = false;
+  } catch (e) {
+    ElMessage.error(`发布失败：${(e as Error)?.message ?? '未知错误'}`);
+  } finally {
+    publishing.value = false;
+  }
+}
 const canManageSupplierRelations = computed(() => permissionStore.canWrite('procurement'));
 const canManageClassification = computed(() => permissionStore.canWrite('system'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
@@ -1292,6 +1370,9 @@ function handleSizeChange(size: number) {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
+            <el-button v-if="canWrite" :icon="Sell" @click="openPublishSku">
+              发布为可售商品
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">
               新建原料类型
             </el-button>
@@ -1392,6 +1473,29 @@ function handleSizeChange(size: number) {
           </template>
         </el-table-column>
       </el-table>
+
+      <el-dialog v-model="publishDialogVisible" title="发布为可售商品" width="520px">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
+          <template #title>选中类别的物料会在商品目录里各建一份，之后就能在销售订单里选到。</template>
+          <div style="font-size: 12px; line-height: 1.7; margin-top: 6px">
+            · 已发布过的不会重复建（按编号 <code>M-物料编号</code> 判定）<br />
+            · 只出现在<b>销售</b>订单里；生产计划、批次、工时那些下拉<b>不受影响</b><br />
+            · 物料字典这边的记录照旧保留，两边通过编号对应
+          </div>
+        </el-alert>
+        <el-checkbox-group v-model="publishCategories">
+          <div v-for="opt in publishCategoryOptions" :key="opt.label" style="margin-bottom: 8px">
+            <el-checkbox :label="opt.label">{{ opt.label }}（{{ opt.count }} 个）</el-checkbox>
+          </div>
+        </el-checkbox-group>
+        <template #footer>
+          <span style="float: left; line-height: 32px; color: var(--el-text-color-secondary)">
+            本次将处理 {{ publishSelectedCount }} 个物料
+          </span>
+          <el-button @click="publishDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="publishing" @click="confirmPublishSku">确定发布</el-button>
+        </template>
+      </el-dialog>
 
       <el-pagination
         v-model:current-page="pagination.page"
