@@ -39,8 +39,21 @@ from smartbi.gold.restaurant.daily_close import push_daily_close  # noqa: E402
 OUT = os.environ.get("DAILY_CLOSE_OUT", "/tmp/daily_close_push.json")
 
 
+def _write(rows) -> None:
+    """产出**永远**落盘, 哪怕是空的。
+
+    🔴 2026-08-13 实测踩到: 名单为空时我在这里直接 return 2, 没写文件 ——
+       cron 的 `[ -r ... ]` 看到的是**上一次**的 json, 于是台账里出现
+       `{"rc": 2, "factories": 1, "sections_computed": 1}`:
+       rc 是这次的, 计数是上次的。**一行里混着两次运行的读数**, 而且不报错。
+    """
+    with open(OUT, "w", encoding="utf-8", newline="") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+
+
 async def main() -> int:
     if not _FACTORIES:
+        _write([])
         print("INSTRUMENT: DAILY_CLOSE_FACTORIES 为空 —— 一个租户都没轮到, "
               "这不是「今天没什么可推的」, 是这次根本没跑")
         return 2
@@ -73,8 +86,7 @@ async def main() -> int:
         except Exception as e:  # noqa: BLE001 — 一个租户炸不该带走其余租户
             rows.append({"factory_id": factory_id, "error": f"{type(e).__name__}: {e}"})
 
-    with open(OUT, "w", encoding="utf-8", newline="") as f:
-        json.dump(rows, f, ensure_ascii=False, indent=2)
+    _write(rows)
 
     for r in rows:
         print(json.dumps(r, ensure_ascii=False))
