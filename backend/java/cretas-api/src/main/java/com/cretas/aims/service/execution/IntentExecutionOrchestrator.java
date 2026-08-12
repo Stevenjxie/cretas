@@ -328,6 +328,12 @@ public class IntentExecutionOrchestrator {
         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
                 evaluateFactoryPackRoute(factoryId, request, userRole);
         if (factoryPackRoute.shouldBlock()) {
+            // 📊 [NarrowPath] 埋点 1/3 —— 只打 taken=true 一侧。
+            // ⚠️ 这道闸有**两个**入口(本方法 + executeWithExplicitIntent), 两处都打。
+            //    只打一处会得出「几乎没人走」的假读数。
+            log.info("[NarrowPath] gate=factoryPack taken=true factoryId={} intentCode={} q={}",
+                    factoryId, request.getIntentCode(),
+                    truncateForTelemetry(request.getUserInput()));
             return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
         }
         boolean factoryPackConstrained = factoryPackRoute.isConstrained();
@@ -386,6 +392,15 @@ public class IntentExecutionOrchestrator {
                 && isRestaurantTenant(factoryId)
                 && userInput != null && !userInput.isEmpty()
                 && !hasExplicitReadVeto(userInput);
+        // 📊 [NarrowPath] 埋点 2/3 —— 只打 taken=true 一侧。
+        // ⚠️ 单独一个 if, 不合进上面的表达式: 那是短路求值, 走到 `isRestaurantTenant`
+        //    为 false 时 `hasExplicitReadVeto` 根本不会被求值, 顺带记一笔就会漏。
+        //    多调一次是纯字符串判断, 没有副作用。
+        if (userInput != null && !userInput.isEmpty()
+                && isRestaurantTenant(factoryId) && hasExplicitReadVeto(userInput)) {
+            log.info("[NarrowPath] gate=readVeto taken=true factoryId={} intentCode={} q={}",
+                    factoryId, request.getIntentCode(), truncateForTelemetry(userInput));
+        }
         // 写动词是唯一让语义权威被跳过的那个原因时记下来 —— 后面识别层要靠它判「闸说改、
         // 解析器说看」的矛盾。两个布尔从同一个前提推导, 不各写一遍, 免得日后只改一处。
         boolean restaurantWriteVerbSuppressedPlan = restaurantSemanticPlanEligible
@@ -980,6 +995,12 @@ public class IntentExecutionOrchestrator {
         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
                 evaluateFactoryPackRoute(factoryId, request, userRole);
         if (factoryPackRoute.shouldBlock()) {
+            // 📊 [NarrowPath] 埋点 1/3 —— 只打 taken=true 一侧。
+            // ⚠️ 这道闸有**两个**入口(本方法 + executeWithExplicitIntent), 两处都打。
+            //    只打一处会得出「几乎没人走」的假读数。
+            log.info("[NarrowPath] gate=factoryPack taken=true factoryId={} intentCode={} q={}",
+                    factoryId, request.getIntentCode(),
+                    truncateForTelemetry(request.getUserInput()));
             return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
         }
         return executeWithExplicitIntent(
@@ -1945,6 +1966,18 @@ public class IntentExecutionOrchestrator {
      * \u4e00\u4efd\u5b9e\u73b0, \u5426\u5219 SSE \u548c /execute \u4e24\u4e2a\u5165\u53e3\u5bf9\u540c\u4e00\u53e5\u8bdd\u7684 veto \u5224\u65ad\u4f1a\u56e0\u526f\u672c
      * \u6f02\u79fb\u800c\u5206\u5c90 \u2014\u2014 \u6b63\u662f\u672c\u5361\u8981\u6d88\u706d\u7684\u75c5\u3002\u5207\u52ff\u518d\u590d\u5236\u4e00\u4efd\u3002
      */
+    /**
+     * [NarrowPath] 埋点用的问句截断。40 字 —— 够认出是哪一类问法, 又不至于把整句
+     * 用户输入抄进日志。null 打成 "-" 而不是 "null", 免得取数时把它当成一个问句。
+     */
+    static String truncateForTelemetry(String q) {
+        if (q == null || q.isEmpty()) {
+            return "-";
+        }
+        String flat = q.replace('\n', ' ').replace('\r', ' ');
+        return flat.length() <= 40 ? flat : flat.substring(0, 40);
+    }
+
     static boolean hasExplicitReadVeto(String input) {
         if (input == null || input.isBlank()) {
             return false;
