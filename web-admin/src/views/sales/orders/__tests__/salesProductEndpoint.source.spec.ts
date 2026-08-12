@@ -37,6 +37,19 @@ describe('sales order product dropdown endpoint', () => {
     });
   }
 
+
+  // 2026-08-12 第二半: 物料(原料/辅料/包材)也要出现在销售下拉里。
+  // 张权要卖的东西在物料字典, 不在商品目录 —— 只切 /sellable 解决不了他的问题。
+  // 发货时物料行从 material_batches 扣(SalesMaterialLineShipmentTest 守那一段)。
+  for (const file of FILES) {
+    const source = readFileSync(resolve(__dirname, '..', file), 'utf8');
+
+    it(`${file} 把物料字典也并进商品下拉`, () => {
+      expect(source, `${file} 应当同时拉 /raw-material-types/active`)
+        .toContain('/raw-material-types/active');
+    });
+  }
+
   it('两个页面用的是同一个端点(不允许一个 sellable 一个 active)', () => {
     const endpoints = FILES.map((file) => {
       const source = readFileSync(resolve(__dirname, '..', file), 'utf8');

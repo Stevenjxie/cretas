@@ -381,11 +381,16 @@ const isDraft = computed(() => String((order.value as any)?.status || '').toUppe
 async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
-    // Mirror list.vue loadProducts — same endpoint / response shape.
+    // Mirror list.vue loadProducts — same endpoints / response shape.
     // ⚠️ /sellable 不是 /active: /active 是生产侧口径(保留半成品、排除原料), 销售侧相反。
-    // 这两处必须一致 —— 列表页能选到而详情页编辑时选不到, 是最难查的那种不一致。
-    const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
-    const list = Array.isArray(res?.data) ? res.data : (res?.data?.content ?? []) as any[];
+    // ⚠️ 并且要和列表页一样把【物料】也并进来 —— 列表页能选到而详情页编辑时选不到,
+    //    是最难查的那种不一致(salesProductEndpoint.source.spec.ts 守这条)。
+    const [res, matRes] = await Promise.all([
+      get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never),
+      get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
+    ]);
+    const unwrap = (d: any) => (Array.isArray(d) ? d : (d?.content ?? [])) as any[];
+    const list = [...unwrap(res?.data), ...unwrap(matRes?.data)];
     products.value = list.map((p: any) => ({
       id: String(p.id),
       name: String(p.name ?? p.productName ?? ''),

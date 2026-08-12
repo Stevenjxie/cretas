@@ -628,6 +628,10 @@ function clearContract() {
 }
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
+const materialOptions = ref<TableRow[]>([]);
+// 下拉数据源 = 可售商品 + 物料字典。两者都用 product_type_id 这一列存,
+// 该列没有外键, 且实测「既是启用商品又是物料」的 id 数量为 0。
+const sellableOptions = computed<TableRow[]>(() => [...products.value, ...materialOptions.value]);
 const salesEmployees = ref<TableRow[]>([]);
 const suppliedMaterialOptions = ref<TableRow[]>([]);
 
@@ -757,7 +761,7 @@ function productOptionLabel(product: TableRow): string {
     textPart(product.name) || textPart(product.productName),
     // 规格串里的英文单位码翻成中文 —— 与 SKU 管理页同一条口径, 别一处翻一处不翻。
     displayProductSpecification(textPart(product.specification) || textPart(product.packageSpec)),
-    productCategoryLabel(product),
+    product.__isMaterial ? `物料·${textPart(product.category) || '未分类'}` : productCategoryLabel(product),
   ].filter(Boolean).join(' / ');
 }
 
@@ -974,8 +978,24 @@ async function loadCustomers() {
 // 排除原料、保留半成品。销售侧恰好相反 —— 2026-08-12 Steve 拍板「出了半成品全开」:
 // 原料/辅料/包材都卖(六膳门张权:「有啥不能卖的 给钱 我都能卖」), 只有半成品不卖。
 // 两个方向都反, 所以是两个端点; 改 /active 会波及那 11 处。
+function unwrapList(data: unknown): TableRow[] {
+  if (Array.isArray(data)) return data as TableRow[];
+  const content = (data as { content?: TableRow[] } | undefined)?.content;
+  return Array.isArray(content) ? content : [];
+}
+
 async function loadProducts() {
   if (!factoryId.value) return;
+  // 物料(原料/辅料/包材)与商品一起进下拉 —— 六膳门张权:「有啥不能卖的 给钱 我都能卖」。
+  // 发货时物料行从 material_batches 扣(SalesServiceImpl.deductMaterialInventory),
+  // 后端靠 id 判定行类型(启用商品优先, 否则物料), 所以这里不需要额外传标记。
+  // 这个接口本页已经在拉了(客供料用), 复用同一条。
+  try {
+    const matRes = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
+    materialOptions.value = unwrapList(matRes?.data).map((m) => ({ ...m, __isMaterial: true }));
+  } catch {
+    materialOptions.value = [];
+  }
   try {
     const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     if (res.success && res.data) products.value = Array.isArray(res.data) ? res.data : res.data.content || [];
@@ -1014,7 +1034,7 @@ function removeItem(idx: number) {
 }
 
 function onProductSelect(item: TableRow, productId: string) {
-  const p = products.value.find((x: TableRow) => x.id === productId);
+  const p = sellableOptions.value.find((x: TableRow) => x.id === productId);
   if (p) {
     item.specification = p.specification || p.packageSpec || '';
     // 销售单位继承 SKU 基本单位。包装单位（箱等）是额外可选换算，不能把「盒」改写为「份」。
@@ -1210,7 +1230,7 @@ function calcBox(item: TableRow) {
     item.boxQuantity = null;  // 抄码品: 不算箱数
     return;
   }
-  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  const p = sellableOptions.value.find((x: TableRow) => x.id === item.productTypeId);
   if (!p) return;
   // 未配置箱规 → 箱数 null (模板会提示去产品字典维护, fool-proof Rule 5).
   if (!p.boxConversionCoefficient || Number(p.boxConversionCoefficient) <= 0) {
@@ -1240,7 +1260,7 @@ function calcBox(item: TableRow) {
 // T130 Feature D — 产品是否未配置箱规 (模板用来显警告 + 决定箱数列是否可显数字).
 function isBoxUnconfigured(item: TableRow): boolean {
   if (!item.productTypeId || isAbacaItem(item)) return false;
-  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  const p = sellableOptions.value.find((x: TableRow) => x.id === item.productTypeId);
   if (!p) return false;
   return !p.boxConversionCoefficient || Number(p.boxConversionCoefficient) <= 0;
 }
@@ -1248,13 +1268,13 @@ function isBoxUnconfigured(item: TableRow): boolean {
 // T130 Feature D — 该行规格展示 (只读): 产品字典 specification / packageSpec.
 function specDisplay(item: TableRow): string {
   if (item.specification) return displayProductSpecification(String(item.specification));
-  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  const p = sellableOptions.value.find((x: TableRow) => x.id === item.productTypeId);
   return displayProductSpecification(String(p?.specification || p?.packageSpec || ''));
 }
 
 // 单位下拉先使用 SKU 基本单位，再追加该 SKU 的包装单位；仅未选 SKU 时保留旧的「份」占位。
 function unitOptions(item: TableRow): string[] {
-  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  const p = sellableOptions.value.find((x: TableRow) => x.id === item.productTypeId);
   const baseUnit = canonicalUnitCode(p?.unit || item.unit || '份');
   const sources: unknown[] = [baseUnit];
   if (p && Number(p.boxConversionCoefficient) > 0) {
@@ -2922,7 +2942,7 @@ function handleMergePurchase() {
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
           <el-select v-model="item.productTypeId" class="sticky-col sticky-product" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
-            <el-option v-for="p in products" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
+            <el-option v-for="p in sellableOptions" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
           </el-select>
           <!-- T130 Feature D — 规格只读: 取产品字典 specification/packageSpec, 抄码品由 onProductSelect 识别. -->
           <el-input :model-value="specDisplay(item)" class="sticky-col sticky-spec" placeholder="规格" style="width: 120px" disabled />
