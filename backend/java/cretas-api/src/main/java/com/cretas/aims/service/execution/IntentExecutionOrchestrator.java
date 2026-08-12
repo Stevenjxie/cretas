@@ -2044,11 +2044,33 @@ public class IntentExecutionOrchestrator {
         // 挂在这里而不是某个 Tool 上: 本方法有 7 个调用点但全部汇入此处组装响应,
         // 而餐饮提问在到达 Java Tool 之前就被 tiered 路由委派走了 (2026-08-06 实测
         // RESTAURANT_WASTAGE_ANOMALY 的 Tool 日志 0 次调用)。挂 Tool = 挂在没人走的路上。
+        // 🔴 2026-08-12 §9.9: **拒答/反问的正文不附加发现块** —— 带一堆发现读起来
+        //    像是回答了, 店长会以为拿到了东西。
+        //    抑制开关(appender 的 awaitingClarification)一直都在, 它 javadoc 写的意图
+        //    也正是这个; 但此前它读的是 `clarificationContinuation`, 而 Python 只在
+        //    **延续轮**才发那个字段 —— 首轮拒答因此漏网(prod 实测三句全中)。
+        //    改判 `kind == "clarification"`, 两种轮次都盖住。
+        boolean isClarification = "clarification".equals(
+                String.valueOf(delegated.get("kind")))
+                || delegated.get("clarificationContinuation") != null;
         String messageWithHint = restaurantFindingHintAppender == null
                 ? delegatedMessage
                 : restaurantFindingHintAppender.append(
-                        delegatedMessage, factoryId,
-                        delegated.get("clarificationContinuation") != null);
+                        delegatedMessage, factoryId, isClarification);
+        // 发现是**真算出来的**, 整块扔掉是白丢价值 —— 降级成可点的追问按钮(§9.9 ④)。
+        if (isClarification && restaurantFindingHintAppender != null) {
+            java.util.Map<String, Object> hintFollowup =
+                    restaurantFindingHintAppender.refusalFollowup(delegatedMessage, factoryId);
+            if (hintFollowup != null) {
+                java.util.List<Object> merged = new java.util.ArrayList<>();
+                Object existing = delegatedData.get("suggestedFollowups");
+                if (existing instanceof java.util.List<?> list) {
+                    merged.addAll(list);
+                }
+                merged.add(hintFollowup);
+                delegatedData.put("suggestedFollowups", merged);
+            }
+        }
 
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)

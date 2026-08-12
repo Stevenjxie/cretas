@@ -57,6 +57,42 @@ public class RestaurantFindingHintAppender {
      *                              「变质损耗占 37%」会让店长不知道该先回答哪个。
      * @return 拼好提示的回答；无提示 / 澄清态 / 空回答时返回原文（逐字不变）
      */
+    /**
+     * 拒答／澄清时那颗「顺带 N 件事」按钮 —— 没有可说的发现时返回 {@code null}。
+     *
+     * <p>🔴 2026-08-12 §9.9：**拒答正文不附加发现块**（带一堆发现读起来像是回答了，
+     * 店长会以为拿到了东西），但那些发现是**真算出来的**，整块扔掉是白丢价值。
+     * 正解是降级成可点的追问 —— 「正文不附加」与「④ 必须可点」一次满足。
+     *
+     * <p>⛔ 按钮的 {@code question} 取自 {@link FindingActionPlanTool#ACTION_PLAN_ASK}，
+     * **不在这里手抄**：抄了就会与那个工具的适用场景漂开，而漂开的表现是
+     * 按钮静默失效（点了没反应），没有任何东西会红。
+     *
+     * <p>⚠️ 与 {@link #append} 共用同一套检测与「答案里已经讲过的就别再说」过滤 ——
+     * 两条路各查一次会得出不一样的条数，而条数要印在按钮上。
+     */
+    public java.util.Map<String, Object> refusalFollowup(String answer, String factoryId) {
+        try {
+            FindingService.Result result = findingService.detectInline(
+                    factoryId, DOMAINS,
+                    com.cretas.aims.service.finding.FindingOrdering.ACT_NOW);
+            result = dropWhatTheAnswerAlreadySaid(result, answer == null ? "" : answer);
+            int n = result.findings().size();
+            if (n <= 0) {
+                return null;
+            }
+            return java.util.Map.of(
+                    "label", "顺带 " + n + " 件事",
+                    "question",
+                    com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool.ACTION_PLAN_ASK);
+        } catch (Exception e) {
+            // 与 append 同一取舍: 附加物坏了不该让店长连主回答都拿不到。
+            log.warn("[RestaurantFindingHint] 发现层不可用, 本次不挂追问按钮: factoryId={}",
+                    factoryId, e);
+            return null;
+        }
+    }
+
     public String append(String answer, String factoryId, boolean awaitingClarification) {
         if (answer == null || answer.isBlank() || awaitingClarification) {
             return answer;

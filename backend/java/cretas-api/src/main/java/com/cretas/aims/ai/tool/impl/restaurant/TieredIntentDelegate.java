@@ -88,6 +88,15 @@ public class TieredIntentDelegate {
             if (Boolean.TRUE.equals(response.get("clarification_continuation"))) {
                 result.put("clarificationContinuation", true);
             }
+            // 🔴 2026-08-12 补透传 `kind`。此前这张映射表是**手写白名单**, `kind`
+            //    没在里面 —— 于是上游想判「这一条是不是反问/拒答」时只能拿
+            //    `clarificationContinuation` 顶, 而那个字段 Python 只在**延续轮**才发。
+            //    后果: 首轮拒答判不出是拒答, 「顺带 N 件事」照样挂在拒答正文后面
+            //    (prod 实测三句全中)。见 RestaurantFindingHintAppender 的 javadoc ——
+            //    抑制开关一直在, 接的信号错了。
+            if (response.get("kind") != null) {
+                result.put("kind", response.get("kind"));
+            }
             if (response.get("warning") != null) {
                 result.put("warning", response.get("warning"));
             }

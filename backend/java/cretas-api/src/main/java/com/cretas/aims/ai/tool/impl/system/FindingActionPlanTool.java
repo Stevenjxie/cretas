@@ -44,11 +44,25 @@ public class FindingActionPlanTool extends AbstractBusinessTool {
         return "system_finding_action_plan";
     }
 
+    /**
+     * 拒答时那颗「顺带 N 件事」按钮点下去要问的话。
+     *
+     * <p>🔴 2026-08-12 抽成常量的理由：§9.9 要求拒答正文**不附带**发现块，
+     * 改成可点的追问按钮。那颗按钮的 {@code question} 必须是**本工具确实认得的**
+     * 问法 —— 否则按下去落空，比现在把发现直接印在正文里更糟。
+     *
+     * <p>⛔ 不在按钮那边手抄一句「这些问题怎么办」：抄了就会与本工具的适用场景漂开，
+     * 而漂开的表现是**按钮静默失效**（点了没反应），没有任何东西会红。
+     * 这里定义一次，{@link #getDescription()} 与按钮都引用它，
+     * 并由 {@code RestaurantFindingHintAppenderTest} 钉住两者一致。
+     */
+    public static final String ACTION_PLAN_ASK = "这些问题怎么办";
+
     @Override
     public String getDescription() {
         return "把当前库存异常整理成一段可执行的行动建议（先做什么、再做什么）。"
                 + "数字全部来自系统检测结果，不做估算。"
-                + "适用场景：'现在该干什么'、'给我个处理方案'、'这些问题怎么办'。";
+                + "适用场景：'现在该干什么'、'给我个处理方案'、'" + ACTION_PLAN_ASK + "'。";
     }
 
     @Override

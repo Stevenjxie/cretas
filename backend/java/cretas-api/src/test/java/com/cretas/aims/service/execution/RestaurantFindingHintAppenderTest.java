@@ -57,6 +57,59 @@ class RestaurantFindingHintAppenderTest {
     }
 
     @Test
+    @DisplayName("UT-RFH-20: 拒答时不挂正文, 改出一颗「顺带 N 件事」按钮")
+    void refusalGetsAButtonNotABody() {
+        // 🔴 §9.9: 拒答正文带一堆发现读起来像是回答了, 店长会以为拿到了东西。
+        //    但发现是**真算出来的**, 整块扔掉是白丢价值 —— 降级成可点的追问。
+        when(findingService.detectInline(eq(FACTORY_ID), anyCollection(), any()))
+                .thenReturn(oneFinding());
+
+        Map<String, Object> btn = appender.refusalFollowup("翻台率现在算不出来。", FACTORY_ID);
+
+        assertNotNull(btn, "有发现却没给按钮 —— 那就是把它们白扔了");
+        assertEquals("顺带 1 件事", btn.get("label"), btn.toString());
+        assertEquals(
+                com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool.ACTION_PLAN_ASK,
+                btn.get("question"),
+                "按钮问的话必须是 FindingActionPlanTool 认得的那句");
+    }
+
+    @Test
+    @DisplayName("UT-RFH-21: 按钮问的那句话, 必须真的写在那个工具的适用场景里")
+    void buttonQuestionIsSomethingTheToolClaimsToHandle() {
+        // ⛔ 这条钉住的是「按钮指向一个真能答的地方」。手抄一句问法, 抄完之后
+        //    工具的适用场景一改, 按钮就**静默失效**(点了没反应), 没有任何东西会红。
+        String ask = com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool.ACTION_PLAN_ASK;
+        assertFalse(ask.isBlank(), "按钮问的话是空的 —— 点下去等于什么都没问");
+        // 工具的 getDescription 由同一个常量拼出来, 两者不可能漂开; 这条守住那个拼接。
+        com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool tool =
+                new com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool(null);
+        assertTrue(tool.getDescription().contains(ask),
+                "按钮问的话不在工具声明的适用场景里: " + tool.getDescription());
+    }
+
+    @Test
+    @DisplayName("UT-RFH-22: 没有发现时不给按钮 —— 空按钮比没按钮更糟")
+    void noFindingsMeansNoButton() {
+        when(findingService.detectInline(eq(FACTORY_ID), anyCollection(), any()))
+                .thenReturn(new FindingService.Result(
+                        List.of(), List.of(), 0, Map.of(), List.of(), List.of()));
+
+        assertNull(appender.refusalFollowup("翻台率现在算不出来。", FACTORY_ID));
+    }
+
+    @Test
+    @DisplayName("UT-RFH-23: 按钮沿用「答案里已经讲过的就别再说」那道过滤")
+    void buttonReusesTheAlreadySaidFilter() {
+        // ⛔ 与 append 各查一次会得出不一样的条数, 而条数要印在按钮上。
+        when(findingService.detectInline(eq(FACTORY_ID), anyCollection(), any()))
+                .thenReturn(oneFinding());
+
+        assertNull(appender.refusalFollowup("变质损耗这次算不出来。", FACTORY_ID),
+                "答案正文里已经点了「变质」, 这条发现不该再变成按钮");
+    }
+
+    @Test
     @DisplayName("UT-RFH-01: 把顺带提示拼到回答末尾，原回答逐字保留")
     void appendsHintAfterAnswer() {
         when(findingService.detectInline(eq(FACTORY_ID), anyCollection(), any())).thenReturn(oneFinding());
