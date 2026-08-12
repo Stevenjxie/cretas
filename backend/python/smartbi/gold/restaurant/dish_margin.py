@@ -32,8 +32,16 @@ import logging
 from typing import Any, Dict
 
 from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
+from smartbi.gold.restaurant.provenance import (
+    ESTIMATED as PROV_ESTIMATED,
+    MEASURED as PROV_MEASURED,
+    qualifier as provenance_qualifier,
+)
 
 logger = logging.getLogger(__name__)
+
+#: 估算依据的措辞。⛔ 只此一处 —— 这句话要出现在店长眼前, 不能两条路各写各的。
+_ESTIMATION_BASIS = "行业默认成本率 {pct:.0f}%"
 
 
 async def compute_dish_margins(
@@ -248,6 +256,19 @@ async def compute_dish_margins(
     total_profit_combined = total_profit + total_profit_estimated  # 精确 + 估算
     avg_rate_combined = total_profit_combined / total_rev_all if total_rev_all > 0 else 0
 
+    # 🔴 出处与依据必须从**同一个条件**推出来, 不能各写各的。
+    # 变异实测(2026-08-12): 第一版把 `estimationBasis` 单独挂在 `total_rev_estimated > 0`
+    # 上, 把 provenance 强改成 MEASURED 之后出现了这个组合 ——
+    #   provenance=MEASURED + estimationBasis="行业默认成本率 32%"
+    #   + 限定语「未覆盖成本的菜品……不在结论内」
+    # 而这条路的 472 元里**恰恰含着**那些未覆盖的菜。也就是说限定语在替这个数说谎。
+    # 两个字段同源之后, 这个组合在结构上就不成立了。
+    has_estimate = total_rev_estimated > 0
+    combined_provenance = PROV_ESTIMATED if has_estimate else PROV_MEASURED
+    estimation_basis = (
+        _ESTIMATION_BASIS.format(pct=industry_cost_ratio * 100) if has_estimate else ""
+    )
+
     data = {
         "windowDays": days,
         "totalRevenue": total_rev_all,
@@ -272,6 +293,26 @@ async def compute_dish_margins(
             "totalDishCount": len(dishes),
             "revenueRatio": coverage_revenue,
         },
+        # 🔴 2026-08-12 架构收口 C: 这条路的「合并版」数字里**掺了估算**
+        #    (无配方的菜按行业默认成本率折一个毛利), 而 AI 问答那条路是把它们
+        #    排除在结论外的。两个数字不同是**对的** —— 但此前系统只给数字不给
+        #    出处, 同一个店长拿到两个毛利数而不知道为什么。
+        # ⛔ 数字一个都没动。这里只是让它带上自己的出处。
+        # ⚠️ `totalProfit` / `avgRate` 是纯账上口径 → MEASURED;
+        #    `totalProfitWithEstimated` / `avgRateWithEstimated` 掺了估算 → ESTIMATED。
+        #    出处是**按字段**的, 不是按整个响应的。
+        "provenance": {
+            "totalProfit": PROV_MEASURED,
+            "avgRate": PROV_MEASURED,
+            "totalProfitWithEstimated": combined_provenance,
+            "avgRateWithEstimated": combined_provenance,
+        },
+        "estimationBasis": estimation_basis,
+        # 限定语**由上面两个字段生成**, 前端不许再手写一份灰色小字。
+        # 覆盖率 100% 时它是空串 —— 说了反而是噪音。
+        "qualifier": provenance_qualifier(
+            combined_provenance, estimation_basis, coverage_ratio=coverage_revenue,
+        ),
         "dishes": dishes,
     }
     return data

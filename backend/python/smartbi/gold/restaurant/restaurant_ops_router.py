@@ -32,6 +32,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from smartbi.gold.restaurant.provenance import (
+    MEASURED as PROV_MEASURED,
+    qualifier as provenance_qualifier,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -4338,7 +4343,6 @@ async def resolve_gross_margin(
             ),
             key=lambda i: i["margin_rate"],
         )
-        cov_pct = f"{coverage_ratio * 100:.1f}%"
         if negative:
             neg_lines = [
                 f"**{window_label}有 {len(negative)} 道毛利为负的菜品（卖一份亏一份，属于亏钱菜品）：**",
@@ -4353,14 +4357,21 @@ async def resolve_gross_margin(
                 neg_lines.append(f"（仅列前 5，共 {len(negative)} 道）")
             neg_lines.append("")
             neg_lines.append(
-                f"> 成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
+                # 🔴 2026-08-12 架构收口 C: 限定语**由出处字段生成**, 不再手写。
+                #    这条路的口径是「排除未覆盖成本的菜」→ 端出去的每个数都是
+                #    账上的 (MEASURED), 覆盖率只是说明「结论盖住了多少营收」。
+                #    另一条路 (dish_margin) 对同一批菜给的是 ESTIMATED 的数,
+                #    两个数字不同是**对的**, 但必须各自带得出出处。
+                provenance_qualifier(PROV_MEASURED, coverage_ratio=coverage_ratio)
             )
             neg_answer = "\n".join(neg_lines)
         else:
+            # 🔴 限定语由出处字段生成(同上)。⛔ 不能写成隐式字符串拼接的一段 ——
+            #    `f"..." provenance_qualifier(...)` 是语法错(第一版就这么写的)。
             neg_answer = (
                 f"{window_label}可计算毛利的 {len(with_cost)} 道菜品中，"
                 f"**没有毛利为负的菜**，按已覆盖成本口径没有单品在亏钱。\n\n"
-                f"> 成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
+                + provenance_qualifier(PROV_MEASURED, coverage_ratio=coverage_ratio)
             )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -6392,7 +6403,6 @@ async def resolve_store_margin(
             key=lambda st: st["margin_rate"],
         )
         rated_count = len([st for st in store_list if st.get("margin_rate") is not None])
-        cov_pct = f"{coverage_ratio * 100:.1f}%"
         if negative_stores:
             neg_lines = [
                 f"**{window_label}有 {len(negative_stores)} 家门店按已覆盖成本口径在亏钱（毛利为负）：**",
@@ -6406,15 +6416,18 @@ async def resolve_store_margin(
             if len(negative_stores) > 5:
                 neg_lines.append(f"（仅列前 5，共 {len(negative_stores)} 家）")
             neg_lines.append("")
+            # 🔴 第三处手写限定语 —— 注意它的措辞和另外两处**已经不一样**了
+            #    (「部分」vs「菜品」)。同一个口径长出两种说法, 这就是手写的必然结果,
+            #    也正是「限定语由字段生成」要消灭的东西。
             neg_lines.append(
-                f"> 成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+                provenance_qualifier(PROV_MEASURED, coverage_ratio=coverage_ratio)
             )
             neg_answer = "\n".join(neg_lines)
         else:
             neg_answer = (
                 f"{window_label}可计算毛利的 {rated_count} 家门店中，"
                 f"**没有毛利为负的门店**，按已覆盖成本口径没有门店在亏钱。\n\n"
-                f"> 成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+                + provenance_qualifier(PROV_MEASURED, coverage_ratio=coverage_ratio)
             )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
