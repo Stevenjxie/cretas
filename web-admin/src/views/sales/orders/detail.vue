@@ -153,7 +153,17 @@ const shipmentForm = ref({
   remark: '',
   items: [] as TableRow[],
 });
-const allocationSummary = ref<Record<string, { allocated: number; planned: number; complete: boolean }>>({});
+type AllocationSummary = {
+  allocated: number;
+  planned: number;
+  complete: boolean;
+  /** 整单都是物料行 —— 没有任何成品批次要分。 */
+  materialOnly: boolean;
+  materialLines: number;
+  /** 成品行单位一致时的显示单位; 混单位时为空串(不标, 避免拿一个单位去标另一种的数)。 */
+  unit: string;
+};
+const allocationSummary = ref<Record<string, AllocationSummary>>({});
 const masterDeliveries = computed(() => deliveries.value.filter((row) => !row.parentDeliveryId && row.recordRole !== 'SHIPMENT'));
 const shipmentRows = computed(() => deliveries.value.filter((row) => row.parentDeliveryId || row.recordRole === 'SHIPMENT'));
 const deliveryAddressMissing = computed(() => !deliveryForm.value.deliveryAddress.trim());
@@ -616,13 +626,31 @@ async function loadDeliveries() {
 }
 
 async function loadAllocationSummaries() {
-  const next: Record<string, { allocated: number; planned: number; complete: boolean }> = {};
+  // 🔴 2026-08-13: materialIdSet 必须先就绪。它由 loadProductsForEdit 填,
+  // 而 onMounted 里那次是排在 loadDeliveries【之后】的 —— 直接依赖挂载顺序,
+  // 这里会拿到空集合, 于是每一行物料都被当成成品去算「已分配」。
+  if (!materialIdSet.value.size) await loadProductsForEdit();
+
+  const next: Record<string, AllocationSummary> = {};
   for (const delivery of deliveries.value) {
     if (delivery.recordRole === 'MASTER') continue;
     const items = Array.isArray(delivery.items) ? delivery.items as TableRow[] : [];
     let planned = 0;
     let allocated = 0;
+    let goodsLines = 0;
+    let materialLines = 0;
+    const units = new Set<string>();
     for (const item of items) {
+      const productTypeId = String(item.productTypeId ?? item.productType?.id ?? '');
+      // 物料行由后端在「确认发货」时按 FIFO 自动扣减, 从不产生批次分配记录。
+      // 把它算进 planned 会让这一行永远停在「已分配 0/N」——看上去像仓库还欠一步,
+      // 实际上没有任何事可做。这与分配对话框里那条「物料无需分配批次」必须一致。
+      if (materialIdSet.value.has(productTypeId)) {
+        materialLines += 1;
+        continue;
+      }
+      goodsLines += 1;
+      units.add(displayUnit(item.unit));
       planned += Number(item.deliveredQuantity || 0);
       if (!item.id) continue;
       try {
@@ -632,7 +660,19 @@ async function loadAllocationSummaries() {
         }
       } catch { /* fail closed: leave incomplete */ }
     }
-    next[String(delivery.id)] = { allocated, planned, complete: planned > 0 && Math.abs(allocated - planned) < 0.000001 };
+    next[String(delivery.id)] = {
+      allocated,
+      planned,
+      // 整单都是物料 → 没有任何批次要分, 直接算完成, 否则「继续分配」按钮永远亮着。
+      complete: goodsLines === 0
+        ? materialLines > 0
+        : planned > 0 && Math.abs(allocated - planned) < 0.000001,
+      materialOnly: goodsLines === 0 && materialLines > 0,
+      materialLines,
+      // 🔴 单位只在【成品行单位一致】时才敢标。原来固定取 items[0].unit,
+      // 于是「2只 + 1个」被汇总成一句「3 只」——把两种单位的数加起来再随便挑一个标上。
+      unit: units.size === 1 ? [...units][0] : '',
+    };
   }
   allocationSummary.value = next;
 }
@@ -2081,9 +2121,19 @@ async function handleQuickPayFull() {
               <el-table-column label="批次分配" width="160" align="center">
                 <template #default="{ row }">
                   <span v-if="row.recordRole === 'MASTER'">由子发运单分配</span>
+                  <!--
+                    整单物料: 后端在「确认发货」时按 FIFO 自动扣减, 没有批次可分。
+                    原来这里显示「已分配 0/0.7 kg」, 仓管会以为还欠一步。
+                  -->
+                  <el-tag v-else-if="allocationSummary[String(row.id)]?.materialOnly" type="success" size="small" effect="plain">
+                    物料 · 自动扣减
+                  </el-tag>
                   <span v-else-if="allocationSummary[String(row.id)]">
                     已分配 {{ allocationSummary[String(row.id)].allocated }}/{{ allocationSummary[String(row.id)].planned }}
-                    {{ displayUnit((row.items || [])[0]?.unit) }}
+                    {{ allocationSummary[String(row.id)].unit }}
+                    <span v-if="allocationSummary[String(row.id)].materialLines" style="color: var(--el-text-color-secondary)">
+                      (另 {{ allocationSummary[String(row.id)].materialLines }} 行物料自动扣减)
+                    </span>
                   </span>
                   <span v-else>0/0</span>
                 </template>
