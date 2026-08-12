@@ -57,7 +57,18 @@ $ErrorActionPreference = 'Stop'
 # No command echo: a traced line could surface a URL.
 Set-PSDebug -Off
 
-$LightsailHost = 'ubuntu@10.66.66.1'
+# 🔴 2026-08-12: 默认值仍是 AmneziaVPN 隧道内的私网地址 —— 隧道停用时它不可达,
+# 制品运输整条链就退回本地构建(实测 web 多花 86s / java 多花 61s), 而且**不报错**,
+# 只在 stderr 留一行 `tokyo_stage_failed`。
+#
+# 同一台东京主机有公网 SSH(52.196.123.155, ED25519 主机指纹与私网地址一致, 已实测)。
+# 这里加一个 env 覆盖口, **默认值一个字不改** —— 隧道在时行为完全同以前;
+# 隧道停用时用 CRETAS_TOKYO_SSH_HOST 走公网, 不必改仓库、不必动 VPN/Clash。
+#
+# ⚠️ 缓存端点是**另一件事**: 服务绑在 10.66.66.1:18081(实测 `ss -lntp` 确认它活着,
+# 只是不监听回环), 换 SSH 地址不会让它可达 —— 需要 SSH 本地端口转发, 再用
+# CRETAS_TOKYO_CACHE_ENDPOINT 指向 127.0.0.1(那个变量本来就支持覆盖)。
+$LightsailHost = if ($env:CRETAS_TOKYO_SSH_HOST) { $env:CRETAS_TOKYO_SSH_HOST } else { 'ubuntu@10.66.66.1' }
 $LightsailKey = Join-Path $env:USERPROFILE '.ssh\ai-egress-tokyo-windows_ed25519'
 $EcsHost = 'aliyun-new'
 $ApprovedPrefixes = @('deploy/backend/', 'codex-network-test/')
