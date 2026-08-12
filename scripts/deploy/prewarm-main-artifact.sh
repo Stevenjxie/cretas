@@ -53,6 +53,35 @@ git -C "$PROJECT_ROOT" fetch -q origin main || {
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
+# ── 制品链路 preflight (秒级 SSH banner 探测) ────────────────────────────────
+#
+# 🔴 2026-08-12 实测: 中转跳 `10.66.66.1:22` 在 key exchange **之前**被关闭
+#    (`kex_exchange_identification: Connection closed by remote host`),
+#    连续三次 —— 两次预热 + 一次发布内取制品, 每次白付一趟完整的取制品流程,
+#    然后回落本地构建(2 分 08 秒)。
+#
+# ⛔ 不重试。链路断了这类故障重试没有帮助, 只是把 2 分钟变成 2 分钟 + 三次超时。
+# ⛔ 不换链路。换链路是新增基础设施, 按「默认不加」先报现状。
+# 🔴 探测的是 **SSH banner**, 不是 TCP 连通性。
+#    第一版写的是 TCP 探测, 实跑当场打脸: 故障期间 `PREFLIGHT=ok` —— 因为本机
+#    代理(fake-IP 段 198.18.0.0/15)会把 TCP **接下来**, 真正断的是它背后那一跳,
+#    表现为 `kex_exchange_identification: Connection closed by remote host`。
+#    TCP 通不通根本区分不了这件事。健康的服务端会立刻发 `SSH-2.0-...`, 所以
+#    读到那 4 个字节就是「这趟运输值得起跑」, 读不到就是不值得。仍然是秒级。
+# ⛔ 不做认证握手 —— 那需要私钥且慢, 而我们要回答的只是「起不起得跑」。
+LIGHTSAIL_ENDPOINT=${CRETAS_TOKYO_SSH_HOST:-ubuntu@10.66.66.1}
+_probe_host=${LIGHTSAIL_ENDPOINT#*@}
+_probe_port=22
+_probe_banner=$(timeout 6 bash -c "exec 3<>/dev/tcp/${_probe_host}/${_probe_port} && head -c 4 <&3" 2>/dev/null || true)
+if [ "${_probe_banner:0:4}" != "SSH-" ]; then
+    echo "PREWARM=skipped reason=artifact_transport_unreachable host=${_probe_host}:${_probe_port}"
+    echo "预热跳过, 原因: 制品链路不通 (${_probe_host}:${_probe_port} 未返回 SSH banner)。" >&2
+    echo "发布会直接走本地构建 —— 这不是失败, 只是慢。" >&2
+    echo "⛔ 不重试: 链路断了重试没有帮助。要修先定性是对端还是本机隧道/代理。" >&2
+    exit 0
+fi
+echo "PREFLIGHT=ok host=${_probe_host}:${_probe_port}"
+
 deadline=$(( $(date +%s) + WAIT_SECONDS ))
 attempt=0
 while :; do
