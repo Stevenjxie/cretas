@@ -19,6 +19,10 @@ SPEC.loader.exec_module(module)
 
 
 class LabelSideViewQueueTests(unittest.TestCase):
+    @staticmethod
+    def _label(class_id: int, confidence: float, box: list[float]) -> SimpleNamespace:
+        return SimpleNamespace(class_id=class_id, confidence=confidence, box=box)
+
     def test_side_risk_requires_view_or_stack_evidence(self):
         plain = SimpleNamespace(
             index=0, box=[0, 0, 150, 100], dropped_neighbour_labels=0,
@@ -44,6 +48,40 @@ class LabelSideViewQueueTests(unittest.TestCase):
             first.write_text(json.dumps({"rows": [{"source_photo_id": "p1"}]}), encoding="utf-8")
             second.write_text(json.dumps({"rows": [{"source_photo_id": "p2"}]}), encoding="utf-8")
             self.assertEqual(module.manifest_source_ids([first, second]), {"p1", "p2"})
+
+    def test_white_confuser_ranks_amplified_matched_white_box(self):
+        production = SimpleNamespace(labels=[self._label(0, 0.72, [10, 10, 40, 40])])
+        candidate = SimpleNamespace(labels=[self._label(0, 0.81, [11, 10, 41, 40])])
+        result = module.white_confuser_features(production, candidate, 0.35, 0.05, 0.30)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["tags"], ["candidate_white_amplified"])
+        self.assertAlmostEqual(result["white_confidence_delta"], 0.09)
+        self.assertGreater(result["matched_white_iou"], 0.9)
+
+    def test_white_confuser_ranks_new_unmatched_white_box(self):
+        production = SimpleNamespace(labels=[self._label(0, 0.80, [80, 80, 100, 100])])
+        candidate = SimpleNamespace(labels=[self._label(0, 0.55, [10, 10, 30, 30])])
+        result = module.white_confuser_features(production, candidate, 0.35, 0.05, 0.30)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["tags"], ["candidate_white_new"])
+        self.assertEqual(result["production_white_confidence"], 0.0)
+
+    def test_white_confuser_rejects_small_delta(self):
+        production = SimpleNamespace(labels=[self._label(0, 0.72, [10, 10, 40, 40])])
+        candidate = SimpleNamespace(labels=[self._label(0, 0.74, [10, 10, 40, 40])])
+        self.assertIsNone(module.white_confuser_features(production, candidate, 0.35, 0.05, 0.30))
+
+    def test_match_tray_is_iou_gated(self):
+        target = SimpleNamespace(box=[10, 10, 50, 50])
+        near = SimpleNamespace(box=[11, 10, 51, 50])
+        far = SimpleNamespace(box=[100, 100, 140, 140])
+        matched, score = module.match_tray(target, [far, near], 0.90)
+        self.assertIs(matched, near)
+        self.assertGreater(score, 0.9)
+        unmatched, _ = module.match_tray(target, [far], 0.90)
+        self.assertIsNone(unmatched)
 
     def _plan(self, root: Path) -> tuple[Path, Path]:
         source = root / "source.png"

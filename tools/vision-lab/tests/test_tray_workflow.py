@@ -131,6 +131,47 @@ class TrayWorkflowTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not fully human-reviewed"):
                     module.validate_reviewed_queue(queue, holdout)
 
+    def test_work_area_queue_audit_recomputes_inside_outside_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            queue = Path(temporary) / "queue"
+            (queue / "annotations-human").mkdir(parents=True)
+            (queue / "work-area-human").mkdir()
+            source_sha = "a" * 64
+            packed_sha = "b" * 64
+            source_image = queue / "source.jpg"
+            packed_image = queue / "packed.jpg"
+            source_image.write_bytes(b"source")
+            packed_image.write_bytes(b"packed")
+            source_sha = module.sha256(source_image)
+            packed_sha = module.sha256(packed_image)
+            row = {
+                "packed_stem": "tray-1", "source_photo_id": "source-1",
+                "source_sha256": source_sha, "packed_image_sha256": packed_sha,
+                "source_path": str(source_image), "packed_image": "packed.jpg",
+                "task_id": "task-1", "sku_code": "SKU-1",
+            }
+            (queue / "manifest.json").write_text(json.dumps({
+                "queue_count": 1, "protected_holdout_included": False, "rows": [row],
+            }), encoding="utf-8")
+            boxes = [[0.2, 0.2, 0.4, 0.4], [0.85, 0.1, 0.95, 0.2]]
+            (queue / "annotations-human" / "tray-1.json").write_text(json.dumps({
+                "reviewed": True, "source": "human", "format": "normalised_xyxy", "boxes": boxes,
+            }), encoding="utf-8")
+            (queue / "work-area-human" / "tray-1.json").write_text(json.dumps({
+                "photo_id": "tray-1", "source_photo_id": "source-1",
+                "source_sha256": source_sha, "packed_image_sha256": packed_sha,
+                "format": module.work_area.FORMAT, "reviewed": True, "source": "human",
+                "judgeable": True,
+                "polygon": [[0.1, 0.1], [0.8, 0.1], [0.8, 0.8], [0.1, 0.8]],
+                "tray_scope_counts": {"inside_work_area": 1, "outside_work_area": 1},
+            }), encoding="utf-8")
+            audit = module.audit_work_area_queue(queue)
+            self.assertEqual(audit["reviewed_images"], 1)
+            self.assertEqual(audit["tray_scope_counts"], {
+                "inside_work_area": 1, "outside_work_area": 1, "unknown_work_area": 0,
+            })
+            self.assertFalse(audit["protected_holdout_modified"])
+
     def test_gate_requires_root_cause_hit_and_accepts_complete_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             artifact = Path(temporary) / "tray.onnx"
@@ -142,12 +183,67 @@ class TrayWorkflowTests(unittest.TestCase):
                 "groups": {"new_blind_defect": {
                     "defect_total": 2, "defect_hits": 2, "tray_target_total": 2, "tray_target_hits": 2,
                 }},
-                "details": [{"photo_id": module.TARGET_DEFECT_PHOTO, "tray_target_covered": True, "hit": True}],
+                "details": [{
+                    "photo_id": module.TARGET_DEFECT_PHOTO, "tray_target_covered": True,
+                    "hit": True, "work_area": "outside_work_area",
+                }],
+                "work_area": {
+                    "records": {"with_human_roi": 27, "without_human_roi": 0, "unjudgeable": 0},
+                    "groups": {
+                        "inside_work_area": {
+                            "defect_total": 5, "defect_hits": 4,
+                            "tray_target_total": 5, "tray_target_hits": 5,
+                            "detected_trays": 60, "normal_trays": 50,
+                            "missing_label_flags": 8, "false_flags": 4,
+                        },
+                        "outside_work_area": {
+                            "defect_total": 2, "defect_hits": 1,
+                            "tray_target_total": 2, "tray_target_hits": 2,
+                            "detected_trays": 20, "normal_trays": 15,
+                            "missing_label_flags": 3, "false_flags": 5,
+                        },
+                        "unknown_work_area": {
+                            "defect_total": 0, "defect_hits": 0,
+                            "tray_target_total": 0, "tray_target_hits": 0,
+                            "detected_trays": 0, "normal_trays": 0,
+                            "missing_label_flags": 0, "false_flags": 0,
+                        },
+                    },
+                },
             }
             metrics = {
                 "artifact_sha256": model["artifact_sha256"], "production_pipeline_replay": True,
                 "onnx_parity_mismatches": 1, "production_onnx_parity_mismatches": 1,
-                "baseline": {"defect_hits": 4, "tray_target_hits": 6, "false_flags": 10, "p95_latency_ms": 1000},
+                "baseline": {
+                    "defect_hits": 4, "tray_target_hits": 6, "false_flags": 10, "p95_latency_ms": 1000,
+                    "details": [{
+                        "photo_id": module.TARGET_DEFECT_PHOTO, "tray_target_covered": True,
+                        "hit": True, "work_area": "outside_work_area",
+                    }],
+                    "work_area": {
+                        "records": {"with_human_roi": 27, "without_human_roi": 0, "unjudgeable": 0},
+                        "groups": {
+                            "inside_work_area": {
+                                "defect_total": 5, "defect_hits": 3,
+                                "tray_target_total": 5, "tray_target_hits": 5,
+                                "detected_trays": 60, "normal_trays": 50,
+                                "missing_label_flags": 9, "false_flags": 5,
+                            },
+                            "outside_work_area": {
+                                "defect_total": 2, "defect_hits": 1,
+                                "tray_target_total": 2, "tray_target_hits": 2,
+                                "detected_trays": 20, "normal_trays": 15,
+                                "missing_label_flags": 3, "false_flags": 5,
+                            },
+                            "unknown_work_area": {
+                                "defect_total": 0, "defect_hits": 0,
+                                "tray_target_total": 0, "tray_target_hits": 0,
+                                "detected_trays": 0, "normal_trays": 0,
+                                "missing_label_flags": 0, "false_flags": 0,
+                            },
+                        },
+                    },
+                },
                 "candidate": candidate,
             }
             config = {"tray_active_learning": {"max_onnx_parity_mismatches": 1}, "promotion_gates": {
@@ -160,7 +256,12 @@ class TrayWorkflowTests(unittest.TestCase):
             candidate["details"][0]["hit"] = False
             rejected = module.evaluate_gate(config, model, metrics)
             self.assertFalse(rejected["passed"])
-            self.assertTrue(any("root-cause protected defect" in error for error in rejected["errors"]))
+            self.assertTrue(any("outside root-cause protected defect regressed" in error for error in rejected["errors"]))
+            candidate["details"][0]["hit"] = True
+            candidate["work_area"]["records"]["without_human_roi"] = 1
+            unknown = module.evaluate_gate(config, model, metrics)
+            self.assertFalse(unknown["passed"])
+            self.assertTrue(any("unknown_work_area evidence blocks promotion" in error for error in unknown["errors"]))
 
 
 if __name__ == "__main__":

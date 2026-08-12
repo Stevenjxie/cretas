@@ -32,6 +32,7 @@ TEACHER_PROMPTS = {
     "isolated": "each isolated sealed food tray, including a tray inside a blue plastic basket",
     "stacked": "each individual sealed food tray in an occluded or stacked group",
 }
+RAW_WORK_AREA_PLAN_VERSION = "vision-lab-work-area-raw-tray-plan-v1"
 BOX_PATTERN = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
 
 
@@ -394,6 +395,100 @@ def reuse_selection_photo_ids(queue: Path) -> list[str]:
     return photo_ids
 
 
+def raw_plan_output_overlaps(output_root: Path, selected: list[dict[str, Any]]) -> set[str]:
+    planned_ids = {str(row["photo_id"]) for row in selected}
+    output_manifests = sorted(output_root.glob("*/manifest.json"))
+    if not output_manifests:
+        return set()
+    return planned_ids & existing_photo_ids(output_manifests)
+
+
+def load_raw_work_area_plan(
+    path: Path, expected_sha256: str, existing_manifests: list[Path],
+    protected_holdout: Path,
+) -> list[dict[str, Any]]:
+    if sha256_file(path) != expected_sha256.lower():
+        raise RuntimeError("raw work-area tray plan SHA mismatch")
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    selected = plan.get("selected")
+    if (plan.get("version") != RAW_WORK_AREA_PLAN_VERSION or plan.get("plan_only") is not True
+            or plan.get("queue_created") is not False or plan.get("mark_created") is not False):
+        raise RuntimeError("unsupported or already-used raw work-area tray plan")
+    if not isinstance(selected, list) or len(selected) != int(plan.get("selected_count", -1)):
+        raise RuntimeError("raw work-area tray plan rows are incomplete")
+    planned_hashes = plan.get("existing_manifest_sha256s") or {}
+    supplied_manifests = {str(manifest.resolve()) for manifest in existing_manifests}
+    if supplied_manifests != set(planned_hashes):
+        raise RuntimeError("raw work-area tray plan manifest set drift")
+    for manifest in existing_manifests:
+        resolved = str(manifest.resolve())
+        if planned_hashes.get(resolved) != sha256_file(manifest.resolve()):
+            raise RuntimeError(f"raw work-area tray plan manifest binding drift: {resolved}")
+    protected = protected_holdout.resolve()
+    if (str(protected) != str(plan.get("protected_manifest"))
+            or sha256_file(protected) != plan.get("protected_manifest_sha256")):
+        raise RuntimeError("raw work-area tray plan protected binding drift")
+    required = (
+        "existing_photo_task_sha_exclusion_passed", "protected_exact_exclusion_passed",
+        "protected_phash_exclusion_passed",
+    )
+    if any(any(row.get(key) is not True for key in required) for row in selected):
+        raise RuntimeError("raw work-area tray plan contains an unsafe row")
+    for key in ("photo_id", "task_id", "source_sha256"):
+        values = [str(row.get(key) or "") for row in selected]
+        if any(not value for value in values) or len(set(values)) != len(selected):
+            raise RuntimeError(f"raw work-area tray plan {key} values are missing or not unique")
+    return selected
+
+
+def load_planned_candidates(
+    database: Path, selected: list[dict[str, Any]], protected: dict[str, Any],
+    excluded_ids: set[str], near_hamming: int,
+) -> list[dict[str, Any]]:
+    connection = sqlite3.connect(f"file:{database.resolve()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    records: list[dict[str, Any]] = []
+    try:
+        for planned in selected:
+            row = connection.execute(
+                "SELECT * FROM photos WHERE photo_id = ?", (str(planned["photo_id"]),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"planned raw photo is missing: {planned['photo_id']}")
+            record = dict(row)
+            for database_key, plan_key in (
+                ("task_id", "task_id"), ("sku_code", "sku_code"), ("sha256", "source_sha256"),
+            ):
+                if str(record[database_key]) != str(planned[plan_key]):
+                    raise RuntimeError(f"planned raw photo binding drift: {planned['photo_id']} {database_key}")
+            image = Path(str(record["local_path"]))
+            if (str(image) != str(planned["source_path"]) or not image.is_file()
+                    or sha256_file(image) != str(planned["source_sha256"])):
+                raise RuntimeError(f"planned raw source drift: {image}")
+            if str(record["photo_id"]) in excluded_ids:
+                raise RuntimeError(f"planned raw photo is already queued: {record['photo_id']}")
+            if str(record["photo_id"]) in protected["ids"] or str(record["sha256"]) in protected["hashes"]:
+                raise RuntimeError(f"planned raw photo overlaps protected truth: {record['photo_id']}")
+            image_phash = phash(image)
+            if image_phash != str(planned["source_perceptual_hash"]):
+                raise RuntimeError(f"planned raw pHash drift: {record['photo_id']}")
+            nearest = min(
+                ((holdout_id, phash_distance(image_phash, other))
+                 for holdout_id, other in protected["phashes"]),
+                key=lambda item: item[1], default=None,
+            )
+            if nearest and nearest[1] <= near_hamming:
+                raise RuntimeError(f"planned raw photo is near protected truth: {record['photo_id']}")
+            record["image_phash"] = image_phash
+            record["nearest_holdout_phash"] = (
+                {"photo_id": nearest[0], "distance": nearest[1]} if nearest else None
+            )
+            records.append(record)
+    finally:
+        connection.close()
+    return records
+
+
 def teacher_crop_regions(record: dict[str, Any], image: Image.Image, limit: int = 8) -> list[dict[str, Any]]:
     detector = record.get("detector_boxes", [])
     comparison = record.get("comparison_boxes", [])
@@ -600,6 +695,8 @@ def main() -> None:
     parser.add_argument("--annotator-url", default="http://127.0.0.1:8765")
     parser.add_argument("--prefer-blue-basket", action="store_true")
     parser.add_argument("--reuse-selection-from", type=Path)
+    parser.add_argument("--raw-work-area-plan", type=Path)
+    parser.add_argument("--raw-work-area-plan-sha256")
     args = parser.parse_args()
 
     if args.queue_size <= 0 or args.teacher_shortlist < args.queue_size:
@@ -607,9 +704,33 @@ def main() -> None:
     manifests = list(args.existing_manifest)
     excluded_ids = existing_photo_ids(manifests)
     protected = protected_evidence(args.protected_holdout)
-    candidates, excluded = load_candidates(
-        args.database, protected, excluded_ids, args.max_photos_scanned, args.near_holdout_hamming,
-    )
+    if args.reuse_selection_from and args.raw_work_area_plan:
+        raise ValueError("reuse-selection-from and raw-work-area-plan are mutually exclusive")
+    if args.raw_work_area_plan:
+        if not args.raw_work_area_plan_sha256 or len(args.raw_work_area_plan_sha256) != 64:
+            raise ValueError("raw-work-area-plan requires its full SHA256")
+        planned = load_raw_work_area_plan(
+            args.raw_work_area_plan, args.raw_work_area_plan_sha256,
+            manifests, args.protected_holdout,
+        )
+        overlap = raw_plan_output_overlaps(args.output_root, planned)
+        if overlap:
+            raise RuntimeError(
+                f"raw work-area tray plan was already queued: {sorted(overlap)}"
+            )
+        candidates = load_planned_candidates(
+            args.database, planned, protected, excluded_ids, args.near_holdout_hamming,
+        )
+        excluded = Counter()
+        if len(candidates) != args.queue_size:
+            raise RuntimeError(
+                f"raw work-area plan count {len(candidates)} does not match queue-size {args.queue_size}"
+            )
+    else:
+        candidates, excluded = load_candidates(
+            args.database, protected, excluded_ids,
+            args.max_photos_scanned, args.near_holdout_hamming,
+        )
     if args.reuse_selection_from:
         reuse_ids = reuse_selection_photo_ids(args.reuse_selection_from)
         available = {str(row["photo_id"]): row for row in candidates}
@@ -706,6 +827,10 @@ def main() -> None:
         shortlist, args.queue_size, args.max_per_task,
         priority_tag="top_blue_basket" if args.prefer_blue_basket else None,
     )
+    proposal_source = (
+        "tray_detector_and_locateanything_proposals_require_full_human_review"
+        if teacher_used else "tray_detector_proposals_require_full_human_review"
+    )
     queue_root = args.output_root / f"tray-active-{stamp}"
     if queue_root.exists():
         raise RuntimeError(f"refusing to overwrite queue: {queue_root}")
@@ -732,7 +857,7 @@ def main() -> None:
         write_json(annotation_path, {
             "photo_id": stem, "source_photo_id": str(row["photo_id"]),
             "format": "normalised_xyxy", "reviewed": False,
-            "source": "tray_detector_and_locateanything_proposals_require_full_human_review",
+            "source": proposal_source,
             "boxes": [item["box"] for item in row["preannotations"]],
         })
         packed = {
@@ -775,14 +900,24 @@ def main() -> None:
         "originals_modified": False, "protected_holdout_included": False,
         "protected_holdout_count": protected["count"], "near_holdout_hamming_threshold": args.near_holdout_hamming,
         "existing_queue_manifests": [str(path) for path in manifests],
+        "raw_work_area_plan": (
+            str(args.raw_work_area_plan.resolve()) if args.raw_work_area_plan else None
+        ),
+        "raw_work_area_plan_sha256": (
+            args.raw_work_area_plan_sha256.lower() if args.raw_work_area_plan_sha256 else None
+        ),
         "preannotations_are_not_ground_truth": True, "every_image_requires_full_human_review": True,
         "queue_count": len(rows), "selection_counts": dict(Counter(tag for row in rows for tag in row["selection_tags"])),
         "excluded": dict(excluded), "contact_sheets": sheets, "rows": manifest_rows,
     }
     write_json(queue_root / "manifest.json", manifest)
+    proposal_description = (
+        "现有 tray detector 与本地 LocateAnything-3B"
+        if teacher_used else "现有 tray detector"
+    )
     (queue_root / "README.md").write_text(
         "# 六扇门 tray 主动学习补框队列\n\n"
-        "青色/黄色框来自现有 tray detector 与本地 LocateAnything-3B，只是预标注，不是真值。"
+        f"青色/黄色框来自{proposal_description}，只是预标注，不是真值。"
         "请逐张完整复核，重点补画面边缘、蓝筐内孤立、遮挡和堆叠托盘；删除背景空托盘、筐、标签纸等误框。"
         "无法判断时不要猜。所有图片都是只读原图的缩放副本，受保护 7+20 holdout 已排除。\n",
         encoding="utf-8",

@@ -20,6 +20,7 @@ import imagehash
 from PIL import Image, ImageOps
 
 import vision_lab
+import work_area
 
 
 PROTECTED_PHASH_DISTANCE = 10
@@ -141,6 +142,119 @@ def validate_reviewed_queue(queue: Path, holdout_path: Path) -> tuple[dict[str, 
     if len(accepted) != len(rows):
         raise RuntimeError(f"tray annotation completion gate: {len(accepted)}/{len(rows)}")
     return manifest, accepted
+
+
+def audit_work_area_queue(queue: Path) -> dict[str, Any]:
+    """Verify a complete human ROI sidecar without modifying tray truth or the queue manifest."""
+    manifest_path = queue / "manifest.json"
+    manifest = load_json(manifest_path)
+    rows = manifest.get("rows") or []
+    if manifest.get("protected_holdout_included") or not rows:
+        raise RuntimeError("work-area audit requires a non-holdout tray queue")
+    if len(rows) != int(manifest.get("queue_count", -1)):
+        raise RuntimeError("work-area queue manifest count drift")
+    totals: Counter[str] = Counter()
+    audited: list[dict[str, Any]] = []
+    missing: list[str] = []
+    unjudgeable: list[str] = []
+    for source in rows:
+        stem = str(source["packed_stem"])
+        packed_image = queue / str(source["packed_image"])
+        source_image = Path(str(source["source_path"]))
+        tray_path = queue / "annotations-human" / f"{stem}.json"
+        roi_path = queue / "work-area-human" / f"{stem}.json"
+        if not packed_image.is_file() or sha256(packed_image) != source.get("packed_image_sha256"):
+            raise RuntimeError(f"packed image drift during work-area audit: {packed_image}")
+        if not source_image.is_file() or sha256(source_image) != source.get("source_sha256"):
+            raise RuntimeError(f"source image drift during work-area audit: {source_image}")
+        if not tray_path.is_file():
+            raise RuntimeError(f"missing human tray annotation for work-area audit: {tray_path}")
+        tray = load_json(tray_path)
+        if tray.get("reviewed") is not True or tray.get("source") != "human":
+            raise RuntimeError(f"tray context is not human-reviewed: {tray_path}")
+        boxes = tray.get("boxes") or []
+        if not boxes:
+            raise RuntimeError(f"tray context has no boxes: {tray_path}")
+        for box in boxes:
+            yolo_line(box)
+        if not roi_path.is_file():
+            missing.append(stem)
+            continue
+        annotation = work_area.validate_human_annotation(load_json(roi_path), expected_photo_id=stem)
+        expected = {
+            "source_photo_id": str(source.get("source_photo_id") or source.get("photo_id") or stem),
+            "source_sha256": str(source.get("source_sha256") or ""),
+            "packed_image_sha256": str(source.get("packed_image_sha256") or ""),
+        }
+        for field, value in expected.items():
+            if not value or annotation.get(field) != value:
+                raise RuntimeError(f"work-area annotation {field} mismatch: {roi_path}")
+        if not annotation["judgeable"]:
+            unjudgeable.append(stem)
+            counts = {work_area.UNKNOWN_WORK_AREA: len(boxes)}
+        else:
+            counts = work_area.classify_boxes(boxes, annotation["polygon"])
+        if annotation.get("tray_scope_counts") != counts:
+            raise RuntimeError(f"work-area saved counts drift: {roi_path}")
+        totals.update(counts)
+        audited.append({
+            "packed_stem": stem,
+            "source_photo_id": expected["source_photo_id"],
+            "task_id": str(source.get("task_id") or "unknown"),
+            "sku_code": str(source.get("sku_code") or "unknown"),
+            "annotation": str(roi_path),
+            "annotation_sha256": sha256(roi_path),
+            "tray_annotation": str(tray_path),
+            "tray_annotation_sha256": sha256(tray_path),
+            "source_sha256": expected["source_sha256"],
+            "packed_image_sha256": expected["packed_image_sha256"],
+            "judgeable": annotation["judgeable"],
+            "tray_scope_counts": counts,
+        })
+    if missing or unjudgeable or len(audited) != len(rows):
+        raise RuntimeError(
+            f"work-area annotation completion gate: reviewed={len(audited)}/{len(rows)}, "
+            f"missing={missing}, unjudgeable={unjudgeable}"
+        )
+    return {
+        "version": "vision-lab-work-area-queue-audit-v1",
+        "queue": str(queue),
+        "queue_manifest_sha256": sha256(manifest_path),
+        "reviewed_images": len(audited),
+        "task_count": len({row["task_id"] for row in audited}),
+        "sku_codes": sorted({row["sku_code"] for row in audited}),
+        "tray_scope_counts": {name: int(totals[name]) for name in work_area.WORK_AREA_GROUPS},
+        "scope_rule": "tray_center_in_human_polygon",
+        "outside_samples_retained": True,
+        "protected_holdout_modified": False,
+        "production_writes": 0,
+        "rows": audited,
+    }
+
+
+def write_work_area_receipt(runtime_root: Path, audits: list[dict[str, Any]]) -> tuple[Path, dict[str, Any]]:
+    totals: Counter[str] = Counter()
+    for audit in audits:
+        totals.update(audit["tray_scope_counts"])
+    payload = {
+        "version": "vision-lab-work-area-audit-receipt-v1",
+        "created_at": vision_lab.utc_now(),
+        "queues": audits,
+        "reviewed_images": sum(int(audit["reviewed_images"]) for audit in audits),
+        "task_count": len({row["task_id"] for audit in audits for row in audit["rows"]}),
+        "sku_codes": sorted({sku for audit in audits for sku in audit["sku_codes"]}),
+        "tray_scope_counts": {name: int(totals[name]) for name in work_area.WORK_AREA_GROUPS},
+        "unknown_work_area": int(totals[work_area.UNKNOWN_WORK_AREA]),
+        "outside_samples_retained": True,
+        "protected_holdout_modified": False,
+        "production_writes": 0,
+    }
+    receipts = runtime_root / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    path = receipts / f"work-area-audit-{stamp}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path, payload
 
 
 def dataset_digest(root: Path) -> str:
@@ -377,7 +491,10 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: 
     return refresh_candidate_parity(config, dataset, receipt, repo_root)
 
 
-def evaluate_candidate(config: dict[str, Any], model: dict[str, Any], repo_root: Path) -> tuple[Path, dict[str, Any]]:
+def evaluate_candidate(
+    config: dict[str, Any], model: dict[str, Any], repo_root: Path,
+    work_area_annotations: list[Path] | None = None,
+) -> tuple[Path, dict[str, Any]]:
     tray = config["tray_active_learning"]
     production_tray = Path(os.path.expandvars(tray["production_tray_onnx"]))
     production_label = Path(os.path.expandvars(tray["production_label_onnx"]))
@@ -398,6 +515,8 @@ def evaluate_candidate(config: dict[str, Any], model: dict[str, Any], repo_root:
         "--production-onnx-parity-mismatches", str(model["production_onnx_parity_mismatches"]),
         "--output", str(output),
     ]
+    for annotation_root in work_area_annotations or []:
+        command.extend(["--work-area-annotations", str(annotation_root)])
     result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", timeout=7200)
     if result.returncode != 0 or not output.is_file():
         raise RuntimeError(f"tray candidate evaluation failed with exit code {result.returncode}")
@@ -419,14 +538,28 @@ def evaluate_gate(config: dict[str, Any], model: dict[str, Any], metrics: dict[s
     if int(candidate.get("tray_target_hits", -1)) < int(baseline.get("tray_target_hits", 0)):
         errors.append("tray target coverage regressed")
     for group_name in gate.get("required_full_recall_groups", []):
-        group = (candidate.get("groups") or {}).get(group_name) or {}
-        if int(group.get("defect_total", 0)) <= 0 or group.get("defect_hits") != group.get("defect_total"):
-            errors.append(f"required defect group did not reach full recall: {group_name}")
-        if group.get("tray_target_hits") != group.get("tray_target_total"):
-            errors.append(f"required defect group tray coverage incomplete: {group_name}")
+        inside_rows = [
+            row for row in candidate.get("details", [])
+            if row.get("kind") == "defect" and row.get("group") == group_name
+            and row.get("work_area") == work_area.INSIDE_WORK_AREA
+        ]
+        if inside_rows and not all(row.get("hit") for row in inside_rows):
+            errors.append(f"required inside defect group did not reach full recall: {group_name}")
+        if inside_rows and not all(row.get("tray_target_covered") for row in inside_rows):
+            errors.append(f"required inside defect group tray coverage incomplete: {group_name}")
     target = next((row for row in candidate.get("details", []) if row.get("photo_id") == TARGET_DEFECT_PHOTO), None)
-    if not target or not target.get("tray_target_covered") or not target.get("hit"):
-        errors.append(f"root-cause protected defect still missed: {TARGET_DEFECT_PHOTO}")
+    baseline_target = next(
+        (row for row in baseline.get("details", []) if row.get("photo_id") == TARGET_DEFECT_PHOTO), None,
+    )
+    if not target:
+        errors.append(f"root-cause protected defect result missing: {TARGET_DEFECT_PHOTO}")
+    if not target or target.get("work_area") != work_area.OUTSIDE_WORK_AREA:
+        errors.append(f"root-cause protected defect is not audited as outside_work_area: {TARGET_DEFECT_PHOTO}")
+    if baseline_target and target and (
+        int(bool(target.get("tray_target_covered"))) < int(bool(baseline_target.get("tray_target_covered")))
+        or int(bool(target.get("hit"))) < int(bool(baseline_target.get("hit")))
+    ):
+        errors.append(f"outside root-cause protected defect regressed: {TARGET_DEFECT_PHOTO}")
     baseline_fp, candidate_fp = int(baseline.get("false_flags", 0)), int(candidate.get("false_flags", 10**9))
     improvement = float(gate.get("min_false_flag_improvement", 0.05))
     if baseline_fp <= 0 or candidate_fp > baseline_fp * (1.0 - improvement):
@@ -444,10 +577,58 @@ def evaluate_gate(config: dict[str, Any], model: dict[str, Any], metrics: dict[s
         errors.append("latency gate failed")
     if baseline_latency and candidate_latency > baseline_latency * (1 + float(gate.get("max_latency_regression", 0.15))):
         errors.append("latency regressed against production")
+    baseline_work_area = baseline.get("work_area") or {}
+    candidate_work_area = candidate.get("work_area") or {}
+    baseline_scope = baseline_work_area.get("groups") or {}
+    candidate_scope = candidate_work_area.get("groups") or {}
+    roi_records = candidate_work_area.get("records") or {}
+    unknown_scope = candidate_scope.get(work_area.UNKNOWN_WORK_AREA) or {}
+    unknown_counts = {
+        "records_without_human_roi": int(roi_records.get("without_human_roi", 0)),
+        "unjudgeable_records": int(roi_records.get("unjudgeable", 0)),
+        "detected_trays": int(unknown_scope.get("detected_trays", 0)),
+        "defects": int(unknown_scope.get("defect_total", 0)),
+        "missing_label_flags": int(unknown_scope.get("missing_label_flags", 0)),
+    }
+    if not candidate_scope or any(unknown_counts.values()):
+        errors.append(f"unknown_work_area evidence blocks promotion: {unknown_counts}")
+    inside_baseline = baseline_scope.get(work_area.INSIDE_WORK_AREA) or {}
+    inside_candidate = candidate_scope.get(work_area.INSIDE_WORK_AREA) or {}
+    inside_defect_total = int(inside_candidate.get("defect_total", 0))
+    inside_defect_hits = int(inside_candidate.get("defect_hits", 0))
+    if inside_defect_total <= 0:
+        errors.append("inside_work_area primary defect coverage is missing")
+    required_inside_hits = min(int(gate.get("min_defect_hits", 4)), inside_defect_total)
+    if inside_defect_hits < required_inside_hits:
+        errors.append("inside_work_area minimum primary defect hit gate not met")
+    if int(inside_candidate.get("defect_hits", -1)) < int(inside_baseline.get("defect_hits", 0)):
+        errors.append("inside_work_area defect recall regressed")
+    if int(inside_candidate.get("tray_target_hits", -1)) < int(inside_baseline.get("tray_target_hits", 0)):
+        errors.append("inside_work_area tray coverage regressed")
+    if int(inside_candidate.get("tray_target_hits", -1)) != int(inside_candidate.get("tray_target_total", 0)):
+        errors.append("inside_work_area primary tray coverage incomplete")
+    inside_baseline_fp = int(inside_baseline.get("false_flags", 0))
+    inside_candidate_fp = int(inside_candidate.get("false_flags", 10**9))
+    allowed_inside_fp = 0 if inside_baseline_fp == 0 else inside_baseline_fp * (1.0 - improvement)
+    if inside_candidate_fp > allowed_inside_fp:
+        errors.append("inside_work_area primary false-flag gate not met")
+    outside_baseline = baseline_scope.get(work_area.OUTSIDE_WORK_AREA) or {}
+    outside_candidate = candidate_scope.get(work_area.OUTSIDE_WORK_AREA) or {}
+    if int(outside_candidate.get("defect_total", 0)) <= 0:
+        errors.append("outside_work_area defect coverage is missing")
+    if int(outside_candidate.get("defect_hits", -1)) < int(outside_baseline.get("defect_hits", 0)):
+        errors.append("outside_work_area defect recall regressed")
+    if int(outside_candidate.get("tray_target_hits", -1)) < int(outside_baseline.get("tray_target_hits", 0)):
+        errors.append("outside_work_area tray coverage regressed")
     result = {
         "version": "vision-lab-tray-promotion-gate-v1", "model_id": model["model_id"],
         "evaluated_at": vision_lab.utc_now(), "passed": not errors, "errors": errors,
         "metrics": metrics, "deployment_authorized": not errors,
+        "work_area_gate": {
+            "inside_primary": inside_candidate,
+            "outside_secondary": outside_candidate,
+            "unknown_counts": unknown_counts,
+        },
     }
     (Path(model["artifact"]).parent / "promotion-gate.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8",
@@ -498,8 +679,21 @@ def main() -> None:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--candidate-receipt", type=Path)
+    parser.add_argument("--work-area-queue", action="append", type=Path)
+    parser.add_argument("--work-area-annotations", action="append", type=Path)
+    parser.add_argument("--audit-work-area-only", action="store_true")
     args = parser.parse_args()
     config = vision_lab.load_config(args.config)
+    runtime_root = Path(config["runtime_root"])
+    work_area_audits = [audit_work_area_queue(queue.resolve()) for queue in (args.work_area_queue or [])]
+    work_area_receipt: Path | None = None
+    if work_area_audits:
+        work_area_receipt, payload = write_work_area_receipt(runtime_root, work_area_audits)
+        if args.audit_work_area_only:
+            print(json.dumps({"receipt": str(work_area_receipt), **payload}, ensure_ascii=False, indent=2))
+            return
+    elif args.audit_work_area_only:
+        raise RuntimeError("--audit-work-area-only requires at least one --work-area-queue")
     queues = args.queue or [Path(os.path.expandvars(config["tray_active_learning"]["queue_root"]))]
     dataset = build_dataset(config, [queue.resolve() for queue in queues])
     if args.prepare_only:
@@ -512,7 +706,9 @@ def main() -> None:
         model = refresh_candidate_parity(config, dataset, model, args.repo_root)
     else:
         model = train_candidate(config, dataset, args.repo_root)
-    metrics_path, metrics = evaluate_candidate(config, model, args.repo_root)
+    configured_annotations = config["tray_active_learning"].get("work_area_evaluation_annotations") or []
+    annotation_roots = args.work_area_annotations or [Path(os.path.expandvars(value)) for value in configured_annotations]
+    metrics_path, metrics = evaluate_candidate(config, model, args.repo_root, annotation_roots)
     gate = evaluate_gate(config, model, metrics)
     deployment = deploy_if_passed(config, model, gate)
     receipt = {
@@ -521,6 +717,8 @@ def main() -> None:
         "metrics": str(metrics_path), "gate_passed": gate["passed"],
         "gate_errors": gate["errors"], "deployment": deployment,
     }
+    if work_area_receipt is not None:
+        receipt["work_area_audit_receipt"] = str(work_area_receipt)
     path = Path(config["runtime_root"]) / "receipts" / f"tray-workflow-{model['model_id']}.json"
     path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(receipt, ensure_ascii=False, indent=2))

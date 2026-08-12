@@ -43,17 +43,38 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
     def test_modern_missing_class_flow_is_required(self):
         modern = SimpleNamespace(
             ALLOW_MISSING_CLASS=True,
+            OPAQUE_CLASS_LABELS=True,
             WIREGUARD_HOST="",
-            PAGE="missing_confirmed 确认这是真的被拔掉了",
+            PAGE=(
+                "missing_confirmed 确认这是真的被拔掉了 "
+                "OPAQUE_CLASS_RENDERING=true function renderBox "
+                "fillRect(tagX,tagY,tagW,tagH)"
+            ),
         )
         module.validate_modern_annotator(modern, Path("label_hard_negative_annotator.py"))
         legacy = SimpleNamespace(
             ALLOW_MISSING_CLASS=True,
+            OPAQUE_CLASS_LABELS=True,
             WIREGUARD_HOST="",
-            PAGE="missing_confirmed 确认这是真的被拔掉了 new Set(classes).size<2",
+            PAGE=(
+                "missing_confirmed 确认这是真的被拔掉了 "
+                "OPAQUE_CLASS_RENDERING=true function renderBox "
+                "fillRect(tagX,tagY,tagW,tagH) new Set(classes).size<2"
+            ),
         )
         with self.assertRaisesRegex(RuntimeError, "legacy two-class hard block"):
             module.validate_modern_annotator(legacy, Path("label_hard_negative_annotator.py"))
+
+    def test_opaque_high_contrast_rendering_is_required(self):
+        thin_outline = SimpleNamespace(
+            ALLOW_MISSING_CLASS=True,
+            WIREGUARD_HOST="",
+            PAGE="missing_confirmed 确认这是真的被拔掉了",
+        )
+        with self.assertRaisesRegex(RuntimeError, "opaque high-contrast"):
+            module.validate_modern_annotator(
+                thin_outline, Path("label_hard_negative_annotator.py")
+            )
 
     def test_legacy_script_name_is_forbidden(self):
         with self.assertRaisesRegex(RuntimeError, "legacy label annotator is forbidden"):
