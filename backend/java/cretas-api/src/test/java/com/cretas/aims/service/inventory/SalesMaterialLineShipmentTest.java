@@ -207,4 +207,57 @@ class SalesMaterialLineShipmentTest {
         verify(materialBatchService, never()).getFIFOBatches(any(), any(), any());
         verify(materialBatchService, never()).useBatchQuantity(any(), any(), any());
     }
+
+    private String invokeResolveName(String productTypeId) throws Exception {
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "resolveSellableName", String.class, String.class);
+        m.setAccessible(true);
+        return (String) m.invoke(salesService, FACTORY, productTypeId);
+    }
+
+    /**
+     * 🔴 2026-08-12 真机 E2E 抓到: 物料行落库时 product_name 是 NULL ——
+     * 原兜底只查 product_types, 物料 orElse(null)。
+     * 实测 RMT_1782891387679(WL026 / 1.75L李锦记薄盐生抽)在 product_types 里 0 行。
+     *
+     * <p>后果比看上去重: product_name 是订单行上【唯一】保存的名字, 列表/发货单/送货单/发票
+     * 全靠它; 存成 null 之后<b>无法从行本身还原</b>。
+     */
+    @Test
+    @DisplayName("物料行的品名从物料字典解析 —— 不能落成 NULL")
+    void resolvesMaterialName() throws Exception {
+        RawMaterialType m = new RawMaterialType();
+        m.setId(MATERIAL_ID);
+        m.setFactoryId(FACTORY);
+        m.setName("1.75L李锦记薄盐生抽");
+        when(rawMaterialTypeRepository.findByIdAndFactoryId(MATERIAL_ID, FACTORY)).thenReturn(Optional.of(m));
+        when(productTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.empty());
+
+        assertThat(invokeResolveName(MATERIAL_ID)).isEqualTo("1.75L李锦记薄盐生抽");
+    }
+
+    @Test
+    @DisplayName("成品行仍走商品目录 —— 物料字典只是兜底, 不抢先")
+    void productNameStillWins() throws Exception {
+        ProductType pt = new ProductType();
+        pt.setId(PRODUCT_ID);
+        pt.setName("红烧猪蹄 250g");
+        when(productTypeRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(pt));
+
+        assertThat(invokeResolveName(PRODUCT_ID)).isEqualTo("红烧猪蹄 250g");
+        // 成品能解析出来时不该再去查物料字典
+        verify(rawMaterialTypeRepository, never()).findByIdAndFactoryId(eq(PRODUCT_ID), any());
+    }
+
+    @Test
+    @DisplayName("两边都查不到时返回 null(保持既有行为), 空 id 不查库")
+    void unknownIdReturnsNull() throws Exception {
+        when(productTypeRepository.findById("NOPE")).thenReturn(Optional.empty());
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("NOPE", FACTORY)).thenReturn(Optional.empty());
+        assertThat(invokeResolveName("NOPE")).isNull();
+
+        assertThat(invokeResolveName(null)).isNull();
+        assertThat(invokeResolveName("  ")).isNull();
+        verify(productTypeRepository, never()).findById("  ");
+    }
 }

@@ -462,8 +462,7 @@ public class SalesServiceImpl implements SalesService {
             // 自动填充产品名称
             String productName = itemDTO.getProductName();
             if (productName == null || productName.isBlank()) {
-                productName = productTypeRepository.findById(itemDTO.getProductTypeId())
-                        .map(ProductType::getName).orElse(null);
+                productName = resolveSellableName(factoryId, itemDTO.getProductTypeId());
             }
             item.setProductName(productName);
             item.setQuantity(itemDTO.getQuantity());
@@ -2141,8 +2140,7 @@ public class SalesServiceImpl implements SalesService {
                 item.setProductTypeId(itemDTO.getProductTypeId());
                 String productName = itemDTO.getProductName();
                 if (productName == null || productName.isBlank()) {
-                    productName = productTypeRepository.findById(itemDTO.getProductTypeId())
-                            .map(ProductType::getName).orElse(null);
+                    productName = resolveSellableName(factoryId, itemDTO.getProductTypeId());
                 }
                 item.setProductName(productName);
                 item.setQuantity(itemDTO.getQuantity());
@@ -3688,6 +3686,31 @@ public class SalesServiceImpl implements SalesService {
      * (预留它的 SO = 发货的 SO) 完全正确; 极端并发场景 (同批被多 SO 预留, 某 SO 超发) 理论上可能
      * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
+    /**
+     * 订单行的品名 —— 成品查 product_types, 物料查 raw_material_types。
+     *
+     * <h2>🔴 2026-08-12 真机 E2E 抓到</h2>
+     * 销售订单可以卖物料之后, 物料行落库时 {@code product_name} 是 <b>NULL</b> ——
+     * 原来的兜底只查成品表, 物料查不到就 {@code orElse(null)}。
+     * 实测 {@code RMT_1782891387679}(WL026 / 1.75L李锦记薄盐生抽)在 product_types 里 0 行。
+     *
+     * <p>后果比看上去重: {@code product_name} 是订单行上<b>唯一</b>保存的名字,
+     * 列表 / 发货单 / 送货单 / 发票全靠它。一旦存成 null, <b>事后无法从行本身还原</b>。
+     *
+     * <p>这是「物料行落在成品的从属数据上」的第三个实例(前两个: 分配批次的空态、箱规 404)。
+     * 所以这次不再逐点补, 收敛成这一个解析器 —— 谁要行的名字都走它。
+     */
+    private String resolveSellableName(String factoryId, String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank()) return null;
+        String fromProduct = productTypeRepository == null ? null
+                : productTypeRepository.findById(productTypeId).map(ProductType::getName).orElse(null);
+        if (fromProduct != null && !fromProduct.isBlank()) return fromProduct;
+        if (salesRawMaterialTypeRepository == null) return null;
+        return salesRawMaterialTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getName)
+                .orElse(null);
+    }
+
     /**
      * 这一行卖的是物料(原料/辅料/包材)还是成品?
      *
