@@ -210,6 +210,27 @@ B:\anaconda3\python.exe tools\vision-lab\work_area_roi_queue.py `
   --runtime-root D:\CretasVisionLab
 ```
 
+托盘人工真值只包含能够可靠画出完整外框的真实托盘。画面边缘只露出局部、被裁切到无法确定完整
+外框的托盘不得靠猜测补框；它也不会因此成为一个可用于 `outside_work_area` 召回的样本。可完整
+判断的台外托盘仍必须保留并按中心点分类。
+
+若一个已完成批次只有一张 ROI 因工作区边界不可见而明确标为 `unjudgeable`，后续同 SKU 补样
+通过人工 tray 和 ROI 审计后，不得改写原批次或删除该 unknown 证据。应建立新的有效集合，将其余
+judgeable 行与补样复制到独立队列，并记录两个源 manifest、被替换 ROI 和新 ROI 的 SHA：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\work_area_effective_queue.py `
+  --base-queue D:\CretasVisionLab\tray-queues\work-area-active-<base> `
+  --replacement-queue D:\CretasVisionLab\tray-queues\work-area-active-<replacement> `
+  --replace-stem <明确 unjudgeable 的 packed stem> `
+  --queue-parent D:\CretasVisionLab\tray-queues `
+  --runtime-root D:\CretasVisionLab
+```
+
+该入口只允许“一张人工 unjudgeable → 一张同 SKU、人工 judgeable”的替换，拒绝其他
+unjudgeable、重复 photo/task/SHA/stem 和任何源文件漂移。派生队列只用于审计/实验，源队列与
+原始 unknown sidecar 保持不变。
+
 新增人工轮次必须先运行只读计划器。推荐第二轮新增 `24` 张（四个现有 SKU 各 `6` 张），使累计
 ROI 达到 `32` 张；这是下一轮数据收集量，不是生产充分性声明。计划器逐一验证候选源图/打包图
 SHA 和 tray 人工真值，按 photo/task 排除当前 ROI 与旧 label MARK，按 ID/task/SHA 及 pHash
