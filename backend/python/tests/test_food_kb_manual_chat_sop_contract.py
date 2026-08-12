@@ -37,6 +37,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_PLATFORM_SYNC_ANSWER,
     _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
+    _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
     _RESTAURANT_STAFFING_SCOPE_ANSWER,
@@ -72,6 +73,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_platform_sync_guard,
     _needs_restaurant_output_clarification_guard,
     _needs_restaurant_query_contract_guard,
+    _needs_restaurant_read_write_boundary_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
     _needs_restaurant_staffing_scope_guard,
@@ -116,6 +118,9 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
     assert "“归属对象”只表示存放位置" in FACTORY_SYSTEM_PROMPT
     assert "“本图产出”按画布终端生产节点计算" in FACTORY_SYSTEM_PROMPT
+    assert "原料分流才把整条版本谱系自动重锚" in FACTORY_SYSTEM_PROMPT
+    assert "每个工序至少保留一个产出 Cell" in FACTORY_SYSTEM_PROMPT
+    assert "生效 BOM 为空配方只能说“还没配辅料/包材”" in FACTORY_SYSTEM_PROMPT
     assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
     assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
@@ -148,6 +153,11 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "导览助手不替用户计算毛利、损耗" in SYSTEM_PROMPT
     assert "统一使用 GFM Markdown 表格" in SYSTEM_PROMPT
     assert "门店简称匹配多家时返回最多 3 个真实候选按钮" in SYSTEM_PROMPT
+    assert "简称或片段唯一匹配时也先给真实门店确认按钮" in SYSTEM_PROMPT
+    assert "问题对象/分析范围/语义规划/查询计划/计划版本" in SYSTEM_PROMPT
+    assert "【餐饮读写意图边界】" in SYSTEM_PROMPT
+    assert "即使出现下架、调整、删除等写动词也保持只读分析" in SYSTEM_PROMPT
+    assert "本次不执行任何操作，也不替用户猜答案" in SYSTEM_PROMPT
     assert "食材类只认“食材、原材料、食品、饮料、酒水、菜品”" in SYSTEM_PROMPT
 
 
@@ -219,6 +229,15 @@ def test_factory_bom_canvas_and_cost_boundary_is_deterministic():
     assert "首次保存会创建首版草稿" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "没有包材或副产本身不阻止激活" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "只汇总包材" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "包材 Cell 位于成品上方并连向所属成品" in (
+        _FACTORY_BOM_CANVAS_COST_ANSWER
+    )
+    assert "有生效 BOM 但明细为空只能说“还没配辅料/包材”" in (
+        _FACTORY_BOM_CANVAS_COST_ANSWER
+    )
+    assert "旧启用版本不能把重发布自身误拦" in (
+        _FACTORY_BOM_CANVAS_COST_ANSWER
+    )
     assert "人工与制造费用也不在 BOM 中配置" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "不能直接与正式报工、结算形成的实际完整成本比较" in (
         _FACTORY_BOM_CANVAS_COST_ANSWER
@@ -245,6 +264,18 @@ def test_factory_workflow_storage_and_output_directory_is_deterministic():
     assert "BOM 副产不计入" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
     assert "不能冒充“没有工艺图”" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
     assert "完全匹配或最小超集" in _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    assert "整条 Workflow 版本谱系自动重锚到该原料" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
+    assert "多原料多成品的联产没有唯一归属" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
+    assert "每个工序 Cell 至少保留一个产出 Cell" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
+    assert "有生效 BOM 但暂未配辅料或包材" in (
+        _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER
+    )
 
 
 def test_material_packaging_questions_use_the_reviewed_factory_contract():
@@ -431,6 +462,8 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
         "首轮没说门店时是默认全部门店还是一定先反问？",
         "最近30天总营收没写门店时会怎么处理？",
         "点名不存在的门店、澄清延续轮和缺时间时分别怎么处理？",
+        "门店简称唯一匹配时会直接查还是先确认按钮？",
+        "全店答案后只说门店片段，怎样保留原问题并收窄范围？",
     )
     assert all(
         _needs_restaurant_context_scope_guard(q) for q in equivalent_questions
@@ -449,7 +482,16 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
     assert "不存在、改名或停用的门店时必须澄清" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
-    assert "属于新的收窄问题，系统会按新问题重新规划" in (
+    assert "属于对上一问的范围收窄" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "也必须先显示“你是想看 X 店吗？”确认按钮" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "把新门店范围拼回原问题后再规划" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "问题对象、分析范围、语义规划、查询计划、计划版本" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
     assert "planner 结构化判定唯一缺项是 `store_scope`" in (
@@ -472,6 +514,24 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
     )
     assert "折扣力度问法仍未闭环" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
     assert "仍缺历史时段表现 resolver" not in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+
+
+def test_restaurant_deliberative_write_words_stay_read_only_and_fail_closed():
+    equivalent_questions = (
+        "这个菜要不要下架？",
+        "如果要调整菜单应该怎样预览和确认？",
+        "读写歧义时写操作安全门怎么处理？",
+    )
+    assert all(
+        _needs_restaurant_read_write_boundary_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_read_write_boundary_guard("最近30天菜品销量排名")
+    assert "征询或假设保持只读" in _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER
+    assert "这个菜要不要下架" in _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER
+    assert "先返回预览" in _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER
+    assert "判定矛盾时 fail closed" in _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER
+    assert "本次不执行任何操作" in _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER
 
 
 def test_restaurant_discount_questions_never_fabricate_current_business_data():
@@ -684,6 +744,12 @@ def test_restaurant_table_and_ambiguity_clarification_use_current_contract():
         _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
     )
     assert "最多 3 个真实候选" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    assert "片段只推断出一家时也先显示该真实门店的确认按钮" in (
+        _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    )
+    assert "只有用户完整写出有效门店全名时才直接使用" in (
+        _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
+    )
     assert "仍然查询销量" in _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
     assert "不替用户查询、计算或分析真实经营数据" in (
         _RESTAURANT_OUTPUT_CLARIFICATION_ANSWER
@@ -944,11 +1010,16 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "`BY_STOCK` 小结形成的成品已经是有效、可用库存批次" in current_sop
     assert "调拨凭证只在收货确认后生成" in current_sop
     assert "归属读取失败时保持缺失并阻止" in current_sop
+    assert "整条 Workflow 版本谱系自动重锚到该共享原料" in current_sop
+    assert "每个工序至少保留一个产出 Cell" in current_sop
+    assert "有生效 BOM 但明细为空时只能说“还没配辅料/包材”" in current_sop
+    assert "包材 Cell 位于成品上方并连向所属成品" in current_sop
+    assert "旧启用版本不能把“自动同步并发布”自身误拦" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-11" in html
+    assert "origin/main · SOP sync 2026-08-12" in html
     assert "存放位置不等于“本图产出”" in html
     assert "中间 WIP 批次沿用同一生产计划身份" in html
     assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
@@ -989,6 +1060,11 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "已删除料号也不回收复用" in html
     assert "无采购订单入库与仓库任务工作台" in html
     assert "申请、审批和仓库实收是三个独立动作" in html
+    assert "每个工序至少保留一个产出 Cell" in html
+    assert "生效 BOM 明细为空只显示“还没配辅料/包材”" in html
+    assert "包材 Cell 位于成品上方并连向所属成品" in html
+    assert "旧版本不能把重发布自身误拦" in html
+    assert "原料分流才把整条版本谱系自动重锚到该原料" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -1083,6 +1159,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "登记表是通用查询的单一真值",
             "是否答到所问只影响学习",
             "营收预测的历史回测误差",
+            "只写简称或片段且唯一推断到一家时",
+            "把新门店范围拼回原问题后再规划",
+            "征询不是写操作",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -1113,6 +1192,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "当前前端只确认发现卡可见",
             "登记表驱动的通用问答",
             "营收预测与历史回测误差",
+            "简称或片段唯一推断到一家时先显示真实门店确认按钮",
+            "不能丢成裸店名",
+            "写判定与只读意图矛盾时就地 fail closed",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -1136,6 +1218,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "客户端未接入动作前不得宣称页面已能生成策划案",
             "历史回测误差约 ±X%",
             "经营断点",
+            "简称或片段唯一推断到一家时也先给真实门店确认按钮",
+            "读写意图边界",
+            "本次 fail closed，不执行操作、不猜答案",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -1185,6 +1270,13 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "无订单入库与库存归属" in ai_assist
     assert "登记表与通用问答边界" in ai_assist
     assert "营收预测与历史回测误差" in ai_assist
+    assert "存放位置、本图产出与自动重锚" in ai_assist
+    assert "产出门禁、版本状态与包材连线" in ai_assist
+    assert "标准表格与门店匹配确认" in ai_assist
+    assert "征询分析与写操作安全门" in ai_assist
+    assert "把新门店范围拼回原问题后再规划" in ai_assist
+    assert "简称或片段唯一匹配时也先显示真实门店确认按钮" in ai_assist
+    assert "本次不执行操作也不猜答案" in ai_assist
     assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 
@@ -1421,7 +1513,19 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "Workflow 画布的 BOM 版本状态和包材 Cell 连线怎样验收？",
+            "factory",
+            _FACTORY_BOM_CANVAS_COST_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "Workflow 的存放位置为什么和本图产出不一样，怎样按产出反查？",
+            "factory",
+            _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "原料分流发布后 Workflow 存放位置和本图产出怎样自动重锚？",
             "factory",
             _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
             "f006-production-full-chain-sop.md",
@@ -1436,6 +1540,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "门店简称唯一匹配时会直接查还是先确认按钮？",
+            "restaurant",
+            _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "这个菜要不要下架，读写歧义时怎样处理？",
+            "restaurant",
+            _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (
