@@ -6,3 +6,9 @@ backend/python/smartbi/tests/test_e2e_unified_analyzer.py whitespace=trailing-sp
 backend/python/tests/conftest.py whitespace=trailing-space,cr-at-eol
 backend/python/smartbi/services/materialized_analytics/templates/member_deep_analytics.py whitespace=trailing-space,cr-at-eol
 backend/python/smartbi/services/materialized_analytics/templates/period_comparison_trend.py whitespace=trailing-space,cr-at-eol
+
+# These two legacy Java controllers still store CRLF blobs. Keep space checks
+# strict while treating CR as EOL; remove these exact rules after a dedicated
+# no-behavior-change LF normalization makes the same range pass without them.
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FormAssistantController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductTypeController.java whitespace=trailing-space,cr-at-eol
