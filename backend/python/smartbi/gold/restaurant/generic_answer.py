@@ -236,8 +236,9 @@ def render(result: CellResult, window_label: str) -> str:
 
         names = [column_label(c) or c.split(".")[-1] for c in result.missing_columns]
         cols = "、".join(names)
-        text = (f"这项分析需要**{label}**相关数据（{cols}），你的系统还没有接入这些字段。"
-                f"接上之后本分析即可运行 —— 本次没有用其他数据替代。")
+        # ⛔ 不说「字段」——「字段」是黑话, 店长不说这个词(见 `INTERNAL_VOCAB`)。
+        text = (f"这项分析要用到**{label}**的数据（{cols}），你这边还没接进来。"
+                f"接上就能算 —— 这次我没有拿别的数据顶替。")
         offers = build_fill_offers(missing_columns=result.missing_columns)
         if offers:
             text += "\n\n" + "\n".join(f"> {o['text']}" for o in offers)

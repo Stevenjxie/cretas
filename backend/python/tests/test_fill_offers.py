@@ -176,12 +176,18 @@ def test_render_offers_the_fill_at_the_product_entry():
     text = render(_cell_with_missing("agg_restaurant_product_cost.food_cost"), "最近30天")
 
     # ① 缺口本身仍然要说 —— 开价是加值, 不是替换
-    assert "还没有接入" in text
+    assert "还没接进来" in text
     # ② 人话名替掉了裸列名
     assert "成本卡" in text, f"没说人话: {text}"
     assert "food_cost" not in text, f"库表列名怼到店长脸上了: {text}"
     # ③ 开价说出了「补了能算出什么」, 且含店长嘴里那个词
     assert "毛利率" in text, f"没开出最有价值的那句价: {text}"
+    # ④ ⛔ 不许同义反复:「补每道菜的食材成本, 能算出**食材成本**」是绕口令。
+    #    直接命中的那个 metric 与列本身同义, 闭包解锁的才是卖点。
+    assert "还能算出" in text, f"没把「显然的」和「意外之喜」分开: {text}"
+    assert "能算出食材成本" not in text, f"同义反复还在: {text}"
+    # ⑤ 「字段」是黑话, 店长不说这个词
+    assert "字段" not in text, f"黑话漏到店长面前: {text}"
 
 
 def test_render_offer_follows_requires_at_the_product_entry(monkeypatch):
@@ -194,18 +200,31 @@ def test_render_offer_follows_requires_at_the_product_entry(monkeypatch):
     # ⛔ 用 registry 取 label, 不写字面量 —— 第一版写死「损耗数量」, 那是**列**的
     #    人话名, 而这里要的是**指标** label(「损耗量」)。变异其实生效了, 是我的
     #    断言在跟一个错的字符串比。形态 D 的微缩版: 同一个概念两个名字。
+    # ⛔ 用 registry 取 label, 不写字面量 —— 第一版写死「损耗数量」, 那是**列**的
+    #    人话名, 而这里要的是**指标** label(「损耗量」)。变异其实生效了, 是我的
+    #    断言在跟一个错的字符串比。形态 D 的微缩版: 同一个概念两个名字。
     wastage_label = reg.METRICS["wastage_qty"].label
-    before = render(_cell_with_missing("fact_pos_item.qty"), "最近30天")
+    # ⚠️ 落点选 `tax_amount` 而不是 `fact_pos_item.qty`: 后者的**闭包非空**,
+    #    正文只说闭包那几个, 直接命中的变化根本不出现在文案里 —— 变异会「不红」,
+    #    而那不是断言没用, 是变异打在了正文看不见的地方(形态 C″)。
+    #    `tax_amount` 闭包为空, 正文退回直接命中, 改动才可见。
+    column = "fact_pos_transaction.tax_amount"
+    before = render(_cell_with_missing(column), "最近30天")
     assert wastage_label not in before
 
     patched = dict(reg.METRICS)
     original = patched["wastage_qty"]
     patched["wastage_qty"] = type(original)(
-        **{**original.__dict__,
-           "requires": tuple(original.requires) + ("fact_pos_item.qty",)})
+        **{**original.__dict__, "requires": tuple(original.requires) + (column,)})
     monkeypatch.setattr(reg, "METRICS", patched)
 
-    after = render(_cell_with_missing("fact_pos_item.qty"), "最近30天")
+    # 阳性对照: 先证明**变异真的到达了**反查, 再看正文 —— 否则「不红」分不清
+    # 是「断言没用」还是「变异没生效」。
+    from smartbi.gold.restaurant.fill_offers import unlocked_split_by_column
+    assert "wastage_qty" in unlocked_split_by_column()[column]["direct"], (
+        "变异没打进反查 —— 后面那条断言无论红不红都没有意义")
+
+    after = render(_cell_with_missing(column), "最近30天")
     assert wastage_label in after, (
         "改了 requires 而产品那条路的开价没变 —— 说明它在别处写死了")
 
@@ -215,4 +234,4 @@ def test_render_still_reports_the_gap_when_no_offer_can_be_made():
     from smartbi.gold.restaurant.generic_answer import render
 
     text = render(_cell_with_missing("表.不存在的列"), "最近30天")
-    assert "还没有接入" in text, "开价没开出来, 连缺口都不说了"
+    assert "还没接进来" in text, "开价没开出来, 连缺口都不说了"

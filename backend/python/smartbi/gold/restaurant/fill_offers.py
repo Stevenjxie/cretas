@@ -79,6 +79,31 @@ def unlocked_by_column() -> Dict[str, Tuple[str, ...]]:
     return {c: tuple(sorted(k)) for c, k in direct.items()}
 
 
+def unlocked_split_by_column() -> Dict[str, Dict[str, Tuple[str, ...]]]:
+    """同一份反查，但把**直接命中**和**闭包命中**分开。
+
+    🔴 为什么要分：不分就会说出「补每道菜的食材成本，能算出**食材成本**、毛利率、毛利」
+       —— 字面正确，读起来像绕口令。那一列直接对应的 metric 是**显然的**，
+       闭包解锁的派生指标才是开价的真正卖点（「毛利率」才是店长嘴里那个词）。
+
+    ⛔ 这个区分**不是手写排除表** —— 反查算法本来就知道：
+       直接命中 = 列在 `Metric.requires` 里；闭包命中 = 经 `left`/`right` 传递到的。
+    """
+    direct: Dict[str, set] = {}
+    for key, metric in _reg.METRICS.items():
+        for column in metric.requires:
+            direct.setdefault(column, set()).add(key)
+
+    full = unlocked_by_column()
+    out: Dict[str, Dict[str, Tuple[str, ...]]] = {}
+    for column, keys in direct.items():
+        out[column] = {
+            "direct": tuple(sorted(keys)),
+            "closure": tuple(sorted(set(full.get(column, ())) - keys)),
+        }
+    return out
+
+
 def _labels_of(metric_keys: Iterable[str]) -> List[str]:
     out = []
     for key in metric_keys:
@@ -95,12 +120,22 @@ def column_label(column: str) -> str:
 
 
 def offers_for_missing_columns(missing_columns: Sequence[str]) -> List[Dict[str, object]]:
-    """完全算不出 → 「补 {列}，能算出 {指标}」。"""
+    """完全算不出 → 「补 {列}，还能算出 {闭包解锁的指标}」。"""
     reverse = unlocked_by_column()
+    reverse_split = unlocked_split_by_column()
     offers: List[Dict[str, object]] = []
     for column in missing_columns:
         label = column_label(column)
-        unlocked = _labels_of(reverse.get(column, ()))
+        split = reverse_split.get(column, {})
+        closure_labels = _labels_of(split.get("closure", ()))
+        direct_labels = _labels_of(split.get("direct", ()))
+        # 🔴 闭包解锁的才是卖点。直接命中的那个 metric 与列本身同义,
+        #    说出来是「补每道菜的食材成本, 能算出食材成本」—— 绕口令。
+        #    「还能」两个字把「显然的」和「意外之喜」分开。
+        # ⛔ 闭包为空时退回直接命中 —— 否则那一列就完全开不出价了,
+        #    而「开不出价」和「没有缺口」在下游长得一样。
+        unlocked = closure_labels or direct_labels
+        lead = "还能算出" if closure_labels else "能算出"
         if not label or not unlocked:
             # ⛔ 说不清楚就不说 —— 一句「补 fact_pos_transaction.tax_amount」
             #    或者「补了能算出（空）」比不开价更糟。
@@ -109,7 +144,7 @@ def offers_for_missing_columns(missing_columns: Sequence[str]) -> List[Dict[str,
         offers.append({
             "kind": "fill",
             "column": column,
-            "text": f"补{label}，能算出{'、'.join(unlocked)}",
+            "text": f"补{label}，{lead}{'、'.join(unlocked)}",
             "unlocks": tuple(reverse.get(column, ())),
         })
     return offers
