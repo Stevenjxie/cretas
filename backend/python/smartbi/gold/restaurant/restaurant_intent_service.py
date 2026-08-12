@@ -13,6 +13,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.customer_text import (
+    CONTRACT_REFUSAL_MARK,
     EXECUTION_UNAVAILABLE,
     NO_SUBSTITUTION,
     NO_USABLE_RESULT,
@@ -1661,7 +1662,7 @@ async def tiered_answer(
             # 2026-08-12 白话化: 原文「本次结果没有可靠覆盖…也没有改走相邻指标」
             # 三个内部说法叠在一起, prod 实测原样发给了店长(问「到底赚钱了没」)。
             safe_text = (
-                f"这次没算出{missing}，所以我没有把可能答非所问的数据端给你，"
+                f"这次没算出{missing}，所以我{CONTRACT_REFUSAL_MARK}，"
                 f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)

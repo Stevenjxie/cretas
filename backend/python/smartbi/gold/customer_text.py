@@ -84,6 +84,17 @@ EXECUTION_UNAVAILABLE = f"系统这会儿有点忙，这次什么都没算，{NO
 #: 计划跑完了但没拿到能给人看的东西。旧版含「可验证结果」「相邻分析」。
 NO_USABLE_RESULT = f"这次没算出可以给你的结果，{NO_SUBSTITUTION}。请确认一下数据范围再试。"
 
+#: 契约没覆盖住问的指标 → 整份不发。这段话**可辨认的那一句**。
+#:
+#: ⚠️ 单独抽出来是给**电池的排除项**用的：电池要断言「这几道题不许走到契约拒答」，
+#:    而它原来挂的是旧措辞 `"本次结果没有可靠覆盖"` —— P-B① 改完文案后那两处
+#:    排除**当场变成恒真**（本轮已经因为同型腐烂拆掉 6 条，不能再造两条）。
+#:    引用这个常量，改文案时电池自动跟着变。
+#:
+#: ⛔ 取的是「答非所问」那半句而不是「这次没算出」——后者与 `NO_USABLE_RESULT`
+#:    的开头撞车，两种不同的拒答会被同一个排除项混在一起，红了分不清是哪条路。
+CONTRACT_REFUSAL_MARK = "没有把可能答非所问的数据端给你"
+
 # The restaurant chat is read by owners and store managers, not engineers.
 # Keep the replacements ordered from specific phrases to individual jargon so
 # that the resulting sentences remain natural instead of becoming word-for-word
