@@ -5791,9 +5791,18 @@ def _semantic_spec_from_t3(
     #    同一个窗口。在这里各写一份 = 说的和算的迟早不是同一个窗口, 那才是真正的
     #    降级处理。(清掉 clarification_needed 之后, 那个块的第 5 个条件就通了。)
     # ⛔ 守卫与门店那一格逐条相同: 延续轮不抢(用户正在回答这个槽位)。
+    # 🔴 `code in _TIME_SCOPED_INTENTS` 是**承重条件**, 不是保险。
+    #    第一版没有它, 实测 `RESTAURANT_OPS_DISCOUNT_SUMMARY` / `..._CHANNEL_MIX`
+    #    拿到 `time_range_defaulted=True` 而 `window_label='全部历史'` ——
+    #    **披露说「最近30天」, 实际按全部历史算**。反问只是烦, 披露和实际不符是在骗人。
+    #    (那两个意图现在已经进了集合; 这条守的是**下一个**被加进来的意图。)
+    # ⚠️ 判据: 这里放行的前提是 `_build_spec` 顶部那个块**真的会补上窗口短语**,
+    #    而它的条件正是 `code in _TIME_SCOPED_INTENTS`。两处必须同源 ——
+    #    一处放行一处不补, 就是「标了旗子没落到算数的字段上」。
     if (
         clarification_needed
         and tuple(missing_fields) == _TIME_ONLY_MISSING
+        and code in _TIME_SCOPED_INTENTS
         and not is_continuation
     ):
         logger.info(

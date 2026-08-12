@@ -43,8 +43,10 @@ def _asked_slots(spec):
 
 
 from smartbi.gold.restaurant.restaurant_intent import (
+    DEFAULT_TIME_PHRASE,
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
+    _INTENT_DESCRIPTIONS,
     _build_t3_prompt,
     _cache_get,
     _cache_put,
@@ -2740,3 +2742,55 @@ async def test_time_plus_another_gap_still_clarifies():
 
     assert spec.clarification_needed is True, (
         "还缺指标却直接答了 —— 指标没有无歧义的默认, 补错等于给一个看着像答案的错答案")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", sorted(_INTENT_DESCRIPTIONS))
+async def test_every_intent_that_defaults_time_actually_gets_that_window(code):
+    """🔴 逐意图核对(不是抽查): 凡是标了 `time_range_defaulted` 的意图,
+    `window_label` 必须**真的**是那个默认窗口。
+
+    被守的病(实测踩过): `RESTAURANT_OPS_DISCOUNT_SUMMARY` /
+    `RESTAURANT_OPS_CHANNEL_MIX` 拿到 `time_range_defaulted=True` 而
+    `window_label='全部历史'` —— **披露说「最近30天」, 实际按全部历史算**。
+    反问只是烦, 披露和实际不符是在骗人。而模块自己的注释早就写了这句。
+
+    ⛔ 参数化跑**全部**意图码, 不是列一张手写清单 —— 手写清单不会在下一个
+       意图被加进来时报警, 而这正是上一次漏掉两个意图的原因。
+    """
+    # 🔴 仪器修正: 第一版用**同一句问句**跑全部意图, 路由缓存把第一次的结果
+    #    replay 给了后面 18 次 —— 实测每次 `spec.intent` 都是
+    #    `RESTAURANT_OPS_BUSINESS_OPTIMIZATION`, 参数 `code` 根本没进到解析里。
+    #    那条断言「19 次全绿」其实只测了 1 个意图, 是个恒真式。
+    #    两处一起修: 每个意图用**不同的问句**, 且逐个清路由/租户闸缓存。
+    clear_route_cache()
+    clear_tenant_gate_cache()
+    pool = _FakeDbPool(is_restaurant=True, store_names=["模拟·静安嘉里中心店"])
+    plan = {
+        "intent": code,
+        "time_range": None, "wants_margin": False, "asks_profitability": False,
+        "requested_metrics": [], "analysis_action": "lookup",
+        "dimensions": [], "dish": None, "store": None, "stores": [],
+        "store_scope": "all", "confidence": 0.98,
+        "clarification_needed": True, "missing_fields": ["time_range"],
+        "clarification_question": "你想看哪个时间范围？",
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+    planner = AsyncMock(return_value=plan)
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=planner), \
+        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
+              return_value=None), \
+        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
+              new=AsyncMock(return_value=(None, 0.0, None))):
+        spec = await parse_restaurant_query(
+            f"{code} 这个怎么样", pool, factory_id="DEMO_REST",
+            session_key=f"perintent-{code}", semantic_first=True)
+
+    if not spec.time_range_defaulted:
+        # 没标默认 —— 这条意图不走默认窗口, 与本条无关(它照旧反问)。
+        return
+    assert spec.window_label == DEFAULT_TIME_PHRASE, (
+        f"{code}: 标了 time_range_defaulted 却把窗口算成 {spec.window_label!r} —— "
+        f"披露会说「{DEFAULT_TIME_PHRASE}」, 那是在骗人")
+    assert spec.date_range[0] is not None and spec.date_range[1] is not None, (
+        f"{code}: 标了默认却没有可算的日期区间")
