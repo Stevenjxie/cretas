@@ -106,8 +106,31 @@ _FORBIDDEN_EVERYWHERE = [
     "Step1",                    # reasoning leak (R13c 修)
     "实体识别",                 # reasoning leak
     "工厂制造分析不适用",       # G4 factory frame (R20 修)
-    "生产统计报告",             # G4 upload frame (R15 修)
+    # 🔴 2026-08-12 删「生产统计报告」: 全仓 grep(排除测试/电池)证明产品源码里
+    #    **没有这个词**, 于是这条排除对全部用例恒真, 一次都不可能红。
+    #    它当年防的是「餐饮问句被套上工厂框架」, 而那个关切现在由上一行
+    #    **活着的**「工厂制造分析不适用」守着(BusinessTypeGate.java:92) ——
+    #    删掉不是放松, 是去掉一条冒充守卫的死条目。
+    #    再腐烂由 `test_battery_phrasings_are_not_dead_letters` 拦。
 ]
+
+#: 「系统说自己没听懂」的真实措辞。
+#:
+#: 🔴 2026-08-12 实测: 电池里原有 4 处 `excludes: [_CANNOT_UNDERSTAND]`, 而
+#:    「我没太看懂」**在产品源码里一个字都没有**(全仓 grep, 排除测试与电池后为空)。
+#:    那 4 条排除因此**恒真 —— 一次都不可能红**, 而它们读起来像是守着
+#:    「系统不许喊听不懂」。多半是当年真有这句话, 后来文案改了,
+#:    排除项没跟着改, 于是静默失效 —— 不报错、不变红, 只是从此什么都不测。
+#:
+#:    系统现在真正的措辞有两种:
+#:      restaurant_intent:5568 「我还没有完整理解这句话，…」   ← fail-closed
+#:      restaurant_intent:6424 「我现在暂时无法完整理解这句话，…」← 瞬态(会重试)
+#:    共同锚点「完整理解这句话」两种都能抓住。
+#:
+#: 判据: **排除项写完要回头确认那个字符串在产品里真的存在** ——
+#:       否则它只是一句写在断言位置上的注释。
+#:       (同型: [18] 那条 ". 打包盒" 挂在编号列表排版上, 改成表格后恒真。)
+_CANNOT_UNDERSTAND = "完整理解这句话"
 
 # ── 日期敏感用例的演化史（三版，值得留着）────────────────────────────────
 # v1: 把「暂无数据」写死成期望 → 只有周一能过, 其余六天必挂
@@ -356,7 +379,7 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["优化建议", "营收"],
      "excludes": [
          "本次结果没有可靠覆盖",
-         "我没太看懂",
+         _CANNOT_UNDERSTAND,
          "请先把缺少的数据补齐",
      ]},
     # ── 操作模式：自然说法进入确认；数据筛选批量操作先列候选再逐项确认 ──
@@ -401,18 +424,98 @@ CASES: List[Dict[str, Any]] = [
     # 补于 2026-07-28：电池此前一条错别字用例都没有。以下形态均已实测确认
     # 当前行为正确，加进来是当回归护栏用，不是提新要求。
     {"q": "本月全部门店莹收多少",            # 形近字 营→莹
-     "contains": ["总营收"], "excludes": ["我没太看懂"]},
+     "contains": ["总营收"], "excludes": [_CANNOT_UNDERSTAND]},
     {"q": "本月全部门店赢收多少",            # 同音字 营→赢
-     "contains": ["总营收"], "excludes": ["我没太看懂"]},
+     "contains": ["总营收"], "excludes": [_CANNOT_UNDERSTAND]},
     {"q": "本月全部门店营收多少呢？？？",     # 标点噪声
      "contains": ["总营收"]},
     {"q": "本月全部门店哪个菜卖的好",        # 语音转写 得→的：要答得出，不能喊看不懂
-     "contains": ["本月"], "excludes": ["我没太看懂", "没有找到"]},
+     "contains": ["本月"], "excludes": [_CANNOT_UNDERSTAND, "没有找到"]},
     {"q": "这月挣了多少",                    # 口语“挣”指净利润；数据缺口必须如实说明
      "contains": ["净利润", "缺少费用"]},
     {"q": f"本月全部门店{_DISH_ALT_TYPO}的销量",        # 菜名错字：必须明说没找到，不许拿榜单顶包
      "contains": ["没有找到"], "excludes": ["排行"]},
+
+    # ── P-G 口语电池 (2026-08-12 新增 20 题) ────────────────────────────────
+    #
+    # 🔴 为什么要补: 上面 60 多个独立问题**几乎全长成「本月全部门店 XXX」**——
+    #    自带完整范围。它们测的是「参数给全了算不算得对」, 不是「话说不全能不能
+    #    问清楚」。而真实老板说的是「这月流水多少」「最近生意怎么样」。
+    #    三种形状: ①不带时间/门店范围 ②一句话两个问题 ③笼统开放/问因果。
+    #
+    # ⛔ **这 20 题的确定性断言刻意只有一条**(不许说「听不懂」), 其余靠判定模型。
+    #    这不是偷懒, 是因为再写下去就是**假保证**:
+    #      · 「必须反问范围」——不成立。用默认窗口作答并声明范围同样正确,
+    #        写死一支就是 08-10 那条 `weekday()` 断言的形状(拿一份会过期的
+    #        推断当判据), 它已经因为同一个原因被改写过两次。
+    #      · 「必须出现某某词」——这些问题的正确答案措辞本来就不定,
+    #        挂上去就是 [02]「哪一组门店」、[18]「. 打包盒」的第三次重演。
+    #    判据: **写完一条断言先问「它靠什么变红」**; 答不上来就别写。
+    #    这些题的质量判定交给 `smartbi.scripts.restaurant_ai_judge`
+    #    (答上问的了吗 / 黑话 / 排版 / 数字自洽), 那正是子串断言看不见的四条。
+    #
+    # ⚠️ 代价说明: 加这 20 题后全量电池 85 → 105, 每日 cron 一轮贵 24%。
+    #    放进 CASES 而不是单开一张表, 是因为**不被默认跑的用例会烂掉**——
+    #    本仓已有实证(52 断言电池随租户收敛死了 4 天, 每天报一次没人处理)。
+    #    若 owner 认为日更成本不划算, 该做的是给 cron 加子集参数, 不是把它们
+    #    挪进一张没人跑的表。
+
+    # ① 不带时间/门店范围
+    {"q": "最近生意怎么样", "oral": True},
+    {"q": "到底赚钱了没", "oral": True},
+    {"q": "人手够不够", "oral": True},
+    {"q": "损耗是不是不正常", "oral": True},
+    {"q": "明天要备多少货", "oral": True},
+    {"q": "生意好不好", "oral": True},
+    {"q": "哪个菜最赚钱", "oral": True},
+    {"q": "客人多不多", "oral": True},
+
+    # ② 一句话两个问题 —— 最常见的失败是**第二问被吞掉**
+    #
+    # 🔴 2026-08-12 改成**链**。单题版本测不到这个失败：
+    #    实测 [96]「哪个菜卖得好，哪个菜不赚钱」→ 系统答「你想看哪个时间范围的数据？」，
+    #    而判定模型判**答到了** —— 它的提示词明写着「反问澄清也算答到了」，
+    #    那条规则本身是对的（反问没有给出错误结论）。
+    #    于是「第二问被吞掉」在反问分支下**完全测不到**：范围一缺，两半都还没发生。
+    #    要测它必须走到系统**手里参数齐了**的那一轮 —— 也就是补完范围之后。
+    # ⛔ 第一轮**不断言**：系统既可能反问、也可能用默认窗口直接答，两种都对。
+    #    写死一支就是 08-10 那条 `weekday()` 断言的形状。
+    {"q": "这月比上月好还是差，差在哪", "chain": "oral_2q_trend", "oral": True},
+    {"q": "本月", "chain": "oral_2q_trend", "oral": True},
+
+    {"q": "周末和平时哪个更赚钱，差多少", "chain": "oral_2q_weekend", "oral": True},
+    {"q": "本月", "chain": "oral_2q_weekend", "oral": True},
+
+    # ⛔ 这一条**有**确定性断言：用户自己把两个指标说出来了 ——
+    #    「卖得好」=销量、「不赚钱」=毛利。两个都必须在答案里。
+    #    这不是措辞断言，是计划 §1.⑦.1 那条硬约束的确定性形态
+    #    （部分答案里每个数必须是用户问的那个指标本身，不许拿相关指标顶）。
+    #    「毛利」是「毛利率」的子串，两种说法都算数。
+    {"q": "哪个菜卖得好，哪个菜不赚钱", "chain": "oral_2q_dish", "oral": True},
+    {"q": "本月", "chain": "oral_2q_dish", "oral": True,
+     "contains": ["销量", "毛利"]},
+
+    {"q": "人手够不够，要不要招人", "chain": "oral_2q_staff", "oral": True},
+    {"q": "本月", "chain": "oral_2q_staff", "oral": True},
+
+    {"q": "损耗高不高，主要是哪些东西", "chain": "oral_2q_waste", "oral": True},
+    {"q": "本月", "chain": "oral_2q_waste", "oral": True},
+
+    {"q": "最近生意怎么样，有什么要注意的", "chain": "oral_2q_overview", "oral": True},
+    {"q": "本月", "chain": "oral_2q_overview", "oral": True},
+
+    # ③ 笼统开放 / 问因果
+    {"q": "为什么毛利率下降", "oral": True},
+    {"q": "有什么办法提高营收", "oral": True},
+    {"q": "最近有什么不对劲的地方", "oral": True},
+    {"q": "我该关注什么", "oral": True},
+    {"q": "生意为什么不如以前", "oral": True},
+    {"q": "怎么才能多赚点", "oral": True},
 ]
+
+for _case in CASES:
+    if _case.get("oral"):
+        _case.setdefault("excludes", []).append(_CANNOT_UNDERSTAND)
 
 
 def _rand_sid(prefix: str) -> str:
@@ -598,9 +701,16 @@ def _run_case(base: str, auth: Dict[str, str], sid: str,
     problems += invariant_problems(flat, case.get("invariant", {}))
     # ⛔ 喂 `message` 不是 `flat` —— flat 已经把空白压平, 拿它查排版等于自发通行证。
     #    这条对**每一题**都跑, 不用逐题登记: 表格是哪一题给的不重要, 给了就必须合法。
-    problems += markdown_table_problems(message)
+    table_problems = markdown_table_problems(message)
+    problems += table_problems
     return {
         "problems": problems, "flat": flat,
+        # ⛔ `message` 是**未压平的原文**, 与 flat 并存不是冗余:
+        #    `--record` 落盘的是它, 因为下游判定排版的那一层需要换行和空行。
+        #    落 flat 就等于把排版判据永久变成恒真 —— 08-11 那 8 张塌掉的表
+        #    正是这么躲过两轮 85/85 的。
+        "message": message,
+        "table_problems": table_problems,
         "followups": flat_followups, "elapsed": time.time() - started,
     }
 
@@ -788,13 +898,51 @@ def select_units(units: Sequence[Any], only: Optional[str]) -> List[Any]:
        4.3M token, 把当天的免费额度烧掉 8 个模型。
        ⛔ 删守卫不等于放松不变量 —— 不变量改由 `test_only_pulls_in_the_whole_chain`
           守着, 那条会**变红**, 而 FATAL 只会让人绕开。
+
+    ⚠️ 2026-08-12: 支持**逗号分隔多个片段**(任一命中即选中)。
+       之前只收一个片段, 想跑一个覆盖多种问法类的子集就只能跑 N 次命令 ——
+       而每次命令都要重新登录并跑一遍 `_preflight_fixture`, **那一步自己就要
+       打 7 次真实问答**(1 次门店名单 + 6 次菜品存在性)。跑 15 个子集 =
+       白付 105 次 LLM 调用, 比想省的那部分还贵。
+       一次调用选中多个单元, preflight 只付一次。
     """
     if not only:
         return list(units)
-    return [u for u in units if any(only in c["q"] for _i, c in u[1])]
+    needles = [piece.strip() for piece in only.split(",") if piece.strip()]
+    if not needles:
+        return list(units)
+    return [u for u in units
+            if any(n in c["q"] for _i, c in u[1] for n in needles)]
 
 
-def run_eval(base: str, only: Optional[str] = None) -> int:
+def record_row(idx: int, case: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """一条用例的可离线复用记录。纯函数 —— 与发 HTTP 那部分分开, 才能被单测。
+
+    🔴 为什么要落盘, 而不是判定跟着电池一起跑:
+       跑一轮全量电池是 **47万~130万 token**(链头不健康时更高), 而判定本身
+       每题只要 ~1,800。把答案存下来, 判定就能在**零电池成本**下反复跑 ——
+       换评分卡、改提示词、加一条判据, 都不用再问一次生产系统。
+       (08-11 为验 15 个 PR 跑了 12 轮全量, 烧掉 8 个模型当天的额度。)
+
+    ⛔ 存 `message` 不存 `flat`: 判定排版要看换行和空行。
+    ⛔ 存**断言的结论**(problems), 不只是通过与否 —— 四象限里「断言红在哪一句」
+       是要逐条读的, 只存一个布尔值就得回头重跑才知道红的是什么。
+    """
+    return {
+        "idx": idx,
+        "q": case["q"],
+        "chain": case.get("chain"),
+        "mode": case.get("mode"),
+        "message": outcome.get("message", ""),
+        "followups": outcome.get("followups", ""),
+        "assertion_problems": list(outcome.get("problems", [])),
+        "table_problems": list(outcome.get("table_problems", [])),
+        "elapsed": round(float(outcome.get("elapsed", 0.0)), 2),
+    }
+
+
+def run_eval(base: str, only: Optional[str] = None,
+             record: Optional[str] = None) -> int:
     # 本轮开始时的日志长度 —— 收尾时只读这之后追加的那一段, 用来说清
     # 「这一轮是在什么条件下取的数」(见 `summarize_provenance` 上面那段)。
     # 放在登录之前: 预检夹具也会发查询、也会焐热缓存, 它同样属于本轮条件。
@@ -861,10 +1009,13 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
     passed, failed = 0, 0
     failures: List[str] = []
     latencies: List[float] = []
+    recorded: List[Dict[str, Any]] = []
 
     def _report(idx: int, case: Dict[str, Any], outcome: Dict[str, Any]) -> None:
         nonlocal passed, failed
         latencies.append(outcome["elapsed"])
+        if record:
+            recorded.append(record_row(idx, case, outcome))
         q, problems = case["q"], outcome["problems"]
         if problems:
             failed += 1
@@ -911,7 +1062,21 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
               f"{ordered[len(ordered)//2]:.1f}s | p95 {p95:.1f}s | 最慢 {ordered[-1]:.1f}s")
     print(f"== {passed} passed, {failed} failed / {passed + failed} run ==")
     # ⛔ 无论成败都打 —— 取数条件是**读这个分数的前提**, 不是失败时才需要的附注。
-    print("\n".join(render_provenance(_provenance_since(log_cursor))))
+    provenance = _provenance_since(log_cursor)
+    print("\n".join(render_provenance(provenance)))
+    if record:
+        # 取数条件跟着答案一起存: 判定是离线跑的, 到时候光看答案没法判断
+        # 这批答案是冷启动来的还是重放缓存来的 —— 而那决定它们可不可比。
+        with open(record, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(
+                {"_meta": {"factory": FACTORY_ID, "base": base, "only": only,
+                           "passed": passed, "failed": failed,
+                           "provenance": provenance}},
+                ensure_ascii=False) + "\n")
+            for row in recorded:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"\n已记录 {len(recorded)} 条答案 -> {record}"
+              f"\n  (判定离线跑: python -m smartbi.scripts.restaurant_ai_judge {record})")
     if failures:
         print("\n".join(["", "── 失败明细 ──", *failures]))
     return 1 if failed else 0
@@ -922,9 +1087,14 @@ def main() -> None:
     parser.add_argument("--base", default="https://admin.cretaceousfuture.com",
                         help="Java 后端 base URL")
     parser.add_argument("--only", default="",
-                        help="only run cases whose query contains this substring")
+                        help="只跑问句含这些片段的用例; 逗号分隔可给多个(任一命中即选中)。"
+                             "链式用例任一步命中则整条链都跑。")
+    parser.add_argument("--record", default="",
+                        help="把每题的**原始答案**与断言结论落成 JSONL, 供离线判定复用 "
+                             "(跑一轮全量电池 47万~130万 token, 判定每题只要 ~1,800 —— "
+                             "存下来就能零电池成本反复判)")
     args = parser.parse_args()
-    sys.exit(run_eval(args.base, args.only or None))
+    sys.exit(run_eval(args.base, args.only or None, args.record or None))
 
 
 if __name__ == "__main__":
