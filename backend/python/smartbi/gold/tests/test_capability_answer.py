@@ -17,7 +17,9 @@ from __future__ import annotations
 import pytest
 
 from smartbi.gold.restaurant.capability_answer import (
+    MARGIN_NOT_PROFIT,
     computable_labels,
+    partial_coverage_answer,
     missing_capability_labels,
     render_capability_refusal,
     should_use_capability_refusal,
@@ -174,3 +176,72 @@ def test_unknown_capability_code_is_dropped_not_leaked():
 def test_only_unknown_codes_means_no_refusal_template():
     """全是翻不出来的码 → 不接管(宁可走原澄清, 也不端一句没有内容的拒答)。"""
     assert should_use_capability_refusal(("some_new_code",)) is False
+
+
+# ── §9.2 第二档：给能算的 + 明说另一个为什么算不出 ──────────────────────
+
+_FACTS = [
+    {"label": "毛利", "value": 680000, "unit": "元"},
+    {"label": "毛利率", "value": 67.7, "unit": "%"},
+]
+
+
+def test_the_refusal_comes_before_any_number():
+    """🔴 承重: **第一句必须是「给不了 + 为什么」**, 数字在其后。
+
+    owner 2026-08-12:「先甩 ¥ 数再解释, 用户读到的就是『赚了这么多』——
+    那是『相邻指标顶替』换个位置重演。」
+
+    变异实测: 把两段调换顺序
+      → 红:「第一个数字出现在拒答之前」
+    """
+    text = partial_coverage_answer(
+        "是否赚钱的判断", "净利润缺少费用、税费及其他收支", _FACTS)
+    assert text.startswith("**是否赚钱的判断算不出来**"), (
+        f"第一句不是「给不了 + 为什么」, 而是: {text.splitlines()[0]!r}")
+    first_digit = min(
+        (text.index(str(d)) for d in ("680000", "67.7") if str(d) in text),
+        default=len(text))
+    assert text.index("算不出来") < first_digit, (
+        f"第一个数字出现在拒答之前 —— 用户读到的会是「赚了这么多」: {text[:70]!r}")
+
+
+def test_the_qualifier_sits_with_the_numbers_not_only_at_the_top():
+    """🔴 承重: 毛利≠净利那层限定语必须**贴着数字**, 不能只写在开头。
+
+    变异实测: 把限定语从小标题里拿掉
+      → 红:「限定语没有和数字待在一起」
+    """
+    text = partial_coverage_answer(
+        "是否赚钱的判断", "净利润缺少费用、税费及其他收支", _FACTS)
+    header = [ln for ln in text.splitlines() if ln.startswith("能算的是")]
+    assert header, "没有「能算的是」这一段"
+    assert MARGIN_NOT_PROFIT in header[0], "限定语没有和数字待在一起: " + header[0]
+
+
+def test_numbers_come_only_from_structured_facts():
+    """🔴 承重: 渲染出来的每个数字都必须能在 facts 里找到出处。
+
+    这是「LLM 不许产生自家数字」这条红线在本出口上的落地方式:
+    **没有入口** —— 叙述文本根本不参与拼接。
+
+    变异实测: 让它把被驳回的 answer_text 也拼进去
+      → 红:「这些数字在结构化事实里没有出处」
+    """
+    import re
+    text = partial_coverage_answer("是否赚钱的判断", "缺费用", _FACTS)
+    allowed = {str(f["value"]) for f in _FACTS}
+    found = set(re.findall(r"\d+(?:\.\d+)?", text))
+    orphan = {n for n in found if n not in allowed}
+    assert not orphan, f"这些数字在结构化事实里没有出处: {sorted(orphan)}"
+
+
+def test_no_facts_means_no_partial_answer():
+    """🔴 承重: 一个数都没有时返回 None, 让调用方走整份拒答。
+
+    ⛔ 空着的「能算的是：」是一句看起来给了东西、实际什么都没有的话 ——
+       那正是这一轮要修的缺陷本身。
+    """
+    assert partial_coverage_answer("是否赚钱的判断", "缺费用", []) is None
+    assert partial_coverage_answer(
+        "是否赚钱的判断", "缺费用", [{"label": "毛利", "value": "—"}]) is None

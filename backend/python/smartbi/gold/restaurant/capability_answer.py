@@ -150,6 +150,54 @@ def should_use_capability_refusal(unsupported: Sequence[str]) -> bool:
     return bool(missing_capability_labels(unsupported))
 
 
+#: 毛利口径的限定语。⛔ 它必须**贴着数字**出现，不能只写在开头。
+#:
+#: 🔴 owner 2026-08-12：「先甩 ¥ 数再解释，用户读到的就是『赚了这么多』——
+#:    那是『相邻指标顶替』换个位置重演。」
+#:    所以顺序是硬性的：先说给不了，再给数；而限定语跟数字**同一行**出现
+#:    （放在小标题里），读到数字时不可能没读到它。
+MARGIN_NOT_PROFIT = "毛利口径，不含人工、房租、水电这些费用，不能当利润看"
+
+
+def partial_coverage_answer(
+    missing_label: str,
+    missing_reason: str,
+    facts: Sequence[Any],
+) -> Optional[str]:
+    """§9.2 第二档：**给能算的 + 明说另一个为什么算不出**。
+
+    `facts` 是 resolver 已经算好的 KPI（`{label, value, unit}`）——
+    ⛔ **数字只从这里来，绝不复用叙述文本**。被契约驳回的那份 `answer_text`
+       有一部分是 LLM 叙述出来的；原样留用等于把 LLM 产的数字重新放行，
+       而且是在一个专门声明「我不拿别的数据凑」的答案里，比今天更糟。
+
+    ## 顺序是硬性的（owner 2026-08-12）
+
+    ```
+    ① 你问的那个给不了 + 为什么      ← 必须是第一句
+    ② 能算的是（<限定语>）：…数字…    ← 限定语与数字同一处
+    ```
+
+    ⛔ 反过来写（先甩数再解释）用户读到的就是「赚了这么多」——
+       **那是「相邻指标顶替」换个位置重演**，而系统对用户有不顶替的承诺。
+
+    ⚠️ 没有可给的数 → 返回 `None`，让调用方走整份拒答。
+       「明说算不出来」本身是合规的（契约 §4），但**空着的「能算的是：」不是** ——
+       那是一句看起来给了东西、实际什么都没有的话。
+    """
+    lines = [f"**{missing_label}算不出来**：{missing_reason}。"]
+    rendered = [
+        f"- {f['label']}：{f['value']}{f.get('unit') or ''}"
+        for f in (facts or [])
+        if isinstance(f, dict) and f.get("label") is not None
+        and f.get("value") not in (None, "", "—", "***", "暂无")
+    ]
+    if not rendered:
+        return None
+    lines += ["", f"能算的是（{MARGIN_NOT_PROFIT}）：", *rendered]
+    return "\n".join(lines)
+
+
 async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
     """查三层，返回本租户算得出来的指标标签。查不动 → 空元组（不猜）。"""
     try:

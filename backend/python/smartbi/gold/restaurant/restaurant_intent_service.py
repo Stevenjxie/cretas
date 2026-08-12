@@ -12,6 +12,13 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from smartbi.gold.restaurant.capability_answer import (
+    missing_capability_labels,
+    partial_coverage_answer,
+    render_capability_refusal,
+    should_use_capability_refusal,
+    tenant_capability,
+)
 from smartbi.gold.customer_text import (
     CONTRACT_REFUSAL_MARK,
     EXECUTION_UNAVAILABLE,
@@ -1277,12 +1284,12 @@ async def tiered_answer(
             #
             # ⚠️ 只在**确实一个都算不出来**时接管; 别的澄清(缺时间/缺门店)照旧,
             #    那些不是能力缺口, 用拒答模板会把「再说清楚点」说成「我做不到」。
-            from smartbi.gold.restaurant.capability_answer import (
-                missing_capability_labels,
-                render_capability_refusal,
-                should_use_capability_refusal,
-                tenant_capability,
-            )
+            # ⚠️ `missing_capability_labels` 已在模块顶部 import。⛔ 不要在这里再
+            #    `from ... import` 一次 —— 那会把它变成**整个函数的局部变量**,
+            #    于是同一函数里更靠后的契约分支引用它时抛
+            #    `cannot access local variable ... where it is not associated with a value`,
+            #    而那个异常被 tiered 路径的 catch 吞成一行 WARNING。
+            #    (2026-08-12 实测: 只有 2 条测试红, 其余全绿。)
             capability_text = None
             if should_use_capability_refusal(spec.unsupported_requirements):
                 available = await tenant_capability(
@@ -1683,9 +1690,28 @@ async def tiered_answer(
                 if contract.missing
                 else "可展示的真实业务结果"
             )
+            # ── §9.2 第二档: 只能算一部分 → 给能算的 + 明说另一个为什么算不出 ──
+            #
+            # 🔴 今天是整份丢弃: 分析**跑过了**(prod 实测「这个月到底赚钱了没有」
+            #    走到这里), resolver 算好的 KPI 就在手边, 却因为契约少了
+            #    `profitability_verdict` 而一个数都不给。
+            #
+            # ⛔ 数字**只从 kpis 来**, 不复用被驳回的 answer_text ——
+            #    那份文本有一部分是 LLM 叙述的, 原样留用等于把 LLM 产的数字重新放行,
+            #    而且是在一个专门声明「我不拿别的数据凑」的答案里。
+            #
+            # ⚠️ **只在能算出「为什么」时才走这条路**: 说不出理由的数字贴在拒答旁边
+            #    就是顶替。理由取自 spec 自己记下的能力缺口, 取不到就退回整份拒答。
+            partial_text = None
+            gap_labels = missing_capability_labels(spec.unsupported_requirements)
+            if gap_labels:
+                partial_text = partial_coverage_answer(
+                    missing, "、".join(gap_labels),
+                    getattr(tiered_result, "kpis", None) or [],
+                )
             # 2026-08-12 白话化: 原文「本次结果没有可靠覆盖…也没有改走相邻指标」
             # 三个内部说法叠在一起, prod 实测原样发给了店长(问「到底赚钱了没」)。
-            safe_text = (
+            safe_text = partial_text or (
                 f"这次没算出{missing}，所以我{CONTRACT_REFUSAL_MARK}，"
                 f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
             )
