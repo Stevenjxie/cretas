@@ -66,6 +66,14 @@ public interface ProductTypeService {
      * 获取所有激活的产品类型
       */
     List<ProductTypeDTO> getActiveProductTypes(String factoryId);
+
+    /**
+     * 销售订单商品选择用的口径: 激活 且 {@code ProductCategory.isSellable}。
+     *
+     * <p>与 {@link #getActiveProductTypes} 是<b>两条</b>口径, 方向相反, 不要合并 ——
+     * 生产侧要半成品不要原料, 销售侧要原料不要半成品。详见实现类注释。
+     */
+    List<ProductTypeDTO> getSellableProductTypes(String factoryId);
      /**
      * 根据类别获取产品类型
       */

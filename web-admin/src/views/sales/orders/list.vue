@@ -969,10 +969,15 @@ async function loadCustomers() {
   } catch { /* dropdown optional — fail silently for roles without customer read permission */ }
 }
 
+// ⚠️ 用 /sellable 不是 /active。
+// /active 是【生产侧】口径(生产计划/批次/工时/毛利红线/成本差异/餐饮共 11 处在用):
+// 排除原料、保留半成品。销售侧恰好相反 —— 2026-08-12 Steve 拍板「出了半成品全开」:
+// 原料/辅料/包材都卖(六膳门张权:「有啥不能卖的 给钱 我都能卖」), 只有半成品不卖。
+// 两个方向都反, 所以是两个端点; 改 /active 会波及那 11 处。
 async function loadProducts() {
   if (!factoryId.value) return;
   try {
-    const res = await get(`/${factoryId.value}/product-types/active`, { _silent: true } as never);
+    const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     if (res.success && res.data) products.value = Array.isArray(res.data) ? res.data : res.data.content || [];
   } catch { /* dropdown optional — fail silently for roles without product read permission */ }
 }

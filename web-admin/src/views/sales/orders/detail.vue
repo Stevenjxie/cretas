@@ -382,7 +382,9 @@ async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
     // Mirror list.vue loadProducts — same endpoint / response shape.
-    const res = await get(`/${factoryId.value}/product-types/active`, { _silent: true } as never);
+    // ⚠️ /sellable 不是 /active: /active 是生产侧口径(保留半成品、排除原料), 销售侧相反。
+    // 这两处必须一致 —— 列表页能选到而详情页编辑时选不到, 是最难查的那种不一致。
+    const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     const list = Array.isArray(res?.data) ? res.data : (res?.data?.content ?? []) as any[];
     products.value = list.map((p: any) => ({
       id: String(p.id),
