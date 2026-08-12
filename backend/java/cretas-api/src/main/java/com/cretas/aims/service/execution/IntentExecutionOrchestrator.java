@@ -2067,7 +2067,14 @@ public class IntentExecutionOrchestrator {
                 if (existing instanceof java.util.List<?> list) {
                     merged.addAll(list);
                 }
-                merged.add(hintFollowup);
+                // 🔴 **排第一位, 不是追加**。前端 `normalizeFollowUpActions` 拼完
+                //    四路来源之后 `.slice(0, 4)` —— 追加在末尾时, 这一轮若已有 ≥4 条
+                //    建议, 这颗按钮会被**静默切掉**(不报错、不留痕, 只是没了)。
+                //    而它是拒答唯一的下一步(§9.9 ④「必须可点」), 掉了就等于没做。
+                // ⚠️ 前端去重键是 `question`, 而本按钮的 question 是固定串
+                //    「这些问题怎么办」—— 同一轮别处若也产出这句, **先到先得**,
+                //    排第一位同时也保证了冲突时活下来的是这颗。
+                merged.add(0, hintFollowup);
                 delegatedData.put("suggestedFollowups", merged);
             }
         }

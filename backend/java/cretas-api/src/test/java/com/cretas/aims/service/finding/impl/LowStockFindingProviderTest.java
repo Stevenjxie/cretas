@@ -1,5 +1,6 @@
 package com.cretas.aims.service.finding.impl;
 
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.finding.Finding;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +31,22 @@ class LowStockFindingProviderTest {
     @Mock
     private MaterialBatchService materialBatchService;
 
+    @Mock
+    private MaterialBatchRepository materialBatchRepository;
+
+    /**
+     * 那几条「只测映射」的用例统一放行 —— 它们要的是形状转换, 不是过滤。
+     *
+     * <p>🔴 2026-08-12 加过滤时这 4 条全红了(Mockito 默认返回空表 ⇒ 全被滤掉),
+     * **那个红是对的**: 过滤从此是必经的。⛔ 没有用「查不到就放行」去消掉它 ——
+     * 那会把噪音原样放回来。空表在生产上的真实含义是「这个工厂一条批次都没有」,
+     * 那时所有低库存告警确实都是种子残留, 全滤掉是对的。
+     */
+    private void allEverStocked(String... ids) {
+        when(materialBatchRepository.findMaterialTypeIdsEverStocked(anyString()))
+                .thenReturn(List.of(ids));
+    }
+
     /** 严格复刻 MaterialBatchServiceImpl#getLowStockWarnings 的 key 集合与类型。 */
     private Map<String, Object> warning(String id, String name, String level,
                                         String current, String safety, String gap, long ratio) {
@@ -59,6 +76,7 @@ class LowStockFindingProviderTest {
     void mapsWarningToFinding() {
         when(materialBatchService.getLowStockWarnings(anyString()))
                 .thenReturn(List.of(warning("M001", "鲈鱼", "WARNING", "12", "50", "38", 24L)));
+        allEverStocked("M001");
 
         List<Finding> findings = provider.detect(FACTORY_ID);
 
@@ -83,6 +101,7 @@ class LowStockFindingProviderTest {
                 warning("M001", "A", "CRITICAL", "0", "50", "50", 0L),
                 warning("M002", "B", "WARNING", "20", "50", "30", 40L),
                 warning("M003", "C", "INFO", "35", "50", "15", 70L)));
+        allEverStocked("M001", "M002", "M003");
 
         List<Finding> findings = provider.detect(FACTORY_ID);
 
@@ -96,6 +115,7 @@ class LowStockFindingProviderTest {
     void unknownLevelFallsBackToInfo() {
         when(materialBatchService.getLowStockWarnings(anyString()))
                 .thenReturn(List.of(warning("M001", "鲈鱼", "SOMETHING_NEW", "12", "50", "38", 24L)));
+        allEverStocked("M001");
 
         assertEquals(Finding.Severity.INFO, provider.detect(FACTORY_ID).get(0).severity());
     }
@@ -116,8 +136,46 @@ class LowStockFindingProviderTest {
     void factsMustNotClaimSupplier() {
         when(materialBatchService.getLowStockWarnings(anyString()))
                 .thenReturn(List.of(warning("M001", "鲈鱼", "WARNING", "12", "50", "38", 24L)));
+        allEverStocked("M001");
 
         assertFalse(provider.detect(FACTORY_ID).get(0).facts().containsKey("preferredSupplier"),
                 "getLowStockWarnings 从不产出 preferredSupplier，facts 不得凭空造出该字段");
+    }
+
+    @Test
+    @DisplayName("UT-LSF-10: 从没进过货的物料不报 —— 那是种子数据残留, 不是缺货")
+    void neverStockedMaterialIsNotAFinding() {
+        // 🔴 prod 实测(cretas_prod_db, 库名取自活 jar 进程 environ):
+        //    MOCK_REST 的 25 个物料里 24 个有进货历史, 只有「罗氏虾」一条批次都没有,
+        //    却挂着安全线 2288.42 —— 每条回答末尾都在报它, 缺口恰等于安全线全额。
+        //    上一轮 LLM-judge 量出的「同一条发现重复 19 次、命中率 100%」就来自它。
+        when(materialBatchService.getLowStockWarnings(anyString())).thenReturn(List.of(
+                warning("mt-shrimp", "罗氏虾", "CRITICAL", "0", "2288.42", "2288.42", 0L),
+                warning("mt-beef", "牛肉", "WARNING", "120", "1844.29", "1724.29", 6L)));
+        // 只有牛肉进过货
+        when(materialBatchRepository.findMaterialTypeIdsEverStocked(anyString()))
+                .thenReturn(List.of("mt-beef"));
+
+        List<Finding> found = provider.detect(FACTORY_ID);
+
+        assertEquals(1, found.size(), "从没进过货的物料仍然被报成缺货: " + found);
+        assertEquals("牛肉", found.get(0).subjectName());
+    }
+
+    @Test
+    @DisplayName("UT-LSF-11: 买过、用光了照旧报 —— 判据是进货历史不是当前余额")
+    void stockedButNowEmptyIsStillAFinding() {
+        // ⛔ 阴性对照。没有这一条, 上一条可以用「余额为 0 就不报」实现而照样绿 ——
+        //    而那会把**真缺货**一起干掉(真缺货余额也是 0)。
+        when(materialBatchService.getLowStockWarnings(anyString())).thenReturn(List.of(
+                warning("mt-beef", "牛肉", "CRITICAL", "0", "1844.29", "1844.29", 0L)));
+        when(materialBatchRepository.findMaterialTypeIdsEverStocked(anyString()))
+                .thenReturn(List.of("mt-beef"));
+
+        List<Finding> found = provider.detect(FACTORY_ID);
+
+        assertEquals(1, found.size(),
+                "买过但用光的物料被消音了 —— 那是真缺货, 判据用错成了「余额是不是 0」");
+        assertEquals("牛肉", found.get(0).subjectName());
     }
 }

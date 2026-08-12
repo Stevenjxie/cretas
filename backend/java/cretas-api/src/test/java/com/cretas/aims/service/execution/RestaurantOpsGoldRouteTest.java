@@ -52,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -190,6 +191,83 @@ class RestaurantOpsGoldRouteTest {
         assertThat(command.getValue().deadline()).isBeforeOrEqualTo(before.plusSeconds(31));
         assertThat(command.getValue().requestId()).isEqualTo(command.getValue().correlationId());
         verify(principalFactory).create("DEMO_REST", 7L, "restaurant_owner");
+    }
+
+    @Test
+    @DisplayName("UT-RFH-30: 拒答时那颗按钮真的会出现在响应里, 且排第一位")
+    void findingButtonReachesTheResponseAndComesFirst() {
+        // 🔴 这条**跑在产品真实入口**上(executeRestaurantOwnerActionChat →
+        //    真 orchestrator → 真 appender), 只桩掉 Python delegate 与发现层数据源。
+        //    RestaurantFindingHintAppenderTest 那四条全是直接调 refusalFollowup ——
+        //    它们证明函数对, **不证明生产上有人调它**。
+        //    本轮一天之内四次「机制在、坏在没接上」(sanitize 没被调 /
+        //    awaitingClarification 接错信号 / 载体闸形态变了 / 前端把自己裁成 0 宽),
+        //    单测对这一类是盲的: 它直接调被测函数, 绕过了「生产上谁调它」。
+        com.cretas.aims.service.finding.FindingService findingService =
+                mock(com.cretas.aims.service.finding.FindingService.class);
+        com.cretas.aims.service.finding.Finding f =
+                new com.cretas.aims.service.finding.Finding(
+                        "LOW_STOCK", "inventory",
+                        com.cretas.aims.service.finding.Finding.Severity.WARNING,
+                        50, "罗氏虾", "罗氏虾", Map.of());
+        when(findingService.detectInline(anyString(), anyCollection(), any()))
+                .thenReturn(new com.cretas.aims.service.finding.FindingService.Result(
+                        List.of(f), List.of("低库存"), 1, Map.of(), List.of(), List.of()));
+        RestaurantFindingHintAppender appender = new RestaurantFindingHintAppender(
+                findingService,
+                mock(com.cretas.aims.service.finding.FindingTextRenderer.class),
+                mock(com.cretas.aims.service.finding.FindingOccurrenceTracker.class));
+        ReflectionTestUtils.setField(orchestrator, "restaurantFindingHintAppender", appender);
+
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        // ⛔ 已有 4 条建议 —— 前端 normalizeFollowUpActions 拼完之后 `.slice(0, 4)`,
+        //    按钮若追加在末尾会被**静默切掉**。这一条钉住它排第一位。
+        // ⛔ 入参照抄同文件里已通过的那条(userInput/sessionId/第 4 参数) ——
+        //    换个问句会被更早的分支接走, 根本到不了 delegate(第一版就是这么红的:
+        //    resultData is null)。本条测的是**响应组装**, 不是路由。
+        when(delegate.tryDelegate(
+                eq("DEMO_REST"), any(), any(), eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "翻台率现在算不出来。",
+                        "kind", "clarification",
+                        "suggestedFollowups", List.of(
+                                Map.of("label", "本月", "question", "本月"),
+                                Map.of("label", "上月", "question", "上月"),
+                                Map.of("label", "最近7天", "question", "最近7天"),
+                                Map.of("label", "最近30天", "question", "最近30天"))));
+
+        // ⚠️ 驱动的是 `tryRestaurantTieredDelegate` —— **响应组装那段生产代码本身**,
+        //    我新写的分支就在它里面, 且它有 7 个调用点全部汇入此处。
+        //    ⛔ 不走 `executeRestaurantOwnerActionChat`: 第一版那么写时红在
+        //       `resultData is null` —— 那条链需要前序测试留下的 pending 状态,
+        //       等于把断言挂在**测试执行顺序**上, 那是另一种隐蔽耦合。
+        //    这一条仍然满足「不是直接调我自己写的 refusalFollowup」:
+        //    它证明的是「响应组装会走到那个分支并把按钮放进 resultData」。
+        //    (还没证明的那半 —— 生产上哪些问句会走到这个组装点 —— 已由
+        //     prod 实测覆盖: 三句拒答轮实打接口, suggested_followups 各 0 条。)
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator, "tryRestaurantTieredDelegate", "DEMO_REST", "怎么优化它",
+                IntentExecuteRequest.builder()
+                        .userInput("怎么优化它")
+                        .sessionId("finding-button-first")
+                        .build());
+
+        assertThat(response).isNotNull();
+        Map<?, ?> resultData = (Map<?, ?>) response.getResultData();
+        List<?> fups = (List<?>) resultData.get("suggestedFollowups");
+        assertThat(fups)
+                .as("拒答轮没有拿到那颗按钮 —— 生产入口根本没走到 refusalFollowup")
+                .hasSize(5);
+        Map<?, ?> first = (Map<?, ?>) fups.get(0);
+        assertThat(first.get("label"))
+                .as("按钮不在第一位, 前端 slice(0,4) 会把它静默切掉")
+                .isEqualTo("顺带 1 件事");
+        assertThat(first.get("question"))
+                .isEqualTo(com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool
+                        .ACTION_PLAN_ASK);
+        // 正文不许再挂发现块(§9.9)
+        assertThat(response.getMessage()).doesNotContain("顺带");
     }
 
     @Test
