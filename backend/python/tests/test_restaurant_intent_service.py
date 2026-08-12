@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+# ⛔ 引用常量, 不抄字面量(见 test_restaurant_intent.py 同处注释)。
+from smartbi.gold.customer_text import NO_SUBSTITUTION
 import smartbi.api.gold_reads as gold_reads_mod
 import smartbi.gold.restaurant.restaurant_intent_service as svc
 from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
@@ -1014,7 +1016,7 @@ async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
     assert result is not None
     assert result["kind"] == "clarification"
     assert result["contract_pass"] is False
-    assert "没有向您展示可能答非所问的数据" in result["answer_text"]
+    assert NO_SUBSTITUTION in result["answer_text"]
     assert "已完成" not in result["answer_text"]
 
 
@@ -1193,10 +1195,10 @@ async def test_tiered_answer_analyzes_supported_metrics_and_lists_missing_dimens
 
     assert result["kind"] == "answer"
     assert result["contract_pass"] is True
-    assert "本次缺少数据、暂时留空的维度" in result["answer_text"]
+    assert "先留空的几项" in result["answer_text"]
     assert "退菜率" in result["answer_text"]
     assert "没有参与结论" in result["answer_text"]
-    assert "相邻指标替代" in result["answer_text"]
+    assert NO_SUBSTITUTION in result["answer_text"]
 
 
 @pytest.mark.asyncio

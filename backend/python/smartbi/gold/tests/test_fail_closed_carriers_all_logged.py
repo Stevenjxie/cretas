@@ -25,8 +25,23 @@ import ast
 import pathlib
 from typing import List, Tuple
 
-#: 用户看到的那句话。⛔ 不写成「大概长这样」的正则 —— 逐字，改了措辞就该重新对齐。
-_FAIL_CLOSED_TEXT = "餐饮语义规划暂时不可用"
+#: 用户看到的那句话。
+#:
+#: ⚠️ 2026-08-12 改：原来是手抄的字面量 `"餐饮语义规划暂时不可用"`。当天把这句
+#:    白话化并收敛成 `customer_text.PLANNER_UNAVAILABLE` 之后，那 4 处内联字符串
+#:    全变成了常量引用 —— 本闸按**字符串字面量**扫，于是**载体数从 4 掉到 0**，
+#:    `test_every_fail_closed_carrier_leaves_a_trace` 跟着变成恒真的绿。
+#:    (只有 `test_there_is_more_than_one_carrier` 那条阴性对照拦住了它。
+#:     没有那条，这次改文案就会把一道承重闸静默变瞎。)
+#:
+#: 判据：**闸认载体的方式，要跟着载体的形态走。**
+#:       文案集中成常量之后，「载体」就是**引用那个常量的地方**，不再是字面量。
+#:       两种形态都认 —— 万一有人又把它内联回去，也照样算载体。
+from smartbi.gold.customer_text import PLANNER_UNAVAILABLE
+
+_FAIL_CLOSED_TEXT = PLANNER_UNAVAILABLE
+#: 常量名本身 —— 引用它的地方就是载体。
+_FAIL_CLOSED_CONST = "PLANNER_UNAVAILABLE"
 
 #: 留痕的标记。⛔ 与生产代码里写的那个字符串**逐字一致**，不另起一个名字。
 _TRACE_MARKER = "planner-outage"
@@ -61,9 +76,15 @@ def _carriers() -> List[Tuple[str, int, str]]:
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-                continue
-            if id(node) in docstrings or _FAIL_CLOSED_TEXT not in node.value:
+            # 形态一: 内联字面量(2026-08-12 之前的形态, 保留以防有人写回去)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if id(node) in docstrings or _FAIL_CLOSED_TEXT not in node.value:
+                    continue
+            # 形态二: 引用那个常量 —— 文案集中之后, 这才是载体
+            elif isinstance(node, ast.Name) and node.id == _FAIL_CLOSED_CONST:
+                # import 那一行不是载体 —— 它不吐拒答, 只是把名字拿进来。
+                pass
+            else:
                 continue
             owner = ""
             best = -1

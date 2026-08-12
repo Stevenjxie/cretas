@@ -13,6 +13,9 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.customer_text import (
+    EXECUTION_UNAVAILABLE,
+    NO_SUBSTITUTION,
+    NO_USABLE_RESULT,
     has_displayable_business_result,
     sanitize_customer_ai_text,
 )
@@ -1411,8 +1414,8 @@ async def tiered_answer(
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
                     (
-                        f"本次没有执行分析：{mismatch}。"
-                        "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
+                        f"这次没有开算：{mismatch}。"
+                        f"请说清是看菜品、看门店还是看全店合计，{NO_SUBSTITUTION}。"
                     ),
                     action_warning,
                 ),
@@ -1517,10 +1520,7 @@ async def tiered_answer(
                 empty_result = {
                     "kind": "clarification",
                     "answer_text": _prepend_action_warning(
-                        (
-                            "计划中的餐饮分析没有返回可验证结果，本次没有改走相邻分析。"
-                            "请确认数据范围后重试。"
-                        ),
+                        NO_USABLE_RESULT,
                         action_warning,
                     ),
                     "contract_pass": False,
@@ -1658,9 +1658,11 @@ async def tiered_answer(
                 if contract.missing
                 else "可展示的真实业务结果"
             )
+            # 2026-08-12 白话化: 原文「本次结果没有可靠覆盖…也没有改走相邻指标」
+            # 三个内部说法叠在一起, prod 实测原样发给了店长(问「到底赚钱了没」)。
             safe_text = (
-                f"本次结果没有可靠覆盖{missing}，因此没有向您展示可能答非所问的数据，"
-                "也没有改走相邻指标。请补充具体范围后重试。"
+                f"这次没算出{missing}，所以我没有把可能答非所问的数据端给你，"
+                f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)
             asyncio.create_task(log_intent_capture(
@@ -1790,12 +1792,7 @@ async def tiered_answer(
             failure_result = {
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
-                    (
-                        "餐饮执行链暂时不可用，本次没有执行任何相邻分析。"
-                        "请稍后重试。"
-                    ),
-                    action_warning,
-                ),
+                    EXECUTION_UNAVAILABLE, action_warning),
                 "contract_pass": False,
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,

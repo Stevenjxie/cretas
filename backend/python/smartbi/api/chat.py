@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from smartbi.config import coerce_numeric_columns
 from smartbi.gold.customer_text import (
+    PLANNER_UNAVAILABLE,
     has_displayable_business_result,
     sanitize_customer_ai_text,
 )
@@ -1565,8 +1566,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             str(effective_user_q)[:80],
                         )
                         answer_text = (
-                            "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
-                            "请稍后重试。"
+                            PLANNER_UNAVAILABLE
                         )
                         return GeneralAnalysisResponse(
                             success=False,
@@ -2490,10 +2490,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 factory_id_hdr, trusted_restaurant_session_key,
                                 str(effective_user_q)[:80],
                             )
-                            answer_text_ops = (
-                                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
-                                "请稍后重试。"
-                            )
+                            answer_text_ops = PLANNER_UNAVAILABLE
                             yield _sse_event("done", {
                                 "success": False,
                                 "answer": answer_text_ops,

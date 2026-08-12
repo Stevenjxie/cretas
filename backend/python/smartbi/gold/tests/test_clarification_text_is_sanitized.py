@@ -44,6 +44,14 @@ from smartbi.gold.restaurant.restaurant_intent import (
     _unsupported_requirement_question,
 )
 from smartbi.gold.restaurant.restaurant_intent_service import clarification_answer_text
+from smartbi.gold import customer_text as _copy
+
+#: 本轮收敛的那批面向店长的固定说法。⛔ 从模块现算，不手抄一份名字清单 ——
+#: 手抄的会漏掉以后新加的常量，而漏掉的那个就没有「不许为空」这道保护。
+_COPY_CONSTANTS = {
+    name: getattr(_copy, name) for name in dir(_copy)
+    if name.isupper() and isinstance(getattr(_copy, name), str) and not name.startswith("_")
+}
 
 
 @pytest.mark.parametrize("requirement", sorted(_UNSUPPORTED_REQUIREMENT_LABELS))
@@ -63,16 +71,43 @@ def test_unsupported_requirement_reaches_the_manager_cleaned(requirement):
     assert not hits, f"发给店长的反问里有内部概念词 {hits}: {out[:120]!r}"
 
 
-def test_the_raw_producer_really_does_emit_the_word():
-    """阴性对照: 生产者**确实**产出了 `维度` —— 否则上一条全绿说明不了任何事。
+def test_the_cleaning_is_actually_wired_up():
+    """🔴 承重: 清洗**真的接在这条路上** —— 喂一个带内部词的串，出口必须洗掉它。
 
-    ⛔ 没有这一条，上面那组可能只是因为「反正也没有那个词」而恒真。
-       （本仓判据：闸绿最常见的原因是它测的东西根本不存在。）
+    ⚠️ 2026-08-12 重构的理由，值得留着：
+       这里原本是一条阴性对照，断言**生产者确实产出「维度」**（否则上面那组
+       参数化就是恒真的绿）。当天下午把源码里那批串白话化之后，生产者不再产出
+       「维度」—— **那条对照当场变红，而它红得对**：它在说「你上面那组现在
+       什么都没测了」。
+
+       正确的响应不是删掉它，是把「测清洗有没有接上」与「测生产者干不干净」
+       **拆成两条各自有效的断言**：
+         · 本条：喂合成的脏串 → 出口必须洗掉（永远有效，与文案改不改无关）
+         · 上面那组：真实生产者的输出干不干净（① 的成果，现在从源头就干净）
+
+    变异实测: 把 `clarification_answer_text` 里的 `sanitize_customer_ai_text(text)`
+      改回 `text` → 红「清洗没有接在这条路上」。
     """
-    raw = _unsupported_requirement_question(("table_turnover",))
-    assert "维度" in raw, (
-        "生产者不再输出「维度」了 —— 那上面那组参数化断言已经失去意义，"
-        "该重新找一个真实的内部概念词做锚点，而不是留着一组恒真的绿")
+    dirty = "也可以明确只分析当前已有的维度。"
+    out = clarification_answer_text(dirty)
+    assert "维度" not in out, f"清洗没有接在这条路上: {out!r}"
+    assert "方面" in out, f"清洗接上了但没改写成店长话: {out!r}"
+
+
+def test_the_producer_is_clean_at_the_source_now():
+    """🔴 承重: ① 的成果 —— 生产者**从源头**就不写内部词，不靠下游清洗。
+
+    owner 2026-08-12 裁定：「不是『写了黑话再洗掉』，是一开始就别写。
+    `sanitize()` 的存在本身就是承认我们会写黑话；而清洗靠词表、词表靠人想得到，
+    三层里最弱的一层决定整体。」
+
+    ⛔ 断言的是**未经清洗的原文**（`clarification_answer_text` 会洗，
+       拿洗过的去断言就测不出源头干不干净了）。
+    """
+    for requirement in sorted(_UNSUPPORTED_REQUIREMENT_LABELS):
+        raw = _unsupported_requirement_question((requirement,))
+        hits = [w for w in INTERNAL_VOCAB if w in raw]
+        assert not hits, f"源码里还写着内部概念词 {hits}: {raw[:100]!r}"
 
 
 def test_fallback_clarification_is_cleaned_too():
@@ -80,6 +115,26 @@ def test_fallback_clarification_is_cleaned_too():
     out = clarification_answer_text(None)
     assert out
     assert not [w for w in INTERNAL_VOCAB if w in out]
+
+
+@pytest.mark.parametrize("name", sorted(_COPY_CONSTANTS))
+def test_copy_constants_are_not_empty(name):
+    """🔴 承重: 文案常量不许是空串。
+
+    🔴 2026-08-12 变异实测暴露的洞，值得留着：
+       把这批文案收成常量之后，断言从 `assert "不会用营业额" in text` 改成了
+       `assert NO_SUBSTITUTION in text` —— 防住了「改文案时断言不跟着改」的漂移。
+       但变异「`NO_SUBSTITUTION = ""`」**没有让任何一条断言变红**：
+       `assert "" in text` 恒真，于是**全部 5 条引用它的断言同时静默通过**。
+
+       引用常量把「一条断言会不会漂」换成了「一个常量会不会被清空」——
+       后者影响面更大（一处改动同时废掉 5 条断言），所以必须单独钉住。
+
+    判据: **凡是拿变量做 `in` 断言，就要有一条守住那个变量不为空。**
+    """
+    value = _COPY_CONSTANTS[name]
+    assert value, f"{name} 是空串 —— 所有 `assert {name} in text` 会全部恒真"
+    assert len(value) >= 4, f"{name} 短到没有区分力: {value!r}"
 
 
 def test_action_warning_still_prepends():
