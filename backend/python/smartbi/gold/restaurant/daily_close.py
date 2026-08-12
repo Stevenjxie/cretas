@@ -71,17 +71,29 @@ def daily_close_window(today: Optional[date] = None) -> Tuple[date, date]:
     return (day, day)
 
 
-#: 「今天有没有营业」看这个指标。⛔ 不看营收: 营收算不出来时是 None,
-#: 而 None 分不清「没营业」和「执行链没跑通」—— 订单数分得清(0 vs None)。
+#: 「今天有没有营业」看这个指标。
 _PRESENCE_METRIC = "orders"
 
 
 def _screen_status(sections: List[Dict[str, Any]]) -> str:
     """`no_data` / `no_business` / `ok`。
 
-    🔴 为什么必须三态: `no_data` 和 `no_business` 在**计数上都是 notified=0**,
-       但一个是「这次没量到东西」(要告警), 一个是「今天没营业」(正常)。
-       混成一个布尔, 静默失效就会长得和正常一模一样。
+    ## 🔴 `no_data` 在生产上**到不了** —— 我原来的判据是错的
+
+    我写这段时的想法是: 营收算不出来是 `None`, 分不清「没营业」和「执行链
+    没跑通」; 而订单数分得清(`0` vs `None`)。**订单数分不清。**
+
+    `orders` 是 `COUNT(...)`, 空集上返回 **0 而不是 NULL**。
+    2026-08-13 prod 实测: 拿一个**根本不存在的租户**跑, 得到的是
+    `no_business` 而不是 `no_data`。单测之所以绿, 是因为 `_FakeConn`
+    直接喂了 `orders: None` —— 那是真实 SQL **永远不会**产出的形状。
+
+    ⛔ 更根本的一层: 「今天没营业」和「今天数据没落库」在事实表上就是
+       **同一个长相**(都是没有行)。这个区分不可能从事实表本身得出来,
+       要么看营业日历, 要么看 ETL 水位 —— 都是外部信号。已挂账。
+
+    所以下面 `value is None` 那一支是**防御性**的(挡住 rows 为空/取不到值),
+    不是「ETL 没跑」的探测器。真正可达的 rc=2 是「一个租户都没轮到」。
     """
     presence = next((s for s in sections if s["metric_key"] == _PRESENCE_METRIC), None)
     if presence is None or presence["value"] is None:
