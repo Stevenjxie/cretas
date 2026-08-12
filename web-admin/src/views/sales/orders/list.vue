@@ -629,6 +629,8 @@ function clearContract() {
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
 const materialOptions = ref<TableRow[]>([]);
+// 物料 id 集合 —— 判「这一行卖的是物料还是成品」只用这一处, 不另起第二份判定。
+const materialIdSet = computed(() => new Set(materialOptions.value.map((m) => String(m.id))));
 // 下拉数据源 = 可售商品 + 物料字典。两者都用 product_type_id 这一列存,
 // 该列没有外键, 且实测「既是启用商品又是物料」的 id 数量为 0。
 const sellableOptions = computed<TableRow[]>(() => [...products.value, ...materialOptions.value]);
@@ -1066,6 +1068,20 @@ async function loadPackagingSpecs(item: OrderItem, productId: string) {
   packagingRequestSequence.set(item, requestSequence);
   item.packagingSpecId = item.packagingSpecId || '';
   item.packagingLoadError = false;
+  // 🔴 2026-08-12 真机 E2E 抓到: 物料行会拿【物料的 id】去查【成品的箱规接口】——
+  //   GET /product-types/RMT_xxx/packaging-specs → 404
+  // → 弹「包装规格加载失败, 请重试后再创建订单」, 而 packagingLoadError 正是创建按钮的
+  //   拦截条件(见 selectedItems.some(i => i.packagingLoadError)) —— 于是【选了物料就建不了单】。
+  //
+  // 箱规是【成品】的概念(product_packaging_specs 按 product_type_id 建), 物料本来就没有、
+  // 也不该有 —— 实测那个物料在该表 0 行, 404 是正确响应, 错的是去查它。
+  //
+  // 与「物料行不查成品批次」是同一条判据: 物料不参与任何成品侧的从属数据。
+  if (materialIdSet.value.has(String(productId))) {
+    item.packagingSpecs = [];
+    item.packagingSpecId = '';
+    return;
+  }
   const historicalSpec = item.packagingSpecId && item.packagingUnit
       && item.packagingBaseUnit && Number(item.packagingFactor) > 0
     ? {
