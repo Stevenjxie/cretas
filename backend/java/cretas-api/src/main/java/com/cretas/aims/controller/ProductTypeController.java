@@ -301,7 +301,6 @@ public class ProductTypeController {
         return ApiResponse.success(result);
     }
 
-
     /**
      * 根据类别获取产品类型
      */

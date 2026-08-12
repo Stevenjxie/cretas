@@ -57,8 +57,7 @@ class RawMaterialTypeMasterDataGuardTest {
     @BeforeEach
     void setUp() {
         service = new RawMaterialTypeServiceImpl(repository, batchRepository, conversionRepository,
-                packagingRepository, segmentRepository, excelUtil, workflowUnitReviewService,
-                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                packagingRepository, segmentRepository, excelUtil, workflowUnitReviewService);
         ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         org.mockito.Mockito.lenient().when(unitContractService.normalize(any(), any()))
                 .thenAnswer(invocation -> {

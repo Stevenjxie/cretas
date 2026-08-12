@@ -56,8 +56,7 @@ class WorkflowUnitReviewWritePathTest {
                 mock(MaterialPackagingHierarchyRepository.class),
                 mock(MaterialCodeSegmentRepository.class),
                 mock(ExcelUtil.class),
-                reviewService,
-                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                reviewService);
         RawMaterialType material = new RawMaterialType();
         material.setId("R1");
         material.setFactoryId("F1");
