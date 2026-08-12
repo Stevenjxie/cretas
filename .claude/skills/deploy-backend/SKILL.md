@@ -41,6 +41,32 @@ allowed-tools:
 
 **理由一：构建段 204s → 25s。** `--prefer-ci-artifact` 已是默认开，但**合并后立刻发布时 CI 还没建完**，探测必然落空、回退本地构建。实测同一棵树：预热后 Java `build_count=0`（零次 Maven）∥ Web 19s = **25s**；不预热则 Java 201s ∥ Web 90s = **204s**。
 
+### ⚠️ 东京中转不可达时（AmneziaVPN 停用）——制品运输的逃生路
+
+症状：`PREWARM=failed` / `WEB_CI_ARTIFACT_UNAVAILABLE reason=tokyo_stage_failed`，
+底下是 `Connection closed by 10.66.66.1 port 22`。
+
+**别把它读成「基础设施故障」**（2026-08-12 我就是这么误判的）。`10.66.66.1` 是东京主机
+在 AmneziaVPN 隧道内的私网地址；隧道停用后它不可达，但**同一台主机的公网 SSH 一直是通的**
+（`52.196.123.155`，ED25519 主机指纹与私网地址一致，已核对）。
+
+缓存服务也没死：`ss -lntp` 实测它 `LISTEN 10.66.66.1:18081`——只是**绑在那个地址上**，
+不监听回环，所以要 SSH 本地端口转发。
+
+```bash
+KEY="$USERPROFILE/.ssh/ai-egress-tokyo-windows_ed25519"
+ssh -f -N -L 18081:10.66.66.1:18081 -i "$KEY"     -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes     ubuntu@52.196.123.155
+
+CRETAS_TOKYO_SSH_HOST='ubuntu@52.196.123.155' CRETAS_TOKYO_CACHE_ENDPOINT='http://127.0.0.1:18081/artifacts'   ./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420
+```
+
+⛔ **不要**启停 AmneziaVPN / Clash·Mihomo，**不要**改 sshd、安全组、密钥。
+⛔ 指纹对不上就停手，**不许**用 `StrictHostKeyChecking=no` 绕。
+
+⚠️ 判据：`WEB_CI_ARTIFACT=already-cached` **不证明运输链通**——它可能被本地 by-tree 缓存
+短路了。要验真链路，先把 `~/.cache/cretas/web-admin-deploy/by-tree/<tree>/` 挪开再跑，
+看到 `WEB_CI_ARTIFACT=used` 才算数（2026-08-12 实测：解包后 774 个文件与本地构建逐字节一致）。
+
 **理由二：躲开「构建白做」那类失败。** 发布脚本在构建完成后会再确认 HEAD 仍等于 `origin/main`，不等就中止（拒绝把基于旧 main 的产物部上去，这是对的）。而 main 上相邻合并间隔中位数约 15 分钟、**有相当比例 ≤4 分钟**——正好是一次 fallback 构建的时长。实测两次真实失败（2026-07-30 19:45 / 07-31 15:30）都是这个形状：构建 166s/227s 全部成功，然后因为构建期间别的 session 合了 PR 而**整个作废**。构建压到 25s，这个窗口同比例缩小约 8 倍。
 
 ⚠️ 两处 `--tests` 用同一个选择器（或预热用更窄的）——判据是**集合包含**，预热传的必须 ⊆ CI 跑过的那组。

@@ -17,7 +17,10 @@ server_script_is_structural_noise() {
 
 server_script_host_target() {
     case "$1" in
-        tokyo) printf 'ubuntu@10.66.66.1' ;;
+        # 🔴 2026-08-12: 默认仍是 AmneziaVPN 隧道内的私网地址。隧道停用时不可达,
+        # 用 CRETAS_TOKYO_SSH_HOST 指向同一台主机的公网 SSH(52.196.123.155,
+        # 主机指纹与私网地址一致, 已实测)。默认值不变 —— 隧道在时行为同以前。
+        tokyo) printf '%s' "${CRETAS_TOKYO_SSH_HOST:-ubuntu@10.66.66.1}" ;;
         ecs)   printf 'root@47.100.235.168' ;;
         *) return 1 ;;
     esac

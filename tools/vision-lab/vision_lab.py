@@ -288,6 +288,39 @@ def download_bytes(url: str, user_agent: str) -> bytes:
     return data
 
 
+def prepare_object(root: Path, url: str, ref: str, user_agent: str) -> tuple[str, Path, bool]:
+    """Return a content-addressed local object, reusing completed downloads by OSS object key."""
+    suffix = Path(urllib.parse.urlparse(url).path).suffix.lower()
+    suffix = suffix if suffix in {".jpg", ".jpeg", ".png", ".webp"} else ".img"
+    ref_digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()
+    index_path = root / "raw" / "object-index" / ref_digest[:2] / f"{ref_digest}.json"
+    if index_path.is_file():
+        try:
+            cached = load_json(index_path)
+        except (OSError, json.JSONDecodeError):
+            cached = None
+        if isinstance(cached, dict) and cached.get("object_ref") == ref:
+            cached_digest = str(cached.get("sha256") or "")
+            cached_suffix = str(cached.get("suffix") or "")
+            if re.fullmatch(r"[0-9a-f]{64}", cached_digest) and cached_suffix in {".jpg", ".jpeg", ".png", ".webp", ".img"}:
+                destination = root / "raw" / "sha256" / cached_digest[:2] / f"{cached_digest}{cached_suffix}"
+                if destination.is_file() and sha256_file(destination) == cached_digest:
+                    return cached_digest, destination, True
+
+    data = download_bytes(url, user_agent)
+    digest = hashlib.sha256(data).hexdigest()
+    destination = root / "raw" / "sha256" / digest[:2] / f"{digest}{suffix}"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and sha256_file(destination) != digest:
+        raise RuntimeError(f"content-address collision: {destination}")
+    if not destination.exists():
+        write_bytes(destination, data)
+    write_json(index_path, {
+        "version": 1, "object_ref": ref, "sha256": digest, "suffix": suffix,
+    })
+    return digest, destination, False
+
+
 def collect(config: dict[str, Any], state: State, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     root = Path(config["runtime_root"])
     watermark = str(state.get_meta("watermark", config["source"]["initial_watermark"]))
@@ -295,21 +328,18 @@ def collect(config: dict[str, Any], state: State, rows: list[dict[str, Any]] | N
     queried_production = rows is None
     rows = query_production(config, watermark, watermark_photo_id) if rows is None else rows
     prepared: list[dict[str, Any]] = []
+    object_cache_hits = 0
+    object_downloads = 0
     for row in rows:
         required = ("photo_id", "task_id", "reviewed_at", "file_url")
         if any(not row.get(key) for key in required):
             raise ValueError(f"source record missing required fields: {row}")
         ref = object_ref(str(row["file_url"]))
-        data = download_bytes(str(row["file_url"]), "Cretas-VisionLab-readonly/1.0")
-        digest = hashlib.sha256(data).hexdigest()
-        suffix = Path(urllib.parse.urlparse(str(row["file_url"])).path).suffix.lower()
-        suffix = suffix if suffix in {".jpg", ".jpeg", ".png", ".webp"} else ".img"
-        destination = root / "raw" / "sha256" / digest[:2] / f"{digest}{suffix}"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists() and sha256_file(destination) != digest:
-            raise RuntimeError(f"content-address collision: {destination}")
-        if not destination.exists():
-            write_bytes(destination, data)
+        digest, destination, cache_hit = prepare_object(
+            root, str(row["file_url"]), ref, "Cretas-VisionLab-readonly/1.0",
+        )
+        object_cache_hits += int(cache_hit)
+        object_downloads += int(not cache_hit)
         prepared.append({
             "photo_id": str(row["photo_id"]), "task_id": str(row["task_id"]),
             "reviewed_at": str(row["reviewed_at"]), "sku_code": str(row.get("sku_code") or ""),
@@ -321,6 +351,7 @@ def collect(config: dict[str, Any], state: State, rows: list[dict[str, Any]] | N
         "version": VERSION, "stage": "collect", "created_at": utc_now(),
         "watermark_before": {"reviewed_at": watermark, "photo_id": watermark_photo_id}, "records_received": len(rows),
         "records_prepared": len(prepared), "production_reads": 1 if queried_production else 0,
+        "object_cache_hits": object_cache_hits, "object_downloads": object_downloads,
         "production_writes": 0, "originals_modified": 0,
     }
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")

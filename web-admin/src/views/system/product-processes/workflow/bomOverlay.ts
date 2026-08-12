@@ -138,7 +138,18 @@ export function isDerivedBomOverlayConnection(
     && connection.targetHandle === AUX_OVERLAY_TARGET_HANDLE;
   if (isAuxiliary) return true;
 
-  return connection.target === `${BOM_OVERLAY_PREFIX}pack:${connection.source}`
+  // 🔴 2026-08-12 (Steve 实测「包材 cell 没有一条线连到成品 cell」):
+  //
+  // 包材连线方向在「包材挪到成品上方」那次改动里翻过 —— deriveBomOverlay 现在是
+  // source=包材 Cell → target=成品 Cell(见下方 edges.push)。但**这条白名单没跟着翻**,
+  // 还在按旧方向判 `target === pack:<source>`, 代入真实值:
+  //
+  //   'material:finished:X' === 'bom-overlay:pack:' + 'bom-overlay:pack:material:finished:X'
+  //
+  // 恒 false ⇒ vue-flow 把这条边静默过滤掉 ⇒ DOM 里一条线都没有 —— 正是本函数
+  // 上方注释预言的那个后果。辅料那条因为方向没翻, 所以一直是对的, 两者看起来"一样"
+  // 就更没人怀疑。判据: **翻转一条边的方向, 要把判它方向的【所有】地方一起翻。**
+  return connection.source === `${BOM_OVERLAY_PREFIX}pack:${connection.target}`
     && connection.sourceHandle === PACK_OVERLAY_SOURCE_HANDLE
     && connection.targetHandle === PACK_OVERLAY_TARGET_HANDLE;
 }
@@ -305,4 +316,36 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
   }
 
   return { nodes, edges };
+}
+
+/** 判定「配方行是不是绑在已经不存在的画布节点上」所需的最小字段。 */
+export interface ObsoleteBomInputCandidate {
+  id: number;
+  materialName?: string | null;
+  materialTypeId?: string | null;
+  materialCategory?: string | null;
+  workflowMaterialNodeId?: string | null;
+}
+
+/**
+ * 🔴 2026-08-12 (Steve 真机): 换原料后点「加辅料」被 409 拦下
+ * 「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉」, 而提示让去删的那个动作
+ * **全站没有界面** (DELETE /bom-recipes/items/{id} 后端有、bomApi.removeItem 有、0 处调用)。
+ *
+ * 这个函数是那个出口的判据: 挑出「绑着画布节点、而该节点已不在当前画布上」的配方行。
+ *
+ * ⚠️ **按绑定判, 不按物料名判**。错误消息里只有物料名, 照着名字删会误删 ——
+ * 同一个物料完全可能一行是活的、一行是孤儿(比如换了投入口但料没换)。
+ * ⚠️ PACKAGING 不算: 它不绑投入口, 与后端 reconcileUpgradedInputSkeletons 的过滤一致。
+ */
+export function selectObsoleteBomInputs<T extends ObsoleteBomInputCandidate>(
+  items: readonly T[],
+  liveCanvasNodeIds: ReadonlySet<string>,
+): T[] {
+  return items.filter((item) => {
+    if (item.materialCategory === 'PACKAGING') return false;
+    const bound = item.workflowMaterialNodeId;
+    if (!bound) return false;
+    return !liveCanvasNodeIds.has(bound);
+  });
 }

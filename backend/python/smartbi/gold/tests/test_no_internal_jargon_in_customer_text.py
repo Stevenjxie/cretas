@@ -38,14 +38,16 @@ from typing import List, Tuple
 
 import pytest
 
-from smartbi.gold.customer_text import sanitize_customer_ai_text
+from smartbi.gold.customer_text import INTERNAL_VOCAB, sanitize_customer_ai_text
 
 #: ⛔ 手写(见模块 docstring 的自陈)。只收**店长读不懂且没法据此行动**的词。
 #: 「毛利」「门店」这类业务词不在此列 —— 它们正是店长每天在说的话。
-_INTERNAL_VOCAB = (
-    "问题对象", "分析范围", "执行范围", "语义规划", "查询计划", "计划版本",
-    "维度", "槽位", "解析器", "置信度", "相似度", "向量", "意图代码",
-)
+#:
+#: ⚠️ 2026-08-12: 词表本身已搬到 `smartbi.gold.customer_text`，因为运行时判据
+#:    (答案里有没有黑话) 也要读同一份，而 production 代码不能 import 测试模块。
+#:    这里保留别名，是为了让本文件里那些讲「这张表错了会怎样」的注释仍然指得着它。
+#:    ⛔ 不要在这里再写一份字面量 —— 两份会漂。
+_INTERNAL_VOCAB = INTERNAL_VOCAB
 
 _MODULES = ("smartbi.gold.restaurant.restaurant_intent",)
 

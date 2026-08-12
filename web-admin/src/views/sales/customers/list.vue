@@ -209,11 +209,14 @@ function requiredTextRule(label: string) {
   };
 }
 
+// 2026-08-12 (Steve): contactPerson / phone / shippingAddress 从必填改为选填。
+// 后端与库本来就允许为空 —— CreateCustomerRequest 上这三个字段只有 @Size 没有
+// @NotBlank, public.customers 三列实测 nullable=YES(只有 name 是 NOT NULL)。
+// 也就是说这三个必填是前端单方面加严的, 全仓只有这一处载体。
+// ⚠️ phone 的【格式】校验保留: 它本来就写成「空值放行, 非空才验格式」, 正好是选填要的行为。
 const formRules = {
   name: [requiredTextRule('客户名称')],
-  contactPerson: [requiredTextRule('联系人')],
   phone: [
-    requiredTextRule('联系电话'),
     {
       validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
         if (!String(value ?? '').trim() || isSupportedCustomerPhone(value)) callback();
@@ -222,7 +225,6 @@ const formRules = {
       trigger: ['blur', 'change'],
     },
   ],
-  shippingAddress: [requiredTextRule('收货地址')],
   status: [{ required: true, message: '请选择客户状态', trigger: 'change' }],
   email: [{ type: 'email', message: '请输入有效邮箱地址', trigger: ['blur', 'change'] }],
 };
@@ -581,14 +583,18 @@ async function handleDelete(row: TableRow) {
         <el-form-item label="客户名称" prop="name" required>
           <el-input v-model="formData.name" placeholder="请输入客户名称" />
         </el-form-item>
-        <el-form-item label="联系人" prop="contactPerson" required>
-          <el-input v-model="formData.contactPerson" placeholder="请输入联系人" />
+        <!-- 2026-08-12 (Steve): 联系人/联系电话/收货地址改为选填。后端与库本来就允许为空
+             (CreateCustomerRequest 上只有 @Size 没有 @NotBlank; public.customers 三列
+             nullable=YES) —— 这三个必填只存在于本文件, 是前端单方面加严的。
+             它们仍留在基础区(不进折叠), 只是不再拦提交。 -->
+        <el-form-item label="联系人" prop="contactPerson">
+          <el-input v-model="formData.contactPerson" placeholder="请输入联系人（选填）" />
         </el-form-item>
-        <el-form-item label="联系电话" prop="phone" required>
-          <el-input v-model="formData.phone" placeholder="请输入联系电话" />
+        <el-form-item label="联系电话" prop="phone">
+          <el-input v-model="formData.phone" placeholder="请输入联系电话（选填）" />
         </el-form-item>
-        <el-form-item label="收货地址" prop="shippingAddress" required>
-          <el-input v-model="formData.shippingAddress" placeholder="请输入收货地址" type="textarea" :rows="2" />
+        <el-form-item label="收货地址" prop="shippingAddress">
+          <el-input v-model="formData.shippingAddress" placeholder="请输入收货地址（选填）" type="textarea" :rows="2" />
         </el-form-item>
         <!-- T10 P2.2: status field editable in form (was view-only via list column badge) -->
         <el-form-item label="状态" prop="status" required>

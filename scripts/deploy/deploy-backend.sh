@@ -1717,10 +1717,15 @@ deploy_jar() {
         cd $REMOTE_JAR_DIR
 
         # 备份当前 JAR
+        rm -f .last-deploy-backup
         if [ -f aims-0.0.1-SNAPSHOT.jar ]; then
             BACKUP_NAME=\"aims-0.0.1-SNAPSHOT.jar.bak.\$(date +%Y%m%d_%H%M%S)\"
             cp aims-0.0.1-SNAPSHOT.jar \"\$BACKUP_NAME\"
             echo \"   备份: \$BACKUP_NAME\"
+            # 🔴 2026-08-12: 把备份名落到标记文件。BACKUP_NAME 是本 heredoc 里的远端
+            # 局部变量, 后面「idle 起不来 → 回退磁盘 jar」那一步是**另一次 ssh**, 读不到它。
+            # 没有这个文件, 那一步就只能靠 `ls -t` 猜, 并发部署时会猜错。
+            printf '%s\n' \"\$BACKUP_NAME\" > .last-deploy-backup
             ls -t aims-0.0.1-SNAPSHOT.jar.bak.* 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
         fi
 
@@ -1868,6 +1873,40 @@ deploy_jar() {
                 ssh $SERVER "journalctl -u $IDLE_SERVICE -n 80 --no-pager -o short-iso" 2>/dev/null || true
                 echo "   ---- 日志结束 ----"
                 ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
+
+                # 🔴 2026-08-12 实测事故: 这里原本只是「停 idle + exit 1」, **没有把磁盘上
+                # 的 jar 换回去**。于是留下这个局面: active 靠自己**内存里**那份继续服务,
+                # 而磁盘上躺着一份**起不来**的 jar —— 任何一次重启(health-monitor 的自动
+                # 重启 / OOM / 机器重启 / systemd Restart=on-failure)都会加载它, prod 直接
+                # 死。当天实际处于这个状态约 2 小时, 靠人工发现才换回来。
+                #
+                # 「部署失败了」必须意味着**磁盘也回到部署前**, 否则失败不是失败, 是延迟引爆。
+                echo "   🔁 回退磁盘上的 jar (这份 jar 起不来, 不能留在磁盘上等下次重启加载)"
+                ssh $SERVER "
+                    cd $REMOTE_JAR_DIR || exit 1
+                    CUR=\$(md5sum aims-0.0.1-SNAPSHOT.jar 2>/dev/null | cut -d' ' -f1)
+                    if [ \"\$CUR\" != '$LOCAL_MD5' ]; then
+                        echo '   ⏭  磁盘上的 jar 不是本次部署的(可能已被并发部署覆盖), 不动它'
+                        exit 0
+                    fi
+                    if [ ! -s .last-deploy-backup ]; then
+                        echo '   ⚠️  没有备份标记 —— 说明部署前磁盘上本来就没有 jar, 无可回退'
+                        exit 0
+                    fi
+                    BK=\$(cat .last-deploy-backup)
+                    if [ ! -f \"\$BK\" ]; then
+                        echo \"   ❌ 备份 \$BK 不见了, 无法回退! 磁盘上留着一份起不来的 jar!\"
+                        echo '   ❌ 立即手动处理: ls -t $REMOTE_JAR_DIR/aims-0.0.1-SNAPSHOT.jar.bak.*'
+                        exit 1
+                    fi
+                    cp \"\$BK\" aims-0.0.1-SNAPSHOT.jar || exit 1
+                    BACK_MD5=\$(md5sum aims-0.0.1-SNAPSHOT.jar | cut -d' ' -f1)
+                    if [ \"\$BACK_MD5\" = '$LOCAL_MD5' ]; then
+                        echo '   ❌ 回退后 md5 仍等于本次部署的 jar, 回退没生效!'
+                        exit 1
+                    fi
+                    echo \"   ✓ 已回退到 \$BK (md5 \$BACK_MD5)\"
+                " || echo "   ⚠️⚠️  磁盘 jar 回退失败 —— 上面的手动步骤必须现在做, 否则下次重启 prod 起不来"
                 exit 1
             fi
 

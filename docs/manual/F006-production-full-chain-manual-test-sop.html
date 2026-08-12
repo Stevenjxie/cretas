@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-        <span class="stamp code">origin/main · SOP sync 2026-08-11</span>
+<span class="stamp code">origin/main · SOP sync 2026-08-12</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -509,12 +509,12 @@
           <tr><td>版本</td><td>DRAFT / ACTIVE / 历史版本</td><td>克隆后的修改内容</td><td>同一 SKU 仅一个生效版本；ACTIVE 与历史版本只读，新版本不回写旧计划</td></tr>
         </tbody></table></div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-1"><span></span></span><span><h4>B01 · 先保存完整 Workflow 草稿</h4><p>选择目标 SKU，完成 Cell、工序与连线并保存。此时不要先发布。</p><span class="expect">画布无悬空线，所有 Cell 绑定有效 SKU；顶部“本图产出”按终端生产节点列出真实产出，不以存放位置判断。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-2"><span></span></span><span><h4>B02 · 从派生配置格建立首版草稿</h4><p>点击工序旁的辅料、包材或副产配置格；没有 BOM 时首次保存自动创建首版草稿。至少配置一项主原料。</p><span class="expect">画布显示“正在编辑草稿”，工艺来源只读；配置格不改变 Workflow 节点或连线。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-3"><span></span></span><span><h4>B03 · 按真实需要补辅料、包材与副产</h4><p>辅料只在工艺明确支持的格中新增；不支持或未知时按页面原因处理。无包材或副产时保持空白，不为凑完整度造行。</p><span class="expect">已有历史行仍可查看；空的可选包材/副产不阻止激活，同一工序与物料不重复。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-1"><span></span></span><span><h4>B01 · 先保存完整 Workflow 草稿</h4><p>选择目标 SKU，完成 Cell、工序与连线并保存。此时不要先发布。每个工序至少保留一个产出 Cell；要替换唯一产出时先新增“产出 Cell（分流）”。</p><span class="expect">删除最后一个产出或对应连线会被拦截；画布无悬空线，所有 Cell 绑定有效 SKU；顶部“本图产出”按终端生产节点列出真实产出，不以存放位置判断。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-2"><span></span></span><span><h4>B02 · 从派生配置格建立首版草稿</h4><p>点击工序旁的辅料、包材或副产配置格；没有 BOM 时首次保存自动创建首版草稿。至少配置一项主原料。</p><span class="expect">顶部版本状态按产品区分 Workflow 草稿/已启用版本与 BOM 生效/草稿版本；生效 BOM 明细为空只显示“还没配辅料/包材”，不误报成没有生效 BOM；工艺来源只读，配置格不改变 Workflow 节点或连线。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-3"><span></span></span><span><h4>B03 · 按真实需要补辅料、包材与副产</h4><p>辅料只在工艺明确支持的格中新增；不支持或未知时按页面原因处理。无包材或副产时保持空白，不为凑完整度造行。</p><span class="expect">辅料跟随对应工序；包材 Cell 位于成品上方并连向所属成品；副产标记贴在真实产出旁。已有历史行仍可查看；空的可选包材/副产不阻止激活。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-4"><span></span></span><span><h4>B04 · 核对有限成本摘要</h4><p>当前摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。</p><span class="expect">不得把该摘要标成完整产品成本；成本差异、差异率和状态不可比时保持空值。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-5"><span></span></span><span><h4>B05 · 生效该草稿</h4><p>确认主原料和实际需要的配置后点击“生效该草稿”。</p><span class="expect">同一 SKU 只有一个 ACTIVE；旧计划继续使用原快照。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-6"><span></span></span><span><h4>B06 · 刷新、自动同步并发布</h4><p>刷新 Workflow，执行“自动同步并发布”；按 READY、可自动迁移或需用户处理的预检结果继续。</p><span class="expect">ACTIVE BOM 门禁通过后，Workflow 原子发布并启用；冲突或单位歧义必须停止并列明原因。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-6"><span></span></span><span><h4>B06 · 刷新、自动同步并发布</h4><p>刷新 Workflow，执行“自动同步并发布”；按 READY、可自动迁移或需用户处理的预检结果继续。</p><span class="expect">ACTIVE BOM 门禁通过后，BOM 同步、Workflow 发布和启用原子完成；已有启用版本也能在同一事务切换，旧版本不能把重发布自身误拦。冲突或单位歧义必须停止并列明原因。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-canvas-7"><span></span></span><span><h4>B07 · 验收历史与实际成本边界</h4><p>修改生效配置时创建新草稿；实际完整成本仍从正式报工与结算形成。</p><span class="expect">旧版本和旧计划不漂移；BOM 有限摘要不覆盖或伪装实际成本。</span></span></label>
         </div>
         <h4 data-min-depth="medium" style="margin:22px 0 10px;font-size:17px">BOM 必测报错矩阵</h4>
@@ -542,9 +542,9 @@
           <tr><td>已选择至少 1 个原料</td><td>其余原料是否投入完全由用户决定</td><td>系统不强制全投，也不自动判断互相替代</td></tr>
         </tbody></table></div>
         <div class="callout blue"><strong>Workflow 只声明可能投入/产出，本次事实留到报工</strong>工序 Cell 不再配置主产出、联产品、副产品或静态成本比例；主料、替代料、辅料、包材、用量和成本来自计划固定 BOM。正式报工只提交本次实际发生且数量大于 0 的投入和产出：单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配；量纲不可统一时只在本次报工填写合计 100% 的比例。</div>
-        <div class="callout blue"><strong>存放位置不等于“本图产出”</strong>顶部归属对象只决定这张工艺图存放在哪个成品或原料目录下，不再代表实际产出，也不参与路线优先级。实际产出以画布终端生产节点汇总的“本图产出”为准，BOM 副产不计入该集合；没有有效终端产出时页面必须明确警告。</div>
+<div class="callout blue"><strong>存放位置不等于“本图产出”</strong>顶部归属对象只决定这张工艺图存放在哪个成品或原料目录下，不再代表实际产出，也不参与路线优先级。实际产出以画布终端生产节点汇总的“本图产出”为准，BOM 副产不计入该集合。发布后只有可证明的“单一共享原料 → 多个成品”原料分流才把整条版本谱系自动重锚到该原料；多原料多成品联产不猜，重锚不能安全完成时保留原位置且不影响已经成功的发布。</div>
         <div class="steps" style="margin-top:12px">
-          <label class="step"><span class="check"><input type="checkbox" data-key="wf-owner-product"><span></span></span><span><h4>选择存放位置并核对“本图产出”</h4><p>在页面顶部选择便于管理的成品或原料作为存放位置，再完成终端产出 Cell。存放位置可以与实际产出不同，不能据此锁定或猜测产出。</p><span class="expect">顶部显示存放位置；“本图产出”准确列出画布真实终端产出，BOM 副产不混入；没有产出时给出明确空态。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="wf-owner-product"><span></span></span><span><h4>选择存放位置并核对“本图产出”</h4><p>在页面顶部选择便于管理的成品或原料作为存放位置，再完成终端产出 Cell。存放位置可以与实际产出不同，不能据此锁定或猜测产出。</p><span class="expect">“本图产出”准确列出画布真实终端产出；每个工序至少一个产出 Cell。原料分流发布后可自动重锚到共享原料，联产保持人工选择；BOM 副产不混入。</span></span></label>
           <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="wf-owner-raw"><span></span></span><span><h4>按产出反查存放在别处的工艺图</h4><p>选择目标成品时，页面按已启用 Workflow 的真实终端产出查找全部生产路线；若某条路线存放在另一个成品或原料下，提示卡显示其存放位置并提供打开入口。</p><span class="expect">命中路线不会因存放位置不同而漏掉；查询失败显示错误，不冒充“没有工艺图”；确实无路线时才显示空态。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>

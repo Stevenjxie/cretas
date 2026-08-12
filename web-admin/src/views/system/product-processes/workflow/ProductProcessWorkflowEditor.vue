@@ -314,9 +314,11 @@
               :id="slotProps.id"
               :data="slotProps.data"
               :can-write="canEdit"
+              :collapsed="collapsedAuxProcessIds.has(slotProps.data.processNodeId)"
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
               @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
               @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @set-collapsed="(next) => setAuxCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
           <template #node-bomPackaging="slotProps">
@@ -847,6 +849,7 @@ import {
   deriveBomOverlay,
   isDerivedBomOverlayConnection,
   isBomOverlayEdge,
+  selectObsoleteBomInputs,
   isBomOverlayNode,
   stripBomOverlay,
   stripBomOverlayEdges,
@@ -1363,6 +1366,50 @@ function resolveProductForProcess(processNodeId: string): string | null {
 }
 
 /** 返回可写的 recipeId; 当前解析到的若非草稿, 先就地建/取草稿再重载浮层。 */
+/**
+ * 「旧工艺中的原料投入在目标工艺中已不存在」的**可执行出口**。
+ *
+ * 触发场景是正常业务动作: 同一个产品换原料/改配方(换供应商等)。旧 BOM 里那几行
+ * 绑着旧画布的投入口(`workflowMaterialNodeId`), 新画布上找不到对应槽位, 升级就被拦。
+ *
+ * ⚠️ 判定用的是「绑定的画布节点还在不在**当前画布**上」, 而不是照抄错误消息里的物料名 ——
+ * 同一个物料可能同时有一行是活的、一行是孤儿, 按名字删会误删活的那行。
+ *
+ * ⛔ 不做批量自动清理: 逐行列出来让用户确认。删 BOM 行会连带用量与成本, 不能替他决定。
+ *
+ * @return true = 用户确认并已移除(调用方可重试); false = 不是这个错 / 没找到孤儿 / 用户取消
+ */
+async function repairObsoleteBomInputs(productTypeId: string, error: unknown): Promise<boolean> {
+  if (workflowErrorCode(error) !== 'BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT') return false;
+  let items: BomRecipeItemView[] = [];
+  try {
+    const current = await bomRecipeApi.getCurrentByProduct(props.factoryId, productTypeId);
+    items = current?.data?.items ?? [];
+  } catch {
+    return false;   // 读不到配方就别猜, 让原始报错照常显示
+  }
+  const liveNodeIds = new Set(flowNodes.value.filter((n) => !isBomOverlayNode(n)).map((n) => n.id));
+  const obsolete = selectObsoleteBomInputs(items, liveNodeIds);
+  if (obsolete.length === 0) return false;                          // 判据对不上就别动手
+
+  const names = obsolete.map((item) => item.materialName || item.materialTypeId).join('、');
+  try {
+    await ElMessageBox.confirm(
+      `这 ${obsolete.length} 行配方绑在旧工艺的投入口上，新画布里已经没有对应位置：\n\n${names}\n\n`
+      + '移除它们之后就能继续。⚠️ 会一并删掉这几行的用量与成本，删除后需要在新画布上重新配。',
+      '移除旧工艺遗留的配方行',
+      { type: 'warning', confirmButtonText: `移除这 ${obsolete.length} 行并重试`, cancelButtonText: '先不动' },
+    );
+  } catch {
+    return false;   // 用户选择不动
+  }
+  for (const item of obsolete) {
+    await bomRecipeApi.removeItem(props.factoryId, item.id);
+  }
+  ElMessage.success(`已移除 ${obsolete.length} 行旧工艺遗留配方`);
+  return true;
+}
+
 async function resolveWritableRecipeId(
   productTypeId: string,
   recipeId: string | undefined,
@@ -1377,8 +1424,27 @@ async function resolveWritableRecipeId(
     // 误报“草稿已创建但未刷新”。
     await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '无法创建 BOM 草稿，请稍后重试');
-    return null;
+    // 🔴 2026-08-12 (Steve 真机): 换原料后点「加辅料」被 409 拦下:
+    //   「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉
+    //     提示: 请确认是否删除这些原料规则后再重试」
+    //
+    // 闸拦得对(不能悄悄丢掉用户填过的用量/成本行), 但**出口走不通**:
+    // DELETE /bom-recipes/items/{itemId} 后端有、bomApi.removeItem 也封装了,
+    // 而全站【0 处界面调用它】—— 用户被告知去删, 却没有任何地方能删。
+    // (本仓 request.ts 处理 MATERIAL_UOM_UNCONFIGURED 时已明确写过「不给 dead-end 跳转」。)
+    //
+    // 这里把出口补上: 算出到底是哪几行成了孤儿, 列给用户确认后逐行移除, 然后重试一次。
+    if (await repairObsoleteBomInputs(productTypeId, error)) {
+      try {
+        await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
+      } catch (retryError) {
+        ElMessage.error(retryError instanceof Error ? retryError.message : '移除后仍无法创建 BOM 草稿');
+        return null;
+      }
+    } else {
+      ElMessage.error(error instanceof Error ? error.message : '无法创建 BOM 草稿，请稍后重试');
+      return null;
+    }
   }
   // 重载后浮层已指向草稿, 重新读一次映射, 不要沿用旧 id。
   const refreshed = reread();
@@ -1404,6 +1470,49 @@ const bomOverlayMaterialsLoaded = ref(false);
 // —— 那份没有 materialTypeId/standardQuantity/替代关系等编辑必需字段)。
 const bomOverlayRecipeIdByOutput = ref<Record<string, string>>({});
 const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
+
+/**
+ * 🔴 2026-08-12 (Steve): 不用辅料的工序, 空辅料 Cell 一直挂在上面看着像没配完。
+ *
+ * ⚠️ 这是**视图偏好, 存本地**, 刻意不进工艺定义 —— 本文件顶部 bomOverlay 的设计约束写着
+ * 「改辅料只动 BOM 草稿, 不产生新工艺版本」, 因为工艺节点一改就动 revisionHash,
+ * 所有钉了旧修订的 BOM 都要重新对齐。为了一个显示开关付那个代价不值。
+ *
+ * 代价说清楚: 它表达的是「我不想看到它」, **不是**「这道工序确实不用辅料」——
+ * 换个人/换台电脑仍会看到完整 Cell。要跨人保留得走 BOM 侧新字段 + 迁移。
+ *
+ * 键按 工厂+产品 隔离, 否则切产品会串味。
+ */
+const collapsedAuxProcessIds = ref<Set<string>>(new Set());
+
+function collapsedAuxStorageKey(): string | null {
+  const identity = currentLoadedIdentity();
+  if (!identity) return null;
+  return `cretas:wf-aux-collapsed:${identity.factoryId}:${identity.productTypeId}`;
+}
+
+function loadCollapsedAux(): void {
+  const key = collapsedAuxStorageKey();
+  if (!key) { collapsedAuxProcessIds.value = new Set(); return; }
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    collapsedAuxProcessIds.value = new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []);
+  } catch {
+    collapsedAuxProcessIds.value = new Set();   // 存储损坏不该把画布带挂
+  }
+}
+
+function setAuxCollapsed(processNodeId: string, collapsed: boolean): void {
+  const next = new Set(collapsedAuxProcessIds.value);
+  if (collapsed) next.add(processNodeId); else next.delete(processNodeId);
+  collapsedAuxProcessIds.value = next;
+  const key = collapsedAuxStorageKey();
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...next]));
+  } catch { /* 无痕模式/配额满: 本次会话内仍然生效, 不打断用户 */ }
+}
 // 副产: 同样两份 —— 展示用行 + 编辑用原始行。
 const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
 const bomOverlayPackagingMaterialsLoaded = ref(false);
@@ -1760,6 +1869,9 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   if (!rawOwnerMode.value) await catalogPromise;
   await loadProductBom();
   if (projectUniqueRawMaterialBindings()) refreshPortMaterialMetadata();
+  // 折叠状态按 工厂+产品 存 —— 必须在 identity 确定之后重载, 否则切产品会把上一个产品
+  // 的折叠集合套到这一个上(工序节点 id 不同, 表现是"折叠莫名其妙失效/串味")。
+  loadCollapsedAux();
   await loadBomOverlayData();
 }
 

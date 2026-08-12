@@ -76,7 +76,7 @@
           readonly
           size="small"
         />
-        <span class="unit-chip" data-testid="input-unit-chip">{{ port.unit }}</span>
+        <span class="unit-chip" data-testid="input-unit-chip">{{ unitLabel(port.unit) }}</span>
       </div>
     </section>
 
@@ -117,7 +117,7 @@
             placeholder="选择或现场创建产出 SKU"
             @change="(skuId) => emit('selectOutput', port.id, skuId)"
           />
-          <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
+          <span class="unit-chip" data-testid="output-unit-chip">{{ unitLabel(port.unit) }}</span>
         </div>
       </div>
     </section>
@@ -143,7 +143,7 @@
             <span>{{ port.materialName || `投入 ${index + 1}` }}</span>
           </div>
           <div class="unit-flow-chip" data-testid="unit-flow-input">
-            {{ port.unit }}投入 <span>→</span> {{ primaryOutput?.unit }}产出
+            {{ unitLabel(port.unit) }}投入 <span>→</span> {{ unitLabel(primaryOutput?.unit) }}产出
           </div>
         </div>
         <div v-for="(port, index) in outputPorts" :key="`unit:${port.id}`" class="unit-relationship-row">
@@ -152,7 +152,7 @@
             <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
           </div>
           <div class="unit-flow-chip" data-testid="unit-flow-output">
-            报工单位：{{ port.unit }}
+            报工单位：{{ unitLabel(port.unit) }}
           </div>
         </div>
       </div>
@@ -178,7 +178,7 @@ import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
-import { workflowSkuSpecificationEquation } from './workflowUnits';
+import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflowUnits';
 import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
@@ -210,12 +210,19 @@ const emit = defineEmits<{
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
+/**
+ * 单位一律走显示名再渲染 —— 存储里 `box` 与 `盒` 都合法(后端 alias 归一到同一个码),
+ * 直接渲染原始串就会在同一张画布上两种写法来回跳(Steve 实测)。见 workflowDisplayUnit。
+ */
+function unitLabel(value: string | null | undefined): string {
+  return workflowDisplayUnit(value);
+}
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const unitRelationshipSummary = computed(() => {
-  const inputUnits = [...new Set(inputPorts.value.map((port) => port.unit).filter(Boolean))];
-  const outputUnits = [...new Set(outputPorts.value.map((port) => port.unit).filter(Boolean))];
+  const inputUnits = [...new Set(inputPorts.value.map((port) => unitLabel(port.unit)).filter(Boolean))];
+  const outputUnits = [...new Set(outputPorts.value.map((port) => unitLabel(port.unit)).filter(Boolean))];
   const inputLabel = inputUnits.length === 1 ? inputUnits[0] : inputUnits.join(' / ');
   const outputLabel = outputUnits.length === 1 ? outputUnits[0] : outputUnits.join(' / ');
   return `投入单位：${inputLabel || '待绑定'} · 产出单位：${outputLabel || '待绑定'}`;

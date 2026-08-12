@@ -10,7 +10,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.OssService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -31,7 +31,28 @@ import java.util.*;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@ConditionalOnBean(OSS.class)
+// 🔴 2026-08-12 实测事故: 这里原本是 @ConditionalOnBean(OSS.class)。
+//
+// @ConditionalOnBean 只能匹配「到目前为止已经处理过的」bean 定义 —— Spring 自己的
+// javadoc 因此写明它**只应该用在自动配置类上**。用在被组件扫描的 @Service 上时,
+// 它的成立与否取决于扫描顺序, 而扫描顺序就是 **jar 里 class 条目的物理顺序**。
+//
+// 提供 OSS 的是 OssConfig#ossClient()(@Bean, 见下方同款条件), 要等 OssConfig 作为
+// 配置类被解析后才注册。所以:
+//   OssConfig 排在本类前面 → OSS 定义已在 → 条件成立 → 一切正常
+//   OssConfig 排在本类后面 → OSS 定义还没有 → 条件不成立 → 本 bean 被静默跳过
+//                          → InvoiceServiceImpl 构造器第 4 个参数找不到 OssService
+//                          → APPLICATION FAILED TO START
+//
+// 实测两份 jar(仅差一个无关类的方法体, 9361 个条目里只有 4 个不同):
+//   能起来的:  OssConfig #1620, 本类 #6765   ✅
+//   起不来的:  本类 #1139,      OssConfig #6406  ❌ 确定性复现 3 次
+// 也就是说**任何一次重新构建都可能把顺序翻过来**, 与改了什么代码无关 —— 之前一直没炸
+// 是运气。
+//
+// 修法: 换成与 ossClient() 完全相同的属性条件。语义等价(本 bean 存在 ⟺ OSS 存在),
+// 但属性条件与注册顺序无关。守卫见 ConditionalOnBeanStartupGuardTest。
+@ConditionalOnProperty(prefix = "aliyun.oss", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class OssServiceImpl implements OssService {
 
     private final OSS ossClient;

@@ -111,7 +111,27 @@ def test_provenance_is_printed_whether_or_not_the_round_passed():
     import smartbi.scripts.restaurant_ai_eval as ev
 
     src = inspect.getsource(ev.run_eval)
-    render_at = src.index("render_provenance(_provenance_since(log_cursor))")
+    # ⚠️ 2026-08-12 改: 原来匹配的是整条字面量
+    #    `render_provenance(_provenance_since(log_cursor))`。它在一次**保持行为
+    #    不变**的重构上误报了 —— 把取数条件先存进变量(供 `--record` 一并落盘)
+    #    再打印, 打印位置和条件性都没变, 闸照样红。
+    #    判据: 断言挂在**一条语句的写法**上, 换个写法就误报; 而它守的从来不是写法。
+    #
+    # 🔴 更要紧的是: 这条闸的 docstring 写着「且不在任何条件分支里」, 而原断言
+    #    **根本没查这件事** —— 只比了先后。把 print 缩进进 `if failed:` 里,
+    #    原断言照样绿, 而那正是它声称要防的那个失败。
+    #    (注释声称的检查不存在, 比不写更糟: 下一个人会把它当成已经守住的东西。)
+    #    下面补上缩进判据, 净效果比原来**更严**。
+    lines = src.splitlines()
+    render_lines = [ln for ln in lines if "render_provenance(" in ln]
+    assert render_lines, "run_eval 里根本没有打印取数条件"
+    for line in render_lines:
+        indent = len(line) - len(line.lstrip())
+        assert indent == 4, (
+            f"打印取数条件的那行缩进 {indent} 空格 —— 它被塞进条件分支里了, "
+            f"全绿那一轮就不会打: {line.strip()!r}")
+
+    render_at = src.index("render_provenance(")
     failures_at = src.index("if failures:")
     assert render_at < failures_at, "取数条件被排到失败明细之后/之内了"
     # 阴性对照: 这两个锚点真的都在源码里, 否则上面的比较等于空转

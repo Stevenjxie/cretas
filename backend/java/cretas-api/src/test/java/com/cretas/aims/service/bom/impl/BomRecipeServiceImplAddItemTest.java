@@ -301,20 +301,16 @@ class BomRecipeServiceImplAddItemTest {
         verify(processInjectionConfigRepo).saveAll(argThat(rows -> rows.iterator().hasNext()));
     }
 
-    @Test
-    @DisplayName("ensureDraft rejects inconsistent history instead of guessing a source")
-    void ensureDraftRejectsHistoryWithoutCurrentActive() {
-        recipe.setProductTypeId("SKU-001");
-        recipe.setStatus(BomRecipe.Status.ARCHIVED);
-        recipe.setIsCurrent(false);
-        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
-                .thenReturn(List.of(recipe));
-        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(1L);
-
-        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-001"))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_CURRENT_ACTIVE_REQUIRED"));
-    }
+    /*
+     * 🔴 2026-08-12: 这条原来断言 `BOM_CURRENT_ACTIVE_REQUIRED`(有历史版本但 0 个 ACTIVE ⇒ 拒绝)。
+     * 用例名写着「instead of guessing a source」—— 作者担心的是**从哪一版克隆**要靠猜, 那是对的;
+     * 但结论下错了: 正确做法不是拒绝, 而是**根本不克隆** —— 照当前画布 revision 投一份新草稿
+     * (画布是权威、BOM 是投影)。真机上那句「请先修复版本状态」指向一个**没有界面**的动作。
+     *
+     * 新语义连同「绝不从归档版克隆」的守卫, 移到了
+     * {@link BomDraftWithoutActiveBaselineTest} —— 那里能把所需依赖 mock 干净;
+     * 本类的夹具缺 bomWorkflowRevisionService / unitContractService, 走不到投影路径。
+     */
 
     @Test
     @DisplayName("ensureDraft rejects ambiguous multiple drafts")
