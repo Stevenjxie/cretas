@@ -58,6 +58,11 @@ from smartbi.gold.restaurant import restaurant_intent as ri
 #:      _REQUISITION_SPEND_RE / _render_aggregation_vocabulary()
 PINNED_ROUTING_FINGERPRINT = "fd5508a3"
 
+#: 🔴 2026-08-13 指纹分层后新增: 晋升校验实际比的是**语义段**, 不是全料指纹。
+#:    两个都钉 —— 只钉全料的话, 「把某份原料从语义段挪到 prompt 段」这种改动
+#:    不会动全料值, 闸不响, 而晋升的失效条件已经变了。
+PINNED_PLAN_SEMANTICS_FINGERPRINT = "ca8f67fc"
+
 _HOWTO = """
 🔴 路由规则变了 —— 停下来, 先量回放等价性, 再更新钉住的指纹。
 
@@ -84,6 +89,20 @@ def test_routing_fingerprint_matches_the_pinned_value():
     actual = ri._routing_rules_fingerprint()
     assert actual == PINNED_ROUTING_FINGERPRINT, (
         f"路由规则指纹变了: 钉住 {PINNED_ROUTING_FINGERPRINT!r} → 实际 {actual!r}\n{_HOWTO}"
+    )
+
+
+def test_plan_semantics_fingerprint_matches_the_pinned_value():
+    """晋升校验实际用的那一段也要钉住。
+
+    ⚠️ 它的值今天**正好等于** prod 上 39/40 行存的 `ca8f67fc` —— 那是
+       2026-08-09 并入词汇表**之前**的旧全料指纹。所以晋升校验按**格式**判失效
+       (裸 8-hex 一律不匹配), 不靠比值。见 `test_fingerprint_layering.py`。
+    """
+    actual = ri._plan_semantics_fingerprint()
+    assert actual == PINNED_PLAN_SEMANTICS_FINGERPRINT, (
+        f"语义段指纹变了: 钉住 {PINNED_PLAN_SEMANTICS_FINGERPRINT!r} → "
+        f"实际 {actual!r}\n{_HOWTO}"
     )
 
 

@@ -2843,17 +2843,100 @@ def _routing_rules_fingerprint() -> str:
     代价是这三张表一改, 全部缓存计划失效、下一轮问答重新走 LLM —— 那正是**期望
     行为**: 规则变了, 旧计划本来就不该再用。
     """
-    material = "\x1f".join((
+    material = "\x1f".join(
+        (*_plan_semantics_materials(), *_prompt_surface_materials()))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
+
+def _plan_semantics_materials() -> Tuple[str, ...]:
+    """**存量计划编译器**读的那些原料 —— 它们一变, 已经存下来的 plan_json
+    就可能编译/执行成另一个东西。
+
+    ⛔ 这个划分**不是手写清单, 是按「谁消费它」推导的** —— 手写清单错了是静默的:
+       某条规则改了却被归进「不影响」那层, 晋升计划不作废, 然后开始答错。
+       推导依据(逐条查过调用点):
+         `_REQUEST_METRIC_RULES`        -> `_detect_requested_metrics` (编译期)
+         `sorted(_INTENT_DESCRIPTIONS)` -> `_VALID_CODES` -> 存量计划 intent 校验
+                                           ⚠️ `sorted(dict)` 只取**键**; 描述文本
+                                              今天就不在指纹里, 它只进 prompt
+         `_REQUISITION_SPEND_RE`        -> 领料花费的确定性口径判定 (编译期)
+       `tests/test_fingerprint_layering.py` 有一道闸把这个推导钉住。
+    """
+    return (
         repr(_REQUEST_METRIC_RULES),
         repr(sorted(_INTENT_DESCRIPTIONS)),
         _REQUISITION_SPEND_RE.pattern,
-        # 🔴 2026-08-09 补: 规划器**可选值**现在由登记表渲染进 prompt。
-        #    不把它并进指纹, 批 2/3 扩词汇表后旧计划会被原样回放 ——
-        #    症状是「新维度/新形态部署了但一直不生效」, 而且完全不报错。
-        #    这与上面那段注释记的 #2043 事故是**同一个形状**。
-        _render_aggregation_vocabulary(),
-    ))
+    )
+
+
+def _prompt_surface_materials() -> Tuple[str, ...]:
+    """**只有 prompt 构造器**读的原料 —— 它们一变, 下一次规划的产物会变, 但
+    **已经存下来的 plan_json 怎么编译不变**。
+
+    🔴 2026-08-09 那条理由仍然成立、只是归属换了层:「扩词汇表后旧计划被原样
+       回放, 症状是新维度部署了但一直不生效」—— 那是**过时**(stale)不是**错**
+       (wrong)。过时的代价是「少了新能力」, 错的代价是「答了个错数」。
+       前者不该让人审过的晋升全部作废。
+
+    ⚠️ 这一段是**靠兜的那部分**: 没办法在编译期证明「扩词汇表绝不改变任何存量
+       计划的产出」。兜它的是 `scripts/cron/replay-equivalence-daily.sh` ——
+       它不看指纹, 直接比产出。⛔ 那道跑批停了, 这一层的安全性就没了。
+    """
+    return (_render_aggregation_vocabulary(),)
+
+
+def _plan_semantics_fingerprint() -> str:
+    """晋升条目的**时效标签**用这一段, 不用全料指纹。
+
+    含义:「这份人审是在哪套**编译规则**下做的」。prompt 侧的改动不再让它作废。
+    """
+    material = "\x1f".join(_plan_semantics_materials())
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
+
+def _prompt_surface_fingerprint() -> str:
+    material = "\x1f".join(_prompt_surface_materials())
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
+
+#: 晋升表 `routing_fingerprint` 列的新格式: `<语义段>.<prompt段>`。
+#: 旧行是裸 8-hex(无分隔符), 取第一段得到的是**旧算法的全料指纹**, 与新语义段
+#: 必然不等 —— 所以旧行保持失效。⛔ 这是**预期**不是缺陷: 分层本身不该让任何
+#: 一条人审过的计划复活, 复活要由人按台账逐条盖章。
+_FINGERPRINT_SEGMENT_SEP = "."
+
+
+def compose_routing_fingerprint() -> str:
+    """写入晋升表时用。两段都存 —— 第二段不参与校验, 但让「这条是在哪套
+    prompt 下审的」可回溯。"""
+    return (_plan_semantics_fingerprint() + _FINGERPRINT_SEGMENT_SEP
+            + _prompt_surface_fingerprint())
+
+
+def plan_semantics_segment(stored) -> str:
+    """从存下来的指纹里取语义段。**旧格式(裸 8-hex, 无分隔符)一律返回空串。**
+
+    🔴 为什么按**格式**判定而不是「取第一段然后比值」——第一版就是那么写的,
+       被验收第 1 项当场抓住:
+
+         新语义段实测 = 'ca8f67fc'
+         而 prod 上 39/40 行存的**正好也是** 'ca8f67fc'
+
+       原因: `ca8f67fc` 是 **2026-08-09 把 `_render_aggregation_vocabulary()`
+       并进指纹之前**的旧全料指纹 —— 那时的原料集恰好就是现在这三份语义原料。
+       于是「取第一段比值」会让 39 条人审过的晋升**静默复活**, 而我们没有任何
+       台账依据说它们仍然有效。⛔ 复活必须是人按逐条台账发起的动作。
+
+    ⚠️ 判据: **靠「哈希不会撞」的设计不叫设计。** 这次不是理论上的碰撞,
+       是算法演进导致的**必然**重合 —— 老值本来就是用今天这套原料算出来的。
+    """
+    if not stored:
+        return ""
+    text = str(stored)
+    if _FINGERPRINT_SEGMENT_SEP not in text:
+        # 旧格式 = 未按分层重新盖章 = 失效。返回空串, 它不会等于任何真指纹。
+        return ""
+    return text.split(_FINGERPRINT_SEGMENT_SEP, 1)[0]
 
 # Authorities `_semantic_spec_from_t3` may return for a plan that is safe to
 # replay.  `llm_contract_incomplete` (the model's answer did not satisfy the
@@ -3107,7 +3190,9 @@ async def _load_promoted_routes(
         return ()
 
     routes: List[Tuple[str, str, Dict[str, Any]]] = []
-    current_fp = _routing_rules_fingerprint()
+    # 🔴 2026-08-13 指纹分层: 晋升校验只看**语义段**, 不看全料指纹。
+    #    prompt 侧的改动(扩词汇表等)让计划**过时**而不是**错**, 不该让人审作废。
+    current_fp = _plan_semantics_fingerprint()
     stale_fingerprint: List[str] = []
     for row in rows or ():
         phrase = _normalize_exact_phrase(row["normalized_phrase"] or "")
@@ -3139,7 +3224,9 @@ async def _load_promoted_routes(
         #    不了这一点, 因为人是在**旧规则下**审的。跳过的代价有界(回落 planner,
         #    答案仍对、只是慢), 而继续服务的代价是零 token 端出一个可能错的答案。
         # ⚠️ NULL 也跳过: 没有指纹就无法证明它是在当前规则下审的。
-        row_fp = row["routing_fingerprint"]
+        # 旧行是裸 8-hex(旧算法的全料指纹), 取第一段仍不等于新语义段 —— 保持
+        # 失效是**预期**。复活要由人按台账逐条盖章, 不由这次分层顺带做掉。
+        row_fp = plan_semantics_segment(row["routing_fingerprint"])
         if row_fp != current_fp:
             stale_fingerprint.append(phrase)
             continue
@@ -3190,11 +3277,24 @@ async def _replay_zero_token_plan(
             )
             if spec is not None:
                 logger.info(
+                    # 🔴 2026-08-13 分层上线观测(前 24 小时逐条人看, 不只看计数)。
+                    #    分层放开的那一刻是回放路径**第一次在 prod 上真正执行** ——
+                    #    修复已部署但那条路一次都没跑过。而回放是零 token 路径,
+                    #    一旦答错**没有任何 LLM 在中间兜底**。
+                    # ⛔ 加的是观测不是逻辑: 四个字段全部读自已经算好的 spec,
+                    #    不新增任何查询、不改变任何行为。
+                    # ⛔ 不做双跑对照 —— 那等于把飞轮省下的 token 又花回去。
+                    # ⚠️ `disclosed` / `window` 是**人要逐条看的那两个** ——
+                    #    计数只能告诉你「命中了」, 告诉不了你「答对了」。
                     "[restaurant-intent] zero-token promoted-route hit: "
-                    "authority=%s intent=%s clarification=%s query=%s",
+                    "authority=%s intent=%s clarification=%s "
+                    "disclosed=%s window=%s zero_token=%s query=%s",
                     spec.planner_authority,
                     spec.intent,
                     spec.clarification_needed,
+                    bool(getattr(spec, "time_range_defaulted", False)),
+                    getattr(spec, "window_label", ""),
+                    True,   # 走到这一行就是零 token: planner 一次都没被调用
                     query,
                 )
                 return spec, "promoted_route"
