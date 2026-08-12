@@ -5,6 +5,7 @@ import {
   BOM_OVERLAY_PREFIX,
   deriveBomOverlay,
   isDerivedBomOverlayConnection,
+  selectObsoleteBomInputs,
   isBomOverlayNode,
   stripBomOverlay,
   stripBomOverlayEdges,
@@ -343,5 +344,51 @@ describe('从 BOM 派生浮层', () => {
     });
     const pack = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}pack:o1`);
     expect(pack!.type === 'bomPackaging' && pack!.data.baseUnit).toBe('未配');
+  });
+});
+
+/**
+ * 🔴 2026-08-12 (Steve 真机): 换原料后点「加辅料」被 409 拦下
+ * 「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉」——
+ * 而提示让去删的那个动作**全站没有界面**(DELETE items 后端有、前端 API 有、0 处调用)。
+ *
+ * selectObsoleteBomInputs 是补上的那个出口的判据。
+ */
+describe('🔴 selectObsoleteBomInputs —— 旧工艺遗留配方行的判据', () => {
+  const live = new Set(['material:raw:NEW', 'material:semi:A']);
+
+  it('绑着已不存在的画布节点 → 判为孤儿', () => {
+    const items = [{ id: 1, materialName: '2015胸肉', workflowMaterialNodeId: 'material:raw:OLD' }];
+    expect(selectObsoleteBomInputs(items, live).map((i) => i.id)).toEqual([1]);
+  });
+
+  it('绑着仍在画布上的节点 → 不动', () => {
+    const items = [{ id: 2, materialName: '冻猪蹄', workflowMaterialNodeId: 'material:raw:NEW' }];
+    expect(selectObsoleteBomInputs(items, live)).toEqual([]);
+  });
+
+  /**
+   * ⚠️ 最要命的一条: 错误消息里只有**物料名**。照着名字删会连活的那行一起删 ——
+   * 同一个物料完全可能一行是活的、一行是孤儿(换了投入口但料没换)。
+   */
+  it('🔴 同一个物料一行活一行孤儿 —— 只能删孤儿那行', () => {
+    const items = [
+      { id: 3, materialName: '2015胸肉', workflowMaterialNodeId: 'material:raw:OLD' },
+      { id: 4, materialName: '2015胸肉', workflowMaterialNodeId: 'material:raw:NEW' },
+    ];
+    expect(selectObsoleteBomInputs(items, live).map((i) => i.id)).toEqual([3]);
+  });
+
+  it('没绑画布的行不是孤儿(手工加的料)', () => {
+    const items = [{ id: 5, materialName: '盐', workflowMaterialNodeId: null }];
+    expect(selectObsoleteBomInputs(items, live)).toEqual([]);
+  });
+
+  it('PACKAGING 不算 —— 它不绑投入口, 与后端 reconcileUpgradedInputSkeletons 的过滤一致', () => {
+    const items = [{
+      id: 6, materialName: '真空袋', materialCategory: 'PACKAGING',
+      workflowMaterialNodeId: 'material:finished:GONE',
+    }];
+    expect(selectObsoleteBomInputs(items, live)).toEqual([]);
   });
 });
