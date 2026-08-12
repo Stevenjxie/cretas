@@ -1,4 +1,4 @@
-import { canonicalUnitCode } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount } from '@/utils/unitPricing';
 
 export interface SalesOrderPackagingSpecContract {
   id: string;
@@ -58,7 +58,9 @@ export function canonicalSalesOrderItemPayload(
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     ...line,
-    unit: canonicalUnitCode(line.unit),
+    // 🔴 2026-08-13: 保留 只/个 —— 只在 UI 里保留没用, 发货单/送货单读的是【落库】的那个值,
+    // 抹成 pcs 之后仓管看到的还是「件」。后端 crossLanguageCode 同样保留这两个标签。
+    unit: canonicalUnitCodeKeepingCount(line.unit),
   };
   UI_ONLY_FIELDS.forEach((field) => delete payload[field]);
   if (!String(line.packagingSpecId || '').trim()) delete payload.packagingSpecId;
