@@ -222,9 +222,27 @@ def render(result: CellResult, window_label: str) -> str:
     """
     label = result.metric_label
     if result.missing_columns:
-        cols = "、".join(c.split(".")[-1] for c in result.missing_columns)
-        return (f"这项分析需要**{label}**相关数据（{cols}），你的系统还没有接入这些字段。"
-                f"接上之后本分析即可运行 —— 本次没有用其他数据替代。")
+        # 🔴 2026-08-13 T2 补数据开价接在这里。
+        #    改之前这句话把**裸库表列名**怼给店长: `c.split(".")[-1]` 得到的是
+        #    `net_amount` / `food_cost` 这种东西。设计卡明写「列的人话名必须在
+        #    registry 上」——所以人话名从 `COLUMN_LABELS` 取, 而「补了能算出什么」
+        #    由 `requires` 反查算出来, 两样都不在这里手写。
+        # ⛔ 开价拿不出来时**退回原措辞**, 不静默丢掉缺口: 「没接入」这件事
+        #    本身必须说, 开价只是加值。
+        from smartbi.gold.restaurant.fill_offers import (
+            build_fill_offers,
+            column_label,
+        )
+
+        names = [column_label(c) or c.split(".")[-1] for c in result.missing_columns]
+        cols = "、".join(names)
+        # ⛔ 不说「字段」——「字段」是黑话, 店长不说这个词(见 `INTERNAL_VOCAB`)。
+        text = (f"这项分析要用到**{label}**的数据（{cols}），你这边还没接进来。"
+                f"接上就能算 —— 这次我没有拿别的数据顶替。")
+        offers = build_fill_offers(missing_columns=result.missing_columns)
+        if offers:
+            text += "\n\n" + "\n".join(f"> {o['text']}" for o in offers)
+        return text
     if not result.rows:
         return f"{window_label}没有可用的{label}数据，本次没有用相邻区间替代。"
 

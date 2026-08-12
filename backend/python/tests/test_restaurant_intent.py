@@ -2298,7 +2298,14 @@ def test_price_elasticity_discloses_required_controls_and_does_not_claim_causali
     assert "促销" in question
     assert "缺货" in question
     assert "对照门店或对照时段" in question
-    assert "相关性还不能证明因果" in question
+    # 🔴 2026-08-13: 原文断言的是「相关性还不能证明因果」这句**原话**。
+    #    去黑话时那句改成了店长话:「光看『涨价后卖得少了』证明不了是涨价造成的,
+    #    可能那几天下雨、可能隔壁在做活动」。
+    # ⛔ 守的性质没变 —— **不许把相关当成因果**。断言跟着改到性质上,
+    #    而不是把黑话原话钉死在测试里(那会让去黑话这件事被测试顶回去)。
+    assert "证明不了是涨价造成的" in question, f"没守住「不把相关当因果」: {question}"
+    assert "不会拿" in question and "直接当成因果" in question, (
+        f"没说清「不会拿涨跌当因果」: {question}")
 
 
 def test_dish_sales_and_margin_share_one_deterministic_resolver():
@@ -3275,9 +3282,18 @@ async def test_regression_chart_request_returns_exportable_fields_not_false_succ
     )
     assert spec is not None
     assert spec.clarification_needed is True
-    assert "不能可靠完成" in (spec.clarification_question or "")
-    assert "菜品名称" in (spec.clarification_question or "")
-    assert "决定系数" in (spec.clarification_question or "")
+    question = spec.clarification_question or ""
+    # 🔴 2026-08-13 断言从「守那几个词」改成「守那个性质」。
+    #    原文是 `"不能可靠完成" in ...` 和 `"决定系数" in ...` ——
+    #    后者**要求正文里出现「决定系数」**, 而那正是要去掉的黑话
+    #    (`ANALYST_JARGON`)。守着黑话的断言会把去黑话这件事顶回去。
+    # ⛔ 被守的性质没变: ①明确说答不了 ②说清缺什么 ③不把没画的图说成画好了。
+    assert "答不了" in question, f"没有明确拒答: {question}"
+    assert "每道菜的名称" in question, f"没说清缺什么: {question}"
+    assert "没画出来的图" in question, f"没守住「不谎报成功」: {question}"
+    # 阴性对照: 黑话不许回来。
+    assert "决定系数" not in question
+    assert "字段" not in question
 
 
 def test_contract_requires_executed_comparison_metadata():

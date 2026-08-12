@@ -489,6 +489,34 @@ AGGREGATIONS: Dict[str, Aggregation] = {
 # ═══════════════════════════════════════════════════════════════════════════
 # 自洽校验 —— 登记表自己不能先坏掉
 # ═══════════════════════════════════════════════════════════════════════════
+#: 「表.列」的**人话名** —— T2 补数据开价要说「补 {什么}, 能算出 {什么}」,
+#: 前半句就取自这里。
+#:
+#: 🔴 为什么放在 registry 上而不是写在开价那段代码里(设计卡明令):
+#:    与 `category` 同一条判据 —— 手写映射一旦落在工具里, **新登记的列会悄悄
+#:    落在表外而不报错**, 于是开价时那一句变成「补 fact_pos_transaction.tax_amount」
+#:    直接把列名怼到店长脸上, 或者干脆跳过不说。
+#:    放在这里 + 下面那道断言, 缺了当场红。
+#: ⛔ 措辞是**店长听得懂的话**, 不是字段名的翻译。「实收金额」不是「actual_receive」。
+COLUMN_LABELS: Dict[str, str] = {
+    "fact_pos_transaction.net_amount": "订单净额(POS 实收流水)",
+    "fact_pos_transaction.gross_amount": "订单原价金额",
+    "fact_pos_transaction.actual_receive": "实际到账金额",
+    "fact_pos_transaction.discount_amount": "折扣金额",
+    "fact_pos_transaction.has_discount": "这单有没有打折",
+    "fact_pos_transaction.platform_fee_amount": "平台抽佣金额",
+    "fact_pos_transaction.tax_amount": "税额",
+    "fact_pos_transaction.customer_count": "就餐人数",
+    "fact_pos_transaction.id": "订单号",
+    "fact_pos_item.amount": "每道菜的销售额",
+    "fact_pos_item.qty": "每道菜的销量",
+    "fact_pos_item.return_qty": "退菜数量",
+    "agg_restaurant_product_cost.food_cost": "每道菜的食材成本(来自成本卡/配方)",
+    "fact_restaurant_wastage.quantity": "损耗数量",
+    "fact_restaurant_wastage.estimated_cost": "损耗金额",
+}
+
+
 def assert_registry_self_consistent() -> None:
     """登记表内部矛盾在跑之前就该发现，不必等打库。
 
@@ -510,6 +538,24 @@ def assert_registry_self_consistent() -> None:
         assert entry.category in CATEGORIES, (
             f"指标 {entry.key} 的 category={entry.category!r} 不在 CATEGORIES 里 —— "
             f"自造一个类别等于给自己开了一个没人渲染的桶")
+
+    # ── 列的人话名: 每一个被 `requires` 引用的列都必须有 ──────────────────
+    #
+    # 🔴 与上面 `category` 那段同一条判据。T2 补数据开价要说「补 {什么}」,
+    #    没有人话名就只能把 `fact_pos_transaction.tax_amount` 怼到店长脸上,
+    #    或者静默跳过那一句 —— 后者更糟, 因为缺口消失了而没人知道。
+    # ⛔ 反向也查: 登记了却没有任何指标依赖的列说明它已经过期, 留着会让人
+    #    以为「补它有用」。
+    required_columns = {c for m in METRICS.values() for c in m.requires}
+    for column in sorted(required_columns):
+        assert column in COLUMN_LABELS, (
+            f"列 {column} 被 requires 引用却没有人话名 —— "
+            f"T2 开价时只能把库表列名怼到店长脸上, 或者静默跳过那句开价")
+        assert COLUMN_LABELS[column].strip(), f"列 {column} 的人话名是空的"
+    for column in sorted(COLUMN_LABELS):
+        assert column in required_columns, (
+            f"列 {column} 有人话名却没有任何指标依赖它 —— "
+            f"过期的登记会让开价说「补它有用」, 而补了什么也解锁不了")
 
     for m in METRICS.values():
         assert m.dimensions, f"指标 {m.key} 没声明能按哪些维度分组"
