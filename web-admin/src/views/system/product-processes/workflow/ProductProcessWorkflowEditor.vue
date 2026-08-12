@@ -314,9 +314,11 @@
               :id="slotProps.id"
               :data="slotProps.data"
               :can-write="canEdit"
+              :collapsed="collapsedAuxProcessIds.has(slotProps.data.processNodeId)"
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
               @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
               @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @set-collapsed="(next) => setAuxCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
           <template #node-bomPackaging="slotProps">
@@ -1468,6 +1470,49 @@ const bomOverlayMaterialsLoaded = ref(false);
 // —— 那份没有 materialTypeId/standardQuantity/替代关系等编辑必需字段)。
 const bomOverlayRecipeIdByOutput = ref<Record<string, string>>({});
 const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
+
+/**
+ * 🔴 2026-08-12 (Steve): 不用辅料的工序, 空辅料 Cell 一直挂在上面看着像没配完。
+ *
+ * ⚠️ 这是**视图偏好, 存本地**, 刻意不进工艺定义 —— 本文件顶部 bomOverlay 的设计约束写着
+ * 「改辅料只动 BOM 草稿, 不产生新工艺版本」, 因为工艺节点一改就动 revisionHash,
+ * 所有钉了旧修订的 BOM 都要重新对齐。为了一个显示开关付那个代价不值。
+ *
+ * 代价说清楚: 它表达的是「我不想看到它」, **不是**「这道工序确实不用辅料」——
+ * 换个人/换台电脑仍会看到完整 Cell。要跨人保留得走 BOM 侧新字段 + 迁移。
+ *
+ * 键按 工厂+产品 隔离, 否则切产品会串味。
+ */
+const collapsedAuxProcessIds = ref<Set<string>>(new Set());
+
+function collapsedAuxStorageKey(): string | null {
+  const identity = currentLoadedIdentity();
+  if (!identity) return null;
+  return `cretas:wf-aux-collapsed:${identity.factoryId}:${identity.productTypeId}`;
+}
+
+function loadCollapsedAux(): void {
+  const key = collapsedAuxStorageKey();
+  if (!key) { collapsedAuxProcessIds.value = new Set(); return; }
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    collapsedAuxProcessIds.value = new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []);
+  } catch {
+    collapsedAuxProcessIds.value = new Set();   // 存储损坏不该把画布带挂
+  }
+}
+
+function setAuxCollapsed(processNodeId: string, collapsed: boolean): void {
+  const next = new Set(collapsedAuxProcessIds.value);
+  if (collapsed) next.add(processNodeId); else next.delete(processNodeId);
+  collapsedAuxProcessIds.value = next;
+  const key = collapsedAuxStorageKey();
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...next]));
+  } catch { /* 无痕模式/配额满: 本次会话内仍然生效, 不打断用户 */ }
+}
 // 副产: 同样两份 —— 展示用行 + 编辑用原始行。
 const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
 const bomOverlayPackagingMaterialsLoaded = ref(false);
@@ -1824,6 +1869,9 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   if (!rawOwnerMode.value) await catalogPromise;
   await loadProductBom();
   if (projectUniqueRawMaterialBindings()) refreshPortMaterialMetadata();
+  // 折叠状态按 工厂+产品 存 —— 必须在 identity 确定之后重载, 否则切产品会把上一个产品
+  // 的折叠集合套到这一个上(工序节点 id 不同, 表现是"折叠莫名其妙失效/串味")。
+  loadCollapsedAux();
   await loadBomOverlayData();
 }
 

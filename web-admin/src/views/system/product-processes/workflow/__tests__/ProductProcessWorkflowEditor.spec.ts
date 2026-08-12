@@ -681,6 +681,43 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(overlayAfter!.position.x).toBe(overlayBefore.x + 120);   // 浮层自己照常跟手
   });
 
+  /**
+   * 🔴 2026-08-12 (Steve): 不用辅料的工序, 空辅料 Cell 一直挂着看着像没配完 ——
+   * 给一个折叠成细窄条的开关。
+   *
+   * ⚠️ 刻意存本地不进工艺定义: 工艺节点一改就动 revisionHash, 所有钉旧修订的 BOM
+   * 都要重新对齐(见 bomOverlay.ts 顶部设计约束)。为一个显示开关付那个代价不值。
+   */
+  describe('🔴 辅料 Cell 折叠(视图偏好)', () => {
+    it('折叠状态按 工厂+产品 隔离存本地, 且不写进工艺定义', async () => {
+      const vm = await mountEditor() as unknown as EditorVm & {
+        setAuxCollapsed: (processNodeId: string, collapsed: boolean) => void;
+        collapsedAuxProcessIds: Set<string>;
+      };
+      vm.openAddProcess('raw');
+      vm.selectedWorkProcessId = 'WP-PACK';
+      vm.confirmAddProcess();
+      await flushPromises();
+      const proc = vm.flowNodes.find((n) => (n.data as { processName?: string })?.processName);
+      if (!proc) throw new Error('Expected a process node');
+
+      const before = JSON.stringify(stripBomOverlay(vm.flowNodes));
+      vm.setAuxCollapsed(proc.id, true);
+      await flushPromises();
+
+      expect(vm.collapsedAuxProcessIds.has(proc.id)).toBe(true);
+      // ⛔ 关键: 折叠是视图偏好, 工艺定义一个字都不能变(否则 revisionHash 变, BOM 全要重对)
+      expect(JSON.stringify(stripBomOverlay(vm.flowNodes))).toBe(before);
+      // 存本地, 键里带工厂与产品
+      const key = `cretas:wf-aux-collapsed:F006:PT-PIG-400`;
+      expect(JSON.parse(window.localStorage.getItem(key) || '[]')).toContain(proc.id);
+
+      vm.setAuxCollapsed(proc.id, false);
+      expect(vm.collapsedAuxProcessIds.has(proc.id)).toBe(false);
+      expect(JSON.parse(window.localStorage.getItem(key) || '[]')).not.toContain(proc.id);
+    });
+  });
+
   it('selecting a Cell also selects every directly connected line', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
