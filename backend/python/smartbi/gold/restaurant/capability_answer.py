@@ -104,9 +104,69 @@ def computable_labels(
     return tuple(out)
 
 
+def computable_categories(
+    schema_columns: set,
+    tenant_value_counts: Dict[str, int],
+    *,
+    metrics: Optional[Dict[str, Any]] = None,
+    unsupported: Sequence[str] = (),
+) -> Tuple[Tuple[str, str], ...]:
+    """`(大类, 锚点标签)` —— 拒答那句「我这儿有的是…」按类说，每类给一个例子。
+
+    🔴 owner 2026-08-12 裁定：11 项一口气念出来太长，收敛成大类；
+       而**类别必须是 registry 上的字段**，不能是手写映射表 ——
+       手写映射一旦落地，新登记的指标会悄悄落在所有类别之外、
+       从「我这儿有的」里**消失**，而消失是不报错的。
+
+    ⛔ **类的顺序按 `CATEGORIES` 走，不按数据量排** —— 数据量不预测
+       「对店长有没有用」。填充量**只用来在类内挑锚点**（同一类里挑本租户
+       数据最全的那个当例子），不作主轴。
+    ⛔ 也不取前 N：截断是静默丢信息，而登记顺序是实现细节不是产品语义。
+    """
+    from smartbi.gold.restaurant.metric_registry import CATEGORIES
+    if metrics is None:
+        from smartbi.gold.restaurant.metric_registry import METRICS
+        metrics = METRICS
+    banned = set(unsupported)
+
+    # 每类收 (填充量, 标签)。填充量取该指标所有必需列里**最小**的那个 ——
+    # 最紧的那一列决定它算不算得出来。
+    per_cat: Dict[str, List[Tuple[int, int, str]]] = {}
+    for order, (key, metric) in enumerate((metrics or {}).items()):
+        if key in banned:
+            continue
+        requires = tuple(getattr(metric, "requires", ()) or ())
+        category = str(getattr(metric, "category", "") or "")
+        if not requires or not category:
+            continue
+        if not all(col in schema_columns for col in requires):
+            continue
+        counts = [tenant_value_counts.get(col, 0) for col in requires]
+        if min(counts) <= 0:
+            continue
+        per_cat.setdefault(category, []).append(
+            (min(counts), order, str(getattr(metric, "label", "") or key)))
+
+    out: List[Tuple[str, str]] = []
+    for category in CATEGORIES:
+        entries = per_cat.get(category)
+        if not entries:
+            continue
+        # 类内按填充量降序; **打平时按登记顺序**。
+        #
+        # 🔴 2026-08-12 真租户实测改的: 同一张表的列填充量几乎总是打平,
+        #    第一版拿标签当 tiebreak, 于是按码点排 —— 「营收和折扣」这一类的锚点
+        #    选成了「平台抽佣」(平 U+5E73 < 营 U+8425), 对店长几乎没用。
+        #    ⛔ 打平时的顺序不能交给码点。登记顺序是**人写的**(与 `_SLOT_POOLS`
+        #    同一条纪律: 人写的顺序 = 人审过的优先级), 且可推导、不是手写映射表。
+        entries.sort(key=lambda item: (-item[0], item[1]))
+        out.append((category, entries[0][2]))
+    return tuple(out)
+
+
 def render_capability_refusal(
     missing_labels: Sequence[str],
-    available_labels: Sequence[str],
+    available_groups: Sequence[Any],
 ) -> str:
     """§9.9 拒答模板的 ①②③ 段。**④ 不在正文里** —— 它是按钮，由调用方放进 followups。
 
@@ -126,8 +186,10 @@ def render_capability_refusal(
         "",
         f"缺的是：{missing}",
     ]
-    if available_labels:
-        lines += ["", f"我这儿有的是：{'、'.join(available_labels)}。"]
+    if available_groups:
+        rendered = "、".join(
+            f"{category}（比如{anchor}）" for category, anchor in available_groups)
+        lines += ["", f"我这儿有的是：{rendered}。"]
     return "\n".join(lines)
 
 
@@ -208,7 +270,7 @@ def partial_coverage_answer(
 
 
 async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
-    """查三层，返回本租户算得出来的指标标签。查不动 → 空元组（不猜）。"""
+    """查三层，返回 `(大类, 锚点标签)` 序列。查不动 → 空元组（不猜）。"""
     try:
         from smartbi.gold.queries import tenant_conn
         from smartbi.gold.restaurant.generic_executor import existing_columns
@@ -246,4 +308,4 @@ async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
         logger.warning("[capability] 无法确认本租户能算什么, 省掉那一段: %s", exc)
         return ()
 
-    return computable_labels(schema_columns, counts, unsupported=unsupported)
+    return computable_categories(schema_columns, counts, unsupported=unsupported)

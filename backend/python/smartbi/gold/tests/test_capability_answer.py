@@ -18,6 +18,7 @@ import pytest
 
 from smartbi.gold.restaurant.capability_answer import (
     MARGIN_NOT_PROFIT,
+    computable_categories,
     computable_labels,
     partial_coverage_answer,
     missing_capability_labels,
@@ -112,7 +113,8 @@ def test_refusal_body_has_no_findings_block():
     §9.9: 拒答带一堆发现读起来像是回答了，人会以为拿到了东西。
     那两条发现是真算出来的，所以**降级成按钮**（调用方放进 followups），不是删掉。
     """
-    text = render_capability_refusal(["净利润（缺少费用、税费及其他收支）"], ["营收", "菜品销量"])
+    text = render_capability_refusal(["净利润（缺少费用、税费及其他收支）"],
+                                     [("营收和折扣", "营收"), ("客流和销量", "销量")])
     assert "顺带" not in text
     assert "还有" not in text or "件事" not in text
 
@@ -123,7 +125,7 @@ def test_refusal_says_boundary_not_what_i_can_compute_for_you():
     被替换掉的那句正是栽在这个口径上 —— 它读起来像「针对你这个问题我能算这些」，
     而那份清单与问句无关。
     """
-    text = render_capability_refusal(["翻台率（缺少桌台…）"], ["营收"])
+    text = render_capability_refusal(["翻台率（缺少桌台…）"], [("营收和折扣", "营收")])
     assert "我这儿有的是" in text
     assert "能算的" not in text, "又用回了那个会被当成「针对你这个问题」的口径"
 
@@ -144,7 +146,9 @@ def test_empty_capability_list_drops_the_section_entirely():
 @pytest.mark.parametrize("jargon", ["可靠覆盖", "相邻指标", "维度", "可验证结果", "相邻分析"])
 def test_refusal_carries_no_contract_jargon(jargon):
     """§9.9 明列的五个词，一个都不许出现在拒答里。"""
-    text = render_capability_refusal(["净利润（缺少费用、税费及其他收支）"], ["营收", "食材损耗"])
+    text = render_capability_refusal(
+        ["净利润（缺少费用、税费及其他收支）"],
+        [("营收和折扣", "营收"), ("损耗", "损耗成本")])
     assert jargon not in text
 
 
@@ -248,3 +252,111 @@ def test_no_facts_means_no_partial_answer():
     assert partial_coverage_answer("是否赚钱的判断", "缺费用", []) is None
     assert partial_coverage_answer(
         "是否赚钱的判断", "缺费用", [{"label": "毛利", "value": "—"}]) is None
+
+
+# ── C: 大类收敛（owner 2026-08-12 裁定：11 项太长） ──────────────────────
+
+
+def test_categories_come_from_the_registry_field_not_a_handwritten_map():
+    """🔴 承重: 指标没写 category 就不进任何大类, 而不是被塞进某个默认桶。
+
+    owner 裁定的理由: 手写映射一旦落地, **新登记的指标会悄悄落在所有类别之外、
+    从「我这儿有的」里消失 —— 而消失是不报错的**。放在 registry 字段上,
+    缺了由 `assert_registry_self_consistent` 当场红(见 test_registry_gate)。
+
+    变异实测: 给没写 category 的指标兜一个默认类
+      → 红:「没写 category 的指标混进了大类」
+    """
+    class M:
+        def __init__(self, label, requires, category=""):
+            self.label, self.requires, self.category = label, requires, category
+    metrics = {
+        "a": M("营收", ("t.c1",), "营收和折扣"),
+        "b": M("没归类的新指标", ("t.c2",)),      # ← 忘了写 category
+    }
+    groups = computable_categories({"t.c1", "t.c2"}, {"t.c1": 5, "t.c2": 5},
+                                   metrics=metrics)
+    labels = [anchor for _cat, anchor in groups]
+    assert "没归类的新指标" not in labels, "没写 category 的指标混进了大类"
+    assert ("营收和折扣", "营收") in groups
+
+
+def test_category_order_follows_registry_not_data_volume():
+    """🔴 承重: 类的顺序按 CATEGORIES 走, **不按数据量排**。
+
+    owner: 数据量不预测「对店长有没有用」。填充量只用于类内挑锚点。
+
+    变异实测: 把外层排序改成按填充量降序
+      → 红:「类的顺序被数据量带跑了」
+    """
+    from smartbi.gold.restaurant.metric_registry import CATEGORIES
+    class M:
+        def __init__(self, label, requires, category):
+            self.label, self.requires, self.category = label, requires, category
+    metrics = {
+        "big": M("客流", ("t.c1",), "客流和销量"),      # 数据量最大, 但类排在最后
+        "small": M("营收", ("t.c2",), "营收和折扣"),    # 数据量最小, 类排最前
+    }
+    groups = computable_categories({"t.c1", "t.c2"}, {"t.c1": 9999, "t.c2": 1},
+                                   metrics=metrics)
+    order = [cat for cat, _ in groups]
+    assert order == [c for c in CATEGORIES if c in order], (
+        f"类的顺序被数据量带跑了: {order}")
+    assert order[0] == "营收和折扣"
+
+
+def test_anchor_is_the_best_filled_one_inside_its_category():
+    """填充量只在**类内**决定锚点 —— 同一类里挑本租户数据最全的那个当例子。"""
+    class M:
+        def __init__(self, label, requires, category):
+            self.label, self.requires, self.category = label, requires, category
+    metrics = {
+        "thin": M("实收", ("t.c1",), "营收和折扣"),
+        "fat": M("营收", ("t.c2",), "营收和折扣"),
+    }
+    groups = computable_categories({"t.c1", "t.c2"}, {"t.c1": 1, "t.c2": 900},
+                                   metrics=metrics)
+    assert groups == (("营收和折扣", "营收"),)
+
+
+def test_registry_gate_reds_when_a_metric_has_no_category():
+    """🔴 承重: registry 自洽闸对「缺 category」会红 —— 这条是上面那条的另一半。
+
+    变异实测: 删掉 assert_registry_self_consistent 里的 category 检查
+      → 红:「缺 category 的指标没有被闸拦住」
+    """
+    import smartbi.gold.restaurant.metric_registry as reg
+    saved = reg.METRICS["revenue"].category
+    object.__setattr__(reg.METRICS["revenue"], "category", "")
+    try:
+        raised = False
+        try:
+            reg.assert_registry_self_consistent()
+        except AssertionError as exc:
+            raised = "category" in str(exc)
+        assert raised, "缺 category 的指标没有被闸拦住"
+    finally:
+        object.__setattr__(reg.METRICS["revenue"], "category", saved)
+
+
+def test_tie_on_fill_falls_back_to_registry_order_not_codepoint():
+    """🔴 承重: 填充量打平时按**登记顺序**挑锚点, 不按字符码点。
+
+    🔴 真租户实测暴露的: 同一张表的列填充量几乎总是打平, 第一版拿标签当
+       tiebreak → 按码点排 → 「营收和折扣」的锚点选成了「平台抽佣」
+       (平 U+5E73 < 营 U+8425), 对店长几乎没用。
+
+    变异实测: tiebreak 改回标签
+      → 红:「打平时锚点按码点排了」
+    """
+    class M:
+        def __init__(self, label, requires, category):
+            self.label, self.requires, self.category = label, requires, category
+    # 登记顺序: 营收在前(人写的优先级), 平台抽佣在后; 两者填充量相同
+    metrics = {
+        "revenue": M("营收", ("t.c1",), "营收和折扣"),
+        "platform_fee": M("平台抽佣", ("t.c2",), "营收和折扣"),
+    }
+    groups = computable_categories({"t.c1", "t.c2"}, {"t.c1": 500, "t.c2": 500},
+                                   metrics=metrics)
+    assert groups == (("营收和折扣", "营收"),), f"打平时锚点按码点排了: {groups}"
