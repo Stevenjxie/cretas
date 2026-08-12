@@ -17,6 +17,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# ⛔ 引用常量, 不抄字面量 —— 2026-08-12 白话化时这些断言全红了,
+#    因为它们锁在旧措辞上。引用同一个常量, 改文案两边原子同步。
+from smartbi.gold.customer_text import NO_SUBSTITUTION, PLANNER_UNAVAILABLE
 from smartbi.gold.restaurant import answer_contract as contract
 from smartbi.gold.restaurant import restaurant_intent
 from smartbi.gold.restaurant.restaurant_intent import (
@@ -710,7 +713,7 @@ async def test_semantic_planner_outage_fails_closed():
     assert spec.intent == ""
     assert spec.clarification_needed is True
     assert spec.planner_authority == "llm_unavailable"
-    assert "没有执行任何相邻分析" in spec.clarification_question
+    assert spec.clarification_question == PLANNER_UNAVAILABLE
 
 
 # ── 2026-08-11: 供应商不可用必须在服务端留痕 ────────────────────────────
@@ -820,7 +823,7 @@ async def test_approved_exact_phrase_does_not_authorize_a_longer_contains_query(
     assert spec is not None
     assert spec.intent == ""
     assert spec.planner_authority == "llm_unavailable"
-    assert "没有执行任何相邻分析" in spec.clarification_question
+    assert spec.clarification_question == PLANNER_UNAVAILABLE
     t3.assert_awaited_once()
 
 
@@ -2235,7 +2238,7 @@ async def test_parse_catches_unsupported_only_capability_gap_before_tenant_gate(
     assert spec.intent == ""
     assert spec.clarification_needed is True
     assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
-    assert "不会用营业额" in (spec.clarification_question or "")
+    assert NO_SUBSTITUTION in (spec.clarification_question or "")
 
 
 def test_margin_and_return_rate_query_runs_margin_and_leaves_return_rate_blank():
@@ -2266,7 +2269,7 @@ def test_net_profit_is_not_silently_reduced_to_revenue_or_gross_margin():
     assert spec.clarification_needed is True
     assert "净利润" in (spec.clarification_question or "")
     assert "费用、税费及其他收支" in (spec.clarification_question or "")
-    assert "不会用营业额" in (spec.clarification_question or "")
+    assert NO_SUBSTITUTION in (spec.clarification_question or "")
 
 
 def test_dish_optimization_reports_every_missing_dimension_together():

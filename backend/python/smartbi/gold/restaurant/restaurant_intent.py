@@ -32,6 +32,15 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+# ⛔ 面向店长的固定说法**只能**来自 customer_text —— 各处写字面量就会与断言漂开
+#    (本轮实测: 5 条断言 + 2 处电池排除锁在这些串上, 改文案不会让它们跟着变)。
+from smartbi.gold.customer_text import (
+    EXECUTION_UNAVAILABLE,
+    NO_SUBSTITUTION,
+    NO_USABLE_RESULT,
+    PLANNER_UNAVAILABLE,
+)
+
 # ⛔ 规划器的聚合可选值**只能**来自登记表 —— 手写第二份清单就是第四个膨胀点。
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS as _AGGREGATIONS,
@@ -1280,11 +1289,13 @@ def _unsupported_requirement_question(
         for item in requirements
         if item in _UNSUPPORTED_REQUIREMENT_LABELS
     ]
+    # 2026-08-12 白话化: 原文含三个店长读不懂的词 ——「相近指标」「维度」,
+    # 外加「可靠分析」这种内部说法。prod 实测这段话原样发给了店长。
     return (
-        f"当前可以可靠分析：{'、'.join(available)}。"
-        f"当前不能可靠分析：{'；'.join(missing)}。"
-        "不会用营业额、毛利或其他相近指标替代这些缺失指标，也不会把部分完成说成全部完成。"
-        "补齐括号内明细后可以继续；也可以明确只分析当前已有的维度。"
+        f"现在能算的：{'、'.join(available)}。"
+        f"现在算不了的：{'；'.join(missing)}。"
+        f"{NO_SUBSTITUTION}，也不会把只算了一半说成算全了。"
+        "把括号里缺的补上就能继续；也可以让我只看现在能算的那几项。"
     )
 
 
@@ -1299,10 +1310,10 @@ def unsupported_requirements_disclosure(requirements: Tuple[str, ...]) -> str:
         return ""
     bullets = "\n".join(f"- {item}" for item in missing)
     return (
-        "\n\n### 本次缺少数据、暂时留空的维度\n"
+        "\n\n### 这次缺数据、先留空的几项\n"
         f"{bullets}\n"
-        "这些维度本次没有参与结论，也没有用营业额、毛利或其他相邻指标替代。"
-        "补齐上述明细后，可以在同一分析中继续合并判断。"
+        f"这几项没有参与结论，{NO_SUBSTITUTION}。"
+        "把上面缺的补上，就能放进同一次分析里一起判断。"
     )
 
 
@@ -6756,8 +6767,7 @@ async def parse_restaurant_query(
             planner_authority="llm_unavailable",
             clarification_needed=True,
             clarification_question=(
-                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
-                "请稍后重试。"
+                PLANNER_UNAVAILABLE
             ),
         )
 
@@ -7173,8 +7183,7 @@ async def _parse_continuation(
             planner_authority="llm_unavailable",
             clarification_needed=True,
             clarification_question=(
-                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
-                "请稍后重试。"
+                PLANNER_UNAVAILABLE
             ),
             is_continuation=True,
         )

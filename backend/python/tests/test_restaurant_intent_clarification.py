@@ -27,6 +27,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# ⛔ 引用常量, 不抄字面量(见 test_restaurant_intent.py 同处注释)。
+from smartbi.gold.customer_text import PLANNER_UNAVAILABLE
+
 def _asked_slots(spec):
     """反问覆盖了哪些槽位 —— 判据用它, 不要断言问句字面值。
 
@@ -1895,7 +1898,7 @@ async def test_reviewed_exact_button_with_extra_instruction_falls_back_fail_clos
     assert second.intent == ""
     assert second.planner_authority == "llm_unavailable"
     assert second.planned_intents == ()
-    assert "没有执行任何相邻分析" in second.clarification_question
+    assert second.clarification_question == PLANNER_UNAVAILABLE
     t3.assert_awaited_once()
 
 

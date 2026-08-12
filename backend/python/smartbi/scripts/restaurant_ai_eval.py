@@ -28,6 +28,13 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional, Sequence
 
+# ⛔ 从产品模块取那句拒答, **不抄字面量**。
+#    这两处排除原本挂的是 `"本次结果没有可靠覆盖"`; P-B① 白话化之后产品里
+#    再也不会出现那句话, 它们**当场变成恒真** —— 本轮已经因为同型腐烂拆掉
+#    6 条(见 `test_battery_phrasings_are_not_dead_letters`), 不能再造两条。
+#    引用常量: 改文案时电池自动跟着变。
+from smartbi.gold.customer_text import CONTRACT_REFUSAL_MARK
+
 # ── 租户夹具：会随租户变的东西，只在这里定义一次 ────────────────────────
 #
 # 🔴 这个块存在的理由（2026-08-09 复盘）：8-06 餐饮租户收敛把 DEMO_REST 停用
@@ -184,7 +191,7 @@ _THIS_WEEK_EMPTY_PERIOD_CASE: Dict[str, Any] = {
     "excludes": [
         "请先把缺少的数据补齐",
         "当前能查到的数据还不够",
-        "本次结果没有可靠覆盖",
+        CONTRACT_REFUSAL_MARK,
     ],
     "invariant": {
         # 说了没数据 → 必须已经给出相邻周期, 否则就是把用户撂在原地。
@@ -378,7 +385,7 @@ CASES: List[Dict[str, Any]] = [
     {"q": "最近7天全部门店营收怎么提高，给我今天能做的动作",
      "contains": ["优化建议", "营收"],
      "excludes": [
-         "本次结果没有可靠覆盖",
+         CONTRACT_REFUSAL_MARK,
          _CANNOT_UNDERSTAND,
          "请先把缺少的数据补齐",
      ]},

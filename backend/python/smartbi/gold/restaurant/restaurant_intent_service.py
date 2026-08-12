@@ -12,7 +12,18 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from smartbi.gold.restaurant.capability_answer import (
+    missing_capability_labels,
+    partial_coverage_answer,
+    render_capability_refusal,
+    should_use_capability_refusal,
+    tenant_capability,
+)
 from smartbi.gold.customer_text import (
+    CONTRACT_REFUSAL_MARK,
+    EXECUTION_UNAVAILABLE,
+    NO_SUBSTITUTION,
+    NO_USABLE_RESULT,
     has_displayable_business_result,
     sanitize_customer_ai_text,
 )
@@ -159,6 +170,39 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     if not warning or warning in (answer_text or ""):
         return answer_text
     return f"**{warning}**\n\n{answer_text}"
+
+
+#: 说不清用户想看什么时的兜底反问。
+_GENERIC_CLARIFICATION = "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+
+
+def clarification_answer_text(
+    clarification_question: Optional[str], warning: Optional[str] = None
+) -> str:
+    """澄清分支真正发给店长的那句话。**过 sanitize。**
+
+    🔴 2026-08-12 prod 实测抓到的缺陷（打真接口把答案存下来再扫）：
+
+        当前可以可靠分析：…。当前不能可靠分析：翻台率（…）。
+        …补齐括号内明细后可以继续；也可以明确只分析当前已有的**维度**。
+
+    `维度` 是内部概念词，店长读不懂。而扫这个词的源码闸
+    `test_no_internal_jargon_in_customer_text` **一直是绿的** ——
+    它的判据是「源码里的串**经 sanitize 之后**不含内部词」，
+    而 `sanitize_customer_ai_text("…已有的维度。")` 确实会改写成「…已有的方面。」。
+
+    **闸、清洗函数、词表三样各自都是对的，坏在它们没有装在同一条路上**：
+    澄清分支把 `spec.clarification_question` 直接当成 `answer_text`，
+    从来没调用过 sanitize（同一个文件里 `_business_optimization` 那条分支调了）。
+
+    ⛔ 修在**构造点**，不是修在调用方。全仓有 10 处 `sanitize_customer_ai_text(`
+       调用点，靠「每个出口都记得调一次」是本仓反复失败过的形态
+       （契约靠调用方记得）。这里让「拿到澄清文案」和「清洗」变成同一个动作。
+
+    ⚠️ sanitize 幂等：下游若再调一次（`chat.py` 有几处会）不会改变结果。
+    """
+    text = clarification_question or _GENERIC_CLARIFICATION
+    return _prepend_action_warning(sanitize_customer_ai_text(text), warning)
 
 
 def _llm_capacity_available() -> bool:
@@ -1229,16 +1273,37 @@ async def tiered_answer(
         action_warning = _read_only_action_warning_for_spec(query, spec)
 
         if spec.clarification_needed or not spec.intent:
-            clarification_text = (
-                spec.clarification_question
-                or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
-            )
+            # ── 能力缺口(用户只问了算不出来的东西) → 走 §9.9 拒答模板 ──────────
+            #
+            # 🔴 换掉的是一段**死代码**: `_unsupported_requirement_question` 里
+            #    「现在能算的：…」那份清单, 三个调用点都要求「没有任何受支持的指标」,
+            #    而 available_labels 的键与 _UNSUPPORTED_REQUIREMENTS **交集为空**
+            #    ⇒ available 恒为 [] ⇒ 硬编码兜底恒定触发。
+            #    于是那句话**恰恰在它与本问题完全无关时才出现** —— 一句会被当真的话。
+            #    (prod 实测: 「这月挣了多少」与「翻台率」拿到的前半句逐字相同。)
+            #
+            # ⚠️ 只在**确实一个都算不出来**时接管; 别的澄清(缺时间/缺门店)照旧,
+            #    那些不是能力缺口, 用拒答模板会把「再说清楚点」说成「我做不到」。
+            # ⚠️ `missing_capability_labels` 已在模块顶部 import。⛔ 不要在这里再
+            #    `from ... import` 一次 —— 那会把它变成**整个函数的局部变量**,
+            #    于是同一函数里更靠后的契约分支引用它时抛
+            #    `cannot access local variable ... where it is not associated with a value`,
+            #    而那个异常被 tiered 路径的 catch 吞成一行 WARNING。
+            #    (2026-08-12 实测: 只有 2 条测试红, 其余全绿。)
+            capability_text = None
+            if should_use_capability_refusal(spec.unsupported_requirements):
+                available = await tenant_capability(
+                    pool, factory_id, spec.unsupported_requirements)
+                capability_text = render_capability_refusal(
+                    missing_capability_labels(spec.unsupported_requirements), available)
+
             clarification_result = {
                 "kind": "clarification",
-                "answer_text": _prepend_action_warning(
-                    clarification_text,
-                    action_warning,
-                ),
+                # ⛔ 走 `clarification_answer_text`, 不要在这里自己拼 ——
+                #    它负责 sanitize。2026-08-12 之前这里是直接拼的,
+                #    「维度」因此漏到店长面前(见该函数的注释)。
+                "answer_text": clarification_answer_text(
+                    capability_text or spec.clarification_question, action_warning),
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
@@ -1381,8 +1446,8 @@ async def tiered_answer(
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
                     (
-                        f"本次没有执行分析：{mismatch}。"
-                        "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
+                        f"这次没有开算：{mismatch}。"
+                        f"请说清是看菜品、看门店还是看全店合计，{NO_SUBSTITUTION}。"
                     ),
                     action_warning,
                 ),
@@ -1487,10 +1552,7 @@ async def tiered_answer(
                 empty_result = {
                     "kind": "clarification",
                     "answer_text": _prepend_action_warning(
-                        (
-                            "计划中的餐饮分析没有返回可验证结果，本次没有改走相邻分析。"
-                            "请确认数据范围后重试。"
-                        ),
+                        NO_USABLE_RESULT,
                         action_warning,
                     ),
                     "contract_pass": False,
@@ -1628,9 +1690,30 @@ async def tiered_answer(
                 if contract.missing
                 else "可展示的真实业务结果"
             )
-            safe_text = (
-                f"本次结果没有可靠覆盖{missing}，因此没有向您展示可能答非所问的数据，"
-                "也没有改走相邻指标。请补充具体范围后重试。"
+            # ── §9.2 第二档: 只能算一部分 → 给能算的 + 明说另一个为什么算不出 ──
+            #
+            # 🔴 今天是整份丢弃: 分析**跑过了**(prod 实测「这个月到底赚钱了没有」
+            #    走到这里), resolver 算好的 KPI 就在手边, 却因为契约少了
+            #    `profitability_verdict` 而一个数都不给。
+            #
+            # ⛔ 数字**只从 kpis 来**, 不复用被驳回的 answer_text ——
+            #    那份文本有一部分是 LLM 叙述的, 原样留用等于把 LLM 产的数字重新放行,
+            #    而且是在一个专门声明「我不拿别的数据凑」的答案里。
+            #
+            # ⚠️ **只在能算出「为什么」时才走这条路**: 说不出理由的数字贴在拒答旁边
+            #    就是顶替。理由取自 spec 自己记下的能力缺口, 取不到就退回整份拒答。
+            partial_text = None
+            gap_labels = missing_capability_labels(spec.unsupported_requirements)
+            if gap_labels:
+                partial_text = partial_coverage_answer(
+                    missing, "、".join(gap_labels),
+                    getattr(tiered_result, "kpis", None) or [],
+                )
+            # 2026-08-12 白话化: 原文「本次结果没有可靠覆盖…也没有改走相邻指标」
+            # 三个内部说法叠在一起, prod 实测原样发给了店长(问「到底赚钱了没」)。
+            safe_text = partial_text or (
+                f"这次没算出{missing}，所以我{CONTRACT_REFUSAL_MARK}，"
+                f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)
             asyncio.create_task(log_intent_capture(
@@ -1758,14 +1841,24 @@ async def tiered_answer(
         logger.warning(f"[restaurant-intent] tiered path failed: {e}")
         if spec is not None and spec.plan_version == "restaurant-query-plan-v2":
             failure_result = {
-                "kind": "clarification",
+                # 🔴 2026-08-12: 这里原来是 `"kind": "clarification"` ——
+                #    **把系统故障说成「我需要你补充信息」**。三个后果：
+                #      1. 语义是假的。EXECUTION_UNAVAILABLE 是「系统坏了」,
+                #         clarification 是「你再说清楚点」。这是「禁止降级处理」的
+                #         变体: 不是给假数据, 是**给假的失败原因**。
+                #      2. 污染指标。按 kind 统计「澄清率」的仪器会把系统故障
+                #         算进澄清率 —— **故障在指标上看起来像产品行为**。
+                #      3. 与发现块抑制撞车: 下游按 kind==clarification 判「拒答」,
+                #         于是系统挂掉时店长看到「餐饮执行链暂时不可用」+ 一颗
+                #         「顺带 N 件事」按钮, 点下去生成**行动建议**。
+                #
+                # ⚠️ 正确取值同一个文件里早就有(约 1204 行, LLM 额度不可用那条),
+                #    它的注释一字不差地适用于这里:
+                #    「用户分不清『这条是可信的事实』和『那条是因为 AI 挂了才这么答』」。
+                #    正确取值、先例、理由全在同一个文件里, 相隔 600 行。
+                "kind": "unavailable",
                 "answer_text": _prepend_action_warning(
-                    (
-                        "餐饮执行链暂时不可用，本次没有执行任何相邻分析。"
-                        "请稍后重试。"
-                    ),
-                    action_warning,
-                ),
+                    EXECUTION_UNAVAILABLE, action_warning),
                 "contract_pass": False,
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,

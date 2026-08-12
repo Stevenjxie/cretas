@@ -14,6 +14,7 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
+from smartbi.gold.customer_text import NO_SUBSTITUTION
 from smartbi.gold.restaurant.generic_executor import (
     CellResult,
     UnsupportedCell,
@@ -402,8 +403,8 @@ async def try_generic_answer(
         except Exception:  # noqa: BLE001 — 拿不到就退回键名, 不因措辞挂掉回答
             zh = {}
         names = "、".join(zh.get(m, m) for m in untranslatable)
-        text += (f"\n\n以下这些本次没有给出：{names}"
-                 " —— 系统没有这项数据，也没有用相邻指标替代。")
+        text += (f"\n\n这几项这次没给出：{names}"
+                 f" —— 系统没有这项数据，{NO_SUBSTITUTION}。")
     return {
         "code": "GENERIC_" + "+".join(f"{m.upper()}_{d.upper()}_{a.upper()}"
                                       for m, d, a in cells),
