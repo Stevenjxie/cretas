@@ -136,7 +136,10 @@ class QualityVerdict:
 
     @property
     def llm_problems(self) -> List[str]:
-        """判定模型指出的问题。判不了的项**不算问题**（不是 False）。"""
+        """判定模型指出的问题。判不了的项**不算问题**（不是 False）。
+
+        ⛔ **不含判据④** —— 见 `advisory`。
+        """
         out: List[str] = []
         if self.addressed is False:
             out.append(f"没答到所问: {self.missing or '(未说明)'}")
@@ -144,9 +147,27 @@ class QualityVerdict:
             out.append("黑话(词表未收): " + "、".join(self.jargon_unlisted))
         if self.layout_llm:
             out.append(f"排版: {self.layout_llm}")
-        if self.number_conflict:
-            out.append(f"数字矛盾: {self.number_conflict}")
         return out
+
+    @property
+    def advisory(self) -> List[str]:
+        """只报、**不计入 verdict** 的观察。目前只有判据④（数字自洽）。
+
+        🔴 2026-08-12 owner 拍板降级，依据是当轮实测：
+           判据④在**真实语料**上唯一一次开火，两条全是误报，且是同一种形态 ——
+           一句话里挂着两个指标的数字
+           （「每份赚 ¥78.57…是高位（中位 ¥27.51）；卖 43100 份，低于中位 47631 份」），
+           判定模型把它们绑到了错误的主语上，报成「表述冲突」。
+           另一条「剩 0kg，低于安全线 2288.42kg」被读成自相矛盾，而 0 确实低于 2288.42。
+
+        ⚠️ 它在**合成样本**上是准的（埋「第一名是第二名的 5 倍」而实际 2.5 倍 →
+           当场抓出并报出正确倍数；把倍数改对 → 通过）。所以不是砍掉，是降级：
+           **合成样本上准，不代表真实语料上准** —— 真实句子更密、更容易绑错主语。
+
+        ⛔ 降级 ≠ 静音。它照常出现在报告里的独立一段，只是不参与四象限归类 ——
+           否则两个假阳性会把两条真答案打进「盲区」格，而那张表要用来排 P-A 的刀。
+        """
+        return [f"数字存疑(仅供参考): {self.number_conflict}"] if self.number_conflict else []
 
     @property
     def problems(self) -> List[str]:
@@ -196,7 +217,7 @@ def _extract_json(text: str) -> Optional[dict]:
 
 
 def parse_quality_payload(
-    content: str, *, listed: Sequence[str] = ()
+    content: str, *, listed: Sequence[str] = (), allow: Sequence[str] = ()
 ) -> Optional[Dict[str, Any]]:
     """把模型输出解析成 {jargon_unlisted, layout, numbers}。纯函数，可单测。
 
@@ -205,6 +226,11 @@ def parse_quality_payload(
     ⛔ 模型列的词里，**已经在词表里的要剔掉** —— 否则同一个词会在
        `jargon_listed` 和 `jargon_unlisted` 里各报一次，读的人以为有两个问题。
        模型这一层的价值就是「词表没收的」，重复的部分不是它的贡献。
+
+    ``allow``：**我们自己认定该说的话**（由调用方推导，见
+    `restaurant_ai_judge.battery_required_vocabulary`）。电池断言要求必须出现的词，
+    再判它是黑话就是自相矛盾。⚠️ 调用方负责保证 `allow` 里不含 `INTERNAL_VOCAB`
+    / `ANALYST_JARGON` —— 这里不再兜一次，兜了就会掩盖电池自己写错的情况。
     """
     parsed = _extract_json(content)
     if parsed is None:
@@ -223,10 +249,10 @@ def parse_quality_payload(
     if jargon and not jargon.get("ok", True):
         raw = jargon.get("words")
         if isinstance(raw, list):
-            listed_set = set(listed)
+            skip = set(listed) | set(allow)
             words = [
                 str(w).strip()[:20] for w in raw
-                if str(w).strip() and str(w).strip() not in listed_set
+                if str(w).strip() and str(w).strip() not in skip
             ]
 
     def _detail(section: Optional[dict]) -> str:
@@ -259,6 +285,7 @@ async def judge_answer_quality(
     *,
     slot: str = _JUDGE_SLOT,
     table_problems: Sequence[str] = (),
+    allow: Sequence[str] = (),
     call_chain=None,
     slot_enum=None,
 ) -> QualityVerdict:
@@ -311,7 +338,7 @@ async def judge_answer_quality(
             unavailable=f"判定模型不可用: {exc}"[:120],
         )
 
-    payload = parse_quality_payload(content, listed=listed)
+    payload = parse_quality_payload(content, listed=listed, allow=allow)
     if payload is None:
         logger.warning("[quality-judge] 输出不可解析: %r", content[:120])
         return QualityVerdict(

@@ -32,7 +32,7 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 #: 并发判定数。判定走 REVIEW 槽, 与规划器同池 —— 开太大等于自己跟自己抢链头,
 #: 而链头一挤就开始超时重试, 那才是真正烧 token 的形态(计划文档实测: 链头不
@@ -40,6 +40,51 @@ from typing import Any, Dict, List, Sequence, Tuple
 _CONCURRENCY = 4
 
 VERDICT_PASS, VERDICT_FAIL, VERDICT_UNKNOWN = "pass", "fail", "unknown"
+
+
+def battery_required_vocabulary(cases: Optional[Sequence[Dict[str, Any]]] = None) -> frozenset:
+    """电池**要求必须出现**的词 —— 判定模型说它们是黑话时不予采纳。
+
+    🔴 2026-08-12 owner 拍板「成本覆盖率是业务词」时的落地方式。
+       起因: 判定模型把 [21] 的 `成本覆盖率` 报成黑话, 而**同一条用例的
+       `contains` 明确要求它出现** —— 两个判据直接打架。
+
+    ⛔ **刻意不手写白名单。** 本仓判据: 判据里出现手写清单就问「这张表错了会
+       怎样」——答: 多写一个词就永久静音一类真问题, 而且没人会去复查那张表。
+       这里换成可推导的规则:
+
+           电池断言「这个词必须出现」  ⇒  我们自己认定它是该说的话
+                                      ⇒  再判它是黑话就是自相矛盾
+
+       加/减词的动作因此发生在**电池断言**里(那是有人会读、会红的地方),
+       而不是发生在一张只增不减的白名单里。
+
+    ⚠️ 例外优先级: `INTERNAL_VOCAB` / `ANALYST_JARGON` **压过**本推导 ——
+       万一哪天有人往 `contains` 里写了 `维度`, 那是电池的错, 不该因此把
+       「内部概念词漏给店长」静音。
+
+    ``cases``: 只为测试注入。⚠️ 2026-08-12 加这个参数是因为变异实测发现:
+       拿**真实 CASES** 测「黑话优先」那条断言时它**恒真** —— 今天没有任何
+       `contains` 含黑话词, 所以去掉 `- banned` 也不会红。一条不可能红的断言
+       不是断言。改成可注入合成用例后, 测的是**这个函数的行为**, 而不是
+       「今天的电池恰好没写错」。
+       (电池今天没写错这件事由 `test_battery_never_requires_a_word_it_also_calls_jargon`
+        单独守着 —— 那条读真实 CASES, 两条各司其职。)
+    """
+    from smartbi.gold.customer_text import ANALYST_JARGON, INTERNAL_VOCAB
+
+    if cases is None:
+        from smartbi.scripts.restaurant_ai_eval import CASES as cases
+
+    banned = set(INTERNAL_VOCAB) | set(ANALYST_JARGON)
+    words = set()
+    for case in cases:
+        for marker in case.get("contains", ()):
+            token = str(marker).strip("「」 ")
+            # 只收「像个词」的: 太短的(？/单字)和带数字的(日期回显)都不是词汇判据
+            if len(token) >= 2 and not any(ch.isdigit() for ch in token):
+                words.add(token)
+    return frozenset(words - banned)
 
 #: 四象限的键。
 Q_AGREE_PASS = "一致通过"
@@ -95,6 +140,7 @@ def build_comparison(rows: Sequence[Dict[str, Any]],
             "q": row.get("q", ""),
             "assertion_problems": assertion_problems,
             "judge_problems": verdict.problems,
+            "advisory": verdict.advisory,
             "unavailable": verdict.unavailable,
             "message": row.get("message", ""),
         })
@@ -169,6 +215,25 @@ def render_report(meta: Dict[str, Any],
     out += ["## 一致通过（%d）" % len(buckets[Q_AGREE_PASS]), "",
             "两边都说没问题。**这不等于答案是对的** —— 判定模型手里没有数据库，"
             "「数字对不对」这条判据两边都看不见（见 `answer_quality_judge` 模块注释）。", ""]
+
+    # ── 判据④：只报，不计入上面任何一格 ────────────────────────────────
+    advisories = [(item, cell) for cell, items in buckets.items()
+                  for item in items if item.get("advisory")]
+    out += [f"## 数字存疑（{len(advisories)}）—— 仅供参考，**不计入四象限**", "",
+            "🔴 2026-08-12 owner 拍板降级。当轮实测：判据④在**真实语料**上唯一一次"
+            "开火，两条全是误报，且同一形态 —— 一句话里挂着两个指标的数字，"
+            "判定模型绑错了主语。它在**合成样本**上是准的，所以不砍、降级。",
+            "",
+            "⛔ 读这一段要**逐条看原文**再下结论；把它当结论用，就是把两个假阳性"
+            "打进盲区格，而那张表要用来排 P-A 的刀。", ""]
+    if not advisories:
+        out += ["（空）", ""]
+    else:
+        out += ["| # | 问句 | 判定模型说 | 它落在哪一格 |", "|---|---|---|---|"]
+        for item, cell in advisories:
+            out.append(f"| {item['idx']} | {item['q'][:24]} "
+                       f"| {_fmt_problems(item['advisory'])} | {cell} |")
+        out.append("")
     return "\n".join(out)
 
 
@@ -176,12 +241,14 @@ async def _judge_all(rows: Sequence[Dict[str, Any]]) -> List[Any]:
     from smartbi.gold.restaurant.answer_quality_judge import judge_answer_quality
 
     semaphore = asyncio.Semaphore(_CONCURRENCY)
+    allow = battery_required_vocabulary()
 
     async def one(row: Dict[str, Any]):
         async with semaphore:
             return await judge_answer_quality(
                 row.get("q", ""), row.get("message", ""),
                 table_problems=row.get("table_problems") or (),
+                allow=tuple(allow),
             )
 
     return list(await asyncio.gather(*(one(r) for r in rows)))

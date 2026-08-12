@@ -24,6 +24,7 @@ from smartbi.scripts.restaurant_ai_judge import (
     Q_BLIND,
     Q_FALSE_ALARM,
     Q_UNJUDGED,
+    battery_required_vocabulary,
     build_comparison,
     quadrant,
     render_report,
@@ -248,6 +249,102 @@ def test_blind_spot_row_carries_both_sides():
     entry = buckets[Q_BLIND][0]
     assert entry["assertion_problems"] == []
     assert any("毛利" in p for p in entry["judge_problems"])
+
+
+# ── 判据④ 降级：只报，不计入 verdict ──────────────────────────────────
+
+
+def test_number_doubt_alone_does_not_fail_the_verdict():
+    """🔴 承重: 只有判据④报了问题时，verdict 仍是 pass，问题进 advisory。
+
+    owner 2026-08-12 拍板降级，依据是它在真实语料上 0/2（两条都把一句话里
+    两个指标的数字绑错了主语）。
+
+    变异实测: 把 `number_conflict` 加回 `llm_problems`
+      → 红: `assert 'fail' == 'pass'` —— 红在「判据④又开始决定归类了」上。
+    """
+    v = QualityVerdict(addressed=True, jargon_unlisted=(), layout_llm="",
+                       number_conflict="销量低于中位却称高位")
+    assert v.verdict == "pass", v.problems
+    assert v.problems == []
+    assert v.advisory and "销量低于中位却称高位" in v.advisory[0]
+
+
+def test_number_doubt_lands_in_its_own_report_section():
+    """🔴 承重: 降级 ≠ 静音 —— 它必须仍然出现在报告里。
+
+    变异实测: 删掉 render_report 里的「数字存疑」段
+      → 红: `assert '数字存疑' in ...` —— 红在「降级变成了藏起来」上。
+    """
+    buckets = build_comparison(
+        [{"idx": 5, "q": "毛利怎么样", "assertion_problems": []}],
+        [QualityVerdict(addressed=True, jargon_unlisted=(), layout_llm="",
+                        number_conflict="分项加总对不上")])
+    report = render_report({"provenance": {"cache_hits": 0, "fresh_parses": 1}}, buckets)
+    assert "数字存疑" in report
+    assert "分项加总对不上" in report
+    assert "不计入四象限" in report
+    # 且它没有把这一题打进盲区格
+    assert "🔴 **0 盲区**" in report or "| 0 一致通过 | 🔴 **0 盲区** |" in report
+
+
+# ── 可接受词表：推导，不是手写 ────────────────────────────────────────
+
+
+def test_allow_list_is_derived_from_what_the_battery_requires():
+    """🔴 承重: 电池 `contains` 要求出现的词，进可接受词表。
+
+    owner 拍板「成本覆盖率是业务词」；[21] 的 contains 正好要求它出现。
+
+    变异实测: 把 `battery_required_vocabulary` 改成 `return frozenset()`
+      → 红: `AssertionError: 成本覆盖率 不在推导出的词表里` —— 红在「推导没生效」上。
+    """
+    vocab = battery_required_vocabulary()
+    assert "成本覆盖率" in vocab, "成本覆盖率 不在推导出的词表里（电池 [21] 明确要求它出现）"
+    assert "毛利率" in vocab
+
+
+def test_explicit_jargon_lists_outrank_the_derived_allow_list():
+    """🔴 承重: 内部概念词/统计黑话**压过**推导 —— 万一电池写错也不许被静音。
+
+    ⚠️ 用**合成用例**测，不用真实 CASES。2026-08-12 变异实测发现：拿真实 CASES
+       测这条时它**恒真** —— 今天没有任何 `contains` 含黑话词，所以去掉
+       `- banned` 也不会红。一条不可能红的断言不是断言。
+       （「今天的电池确实没写错」由下一条读真实 CASES 单独守着。）
+
+    变异实测: 去掉 `battery_required_vocabulary` 里的 `- banned`
+      → 红: `这些词同时被判成「该说的」和「黑话」: ['维度', '置信区间']`
+    """
+    poisoned = [{"q": "x", "contains": ["维度", "置信区间", "毛利率"]}]
+    vocab = battery_required_vocabulary(poisoned)
+    leaked = sorted(vocab & (set(INTERNAL_VOCAB) | set(ANALYST_JARGON)))
+    assert not leaked, f"这些词同时被判成「该说的」和「黑话」: {leaked}"
+    # 阴性对照: 正常业务词照样收进来, 否则上面的空集可能只是因为函数什么都不返回
+    assert "毛利率" in vocab
+
+
+def test_battery_never_requires_a_word_it_also_calls_jargon():
+    """🔴 承重: 电池自身不许自相矛盾 —— `contains` 里不能出现内部概念词。
+
+    上一条保证「矛盾时黑话优先」；这一条保证**矛盾根本不该存在**。
+    两条都要有: 只有上一条的话, 电池里写进一个 `维度` 也不会有人知道。
+    """
+    from smartbi.scripts.restaurant_ai_eval import CASES
+    banned = set(INTERNAL_VOCAB) | set(ANALYST_JARGON)
+    offenders = [
+        (i, m) for i, c in enumerate(CASES, 1)
+        for m in c.get("contains", ()) if str(m).strip("「」 ") in banned
+    ]
+    assert not offenders, (
+        f"电池断言要求这些内部概念词必须出现在给店长的答案里: {offenders}")
+
+
+def test_allowed_word_is_dropped_from_model_jargon_findings():
+    """推导出的词表真的在过滤模型输出（否则上面几条只是在测一个没人用的集合）。"""
+    parsed = parse_quality_payload(
+        json.dumps({"jargon": {"ok": False, "words": ["成本覆盖率", "夏普比率"]}}),
+        listed=(), allow=("成本覆盖率",))
+    assert parsed["jargon_unlisted"] == ("夏普比率",)
 
 
 def test_report_states_unjudged_separately():
