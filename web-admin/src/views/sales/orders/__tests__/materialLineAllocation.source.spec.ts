@@ -32,8 +32,23 @@ describe('物料行不参与成品批次分配', () => {
       .toContain('if (!isMaterial && productTypeId && deliveredQuantity > 0)');
   });
 
-  it('② 提交校验跳过物料行(否则一行物料卡死整张子发运单)', () => {
-    expect(source).toMatch(/if \(item\.isMaterial\) \{\s*\n\s*continue;/);
+  /**
+   * ⚠️ 2026-08-13: 这条原本只数「有没有跳过」, 于是**半截修复照样绿** ——
+   * 上一版只在【校验】循环里跳了物料行, 【提交】循环没跳, 照样 POST 空 allocations,
+   * 后端回「批次分配列表不能为空」, 整次提交失败, 真机 E2E 才撞出来。
+   *
+   * handleBatchAllocate 里对 activeItems 正好遍历两次(先校验后提交), 两处都必须跳过。
+   * **数量断言是关键** —— 只断言「存在」抓不到漏掉一处。
+   */
+  it('② 校验与提交【两个】循环都跳过物料行(漏一个就是半截修复)', () => {
+    const loops = source.match(/for \(const item of activeItems\)/g) || [];
+    expect(loops, 'handleBatchAllocate 应当正好两个 activeItems 循环').toHaveLength(2);
+    const skips = source.match(/if \(item\.isMaterial\) \{/g) || [];
+    expect(skips, '两个循环都要跳过物料, 少一个就会 POST 空分配列表').toHaveLength(2);
+  });
+
+  it('全是物料行时不报「成功 0 项」—— 那等于说什么都没发生', () => {
+    expect(source).toContain('物料行无需分配批次');
   });
 
   it('③ 界面给物料专属说明, 不复用成品空态', () => {
