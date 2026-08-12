@@ -319,7 +319,14 @@ def _execution_mismatch(
         *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
     ))))
     if not set(_canonical_dimensions(spec.dimensions)).issubset(supported_dimensions):
-        return "查询维度超出计划 resolver 的能力范围"
+        # 🔴 2026-08-13 去黑话。原文「查询维度超出计划 resolver 的能力范围」
+        #    一句踩两个:「维度」在 `INTERNAL_VOCAB` 里,「resolver」是「解析器」
+        #    的英文。prod 实测这句**天天在发给店长**(「今天赚多少」就撞它)。
+        # ⛔ 不是只删黑话 ——「没有开算」也不是人话。这句要说的其实是:
+        #    **我不知道你想看哪一层, 所以没敢算。**
+        # ⚠️ 这个串会被上游拼成 `f"这次没有开算：{mismatch}。"`(见 :1512),
+        #    所以它自己写成一个能接在后面的短语。
+        return "我不确定你要看的是哪一层的数"
     return None
 
 
@@ -1509,8 +1516,13 @@ async def tiered_answer(
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
                     (
-                        f"这次没有开算：{mismatch}。"
-                        f"请说清是看菜品、看门店还是看全店合计，{NO_SUBSTITUTION}。"
+                        # 🔴 2026-08-13 去黑话 + 说人话。原文是
+                        #    「这次没有开算：查询维度超出计划 resolver 的能力范围。」
+                        #    ——「没有开算」不是人话,「维度」「resolver」是黑话。
+                        # ⛔ 要说的其实是: 我不知道你想看哪一层, 所以没敢算。
+                        f"{mismatch}，所以这次我没敢算。"
+                        f"你是想看某道菜、某家门店，还是全店合计？说一个就行，"
+                        f"{NO_SUBSTITUTION}。"
                     ),
                     action_warning,
                 ),

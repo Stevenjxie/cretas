@@ -7995,8 +7995,11 @@ async def resolve_channel_mix(
             code="RESTAURANT_OPS_CHANNEL_MIX",
             title=f"堂食外卖拆分（{requested}）",
             answer_text=(
-                f"{requested}没有标注了渠道（堂食/外卖）的订单数据，"
-                "不能计算占比，也不会用总单量摊派替代。请先确认收银渠道字段已同步。"
+                # ⛔ 2026-08-13 去黑话:「字段」店长不说, 他说「收银台有没有把
+                #    堂食/外卖分开记」。
+                f"{requested}的订单里没有分堂食还是外卖，"
+                "所以占比算不出来 —— 我也不会拿总单量摊一个数给你。"
+                "麻烦确认一下收银台有没有把这两类分开记、数据有没有同步过来。"
             ),
             charts=[], kpis=[],
             meta={"no_data": True},
@@ -8200,8 +8203,11 @@ async def resolve_discount_summary(
                 code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
                 title="折扣力度",
                 answer_text=(
-                    "还没有可用的日汇总数据，因此算不出折扣总额和占营收比。"
-                    "不会用订单表里的折扣字段临时拼一个不同口径的数。"
+                    # ⛔ 2026-08-13 去黑话:「订单表里的折扣字段」是库表口径,
+                    #    店长关心的是「那是另一本账」。
+                    "还没有每天汇总好的数据，所以折扣一共让了多少、占营收多少，"
+                    "这次算不出来。我也不会拿单据上的折扣临时凑一个 —— "
+                    "那是另一本账，两个数对不上反而更麻烦。"
                 ),
                 charts=[], kpis=[], meta={"no_data": True},
             )

@@ -113,9 +113,15 @@ def test_missing_columns_are_told_truthfully_never_zero():
     r = CellResult("revenue", "营收", "store", "rank", "money", [],
                    ("fact_pos_transaction.net_amount",), "")
     text = render(r, "本月")
-    assert "还没有接入" in text
+    # 🔴 2026-08-13: 断言从「守字面」改成「守性质」(形态 C‴)。
+    #    原文钉的是「还没有接入」「没有用其他数据替代」这两句**原话**,
+    #    而去黑话时它们改成了店长话(「你这边还没接进来」「没有拿别的数据顶替」)。
+    # ⛔ 守的性质一个没少: ①说「没接进来」而不是给个 0 ②说明不拿别的顶替。
+    assert "还没接进来" in text, f"没说清「缺数据」: {text}"
     assert "¥0" not in text and "0.00" not in text
-    assert "没有用其他数据替代" in text
+    assert "没有拿别的数据顶替" in text, f"没守住「不拿别的顶替」: {text}"
+    # 阴性对照: 黑话不许回来。
+    assert "字段" not in text, f"黑话漏到店长面前: {text}"
 
 
 def test_empty_result_is_distinguished_from_missing_columns():
