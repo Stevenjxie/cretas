@@ -116,6 +116,30 @@ export const TRANSLATED_UNIT_CODES: readonly string[] = Object.keys(UNIT_LABELS)
 const DISTINCT_COUNT_LABELS = new Set(['只', '个']);
 
 /**
+ * 归一单位码, 但<b>保留</b> 只/个 —— 与后端
+ * {@code UnitContractServiceImpl.crossLanguageCode} 逐条对应(它同样先查
+ * DISTINCT_COUNT_LABELS 再走权威表)。
+ *
+ * <h2>🔴 2026-08-13 真机 E2E 抓到</h2>
+ * 销售订单选中物料 {@code YL060 温氏黄油鸡}(物料字典单位「只」)后, 订单行显示
+ * 「<b>件</b>」; {@code BC001 吸塑盒}(单位「个」)也显示「件」——
+ * 三个计件单位在界面上被合并成同一个字。
+ *
+ * <p>根因不在 {@link displayUnit}(它有 RAW_COUNT_LABELS, 传「只」会原样返回), 而在<b>更早</b>:
+ * 订单行选品时就 {@code canonicalUnitCode('只') → 'pcs'} 把原标签抹掉了, 显示层再想还原也没有了。
+ *
+ * <p>后果: 仓管在发货单上看到「2 <b>件</b>黄油鸡」而不是「2 <b>只</b>」。
+ * 数量算术不受影响(扣减用纯数字), 坏的是**人读到的东西**。
+ * 这正是同文件里 #1672 / #2097 修过两次的那类「用户填的标签被改写」缺陷 ——
+ * 名单早就在({@code DISTINCT_COUNT_LABELS}), 只是**只接在 sameUnit 上, 没接到落库/展示这条路**。
+ */
+export function canonicalUnitCodeKeepingCount(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  return DISTINCT_COUNT_LABELS.has(raw) ? raw : canonicalUnitCode(raw);
+}
+
+/**
  * 判两个单位<b>是不是同一个</b> —— 中英写法互认, 但不合并 只/个/件。
  *
  * 🔴 为什么不能直接 `a === b`: 库里同一个单位有中英两种写法 (后端保存写规范码, 人工录入常是中文),
@@ -126,11 +150,7 @@ const DISTINCT_COUNT_LABELS = new Set(['只', '个']);
  * 与后端 `UnitContractServiceImpl.crossLanguageCode` 逐条对应, 改一边要改另一边。
  */
 export function sameUnit(left: unknown, right: unknown): boolean {
-  const norm = (value: unknown) => {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-    return DISTINCT_COUNT_LABELS.has(raw) ? raw : canonicalUnitCode(raw);
-  };
+  const norm = canonicalUnitCodeKeepingCount;  // 与落库/展示同一份归一, 不再各写一份
   const l = norm(left);
   const r = norm(right);
   return l !== '' && l === r;

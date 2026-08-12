@@ -53,7 +53,7 @@ import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
-import { canonicalUnitCode, displayUnit, mergeCanonicalUnitOptions } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit, mergeCanonicalUnitOptions } from '@/utils/unitPricing';
 import { displayProductSpecification } from '@/utils/productSpecification';
 import {
   canonicalSalesOrderItemPayload,
@@ -1040,7 +1040,10 @@ function onProductSelect(item: TableRow, productId: string) {
   if (p) {
     item.specification = p.specification || p.packageSpec || '';
     // 销售单位继承 SKU 基本单位。包装单位（箱等）是额外可选换算，不能把「盒」改写为「份」。
-    const pu = canonicalUnitCode(p.unit || '份');
+    // 🔴 2026-08-13: 用 KeepingCount 版本 —— 普通 canonicalUnitCode 会把 只/个 都并成 pcs,
+    // 于是订单行把「2 只黄油鸡」显示成「2 件」。名单(DISTINCT_COUNT_LABELS)早就有,
+    // 只是没接到这条路上; 后端 crossLanguageCode 本来就保留这两个标签。
+    const pu = canonicalUnitCodeKeepingCount(p.unit || '份');
     item.unit = pu || item.unit || '份';
     if (p.unitPrice != null && (item.unitPrice == null || item.unitPrice === 0)) {
       item.unitPrice = Number(p.unitPrice);
