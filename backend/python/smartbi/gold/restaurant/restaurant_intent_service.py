@@ -1841,7 +1841,22 @@ async def tiered_answer(
         logger.warning(f"[restaurant-intent] tiered path failed: {e}")
         if spec is not None and spec.plan_version == "restaurant-query-plan-v2":
             failure_result = {
-                "kind": "clarification",
+                # 🔴 2026-08-12: 这里原来是 `"kind": "clarification"` ——
+                #    **把系统故障说成「我需要你补充信息」**。三个后果：
+                #      1. 语义是假的。EXECUTION_UNAVAILABLE 是「系统坏了」,
+                #         clarification 是「你再说清楚点」。这是「禁止降级处理」的
+                #         变体: 不是给假数据, 是**给假的失败原因**。
+                #      2. 污染指标。按 kind 统计「澄清率」的仪器会把系统故障
+                #         算进澄清率 —— **故障在指标上看起来像产品行为**。
+                #      3. 与发现块抑制撞车: 下游按 kind==clarification 判「拒答」,
+                #         于是系统挂掉时店长看到「餐饮执行链暂时不可用」+ 一颗
+                #         「顺带 N 件事」按钮, 点下去生成**行动建议**。
+                #
+                # ⚠️ 正确取值同一个文件里早就有(约 1204 行, LLM 额度不可用那条),
+                #    它的注释一字不差地适用于这里:
+                #    「用户分不清『这条是可信的事实』和『那条是因为 AI 挂了才这么答』」。
+                #    正确取值、先例、理由全在同一个文件里, 相隔 600 行。
+                "kind": "unavailable",
                 "answer_text": _prepend_action_warning(
                     EXECUTION_UNAVAILABLE, action_warning),
                 "contract_pass": False,

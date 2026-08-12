@@ -1307,6 +1307,13 @@ async def post_restaurant_tiered_answer(
 
         answer_response = {
             "delegate": True,
+            # 🔴 2026-08-12 补透传 `kind`。此前这一路**根本不带它**, 于是
+            #    `kind="unavailable"`(系统故障/LLM 熔断)到 Java 时与正常答案
+            #    毫无区别 —— Java 据此挂上「顺带 N 件事」按钮, 变成
+            #    「系统挂了, 顺便给你两条行动建议」。
+            # ⚠️ 正常答案带上 `kind="answer"` 对下游是无害的: 下游只在
+            #    clarification / unavailable 上做抑制, 其余一律照旧。
+            "kind": result.get("kind"),
             "answer_text": result["answer_text"],
             "charts": result.get("charts") or [],
             "kpis": result.get("kpis") or [],

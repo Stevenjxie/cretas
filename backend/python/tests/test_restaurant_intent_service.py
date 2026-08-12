@@ -1340,6 +1340,12 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
     result = await post_restaurant_tiered_answer(_fake_request("restaurant_manager"), body)
     assert result == {
         "delegate": True,
+        # 🔴 2026-08-12 新增: `kind` 必须透传到 Java。此前这一路不带它, 于是
+        #    `kind="unavailable"`(系统故障/LLM 熔断)与正常答案在 Java 眼里毫无区别,
+        #    发现块照挂 —— 变成「系统挂了, 顺便给你两条行动建议」。
+        # ⚠️ 正常答案带 "answer" 对下游无害: 下游只在 clarification / unavailable
+        #    上做抑制。这条断言守的是**这个字段确实被转发了**。
+        "kind": "answer",
         "answer_text": tiered_result["answer_text"],
         "charts": tiered_result["charts"],
         "kpis": tiered_result["kpis"],
