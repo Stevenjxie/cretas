@@ -1097,7 +1097,15 @@ async function handleBatchAllocate() {
   // Per-item try/catch — the axios interceptor rejects on success:false, so a
   // single outer try would abort the loop after the first failure and leave the
   // remaining items un-attempted (bug caught in code review).
+  let skippedMaterials = 0;
   for (const item of activeItems) {
+    // 🔴 2026-08-13 真机 E2E 抓到: 上一版只在【校验】循环里跳过物料行, 这个【提交】循环没跳 ——
+    // 于是照样 POST 一个空的 allocations, 后端回「批次分配列表不能为空」, 整次提交失败。
+    // 一个循环改了另一个没改 = 半截修复。物料行没有成品批次可分配, 两个循环都必须跳过。
+    if (item.isMaterial) {
+      skippedMaterials++;
+      continue;
+    }
     try {
       const allocations = item.allocations
         .filter(a => Number(a.allocatedQty) > 0)
@@ -1118,7 +1126,11 @@ async function handleBatchAllocate() {
   }
   submitting.value = false;
   if (failed === 0) {
-    ElMessage.success(`批次分配成功 (${success} 项)`);
+    // 全是物料行时 success=0 —— 说「成功 0 项」等于告诉用户什么都没发生, 而实际是
+    // 「本来就不需要分配」。两种情况的下一步动作不同, 提示必须分开。
+    ElMessage.success(skippedMaterials > 0 && success === 0
+      ? `物料行无需分配批次 (${skippedMaterials} 项)，可直接确认发货`
+      : `批次分配成功 (${success} 项)`);
     batchAllocDialogVisible.value = false;
     loadDeliveries();
   } else {
