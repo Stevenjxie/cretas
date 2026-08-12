@@ -669,7 +669,8 @@ function removeSuppliedMaterial(index: number) {
 function onSuppliedMaterialSelect(row: CustomerSuppliedMaterialRequirement) {
   const material = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === row.materialTypeId);
   row.materialName = String(material?.name || '');
-  row.unit = canonicalUnitCode(material?.unit || material?.measurementUnit || '');
+  // KeepingCount: 物料字典里 只/个 是真实计量单位, 普通 canonicalUnitCode 会并成 pcs。
+  row.unit = canonicalUnitCodeKeepingCount(material?.unit || material?.measurementUnit || '');
 }
 
 function onProcessingModeChange() {
@@ -1830,7 +1831,7 @@ async function handleEdit(row: TableRow) {
           materialTypeId: String(material.materialTypeId || ''),
           materialName: String(material.materialName || ''),
           expectedQuantity: Number(material.expectedQuantity || 0),
-          unit: canonicalUnitCode(material.unit || ''),
+          unit: canonicalUnitCodeKeepingCount(material.unit || ''),
           expectedArrivalAt: String(material.expectedArrivalAt || '').slice(0, 19),
           targetWarehouseId: String(material.targetWarehouseId || ''),
           targetWarehouseName: String(material.targetWarehouseName || ''),
@@ -1844,7 +1845,10 @@ async function handleEdit(row: TableRow) {
       ? row.items.map((item: TableRow) => ({
           productTypeId: String(item.productTypeId || item.productType?.id || ''),
           quantity: Number(item.quantity || 0),
-          unit: canonicalUnitCode(item.unit || '份'),
+          // 🔴 KeepingCount: 这是【打开已有订单去编辑】的路径。用普通 canonicalUnitCode
+          // 会把库里存的 只/个 就地改写成 pcs, 用户只是点开看一眼再保存, 单位就被换掉了 ——
+          // 静默改写已落库的数据, 比新建时显示错更糟。
+          unit: canonicalUnitCodeKeepingCount(item.unit || '份'),
           unitPrice: Number(item.unitPrice || 0),
           // PR #173 reviewer follow-up M-4 (May 9 2026): preserve specification + boxQuantity
           // on edit. 旧 bug: handleEdit 重建 form.items 时漏了这两字段, 用户编辑现有订单后
@@ -2034,14 +2038,21 @@ function handleAiFill(params: TableRow) {
     try {
       form.value.items = (params.items as TableRow[]).map((item) => {
       const prodName = String(item.productName || '');
-      const productResolution = resolveReferenceByName(prodName, products.value);
+      // 🔴 2026-08-13 真机 E2E: 这里原本查的是 products(只有成品)。AI 把
+      // 「温氏黄油鸡 2 只 / 吸塑盒 1 个」解析得完全正确, 点「填入表单」却
+      // 直接 return —— 抽屉先 emit 关闭自己, 再 emit fill-form, 于是现场看到的是
+      // 「面板关了, 弹窗没开, 什么也没发生」, 那句 warning 被关闭动画盖过去了。
+      // 必须查 sellableOptions(成品 + 物料), 与下拉同源 —— 下拉能选到的东西,
+      // AI 填表也必须认得, 否则「能选」与「AI 能填」两套口径必然漂。
+      const productResolution = resolveReferenceByName(prodName, sellableOptions.value);
       if (productResolution.status !== 'MATCHED') {
         throw new Error(`产品“${prodName}”${productResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
       }
       return {
         productTypeId: productResolution.id,
         quantity: Number(item.quantity || 0),
-        unit: canonicalUnitCode(item.unit || 'kg'),
+        // KeepingCount: 普通 canonicalUnitCode 把 只/个 并成 pcs → 显示回「件」。
+        unit: canonicalUnitCodeKeepingCount(item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
         taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
       };

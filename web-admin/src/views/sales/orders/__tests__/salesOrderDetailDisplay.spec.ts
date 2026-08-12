@@ -22,7 +22,12 @@ describe('sales order detail display-unit contract', () => {
   it('covers subsequent quick-delivery and profit displays without changing payload values', () => {
     expect(listSource).toContain('{{ displayUnit(item.unit) }}');
     expect(profitSource).toContain('{{ displayUnit(row.unit) }}');
-    expect(listSource).toContain('unit: canonicalUnitCode(item.unit');
+    // 契约是「payload 存规范化单位码, 界面用 displayUnit 翻译」, 不是「必须叫这个函数名」。
+    // 2026-08-13: handleEdit 改用 canonicalUnitCodeKeepingCount —— 它仍然规范化,
+    // 只是把 只/个 排除在折叠之外(普通版会把两者都并成 pcs → 显示回「件」,
+    // 而 handleEdit 是【打开已有订单】的路径, 那等于静默改写已落库的单位)。
+    // 断言放宽到两个版本任一, 但仍然要求 unit 是经过规范化的 —— 裸 item.unit 照样红。
+    expect(listSource).toMatch(/unit: canonicalUnitCode(KeepingCount)?\(item\.unit/);
   });
 
   it('does not expose procurement semantics as a sales-order row action', () => {
