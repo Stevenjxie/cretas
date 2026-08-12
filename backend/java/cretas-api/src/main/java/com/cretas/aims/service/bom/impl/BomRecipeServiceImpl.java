@@ -196,13 +196,29 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         assertVersionCapacity(factoryId, productTypeId);
-        if (versions.isEmpty()) {
+        // 🔴 2026-08-12 (Steve): 「哪怕没有 active 版本也应该可以改 BOM ——
+        //    因为 BOM 是和 workflow 版本在一起的, 不该有自己独立的版本设计。」
+        //
+        // 原来这里只有 versions.isEmpty() 走投影, 有版本但 0 个 ACTIVE 会掉到下面那道
+        // 「没有唯一的当前生效 BOM」上被拒。可是那道闸防的是**克隆哪一个**的歧义 ——
+        // 而 >1 的歧义在本方法上方(BOM_CURRENT_ACTIVE_AMBIGUOUS)就已经拦掉了,
+        // 能走到这里的 `!= 1` **只可能是 == 0**: 没有可克隆的生产基线。
+        //
+        // 「没有基线」和「一条版本都没有」是同一种局面 —— 都应该照**当前画布 revision**
+        // 投一份新草稿, 而不是让用户先去别处「修复版本状态」(那个动作同样没有界面)。
+        // 这也正是画布权威、BOM 是投影的口径: 基线缺失时权威仍在画布上。
+        //
+        // 真机撞到的形状: 产品有历史版本(被归档/退役), 但当前没有 ACTIVE ——
+        // 画布搭好了却连辅料都加不了, 且提示指向一个用户做不到的动作。
+        if (versions.isEmpty() || currentActive.isEmpty()) {
+            Integer latestVersion = versions.isEmpty() ? null : versions.get(0).getVersion();
+            int nextVersion = latestVersion == null ? 1 : latestVersion + 1;
             BomRecipe draft = new BomRecipe();
             draft.setFactoryId(factoryId);
             draft.setRecipeCode(generateRecipeCode(factoryId));
             draft.setProductTypeId(productTypeId);
             draft.setProductName(product.getName());
-            draft.setVersion(1);
+            draft.setVersion(nextVersion);
             draft.setIsCurrent(false);
             draft.setOverallYieldRate(null);
             applyProductOutputSnapshot(draft, product);
@@ -216,13 +232,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             return initializeFamilyAndInputSkeletons(factoryId, draft, binding);
         }
 
-        if (currentActive.size() != 1) {
-            throw bomError(409,
-                    "该产品没有唯一的当前生效 BOM，无法安全创建新版本",
-                    "BOM_CURRENT_ACTIVE_REQUIRED",
-                    "请先修复版本状态，确保只有一个 ACTIVE/current 版本",
-                    "bomVersions");
-        }
+        // 走到这里必然 currentActive.size() == 1: 0 个已在上面走投影, >1 已在方法上方拦掉。
         BomRecipe cloned = cloneRecipe(factoryId, currentActive.get(0).getId());
         if (workflowRevisionId != null
                 && !Objects.equals(workflowRevisionId, cloned.getWorkflowRevisionId())) {
