@@ -1,0 +1,3 @@
+# 2026-08-12 Dispatch 完成记录
+
+- `SOP-RAG-SYNC-20260812` — `merged` — Owner: `/root` — Base SHA `4e7eb9c4490c9286a2170a578d24494545789358`；按 `db51f682..4e7eb9c4` 当前行为独立同步工厂 Workflow 自动重锚、每工序产出门禁、BOM/Workflow 版本状态、包材连线与安全重发布，以及餐饮门店范围收窄、片段唯一匹配确认、面向店长文案和读写歧义 fail-closed。内容与回答合同 PR #2524 合入 `925977c98ca07c492eb9c9fa73f624c52e20a0fe`，目标合同测试 89 项、`py_compile`、HTML/JS parse、`git diff --check` 与 GitHub CI 全部通过。生产从 clean exact main 完成 migration dry-run（138 项已应用、0 pending）、标准 Python 发布、三页和四个 canonical source 的哈希校验与原子替换；RAG 为 F006 71 块、餐饮 82/241/174 块，`.NEW=0`。工厂真实回答 3/3，只引用 `f006-production-full-chain-sop.md`；餐饮 4/4，只引用三个 registered source，固定单菜毛利和导览不代算通过。Python、Embedding、PostgreSQL 健康，三页公网与仓库 SHA-256 一致；备份后缀 `sop-20260812T092755+0800`，生产 ERP 业务写入 0，scope 随本归档释放。
