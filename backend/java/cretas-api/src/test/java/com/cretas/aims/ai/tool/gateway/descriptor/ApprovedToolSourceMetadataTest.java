@@ -3,7 +3,6 @@ package com.cretas.aims.ai.tool.gateway.descriptor;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool;
 import com.cretas.aims.ai.tool.impl.restaurant.RestaurantOwnerActionAdvisorTool;
-import com.cretas.aims.ai.tool.impl.bom.BomAdjustTool;
 import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiredQueryTool;
@@ -46,7 +45,6 @@ class ApprovedToolSourceMetadataTest {
     @Test
     void fixedWriteToolsPublishExplicitAnyOfPermissionsAndPreviewMetadata() {
         ProductCreateTool productCreate = new ProductCreateTool();
-        BomAdjustTool bomAdjust = new BomAdjustTool();
 
         assertThat(productCreate.getActionType()).isEqualTo(ToolExecutor.ActionType.WRITE);
         assertThat(productCreate.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
@@ -57,14 +55,9 @@ class ApprovedToolSourceMetadataTest {
         assertThat(productCreate.requiresPermission()).isTrue();
         assertThat(productCreate.hasPermission("factory_super_admin")).isFalse();
 
-        assertThat(bomAdjust.getActionType()).isEqualTo(ToolExecutor.ActionType.UPDATE);
-        assertThat(bomAdjust.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
-        assertThat(bomAdjust.getRequiredPermissions()).containsExactlyInAnyOrder(
-                "production:read_write", "rd:read_write", "finance:read_write");
-        assertThat(bomAdjust.getDomainTags()).containsExactly("bom");
-        assertThat(bomAdjust.supportsPreview()).isTrue();
-        assertThat(bomAdjust.requiresPermission()).isTrue();
-        assertThat(bomAdjust.hasPermission("factory_super_admin")).isFalse();
+        // 2026-08-14: BomAdjustTool 随 9 个老式 BOM 写入工具一并退役
+        // (BOM 只能在画布页面上改, AI 也不例外)。这段守的「写工具必须显式公布
+        // anyOf 权限 + 预览元数据」仍由上方 ProductCreateTool 覆盖, 不因删除而失去覆盖。
     }
 
     @Test

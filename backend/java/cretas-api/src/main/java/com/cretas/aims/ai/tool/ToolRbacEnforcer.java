@@ -116,9 +116,6 @@ public class ToolRbacEnforcer {
             Map.entry("plan_update", Set.of("production:read_write", "scheduling:read_write")),
             Map.entry("work_process_config_update", Set.of("production:read_write")),
             Map.entry("work_process_task_assign", Set.of("production:read_write")),
-            Map.entry("bom_recipe_activate", Set.of("production:read_write")),
-            Map.entry("bom_version_approve", Set.of("production:read_write")),
-            Map.entry("bom_version_create", Set.of("production:read_write")),
             Map.entry("ecn_approve", Set.of("production:read_write")),
 
             // ===== 出货 (发货是资金/库存出口) =====

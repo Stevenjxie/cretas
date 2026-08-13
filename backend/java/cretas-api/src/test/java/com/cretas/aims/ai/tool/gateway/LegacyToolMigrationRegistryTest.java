@@ -148,7 +148,7 @@ class LegacyToolMigrationRegistryTest {
     void approvedRuntimePolicySetIncludesInventoryWorkflowAndRemainsRestaurantDisjoint() {
         RuntimeToolDescriptorRegistry approved = RuntimeToolDescriptorRegistry.loadDefault();
 
-        assertThat(approved.approvedToolNames()).hasSize(10);
+        assertThat(approved.approvedToolNames()).hasSize(9);
         assertThat(approved.approvedToolNames()).contains(
                 "material_stock_summary",
                 "material_batch_query",

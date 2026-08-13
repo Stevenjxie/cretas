@@ -23,29 +23,41 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(588);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(577);
-        assertThat(statistics.total()).isEqualTo(588);
-        assertThat(statistics.legacy()).isEqualTo(577);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(579);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(569);
+        assertThat(statistics.total()).isEqualTo(579);
+        assertThat(statistics.legacy()).isEqualTo(569);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 447L,
-                ToolExecutor.ActionType.WRITE, 62L,
-                ToolExecutor.ActionType.UPDATE, 27L,
+                // 2026-08-14: 9 个老式 BOM 写入工具退役, 逐项核对过与清册里的 actionType 分布
+                // **完全吻合**(READ 5 + WRITE 3 + UPDATE 1 = 9), 所以是「少了那 9 个」而不是把闸改松:
+                //   READ   447 → 442  (−5)
+                //   WRITE   62 →  59  (−3)
+                //   UPDATE  27 →  26  (−1)
+                ToolExecutor.ActionType.READ, 442L,
+                ToolExecutor.ActionType.WRITE, 59L,
+                ToolExecutor.ActionType.UPDATE, 26L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 511L,
-                ToolExecutor.RiskLevel.MEDIUM, 72L,
+                // 同上, 逐项核对过与那 9 个工具的 riskLevel 分布吻合(LOW 5 + MEDIUM 4 = 9):
+                //   LOW    511 → 506  (−5)
+                //   MEDIUM  72 →  68  (−4)
+                ToolExecutor.RiskLevel.LOW, 506L,
+                ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
-        assertThat(statistics.previewSupported()).isEqualTo(38);
-        assertThat(statistics.requiresPermission()).isEqualTo(42);
+        // 退役那 9 个工具后的逐项核对(每个数都对得上, 不是把闸调松):
+        //   previewSupported   38 → 36  (9 个里 supportsPreview=true 的恰好 2 个)
+        //   requiresPermission 42 → 41  (requiresPermission=true 的恰好 1 个)
+        assertThat(statistics.previewSupported()).isEqualTo(36);
+        assertThat(statistics.requiresPermission()).isEqualTo(41);
+        // governanceStatus 分布: REVIEW_REQUIRED 7 + REVIEW_REQUIRED_P0 1 + APPROVED 1 = 9
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 560L,
-                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
-                ToolGovernanceStatus.APPROVED, 10L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 553L,
+                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
+                ToolGovernanceStatus.APPROVED, 9L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
@@ -67,7 +79,6 @@ class ToolDescriptorCatalogTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust",
                         "material_stock_summary",
                         "material_batch_query",
                         "material_expired_query");
@@ -86,7 +97,9 @@ class ToolDescriptorCatalogTest {
                 ToolDescriptorInventoryLoader.P0_TOOL_NAMES.stream()
                         .filter(toolName -> !approvedP0.contains(toolName))
                         .collect(Collectors.toUnmodifiableSet()));
-        assertThat(actualP0).hasSize(18);
+        // 18 → 17: bom_version_approve 随 9 个老式 BOM 写入工具退役, 从 P0_TOOL_NAMES 摘除。
+        // 这个数量的是「仍待审的 P0 工具数」—— 少一个工具就该少一个, 不是把闸放松。
+        assertThat(actualP0).hasSize(17);
         for (String toolName : actualP0) {
             ToolDescriptorInventoryEntry byName = catalog.findByToolName(toolName).orElseThrow();
             assertThat(byName.governanceStatus()).isEqualTo(ToolGovernanceStatus.REVIEW_REQUIRED_P0);
