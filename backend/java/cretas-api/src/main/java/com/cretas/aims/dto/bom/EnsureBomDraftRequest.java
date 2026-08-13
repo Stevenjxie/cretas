@@ -20,4 +20,12 @@ public class EnsureBomDraftRequest {
      * same terminal SKU.
      */
     private Long workflowRevisionId;
+
+    /**
+     * 用户已在界面上逐行看过并确认「旧工艺遗留的投入行可以丢」。
+     *
+     * <p>缺省 false = 保持原行为。为 true 时后端**自己**重新算出哪几行是孤儿并软删,
+     * 不接受客户端指定要删哪几行 —— 这个字段只表达"人已确认", 不表达"删什么"。
+     */
+    private Boolean dropObsoleteInputs;
 }

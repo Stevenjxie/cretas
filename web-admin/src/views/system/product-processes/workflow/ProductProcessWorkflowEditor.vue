@@ -1412,10 +1412,13 @@ async function repairObsoleteBomInputs(productTypeId: string, error: unknown): P
   } catch {
     return false;   // 用户选择不动
   }
-  for (const item of obsolete) {
-    await bomRecipeApi.removeItem(props.factoryId, item.id);
-  }
-  ElMessage.success(`已移除 ${obsolete.length} 行旧工艺遗留配方`);
+  // 🔴 2026-08-13: 这里原来逐行 DELETE /bom-recipes/items/{id} —— **那条路结构上走不通**:
+  //   · 闸在建草稿时触发, 此刻草稿还没建成, 这些行属于 ACTIVE 配方, 而 deleteItem 第一件事
+  //     就是 status != DRAFT → 拒;
+  //   · 就算是 DRAFT, hasCompleteWorkflowIdentity 也会拒 —— 而「绑着画布槽位」正是这些行
+  //     被选中的判据, 挑选条件与拒绝条件完全相同。
+  // 生产实测: 点「移除并重试」后那几行原封不动, 用户回到原地。
+  // 改为把「人已确认」回传给 ensure-draft, 由后端在同一事务里删它自己算出的孤儿行。
   return true;
 }
 
@@ -1437,15 +1440,24 @@ async function resolveWritableRecipeId(
     //   「旧工艺中的原料投入在目标工艺中已不存在：2015胸肉
     //     提示: 请确认是否删除这些原料规则后再重试」
     //
-    // 闸拦得对(不能悄悄丢掉用户填过的用量/成本行), 但**出口走不通**:
-    // DELETE /bom-recipes/items/{itemId} 后端有、bomApi.removeItem 也封装了,
-    // 而全站【0 处界面调用它】—— 用户被告知去删, 却没有任何地方能删。
+    // 闸拦得对(不能悄悄丢掉用户填过的用量/成本行), 但**用户被告知去删, 却没有地方能删**。
     // (本仓 request.ts 处理 MATERIAL_UOM_UNCONFIGURED 时已明确写过「不给 dead-end 跳转」。)
     //
-    // 这里把出口补上: 算出到底是哪几行成了孤儿, 列给用户确认后逐行移除, 然后重试一次。
+    // ⚠️ 2026-08-13 订正: 上一版出口是「列给用户确认后**逐行 DELETE**
+    // /bom-recipes/items/{id}」—— 生产实测点下去那几行原封不动, 因为那条路
+    // **结构上不可能成功**: 409 是在建草稿时触发的, 此刻草稿还没建成, 那几行属于
+    // ACTIVE 配方(deleteItem 第一件事就是 status != DRAFT → 拒); 就算是 DRAFT,
+    // hasCompleteWorkflowIdentity 也拒 —— 而「绑着画布槽位」正是这些行被选中的判据,
+    // 挑选条件与拒绝条件完全相同。
+    //
+    // 现在的出口: 只取得用户确认, 然后带 dropObsoleteInputs 重试 ensure-draft,
+    // 由后端在同一事务里删它自己算出的孤儿行(判定权不外移)。
     if (await repairObsoleteBomInputs(productTypeId, error)) {
       try {
-        await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
+        // 带上「人已确认」重试。删哪几行由后端重算, 前端不送 id 列表。
+        await ensureBomDraftRecipe(
+          props.factoryId, productTypeId, definition.value?.revisionId, true);
+        ElMessage.success('已移除旧工艺遗留的配方行');
       } catch (retryError) {
         ElMessage.error(retryError instanceof Error ? retryError.message : '移除后仍无法创建 BOM 草稿');
         return null;

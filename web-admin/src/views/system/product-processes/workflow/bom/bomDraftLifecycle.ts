@@ -10,6 +10,7 @@ export type EnsureDraftApi = (
   factoryId: string,
   productTypeId: string,
   workflowRevisionId?: number | null,
+  dropObsoleteInputs?: boolean,
 ) => Promise<BomApiResponse<BomRecipeSummary>>;
 
 /**
@@ -26,13 +27,19 @@ export function createBomDraftEnsurer(
     factoryId: string,
     productTypeId: string,
     workflowRevisionId?: number | null,
+    dropObsoleteInputs?: boolean,
   ): Promise<BomRecipeSummary> => {
-    const key = `${factoryId}:${productTypeId}:${workflowRevisionId ?? 'auto'}`;
+    // ⚠️ dropObsoleteInputs 必须进 key: 确认后的重试与刚失败的那次是**同一个**
+    // factory/product/revision, 不进 key 就会被去重合并回那个正在飞的「不丢弃」请求,
+    // 用户点了确认却看到同一个 409。
+    const key = `${factoryId}:${productTypeId}:${workflowRevisionId ?? 'auto'}`
+      + `:${dropObsoleteInputs ? 'drop' : 'keep'}`;
     const existing = pending.get(key);
     if (existing) return existing;
 
     const request = (async () => {
-      const response = await ensureDraftApi(factoryId, productTypeId, workflowRevisionId);
+      const response = await ensureDraftApi(
+        factoryId, productTypeId, workflowRevisionId, dropObsoleteInputs);
       if (!response.success || !response.data) {
         throw new Error(response.message || '无法创建或加载 BOM 草稿');
       }

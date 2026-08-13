@@ -337,10 +337,20 @@ export const bomRecipeApi = {
    * Workflow embeds must pass the exact canvas revision so same-SKU multi-output
    * definitions never fall back to a different active/draft Workflow.
    */
-  ensureDraft: (factoryId: string, productTypeId: string, workflowRevisionId?: number | null) =>
+  ensureDraft: (
+    factoryId: string,
+    productTypeId: string,
+    workflowRevisionId?: number | null,
+    /**
+     * 用户已逐行确认「旧工艺遗留的投入行可以丢」。只表达"人已确认",
+     * **不表达删哪几行** —— 由后端自己重算, 判定权不外移。
+     */
+    dropObsoleteInputs?: boolean,
+  ) =>
     post<BomRecipeSummary>(`${recipeBase(factoryId)}/ensure-draft`, {
       productTypeId,
       ...(workflowRevisionId == null ? {} : { workflowRevisionId }),
+      ...(dropObsoleteInputs ? { dropObsoleteInputs: true } : {}),
     }),
 
   getCurrentByProduct: (factoryId: string, productTypeId: string) =>
