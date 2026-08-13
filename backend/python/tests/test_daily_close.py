@@ -306,9 +306,16 @@ async def test_split_execution_subtracts_paid_revenue():
         dimension_key="all", aggregation_key="summary",
         date_range=(date(2026, 8, 12), date(2026, 8, 12)))
     got = float(cell.rows[0]["gross_profit"])
-    assert abs(got - 475623.83) < 0.01, (
-        f"毛利 = {got}, 期望 475623.83(实收 − 成本)。"
-        f"若得到 999999 说明还在走单条 SQL 那条路")
+    # 覆盖口径: (20000 − 800×0.625) − 6000 = 13500
+    assert abs(got - 13500.0) < 0.01, (
+        f"毛利 = {got}, 期望 13500(覆盖净营收 − 覆盖成本)。"
+        f"若得到 999999 说明还在走单条 SQL 那条路; "
+        f"若得到 14000 说明折扣没摊(20000−6000)")
+    # 🔴 阳性对照: 不摊折扣会得到 14000 —— 两者差的正是摊到覆盖部分的那 500,
+    #    没有这条就分不清「摊了」和「压根没走覆盖口径」。
+    assert abs(got - 14000.0) > 1.0, "折扣没摊到覆盖部分"
+    assert cell.provenance == "ESTIMATED"
+    assert "摊派" in cell.estimation_basis
 
 
 def _cell_cov(coverage):
@@ -376,6 +383,26 @@ class _FakeConn:
         self._values = values
         self.fetched_sql = []
 
+    #: 覆盖口径的合成读数。⚠️ 这几个数**互相之间必须自洽**, 否则断言在验一个
+    #: 不可能出现的世界(形态 B‴)。这里的关系是:
+    #:   折扣 = 全部明细 32000 − 交易实收 31200 = 800
+    #:   覆盖占比 = 20000/32000 = 0.625
+    #:   覆盖净营收 = 20000 − 800×0.625 = 19500
+    #:   覆盖毛利   = 19500 − 6000 = 13500      毛利率 = 69.2%
+    COVERED_GROSS, ALL_GROSS, COVERED_COST, PAID_NET = 20000.0, 32000.0, 6000.0, 31200.0
+
+    async def fetchrow(self, sql, *args):
+        if "covered_gross" in sql:
+            return {"covered_gross": self.COVERED_GROSS,
+                    "all_gross": self.ALL_GROSS,
+                    "covered_cost": self.COVERED_COST}
+        return None
+
+    async def fetchval(self, sql, *args):
+        if "net_amount" in sql:
+            return self.PAID_NET
+        return None
+
     async def fetch(self, sql, *args):
         if "information_schema" in sql:
             # 所有列都在 —— 这样走的是「算得出」那条路
@@ -417,7 +444,14 @@ class _FakePool:
 
         class _Ctx:
             async def __aenter__(self):
+                # ⚠️ 只接管防重表那条查询, 其余**转回 conn 自己的** ——
+                #    不分流的话它会把覆盖口径那条查询也吃掉, 表现是毛利那段
+                #    变成「今天没有可用的毛利数据」(实测踩到)。
+                _own = _FakeConn.fetchrow
+
                 async def fetchrow(sql, *args):
+                    if "notifications_log" not in sql:
+                        return await _own(pool._conn, sql, *args)
                     key = (args[0], args[1], args[2])
                     return {"id": 1} if key in pool.notified_log else None
 
