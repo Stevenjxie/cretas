@@ -66,7 +66,9 @@ async def main() -> int:
         pool, FACTORY, date_range=(_DAY, _DAY), window_label=str(_DAY))
     resolver_profit = None
     meta = getattr(answer, "meta", None) or {}
-    for key in ("gross_profit", "total_profit"):
+    # ⚠️ 具名字段优先。kpis 没有 label, 按标签猜必然读不到 —— 实测第一次
+    #    跑闸就报 rc=2(读不到), 那不是「不一致」也不是「一致」。
+    for key in ("aggregate_gross_profit", "gross_profit", "total_profit"):
         if isinstance(meta.get(key), (int, float)):
             resolver_profit = float(meta[key])
             break

@@ -182,3 +182,21 @@ def test_the_no_discount_note_reads_correctly_in_the_template():
         "basis 不是名词短语 —— 套进「用{basis}估算」会读不通")
     # 解释放在模板外面, 不塞进 basis
     assert "折扣是整单的，摊不到单道菜" in src
+
+
+def test_resolver_exposes_the_aggregate_for_the_parity_gate():
+    """⛔ 闸读不到 = 闸不存在，只是它诚实地说了「没量到」。
+
+    prod 实测：第一次跑对账闸就报 rc=2 —— executor 侧有数，resolver 侧 None，
+    因为 kpis 没有 `label`，按标签猜读不到。合计层的数必须**具名**带出去。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    assert '"aggregate_gross_profit": total_profit' in src, (
+        "合计毛利没具名带进 meta —— 对账闸读不到它")
+    assert '"aggregate_paid_revenue": total_rev' in src
+
+    probe = io.open(_PY_ROOT / "smartbi/scripts/margin_parity_probe.py",
+                    encoding="utf-8", newline="").read()
+    assert "aggregate_gross_profit" in probe, "闸没读那个具名字段"
