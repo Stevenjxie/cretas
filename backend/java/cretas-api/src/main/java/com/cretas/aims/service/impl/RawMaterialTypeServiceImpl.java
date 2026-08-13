@@ -220,6 +220,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         String previousUnit = materialType.getUnit();
         boolean wasPackaging = isPackagingCategory(materialType.getCategory());
+        // 🔴 2026-08-13: 落库时的参考价, 必须在任何写入之前抓 —— 下面判「这条存量记录
+        // 本来有没有价」要用它。抓晚了会读到本次请求刚写进去的值。
+        BigDecimal storedTaxIncludedPrice = materialType.getTaxIncludedUnitPrice();
 
         if (!materialType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此原材料类型")
@@ -294,7 +297,27 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         } else if (dto.getTaxRate() != null || dto.getTaxTreatment() != null) {
             refreshReferencePriceForTaxChange(materialType);
         }
-        if (packaging) {
+        // 🔴 2026-08-13 生产实测: 这里原本对所有包材无条件要求参考价, 后果是
+        // **存量包材连一个字段都改不了** —— 全平台 63 个启用包材里 59 个没有参考价
+        // (F006 34/38, LIUSHANMEN 25/25), 它们保存任何修改都被 400 拦下,
+        // 包括「去把价格补上」以外的一切动作(改名、挂分类、调单位…)。
+        //
+        // 这道闸与下游冗余, 而下游更安全: BomRecipeServiceImpl#applyMaterialMasterPricing
+        // 取 movingAvgPrice ?: unitPrice, 两者都空时 itemCost 为 null →
+        // markFamilyCostIncomplete, 把整个 family 的标准成本标记为不完整 ——
+        // **不是**悄悄按 0 元算。也就是说成本正确性已经在它真正起作用的位置被守住了。
+        // 而这 59 条里只有 3 条真的进了活 BOM: 其余 56 条上, 这道闸什么也没保护。
+        //
+        // 处置: 新建仍然要求(新数据保持干净), 存量不追加要求。
+        //   · 本次请求带了价 → 照常校验(想填就必须填对)
+        //   · 记录本来就有价 → 照常校验(不许把已有的价清空)
+        //   · 记录本来没价且本次也不设价 → 只校验计税元数据, 放行其它字段的修改
+        boolean packagingPricingRequired = packaging
+                && (dto.getMaterialReferencePrice() != null
+                    || dto.getTaxIncludedUnitPrice() != null
+                    || (storedTaxIncludedPrice != null
+                        && storedTaxIncludedPrice.compareTo(BigDecimal.ZERO) > 0));
+        if (packagingPricingRequired) {
             validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
                     materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
         } else {
