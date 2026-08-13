@@ -27,10 +27,6 @@ import IntentConfigScreen from '../screens/management/IntentConfigScreen';
 // Phase 3 P2 - 工厂设置
 import FactorySettingsScreen from '../screens/management/FactorySettingsScreen';
 
-// M-BOM-1 (Track D1, 2026-05-14): BOM 配方主子表
-import BomConfigScreen from '../screens/factory/bom/BomConfigScreen';
-import BomEditorScreen from '../screens/factory/bom/BomEditorScreen';
-
 // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
 import WorkProcessListScreen from '../screens/factory/workprocess/WorkProcessListScreen';
 import WorkProcessCreateScreen from '../screens/factory/workprocess/WorkProcessCreateScreen';
@@ -171,17 +167,10 @@ export function ManagementStackNavigator() {
       />
       */}
 
-      {/* M-BOM-1 (Track D1, 2026-05-14): BOM 配方主子表 */}
-      <Stack.Screen
-        name="BomConfigList"
-        component={BomConfigScreen}
-        options={{ title: 'BOM 配方管理' }}
-      />
-      <Stack.Screen
-        name="BomConfigEdit"
-        component={BomEditorScreen}
-        options={{ title: 'BOM 配方编辑' }}
-      />
+      {/* 🔴 2026-08-14 退役: RN 侧 BOM 配方主子表(BomConfigList / BomConfigEdit)。
+          BOM 已于 2026-08-07 阶段 5 收敛为「画布即 BOM」—— 只在 web-admin 的
+          产品-工序配置画布上通过辅料/包材 cell 维护。手机端不设 BOM(owner 判定)。
+          屏幕与 API 客户端一并删除, 不留「代码还在就会被当成还在用」的残留。 */}
       {/* Track D2 — 工序管理 + 产品工序配置 (六扇门第四次会议) */}
       <Stack.Screen
         name="WorkProcessList"
