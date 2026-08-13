@@ -25,7 +25,7 @@ class RuntimeToolPolicyLoaderTest {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(10);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -35,7 +35,6 @@ class RuntimeToolPolicyLoaderTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust",
                         "material_stock_summary",
                         "material_batch_query",
                         "material_expired_query");
@@ -65,7 +64,7 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(5, 7)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(5, 6)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy())
@@ -75,7 +74,7 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(7, 10)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(6, 9)).allSatisfy(policy -> {
             assertThat(policy.actionType()).isEqualTo(
                     com.cretas.aims.ai.tool.ToolExecutor.ActionType.READ);
             assertThat(policy.riskLevel()).isEqualTo(

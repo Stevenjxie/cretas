@@ -2,8 +2,8 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 588
-expectedLegacyCount: 577
+expectedToolCount: 579
+expectedLegacyCount: 569
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -7292,46 +7292,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_recipe_create_from_sample"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeCreateFromSampleTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_recipe_cost_calculate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeCostCalculateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "bom_recipe_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeQueryTool"
     provenance: LEGACY_INFERRED
@@ -7352,67 +7312,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_recipe_create_from_text"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeCreateFromTextTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_recipe_clone_with_modify"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeCloneWithModifyTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_adjust"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomAdjustTool"
-    provenance: EXPLICIT
-    actionType: UPDATE
-    riskLevel: MEDIUM
-    supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: ["production:read_write", "rd:read_write", "finance:read_write"]
-    allowedRoles: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: true
-      riskLevel: true
-      supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: true
-      version: true
-      domainTags: true
-    governanceStatus: APPROVED
   - toolName: "alert_rule_update"
     implementationClass: "com.cretas.aims.ai.tool.impl.alerts.AlertRuleUpdateTool"
     provenance: LEGACY_INFERRED
@@ -7427,46 +7326,6 @@ descriptors:
       actionType: false
       riskLevel: false
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_recipe_activate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomRecipeActivateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: true
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_batch_operation"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomBatchOperationTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
@@ -7573,26 +7432,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED_P0
-  - toolName: "bom_version_approve"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomVersionApproveTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
   - toolName: "bom_reverse_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomReverseQueryTool"
     provenance: LEGACY_INFERRED
@@ -7618,26 +7457,6 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["bom"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "bom_version_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomVersionCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
     supportsPreview: false
     requiresPermission: false
     requiredPermissions: []

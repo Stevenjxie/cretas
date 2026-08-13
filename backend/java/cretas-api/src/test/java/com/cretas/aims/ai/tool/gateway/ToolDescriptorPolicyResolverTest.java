@@ -67,27 +67,31 @@ class ToolDescriptorPolicyResolverTest {
                 productWithSystemPermission,
                 productWithSystemPermission.principal())).isPresent();
 
-        ToolExecutionCommand bomWithFinancePermission = command(
-                "bom_adjust",
+        // 2026-08-14: 原来这两段用 bom_adjust 当样本, 它随 9 个老式 BOM 写入工具退役了。
+        // 换成 product_create —— 它同样公布多权限(production:read_write / system:read_write),
+        // 所以「任一命中即放行」与「一个都不命中则 fail closed」这两条语义**一条没少**:
+        // 上方已用 system:read_write 覆盖其一, 这里用另一个 production:read_write。
+        ToolExecutionCommand productWithProductionPermission = command(
+                "product_create",
                 "1.0.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
-                "finance_manager",
-                Set.of("finance:read_write"));
+                "production_manager",
+                Set.of("production:read_write"));
         assertThat(resolver.resolve(
-                bomWithFinancePermission,
-                bomWithFinancePermission.principal())).isPresent();
+                productWithProductionPermission,
+                productWithProductionPermission.principal())).isPresent();
 
-        ToolExecutionCommand bomWithoutAnyRequiredPermission = command(
-                "bom_adjust",
+        ToolExecutionCommand productWithoutAnyRequiredPermission = command(
+                "product_create",
                 "1.0.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
-                "finance_manager",
-                Set.of("finance:read"));
+                "production_manager",
+                Set.of("production:read"));
         assertThat(resolver.resolve(
-                bomWithoutAnyRequiredPermission,
-                bomWithoutAnyRequiredPermission.principal())).isEmpty();
+                productWithoutAnyRequiredPermission,
+                productWithoutAnyRequiredPermission.principal())).isEmpty();
     }
 
     @Test

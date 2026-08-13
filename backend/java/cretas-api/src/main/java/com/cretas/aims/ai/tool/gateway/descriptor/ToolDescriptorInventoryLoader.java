@@ -57,7 +57,6 @@ public final class ToolDescriptorInventoryLoader {
             "purchase_finance_approve",
             "transfer_approve",
             "return_order_approve",
-            "bom_version_approve",
             "ecn_approve",
             "rd_sample_approve",
             "dictionary_batch_import",

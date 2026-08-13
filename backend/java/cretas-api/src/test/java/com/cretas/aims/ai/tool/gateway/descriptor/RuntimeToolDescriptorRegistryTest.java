@@ -34,7 +34,11 @@ class RuntimeToolDescriptorRegistryTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust");
+                        // 2026-08-14: bom_adjust 随 9 个老式 BOM 写入工具退役, 从 P0 集合摘除。
+                        // 下面三条只读物料工具不受影响, 必须保留。
+                        "material_stock_summary",
+                        "material_batch_query",
+                        "material_expired_query");
         for (String toolName : registry.approvedToolNames()) {
             ToolDescriptor descriptor = registry.findApproved(toolName).orElseThrow();
             assertThat(descriptor.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
@@ -68,7 +72,9 @@ class RuntimeToolDescriptorRegistryTest {
                 });
         assertThat(ToolDescriptorInventoryLoader.P0_TOOL_NAMES)
                 .filteredOn(toolName -> !registry.approvedToolNames().contains(toolName))
-                .hasSize(18)
+                // 18 → 17: bom_version_approve 随 9 个老式 BOM 写入工具退役。
+                // 这里数的是「P0 里尚未进入 approved 集合的」, 少一个工具就该少一个。
+                .hasSize(17)
                 .allSatisfy(toolName -> assertThat(registry.findApproved(toolName)).isEmpty());
         assertThat(registry.findApproved("restaurant_sales_overview")).isEmpty();
         assertThat(registry.findApproved("does_not_exist")).isEmpty();
@@ -89,7 +95,7 @@ class RuntimeToolDescriptorRegistryTest {
                 "com.example.UnapprovedTool", "unapproved_tool", first.version());
         List<RuntimeToolPolicyEntry> extraPolicies = new ArrayList<>(manifest.policies());
         extraPolicies.add(extraEntry);
-        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 8, extraPolicies);
+        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 10, extraPolicies);
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, extra))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unapproved=[unapproved_tool]");
@@ -97,7 +103,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry driftedEntry = copy(
                 first, first.implementationClass(), first.toolName(), "2.0.1");
         RuntimeToolPolicyManifest drifted = new RuntimeToolPolicyManifest(
-                1, 7, manifest.policies().stream()
+                1, 9, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? driftedEntry : policy)
                         .toList());
@@ -108,7 +114,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry sourceDrift = copy(
                 first, "com.example.UserDisableTool", first.toolName(), first.version());
         RuntimeToolPolicyManifest sourceDriftManifest = new RuntimeToolPolicyManifest(
-                1, 7, manifest.policies().stream()
+                1, 9, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? sourceDrift : policy)
                         .toList());
@@ -120,7 +126,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry permissionDrift = copyWithPermissions(
                 first, Set.of("hr:read"));
         RuntimeToolPolicyManifest permissionDriftManifest = new RuntimeToolPolicyManifest(
-                1, 7, manifest.policies().stream()
+                1, 9, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? permissionDrift : policy)
                         .toList());

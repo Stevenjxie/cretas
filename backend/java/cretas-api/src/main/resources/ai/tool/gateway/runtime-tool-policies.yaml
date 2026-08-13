@@ -1,6 +1,6 @@
 # Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
 schemaVersion: 1
-expectedPolicyCount: 10
+expectedPolicyCount: 9
 policies:
   - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
     toolName: "user_disable"
@@ -106,25 +106,6 @@ policies:
     allowedRoles: []
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["product"]
-    version: "1.0.0"
-    supportsPreview: true
-    confirmationPolicy: REQUIRED_FOR_EXECUTION
-    approvalPolicy: NOT_REQUIRED
-    idempotencyPolicy: REQUIRED_FOR_EXECUTION
-    dataClassification: CONFIDENTIAL
-    allowedSources: [HTTP_CONTROLLER]
-    egressPolicy:
-      mode: DENY_ALL
-      allowedDestinations: []
-    provenance: EXPLICIT
-  - implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomAdjustTool"
-    toolName: "bom_adjust"
-    actionType: UPDATE
-    riskLevel: MEDIUM
-    requiredPermissions: ["production:read_write", "rd:read_write", "finance:read_write"]
-    allowedRoles: []
-    allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
-    domainTags: ["bom"]
     version: "1.0.0"
     supportsPreview: true
     confirmationPolicy: REQUIRED_FOR_EXECUTION
