@@ -36,6 +36,50 @@ from smartbi.gold.restaurant.restaurant_ops_router import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _cretas_pool_default(monkeypatch):
+    """本模块默认给一个**空的**运营库。
+
+    🔴 为什么需要: 2026-08-13 起 cretas 够不着时毛利路径会**显式失败**
+       (不再静默退回只用 SmartBI 兜底)。本模块里绝大多数用例测的是措辞/路由/
+       渲染, 它们此前是靠「连不上真库 → 吞掉异常 → 继续」跑通的 ——
+       那条路正是这次要堵的。给个空运营库让它们回到自己该测的东西上。
+    ⚠️ 「来源断了要响」由 `smartbi/gold/tests/test_cost_key_source.py` 专门守,
+       ⛔ 不靠本模块「碰巧连不上」来守 —— 那是拿环境故障当断言。
+    """
+    class _EmptyCretasConn:
+        async def fetch(self, _query, *_args):
+            return []
+
+    _patch_cretas_pool(monkeypatch, _EmptyCretasConn())
+
+
+def _patch_cretas_pool(monkeypatch, connection):
+    """把 cretas 那一侧接到夹具上。
+
+    ⚠️ 2026-08-13 起「菜名→成本键」的解析统一走
+       `restaurant_cost_mapping.resolve_cost_keys`, 它复用服务已有的**池**
+       (`smartbi.config.get_cretas_pool`), 不再自己 `asyncpg.connect`。
+       夹具跟着改 —— 原来只 patch `asyncpg.connect` 的话, 解析会去连真库。
+    """
+    class _Ctx:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    async def _get_cretas_pool():
+        return _Pool()
+
+    import smartbi.config as _config
+    monkeypatch.setattr(_config, "get_cretas_pool", _get_cretas_pool)
+
+
 def _dish_metric_entry():
     return {
         "name": "米饭",
@@ -1372,6 +1416,7 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
 
     result = asyncio.run(
         _r.resolve_gross_margin(
@@ -1449,6 +1494,7 @@ def test_gross_margin_uses_smartbi_cost_product_fallback_when_erp_seed_is_gone(
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
 
     result = asyncio.run(_r.resolve_gross_margin(
         _SmartBIPool(),
@@ -1525,9 +1571,14 @@ def test_store_margin_excludes_missing_cost_and_uses_distinct_bill_count():
         {"store_id": 2, "store_name": "完整成本店", "dish_name": "C", "normalized_name": "C",
          "qty": 5, "revenue": 500.0, "bills": 4},
     ]
+    # ⚠️ 映射的键由 `normalize_dish_name` 产出(strip + lower), 手搭夹具必须走
+    #    同一个函数 —— 写死 `{"A": ...}` 在 ASCII 名字上会静默配不上, 症状是
+    #    「有成本卡的店毛利也是 None」, 完全不像「夹具的键没规范化」。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        normalize_dish_name as _norm)
     stores = aggregate(
         rows,
-        {"A": "P-A", "B": "P-B", "C": "P-C"},
+        {_norm(n): pk for n, pk in (("A", "P-A"), ("B", "P-B"), ("C", "P-C"))},
         {"P-B": 30.0, "P-C": 20.0},
         {1: 8, 2: 9},
     )
@@ -1730,6 +1781,11 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
                     if include_cost
                     else []
                 )
+            # 成本键解析的存量兜底层。⚠️ 必须排在下面按 `args[2]` 取日期之前 ——
+            #    这条查询只有一个参数, 落到下面会 IndexError, 而那个 IndexError
+            #    会被解析器包成「权威来源不可用」, 症状完全不像「夹具没跟上」。
+            if "FROM dim_restaurant_cost_product" in query:
+                return []
             current_rows = rows_by_range.get((args[2], args[3]), [])
             if "COUNT(DISTINCT t.id)::int AS bills" in query:
                 return [{"store_id": sid, "bills": 8}
@@ -1752,15 +1808,19 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
             return _AcquireContext()
 
     class _CretasConnection:
+        #: ⚠️ 新的解析取**整个租户**的 product_types(只传 factory_id), 不再按
+        #:    名字过滤 —— 夹具因此不能再从入参里读名字清单。
+        _NAMES = ("测试菜",)
+
         async def fetch(self, query, *_args):
             if "FROM product_types" in query:
                 return [
-                    {
-                        "id": "PT-DISH" if name == "测试菜" else f"PT-{name}",
-                        "name": name,
-                    }
-                    for name in _args[1]
+                    {"id": "PT-DISH" if name == "测试菜" else f"PT-{name}",
+                     "name": name}
+                    for name in self._NAMES
                 ]
+            if "dim_product_alias" in query:
+                return []
             raise AssertionError(f"unexpected Cretas query: {query}")
 
         async def close(self):
@@ -1771,6 +1831,7 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
     return _Pool(), connection
 
 

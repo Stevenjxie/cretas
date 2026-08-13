@@ -33,8 +33,14 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.metric_registry import (
-    COST_UNIT_ERROR_RATIO as _COST_UNIT_ERROR_RATIO,
+    MAX_SANE_DISH_UNIT_COST as _REG_MAX_SANE_DISH_UNIT_COST,
+    dish_cost_is_implausible as _dish_cost_is_implausible,
 )
+# ⛔ 这里**不再** import `COST_UNIT_ERROR_RATIO` —— 本模块已经没有任何一处
+#    自己拿它做比较了。改之前 import 它是为了「两处共用同一个阈值」, 而那正是
+#    上一版的错觉: 共用了阈值, 粒度还是两套。现在整条判据都在登记表里。
+#    `tests/test_margin_parity.py::test_the_cost_outlier_rule_has_exactly_one_home`
+#    会在有人把它 import 回来时红。
 from smartbi.gold.restaurant.provenance import (
     ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
@@ -1878,28 +1884,28 @@ def _compute_margin_dragger(
     return best
 
 
-_MAX_SANE_DISH_UNIT_COST = 99999.0
-# 🔴 owner 2026-08-13: 这条判据**只能有一处定义**, 两条路读同一份。
-# 改之前这里是 10.0 而 generic_executor 那侧是 5.0 —— 同一个判据两个值,
-# 正是形态 D。实测后果: 青花椒的「米饭」成本卡 ¥167.20 / 售价 ¥16.80 = 9.95 倍,
-# **恰好卡在两个阈值之间** —— 一条路排除它、另一条不排除, 两条路给出两个数。
-# ⛔ 不在这里写死数字, 从登记表取。
-_MAX_COST_TO_REALIZED_PRICE_RATIO = _COST_UNIT_ERROR_RATIO
+# 🔴 owner 2026-08-13/14: 这条判据**只能有一处定义**, 在
+#    `metric_registry.dish_cost_is_implausible`。本函数是它的一层薄封装,
+#    ⛔ 不在这里重写任何比较。
+#
+# 这里踩过**两次**同一个坑, 一次比一次隐蔽:
+#   ① 阈值两份: 这里 10.0 / 执行器 5.0 —— 米饭 9.95 倍恰好卡在中间。
+#      修法是共用常量, 当时以为收敛完了。
+#   ② **粒度两份**: 常量确实只有一处了, 但执行器那侧按 `fact_pos_item` 逐行判、
+#      这里按整道菜的聚合价判。同一张卡, 两种判决。
+#      实测(RES_3101_009 / 2026-08-12): 两条路差 **19,131.37**, 残差全部来自米饭。
+# ⇒ 判据 = 阈值 + **作用粒度**。只共用前者等于没共用。
+_MAX_SANE_DISH_UNIT_COST = _REG_MAX_SANE_DISH_UNIT_COST
 
 
 def _is_plausible_dish_unit_cost(
     unit_cost: Optional[float], qty: float, revenue: float,
 ) -> bool:
-    """Reject corrupted cost cards before they can poison a margin answer."""
-    if unit_cost is None or not math.isfinite(unit_cost):
-        return False
-    if unit_cost < 0 or unit_cost >= _MAX_SANE_DISH_UNIT_COST:
-        return False
-    if qty > 0 and revenue > 0:
-        realized_unit_revenue = revenue / qty
-        if unit_cost > realized_unit_revenue * _MAX_COST_TO_REALIZED_PRICE_RATIO:
-            return False
-    return True
+    """Reject corrupted cost cards before they can poison a margin answer.
+
+    ⛔ 判定本身在登记表里, 本函数只做取反。
+    """
+    return not _dish_cost_is_implausible(unit_cost, qty, revenue)
 
 
 def _build_margin_entries(
@@ -1907,10 +1913,16 @@ def _build_margin_entries(
     cretas_map: Dict[str, str],
     cost_map: Dict[str, float],
 ) -> List[Dict[str, Any]]:
-    """Build margin rows while preserving unknown cost as unknown."""
+    """Build margin rows while preserving unknown cost as unknown.
+
+    ⚠️ 取键**必须**走 `cost_key_of` —— 它连着 `normalize_dish_name`, 是两条路
+       共用的那一份规范化。直接 `cretas_map.get(name)` 会绕开它, 于是一侧对
+       大小写敏感一侧不敏感, 差异表现成「日结算了这道菜, 问答没算」。
+    """
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_key_of
     entries: List[Dict[str, Any]] = []
     for row in pos_rows:
-        source_pk = cretas_map.get(row["normalized_name"])
+        source_pk = cost_key_of(cretas_map, row["normalized_name"])
         qty = float(row["total_qty"])
         revenue = float(row["total_revenue"])
         cost_present = (
@@ -1939,6 +1951,12 @@ def _build_margin_entries(
             "margin_rate": margin_rate,
             "has_cost": has_cost,
             "invalid_cost": invalid_cost,
+            # 🔴 被判无效的那张卡**要留下值**。`food_cost_unit` 只在 has_cost
+            #    时才填, 于是异常项那里恒为 None —— 正文照着印会打出
+            #    「成本卡 ¥0.00 一份」(2026-08-14 prod 实测), 一个既没信息量
+            #    又明显是假的数字, 店长照着去核对只会更糊涂。
+            # ⚠️ 它**不进任何计算**, 只用于指名道姓那句话。
+            "invalid_cost_value": candidate_cost if invalid_cost else None,
         })
     return entries
 
@@ -2268,10 +2286,14 @@ def _aggregate_store_margin_entries(
     cost_by_pk: Dict[str, float],
     bill_count_by_store: Optional[Dict[Any, int]] = None,
 ) -> List[Dict[str, Any]]:
-    """Aggregate store margins without turning missing dish cost into zero."""
+    """Aggregate store margins without turning missing dish cost into zero.
+
+    ⚠️ 取键走 `cost_key_of` —— 与毛利问答/日结**同一份**规范化。
+    """
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_key_of
     per_store: Dict[Any, Dict[str, Any]] = {}
     for row in store_dish_rows:
-        source_pk = name_to_pk.get(row["normalized_name"])
+        source_pk = cost_key_of(name_to_pk, row["normalized_name"])
         cost_present = (
             source_pk is not None
             and source_pk in cost_by_pk
@@ -4099,55 +4121,39 @@ async def resolve_gross_margin(
             },
         )
 
-    # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
-    # P0-2: alias lets merchants bind POS name → any product_type, handles the
-    # "POS xlsx name vs recipe name" drift problem (括号/空格/[] differences).
-    normalized_names = list({r["normalized_name"] for r in pos_rows})
-    cretas_map: Dict[str, str] = {}  # pos_name → source_pk (product_type_id)
-    try:
-        import asyncpg as _asyncpg
-        from config import get_settings as _get_settings
-        cretas_url = _get_settings().food_kb_db_url
-        cretas = await _asyncpg.connect(cretas_url)
-        try:
-            # Primary: exact name match
-            name_rows = await cretas.fetch(
-                "SELECT id, name FROM product_types WHERE factory_id = $1 AND name = ANY($2::text[])",
-                factory_id, normalized_names,
-            )
-            for r in name_rows:
-                cretas_map[r["name"]] = r["id"]
-            # Fallback: alias table (table may not exist on older schemas → catch)
-            unmapped = [n for n in normalized_names if n not in cretas_map]
-            if unmapped:
-                try:
-                    alias_rows = await cretas.fetch(
-                        """SELECT pos_name, product_type_id FROM dim_product_alias
-                            WHERE factory_id = $1 AND pos_name = ANY($2::text[])""",
-                        factory_id, unmapped,
-                    )
-                    for r in alias_rows:
-                        cretas_map[r["pos_name"]] = r["product_type_id"]
-                except Exception as e:
-                    # Table doesn't exist yet — ignore, name match still works
-                    if "does not exist" not in str(e):
-                        logger.warning(f"[gross_margin] alias lookup failed: {e}")
-        finally:
-            await cretas.close()
-    except Exception as e:
-        logger.warning(f"[gross_margin] cretas name lookup failed: {e}")
-
-    # Historical/demo Gold cost rows can outlive the operational product_types
-    # seed that originally produced them.  Supplement only unresolved names
-    # from SmartBI's tenant-scoped cost-product read model; ambiguous names stay
-    # unresolved rather than guessing a COGS key.
-    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
-    cretas_map = await merge_cost_product_mapping(
-        smartbi_pool,
-        factory_id,
-        normalized_names,
-        cretas_map,
+    # Step 2: 菜名 → 成本键。
+    #
+    # 🔴 2026-08-13 owner 裁定条件 2: 这一步的实现**只有一份**, 在
+    #    `restaurant_cost_mapping.resolve_cost_keys` —— 日结那条路读的是同一份。
+    #    改之前这里是三十行内联的 cretas 查询, 日结那边是一条 SQL join,
+    #    两边够得着的菜不一样(青花椒 9 道只在运营库里), 于是同一天同一家店
+    #    日结毛利 103,370.22 而问答 124,071.85。
+    # ⛔ 谁都不许在这里「顺手」再补一级 fallback: 补了日结就少一级。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        CostKeySourceUnavailable,
+        resolve_cost_keys,
     )
+    async with smartbi_pool.acquire() as _map_conn:
+        await _map_conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id)
+        try:
+            cretas_map = await resolve_cost_keys(_map_conn, factory_id)
+        except CostKeySourceUnavailable as exc:
+            # ⛔ 不降级成「这些菜没有成本卡」—— 那会把毛利算高而且不留痕迹。
+            #    宁可这一问明确说取不到。
+            logger.error("[gross_margin] 成本键权威来源不可用 factory=%s: %s",
+                         factory_id, exc)
+            return OpsAnswer(
+                code="RESTAURANT_OPS_GROSS_MARGIN",
+                title="毛利",
+                answer_text=(
+                    "现在算不了毛利 —— 菜品成本的数据源连不上。\n\n"
+                    "这不是「你的菜没有成本卡」，是我这边取不到，"
+                    "所以我不给你一个可能偏高的数。稍后再问一次。"
+                ),
+                charts=[], kpis=[],
+                meta={"no_data": True, "reason": "cost_key_source_unavailable"},
+            )
 
     # Step 3: load food cost per source_pk
     cost_map: Dict[str, float] = {}
@@ -4497,7 +4503,24 @@ async def resolve_gross_margin(
     if missing_cost_count > 0:
         exclusion_notes.append(f"{missing_cost_count} 个菜品缺少完整成本")
     if invalid_cost_count > 0:
-        exclusion_notes.append(f"{invalid_cost_count} 个菜品成本值明显异常")
+        # 🔴 owner 2026-08-14 判据三: **指名道姓**, 不许只报个数。
+        #    「1 个菜品成本值明显异常」对店长不产生任何动作 —— 他不知道是哪道菜、
+        #    也不知道该改什么。日结那条路早就点名了(generic_answer), 问答这条
+        #    只数了个数 —— 又一处「两条路说的不是同一件事」。
+        # ⚠️ 均价与判据用的是**同一个** revenue/qty, ⛔ 不在这里另算一个。
+        worst = sorted(
+            (e for e in enriched if e["invalid_cost"]),
+            key=lambda e: (e["invalid_cost_value"] or 0), reverse=True,
+        )[:2]
+        named = "、".join(
+            f"{e['name']}（成本卡 ¥{(e['invalid_cost_value'] or 0):,.2f} 一份，"
+            f"实际卖 ¥{(e['revenue'] / e['qty']) if e['qty'] else 0:,.2f}）"
+            for e in worst
+        )
+        exclusion_notes.append(
+            f"{invalid_cost_count} 个菜品成本值明显异常：{named}，多半是单位记错"
+            f"（比如一袋当成一份），改好就会自动算回来"
+            if named else f"{invalid_cost_count} 个菜品成本值明显异常")
     if primary_excluded_count > 0:
         exclusion_notes.append(
             f"{primary_excluded_count} 个米饭/附属用品仅计入总额、不参与主菜排名与建议"
@@ -4651,11 +4674,16 @@ async def resolve_gross_margin(
         #    覆盖率本身仍是 item 口径算的(分子分母同源), 那个百分比是对的。
         f"- 实收营收 **¥{total_rev:,.2f}**，其中 {coverage_ratio * 100:.1f}% 的销售有成本卡、能算毛利\n"
         f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
-        f"计算过程：`毛利 ¥{total_profit:,.2f} = 实收营收 ¥{total_rev:,.2f}"
-        f" − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
+        # 🔴 2026-08-14: 这里原来印的是**全额实收** ¥373,832.93, 而结果是
+        #    **覆盖部分**的毛利 —— 店长照着减一遍得 347,578.81, 与上面那行
+        #    124,071.85 对不上。**答案自己跟自己打架**, 比不给过程更糟。
+        # ⛔ 分子分母同源: 减数是覆盖部分的净营收, 不是全店实收。
+        f"计算过程：`毛利 ¥{total_profit:,.2f} = 有成本卡那部分的净营收 "
+        f"¥{covered_net_rev:,.2f} − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
         # ⛔ 不写「口径」——它在 INTERNAL_VOCAB 里, sanitize 会替换成「计算方法」,
         #    于是 prod 上打出「计算计算方法：」。⚠️ 自己敲进源码的串不许靠 sanitize 兜。
-        f"> 怎么算的：毛利 = 实收营收 − 对应菜品成本；期间与菜品范围完全一致。\n"
+        f"> 怎么算的：毛利 = 有成本卡那部分的净营收 − 对应菜品成本；"
+        f"期间与菜品范围完全一致。\n"
         f"{per_dish_no_discount_note}"
         f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
@@ -5800,45 +5828,33 @@ async def resolve_store_margin(
             },
         )
 
-    # Lookup cretas product_types + dim_product_alias (P0-2) + agg_product_cost for food cost.
-    dish_names = list({r["normalized_name"] for r in store_dish_rows})
-    name_to_pk: Dict[str, str] = {}
-    try:
-        import asyncpg as _asyncpg
-        from config import get_settings as _get_settings
-        cretas = await _asyncpg.connect(_get_settings().food_kb_db_url)
-        try:
-            rows = await cretas.fetch(
-                "SELECT id, name FROM product_types WHERE factory_id = $1 AND name = ANY($2::text[])",
-                factory_id, dish_names,
-            )
-            for r in rows:
-                name_to_pk[r["name"]] = r["id"]
-            unmapped = [n for n in dish_names if n not in name_to_pk]
-            if unmapped:
-                try:
-                    alias_rows = await cretas.fetch(
-                        """SELECT pos_name, product_type_id FROM dim_product_alias
-                            WHERE factory_id = $1 AND pos_name = ANY($2::text[])""",
-                        factory_id, unmapped,
-                    )
-                    for r in alias_rows:
-                        name_to_pk[r["pos_name"]] = r["product_type_id"]
-                except Exception as e:
-                    if "does not exist" not in str(e):
-                        logger.warning(f"[store_margin] alias lookup failed: {e}")
-        finally:
-            await cretas.close()
-    except Exception as e:
-        logger.warning(f"[store_margin] cretas lookup failed: {e}")
-
-    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
-    name_to_pk = await merge_cost_product_mapping(
-        smartbi_pool,
-        factory_id,
-        dish_names,
-        name_to_pk,
+    # 菜名 → 成本键。⛔ 与毛利问答/日结读**同一份**实现, 见
+    #    `restaurant_cost_mapping.resolve_cost_keys` 顶部。
+    #    改之前这里是第三份内联的 cretas 查询 —— 三份实现就有三种「这家店有哪些
+    #    菜算得出成本」, 按门店的毛利加总不等于全店毛利, 而没有任何东西会报错。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        CostKeySourceUnavailable,
+        resolve_cost_keys,
     )
+    async with smartbi_pool.acquire() as _map_conn:
+        await _map_conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id)
+        try:
+            name_to_pk = await resolve_cost_keys(_map_conn, factory_id)
+        except CostKeySourceUnavailable as exc:
+            logger.error("[store_margin] 成本键权威来源不可用 factory=%s: %s",
+                         factory_id, exc)
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title="门店毛利",
+                answer_text=(
+                    "现在算不了各店毛利 —— 菜品成本的数据源连不上。\n\n"
+                    "这不是「你的菜没有成本卡」，是我这边取不到，"
+                    "所以我不给你一个可能偏高的数。稍后再问一次。"
+                ),
+                charts=[], kpis=[],
+                meta={"no_data": True, "reason": "cost_key_source_unavailable"},
+            )
 
     cost_by_pk: Dict[str, float] = {}
     if name_to_pk:

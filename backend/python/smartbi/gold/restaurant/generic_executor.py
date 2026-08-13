@@ -34,14 +34,24 @@ from smartbi.gold.restaurant.provenance import (
 )
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
-    cost_outlier_predicate,
+    COST_BRIDGE_KEY_PARAM,
+    dish_cost_is_implausible,
     DERIVED,
     DIMENSIONS,
     GRAINS,
     METRICS,
 )
+from smartbi.gold.restaurant.restaurant_cost_mapping import (
+    CostKeySourceUnavailable,
+    cost_bridge_pairs,
+)
 
 logger = logging.getLogger(__name__)
+
+#: item_cost 粒度上 `entity_filter` 的占位符 —— 排在两个桥接数组之后。
+_ENTITY_PARAM_WITH_BRIDGE = COST_BRIDGE_KEY_PARAM + 1
+#: 其余粒度上没有桥接数组, 实体过滤紧跟三个基础参数。
+_ENTITY_PARAM_PLAIN = 4
 
 
 @dataclass
@@ -163,6 +173,21 @@ def _base_metrics_of(item) -> List[str]:
     return uniq
 
 
+def uses_cost_bridge(metric_key: str) -> bool:
+    """这个指标算下来要不要经过成本桥接 —— 也就是 SQL 里要不要那两个数组参数。
+
+    🔴 **唯一定义。** 拼 SQL 的 `build_sql` 和准备实参的 `execute_cell` 必须读
+       同一个答案, 否则 `$N` 与实参错位。这是「闸的左右两边来源相同」的反面:
+       这里恰恰**要求**两处同源, 因为它们描述的是同一件事。
+    ⚠️ 派生量要递归展开: `gross_margin` 自己没有 `requires`, 但它的分子
+       `gross_profit` 里有 `food_cost`。不展开就会漏掉最需要桥接的那几个。
+    """
+    item = METRICS.get(metric_key) or DERIVED.get(metric_key)
+    if item is None:
+        return False
+    return "food_cost" in _base_metrics_of(item)
+
+
 def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
               limit_override: Optional[int] = None,
               entity_filter: Optional[str] = None) -> Tuple[str, Tuple[str, ...], List[str]]:
@@ -201,7 +226,8 @@ def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
                 f"拿另一个粒度的表达式硬凑会算错, 故拒绝")
 
     # 成本要额外的桥接 join, 所以来源取「最宽」的那个
-    needs_cost = any(m.key == "food_cost" for m in metrics)
+    # ⛔ 判据走 `uses_cost_bridge` —— 与 `execute_cell` 准备实参时读的是同一处。
+    needs_cost = uses_cost_bridge(metric_key)
     source = "item_cost" if needs_cost else grain
     from_clause, source_join, alias = GRAINS[source]
 
@@ -242,7 +268,10 @@ def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
         if not dim.label_expr:
             raise UnsupportedCell(
                 f"「{dim.label}」没有可过滤的对象 —— 点名某一个的问法在这个维度上不成立")
-        sql += f"   AND {dim.label_expr} = $4\n"
+        # ⚠️ 序号随粒度变: item_cost 上 $4/$5 已经被两个桥接数组占了。
+        #    ⛔ 这一处和 `execute_cell` 拼实参那一处都读 `needs_cost`, 不许各判各的。
+        entity_param = _ENTITY_PARAM_WITH_BRIDGE if needs_cost else _ENTITY_PARAM_PLAIN
+        sql += f"   AND {dim.label_expr} = ${entity_param}\n"
     if group_cols:
         sql += f" GROUP BY {', '.join(group_cols)}\n"
     if agg.order:
@@ -411,29 +440,75 @@ def _scalar(cell: "CellResult", key: str):
     return cell.rows[0].get(key) if cell.rows else None
 
 
-#: 覆盖部分的四个量, 一次查出来 —— 分子分母必须来自**同一批行**。
+#: 覆盖部分的三个量, 一次查出来 —— 分子分母必须来自**同一批行**。
 #: join 从 `GRAINS["item_cost"]` 取, 不重抄(抄一份就是同一条 join 两个定义)。
+#:
+#: 🔴 2026-08-14: 排除条件从「行级 SQL 判据」改成「**菜名数组**」——
+#:    判定在 Python 一处 (`dish_cost_is_implausible`), SQL 只负责照名单剔除。
+#:    行级判会让同一张卡的判决取决于那天这道菜恰好怎么卖的, 实测差 19,131.37。
 _COVERED_MARGIN_SQL = (
     "SELECT COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL"
-    "                                       AND NOT ({outlier})), 0)"
+    "                                       AND NOT ({excluded})), 0)"
     "         AS covered_gross,\n"
     "       COALESCE(SUM(i.amount), 0)                    AS all_gross,\n"
-    "       COALESCE(SUM(i.qty * c.food_cost) FILTER (WHERE NOT ({outlier})), 0)"
+    "       COALESCE(SUM(i.qty * c.food_cost) FILTER (WHERE NOT ({excluded})), 0)"
     "         AS covered_cost\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
 )
 
-#: 被排除的那几道菜, 指名带出来给正文用。
-_COST_OUTLIER_SQL = (
-    "SELECT dp.normalized_name AS name,\n"
-    "       max(c.food_cost)                       AS card_cost,\n"
-    "       SUM(i.amount) / NULLIF(SUM(i.qty), 0)  AS avg_price\n"
+#: 「这道菜今天卖了多少、卡上写多少」—— 判定的**输入**, 不含判定本身。
+#: ⚠️ 按菜聚合(GROUP BY 名字), 因为判据的粒度是菜。
+_DISH_COST_FACTS_SQL = (
+    "SELECT dp.normalized_name                    AS name,\n"
+    "       SUM(i.qty)                            AS qty,\n"
+    "       SUM(i.amount)                         AS revenue,\n"
+    "       max(c.food_cost)                      AS unit_cost\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
-    "   AND c.food_cost IS NOT NULL AND ({outlier})\n"
-    " GROUP BY 1 ORDER BY max(c.food_cost) DESC LIMIT 5\n"
+    "   AND c.food_cost IS NOT NULL\n"
+    " GROUP BY 1\n"
 )
+
+#: 被排除的菜名进 SQL 用的占位符。⚠️ 只用于本模块的两个模板,
+#: 与 `build_sql` 里 $6 = entity_filter 不冲突(不同模板, 各自独立编号)。
+_EXCLUDED_PARAM = 6
+#: SQL 里那句「这道菜在不在排除名单里」。⛔ 它**不是判据** —— 判据在 Python,
+#: 这里只是把算好的名单套上去。
+_EXCLUDED_EXPR = f"dp.normalized_name = ANY(${_EXCLUDED_PARAM}::text[])"
+
+
+async def _cost_outliers(conn, factory_id: str, date_range, bridge):
+    """按**菜**判成本卡单位错没错。返回 (排除名单, 指名用的明细)。
+
+    🔴 判定只调 `dish_cost_is_implausible` —— 全仓唯一的一处。
+       本函数负责取数和组装, **一个比较符号都不写**。
+    """
+    frm, join, alias = GRAINS["item_cost"]
+    names, keys = bridge
+    rows = await conn.fetch(
+        _DISH_COST_FACTS_SQL.format(frm=frm, join=join, alias=alias),
+        factory_id, date_range[0], date_range[1], names, keys)
+    excluded, detail = [], []
+    for row in rows or ():
+        name = row["name"]
+        if not name:
+            continue
+        unit_cost = row["unit_cost"]
+        qty = float(row["qty"] or 0)
+        revenue = float(row["revenue"] or 0)
+        if not dish_cost_is_implausible(unit_cost, qty, revenue):
+            continue
+        excluded.append(name)
+        detail.append({
+            "name": name,
+            "card_cost": float(unit_cost or 0),
+            # 均价与判据用的是**同一个** revenue/qty, ⛔ 不许在正文里另算一个
+            "avg_price": (revenue / qty) if qty else 0.0,
+        })
+    detail.sort(key=lambda d: d["card_cost"], reverse=True)
+    return excluded, tuple(detail[:5])
+
 
 #: 折扣按明细金额比例摊派 —— owner 2026-08-13 裁定。
 #: 🔑 **折扣总额是实测的, 只有它在明细行之间怎么分是估的** ——
@@ -445,21 +520,34 @@ _COST_OUTLIER_SQL = (
 _DISCOUNT_ALLOC_BASIS = "按明细金额摊派的折扣"
 
 
-async def _covered_margin(conn, factory_id: str, date_range):
+async def _covered_margin(conn, factory_id: str, date_range, bridge):
     """覆盖部分的 (净营收, 成本, 覆盖率)。算不出来返回 None。
 
     🔴 owner 2026-08-13 裁定: **毛利的分子和分母都只算有成本卡的那部分。**
        改之前分子用全额营收、分母用覆盖额, 三个症状同源:
          DEMO_REST 日结毛利率 88.3% / 青花椒问答整个拒答 / 问答正文自己算不平。
+
+    :param bridge: `(菜名[], 成本键[])` —— 由 `cost_bridge_pairs` 解析好传进来。
+        ⛔ 不在这里自己去解析: 解析可能抛 `CostKeySourceUnavailable`, 而本函数
+           的 `except` 是「取数失败返回 None」—— 那会把「权威来源断了」吞成
+           「这段时间算不出毛利」, 正是要杜绝的静默降级。
     """
     frm, join, alias = GRAINS["item_cost"]
-    # ⛔ 判据从 registry 取, 两条路读**同一份** —— 抄一份就会漂, 而漂的表现是
-    #    「日结排除了这道菜, 问答没排除」, 两条路又给出两个数。
-    outlier = cost_outlier_predicate()
-    sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias,
-                                     outlier=outlier)
+    names, keys = bridge
+    # 🔴 先按**菜**判出排除名单 —— 判定在 `dish_cost_is_implausible` 一处,
+    #    SQL 只照名单剔除。⛔ 曾经这里是一条行级 SQL 判据, 与问答那侧的
+    #    菜级判据长得像但不等价, 实测两条路差 19,131.37 全部来自一道菜。
     try:
-        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1])
+        excluded, outliers = await _cost_outliers(conn, factory_id, date_range, bridge)
+    except Exception:  # noqa: BLE001
+        logger.warning("[generic-executor] 成本卡异常判定取数失败", exc_info=True)
+        return None
+
+    sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias,
+                                     excluded=_EXCLUDED_EXPR)
+    try:
+        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1],
+                                  names, keys, excluded)
         paid = await conn.fetchval(
             "SELECT COALESCE(SUM(t.net_amount), 0) FROM fact_pos_transaction t "
             " WHERE t.factory_id = $1 AND t.date >= $2 AND t.date <= $3",
@@ -481,26 +569,14 @@ async def _covered_margin(conn, factory_id: str, date_range):
 
     # 被排除的菜**指名带出去** —— owner: 那不是一句免责声明, 是一条
     # **可执行的修复指令**(「米饭成本卡 167.20 而它卖 16.80, 请核对单位」)。
-    # ⚠️ 拿不到不影响主结果, 但要留痕。
-    outliers = []
-    try:
-        rows = await conn.fetch(
-            _COST_OUTLIER_SQL.format(frm=frm, join=join, alias=alias,
-                                     outlier=outlier),
-            factory_id, date_range[0], date_range[1])
-        outliers = [
-            {"name": r["name"], "card_cost": float(r["card_cost"] or 0),
-             "avg_price": float(r["avg_price"] or 0)}
-            for r in (rows or []) if r["name"]
-        ]
-    except Exception:  # noqa: BLE001
-        logger.warning("[generic-executor] 异常成本卡清单取不到", exc_info=True)
+    # 🔑 owner 2026-08-14: 这句话是当初冻结那张卡的**全部理由** ——
+    #    差额归零但产品说不出这句, 这一节不算做完。
     return covered_net, covered_cost, share, outliers
 
 
 async def _execute_derived_split(
     conn, item, *, dimension_key: str, aggregation_key: str,
-    factory_id: str, date_range, available_columns,
+    factory_id: str, date_range, available_columns, bridge,
 ) -> "CellResult":
     """把派生量拆成两个基础指标**各按自己的粒度**独立执行, 再在 Python 里合。
 
@@ -513,7 +589,7 @@ async def _execute_derived_split(
     # 🔴 靠成本卡的派生量走**覆盖口径**: 分子分母都只算有成本卡的那部分,
     #    且折扣按明细金额比例摊到覆盖部分。⛔ 不再「全额分子 vs 覆盖额分母」。
     if _COST_CARD_COLUMN in _effective_requires(item.key):
-        got = await _covered_margin(conn, factory_id, date_range)
+        got = await _covered_margin(conn, factory_id, date_range, bridge)
         if got is None:
             return CellResult(item.key, label, dimension_key, aggregation_key,
                               unit, [], (), "-- covered-margin: 取数失败 --")
@@ -566,14 +642,15 @@ async def _execute_derived_split(
             inner = await _execute_derived_split(
                 conn, DERIVED[item.left], dimension_key=dimension_key,
                 aggregation_key=aggregation_key, factory_id=factory_id,
-                date_range=date_range, available_columns=available_columns)
+                date_range=date_range, available_columns=available_columns,
+                bridge=bridge)
             iv = _scalar(inner, item.left)
             value = (Decimal(str(iv)) / rv * 100) if (iv is not None and rv) else None
         else:
             raise UnsupportedCell(f"未登记的派生运算: {item.op}")
 
     provenance, basis = _provenance_of(item.key)
-    coverage = (await _coverage_ratio_of(conn, factory_id, date_range)
+    coverage = (await _coverage_ratio_of(conn, factory_id, date_range, bridge)
                 if provenance == PROV_ESTIMATED else None)
     return CellResult(
         item.key, label, dimension_key, aggregation_key, unit,
@@ -593,15 +670,26 @@ async def execute_cell(
     limit_override: Optional[int] = None,
     entity_filter: Optional[str] = None,
 ) -> CellResult:
-    """执行一个格子。缺列时**不发 SQL**，直接回「缺什么」。"""
+    """执行一个格子。缺列时**不发 SQL**，直接回「缺什么」。
+
+    :raises CostKeySourceUnavailable: 要走成本桥接、而权威来源 (cretas 运营库)
+        够不着时**直接抛**, ⛔ 不降级。见 `restaurant_cost_mapping` 顶部:
+        少了权威层与「这些菜没有成本卡」在数值上完全一样, 而后者会被端给店长。
+    """
     item, dim, agg = _resolve_spec(metric_key, dimension_key, aggregation_key)
+
+    # 🔑 菜名→成本键**解析一次**, 本格子里所有 SQL 共用同一份。
+    #    ⛔ 不许某条 SQL 自己再解析一遍 —— 两次解析之间池子状态可能不同,
+    #       表现就是「毛利和覆盖率算的不是同一批菜」。
+    bridge = (await cost_bridge_pairs(conn, factory_id)
+              if uses_cost_bridge(metric_key) else None)
 
     # 🔴 合计层的口径修正 —— owner 2026-08-13 裁定 2。见 `_needs_split_execution`。
     if _needs_split_execution(item, agg):
         return await _execute_derived_split(
             conn, item, dimension_key=dimension_key, aggregation_key=aggregation_key,
             factory_id=factory_id, date_range=date_range,
-            available_columns=available_columns)
+            available_columns=available_columns, bridge=bridge)
 
     sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key,
                                      limit_override=limit_override,
@@ -619,7 +707,12 @@ async def execute_cell(
                           unit, [], missing, sql)
 
     start, end = date_range
+    # ⚠️ 顺序必须与 `build_sql` 里的占位符编号一致: $1-$3 基础, $4/$5 桥接数组
+    #    (只在 item_cost 粒度上), 之后才是 entity_filter。
+    #    ⛔ 两处都由 `uses_cost_bridge(metric_key)` 决定, 不许各判各的。
     args = [factory_id, start, end]
+    if bridge is not None:
+        args.extend(bridge)
     if entity_filter is not None:
         args.append(entity_filter)
     rows = await conn.fetch(sql, *args)
@@ -629,7 +722,7 @@ async def execute_cell(
     # ⚠️ 只有靠成本卡估出来的格子才需要覆盖率 —— 别的格子多跑一次查询纯属浪费,
     #    而且 `qualifier()` 对 MEASURED + 覆盖率不足会说出「未覆盖成本的菜品
     #    无法判断盈亏」, 那对一个跟成本无关的指标(比如订单数)是句错话。
-    coverage = (await _coverage_ratio_of(conn, factory_id, date_range)
+    coverage = (await _coverage_ratio_of(conn, factory_id, date_range, bridge)
                 if provenance == PROV_ESTIMATED else None)
     return CellResult(
         metric_key, label, dimension_key, aggregation_key, unit,
@@ -693,17 +786,29 @@ _COVERAGE_SQL_TEMPLATE = (
 )
 
 
-async def _coverage_ratio_of(conn, factory_id: str, date_range) -> Optional[float]:
+async def _coverage_ratio_of(conn, factory_id: str, date_range,
+                             bridge) -> Optional[float]:
     """这段时间里, 有成本卡的营收占多少。
 
     ⛔ 算不出来时返回 `None`(= 不按覆盖率表达), **不返回 1.0** ——
        返回 1.0 等于说「全覆盖」, 那是拿一个猜测冒充读数, 且方向最危险
        (覆盖不足的租户会被说成全覆盖)。
     """
+    if bridge is None:
+        # 🔴 当场炸, ⛔ 不静默返回 None: 一个 ESTIMATED 的格子没有覆盖率, 限定语
+        #    就只剩「按成本卡估算」——**不说这个估只覆盖了几成**。42% 覆盖率的
+        #    租户会看到一个高得离谱的毛利配一句听起来已经解释过了的话。
+        #    这是编程期的不一致(`provenance` 说要成本卡而 `uses_cost_bridge` 说不要),
+        #    不是数据问题, 该让它响。
+        raise AssertionError(
+            "ESTIMATED 格子拿不到成本桥接 —— `_provenance_of` 与 "
+            "`uses_cost_bridge` 判断不一致")
+    names, keys = bridge
     frm, join, alias = GRAINS["item_cost"]
     sql = _COVERAGE_SQL_TEMPLATE.format(frm=frm, join=join, alias=alias)
     try:
-        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1])
+        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1],
+                                  names, keys)
     except Exception:  # noqa: BLE001 — 覆盖率拿不到不该让整个格子失败
         logger.warning("[generic-executor] 覆盖率查询失败, 本格不带覆盖率",
                        exc_info=True)

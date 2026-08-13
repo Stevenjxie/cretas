@@ -105,16 +105,54 @@ def test_rank_requires_a_dimension():
 
 
 def test_cost_joins_through_the_name_bridge_not_product_id():
-    """🔴 承重: 成本必须经 dim_restaurant_cost_product 桥接。
+    """🔴 承重: 成本必须按**名字桥接**到 product_source_pk, 绝不按 product_id 直连。
 
     2026-08-09 实测 agg_restaurant_product_cost.product_id **全库都是 0**,
     按 product_id 直连会静默得到 0 成本 → 毛利率 100%,
     一个看起来很棒的错数字。
+
+    ⚠️ 2026-08-13 起桥接的**来源**从「直接 join SmartBI 的
+       dim_restaurant_cost_product」换成「Python 解析好的两个数组」——
+       那张表降级为三层来源里的第三层(存量兜底), 权威层在运营库。
+       本测守的行为**没变**: 成本经名字桥接、不按 product_id。
     """
     sql, _req, _base = build_sql("gross_margin", "product", "rank")
-    assert "dim_restaurant_cost_product" in sql, "成本没走桥接表"
     assert "c.product_source_pk = b.product_source_pk" in sql, "桥接条件不对"
+    assert "b.normalized_name = dp.normalized_name" in sql, "没按名字桥接"
     assert "c.product_id" not in sql, "🔴 按 product_id 直连了 —— 会静默算出 0 成本"
+
+
+def test_cost_bridge_join_has_no_sql_side_normalisation():
+    """⛔ join 两边都不许出现 lower()/btrim()。
+
+    规范化只有一处, 在 `normalize_dish_name`(Python)。SQL 再做一次会与它
+    对全角空格/Unicode 折叠的处理不一致 —— 表现是「有几道菜只在一条路上
+    匹配得上」, 正是 2026-08-13 那 20,701.63 元差额的成因形态。
+    """
+    sql, _req, _base = build_sql("gross_margin", "product", "rank")
+    bridge_line = [ln for ln in sql.splitlines()
+                   if "b.normalized_name" in ln][0]
+    assert "lower(" not in bridge_line, f"SQL 侧又做了一次规范化: {bridge_line}"
+    assert "btrim(" not in bridge_line, f"SQL 侧又做了一次规范化: {bridge_line}"
+
+
+def test_cost_bridge_predicate_is_read_by_both_sql_and_args():
+    """🔴 `uses_cost_bridge` 是**唯一定义** —— 拼 SQL 与备实参必须同源。
+
+    不同源的后果不是「少一层兜底」, 是 `$N` 与实参**错位**: asyncpg 报
+    「参数类型不匹配」, 读起来完全不像「桥接没接上」。
+    ⚠️ 阳性对照: 不含成本的指标必须判 False, 否则这条断言恒真。
+    """
+    from smartbi.gold.restaurant.generic_executor import uses_cost_bridge
+
+    for key in ("food_cost", "gross_profit", "gross_margin"):
+        sql, _r, _b = build_sql(key, "product", "rank")
+        assert uses_cost_bridge(key) is True, key
+        assert "unnest($4::text[], $5::text[])" in sql, key
+    for key in ("revenue", "orders"):
+        sql, _r, _b = build_sql(key, "product", "rank")
+        assert uses_cost_bridge(key) is False, key
+        assert "unnest(" not in sql, key
 
 
 def test_derived_metrics_are_computed_in_sql_not_twice():

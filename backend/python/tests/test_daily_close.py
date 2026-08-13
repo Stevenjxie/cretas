@@ -26,6 +26,41 @@ from smartbi.gold.restaurant.metric_registry import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _cretas_pool_for_cost_keys(monkeypatch):
+    """成本键的权威来源(运营库)在本模块里用桩。
+
+    🔴 2026-08-13 起日结的毛利格子会去运营库解析「菜名→成本键」——
+       那正是这次要修的东西(那 9 道菜的映射只在运营库里)。
+    ⚠️ 不打桩的话这些用例会去连真库, 失败原因是 `asyncpg` 连接错误 ——
+       **看起来像本模块在测数据库**, 实际上什么都没测到。
+    ⛔ 「来源断了要显式失败」由 `smartbi/gold/tests/test_cost_key_source.py` 守,
+       不靠本模块碰巧连不上来守。
+    """
+    class _CretasConn:
+        async def fetch(self, sql, *_args):
+            if "product_types" in sql:
+                return [{"id": "PK_LIVE", "name": "番茄炒蛋"}]
+            return []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _CretasConn()
+
+        async def __aexit__(self, *_a):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    async def _get_cretas_pool():
+        return _Pool()
+
+    import smartbi.config as _config
+    monkeypatch.setattr(_config, "get_cretas_pool", _get_cretas_pool)
+
+
 # ── 判据 4: 写死的只有 spec ────────────────────────────────────────
 def test_every_hardcoded_cell_is_a_registered_combination():
     """⛔ 写死的 spec 必须**全部**是 registry 上登记过的组合。
@@ -403,6 +438,13 @@ class _FakeConn:
             return self.PAID_NET
         return None
 
+    #: 成本桥接的存量兜底层 + 这家店有哪些菜。
+    #: ⚠️ 2026-08-13 起「菜名→成本键」统一由 `resolve_cost_keys` 解析,
+    #:    执行器把配好的两个数组当参数传给 SQL。桩要覆盖这两条查询, 否则
+    #:    它们会掉进下面那条兜底分支, 拿到一行 `{revenue: ...}` 当映射用。
+    BRIDGE_ROWS = [("番茄炒蛋", "PK_STALE")]
+    DISH_NAMES = ["番茄炒蛋"]
+
     async def fetch(self, sql, *args):
         if "information_schema" in sql:
             # 所有列都在 —— 这样走的是「算得出」那条路
@@ -410,6 +452,19 @@ class _FakeConn:
             cols = {c for m in METRICS.values() for c in m.requires}
             return [{"table_name": c.split(".")[0], "column_name": c.split(".")[1]}
                     for c in cols]
+        if "dim_restaurant_cost_product" in sql:
+            return [{"normalized_name": n, "product_source_pk": pk}
+                    for n, pk in self.BRIDGE_ROWS]
+        if "SELECT DISTINCT normalized_name FROM dim_product" in sql:
+            return [{"normalized_name": n} for n in self.DISH_NAMES]
+        if "AS unit_cost" in sql:
+            # 成本卡异常判定的**输入**(按菜聚合)。⚠️ 2026-08-14 起排除判据在
+            #    Python 里按菜算, 执行器要先查这一条再拼覆盖毛利。
+            # ⚠️ 这里给一张**正常**的卡: 3.00 一份而卖 10.00 —— 不触发排除,
+            #    于是下面几条对毛利数值的断言不受影响(阳性对照在
+            #    test_margin_parity 里, 用米饭那张真实的坏卡)。
+            return [{"name": n, "qty": 100.0, "revenue": 1000.0,
+                     "unit_cost": 3.0} for n in self.DISH_NAMES]
         self.fetched_sql.append(sql)
         key = next((k for k in self._values if k in sql), None)
         return [{k: v for k, v in self._values.items()}]

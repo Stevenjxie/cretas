@@ -47,6 +47,17 @@ from typing import Dict, Optional, Tuple
 #:    `assert_registry_self_consistent` 当场红。
 CATEGORIES: Tuple[str, ...] = ("营收和折扣", "成本和毛利", "损耗", "客流和销量")
 
+#: 成本桥接的两个数组参数占位符, 位置**固定**。
+#:
+#: 🔴 为什么钉成常量而不是各处手写 `$4`/`$5`: 拼 SQL 的地方有四处
+#:    (`build_sql` / 覆盖毛利 / 异常成本卡清单 / 覆盖率), 准备实参的只有一处。
+#:    手写就会有一处写错序号, 而 asyncpg 的报错是「参数类型不匹配」——
+#:    读起来完全不像「桥接没接上」。
+#: ⚠️ 因此在 item_cost 粒度上, `entity_filter` 的占位符要往后挪到 $6,
+#:    由 `build_sql` 按 `uses_cost_bridge()` 统一决定, ⛔ 两处不许各判各的。
+COST_BRIDGE_NAME_PARAM = 4
+COST_BRIDGE_KEY_PARAM = 5
+
 GRAINS: Dict[str, Tuple[str, str, str]] = {
     "txn": ("fact_pos_transaction t", "", "t"),
     "item": (
@@ -59,16 +70,29 @@ GRAINS: Dict[str, Tuple[str, str, str]] = {
         "JOIN fact_pos_item i ON i.transaction_id = t.id "
         "LEFT JOIN dim_product dp ON dp.product_id = i.product_id "
         "AND dp.factory_id = i.factory_id "
-        "LEFT JOIN dim_restaurant_cost_product b "
-        "ON b.factory_id = i.factory_id "
-        # 🔴 大小写归一。2026-08-13 实测: 桥接表存小写 `营养多c番茄味(单人份)`,
-        #    而 dim_product 存大写 `营养多C番茄味(单人份)` —— 精确等值全部落空,
-        #    6 道菜的成本卡被漏掉, 日结与问答因此差 7,297.97 元。
-        # ⚠️ 只归一大小写, **不动别的** —— 名字里还有 `【无刺】`/`【直播专享】`
-        #    这类前缀和括号差异, 那些两条路都算「没卡」, 是另一件事(已挂账)。
-        "AND lower(b.normalized_name) = lower(dp.normalized_name) "
+        # 🔴 2026-08-13 owner 裁定条件 2: 菜名→成本键的解析**只有一处**, 在
+        #    `restaurant_cost_mapping.resolve_cost_keys`。这里不再直接 join
+        #    SmartBI 的桥接表 —— 那张表只是三层来源中的**第三层**(存量兜底),
+        #    权威层在运营库 `cretas_db.product_types`。
+        #
+        #    实测: 青花椒有 9 道菜的映射只在运营库里, 桥接表 exact=0/ci=0 ——
+        #    日结只连 SmartBI 一个池, 于是日结毛利 103,370.22 而问答 124,071.85。
+        #    **两条路够得着的映射不一样, 结构上就不可能给出同一个数。**
+        #
+        # ⚠️ join 是**纯等值**, 两边一个函数都没有。数组里装的是
+        #    `dim_product.normalized_name` 的原样值, 规范化(strip+lower)全部
+        #    发生在 Python 那一处。⛔ 别在这儿补 `lower()` 去「顺手更宽松一点」:
+        #    SQL 与 Python 的大小写折叠/空白定义并不一致, 不一致的表现就是
+        #    「有几道菜只在一条路上匹配得上」—— 正是这次要根治的东西。
+        f"LEFT JOIN unnest(${COST_BRIDGE_NAME_PARAM}::text[], "
+        f"${COST_BRIDGE_KEY_PARAM}::text[]) "
+        "AS b(normalized_name, product_source_pk) "
+        "ON b.normalized_name = dp.normalized_name "
         "LEFT JOIN agg_restaurant_product_cost c "
-        "ON c.factory_id = b.factory_id "
+        "ON c.factory_id = i.factory_id "
+        # ⛔ 承重: 成本按 `product_source_pk` 桥接, **绝不按 product_id 直连** ——
+        #    `agg_restaurant_product_cost.product_id` 全库都是 0(2026-08-09 实测),
+        #    直连会静默得到 0 成本 → 毛利率 100%, 一个看起来很棒的错数。
         "AND c.product_source_pk = b.product_source_pk",
         "t",
     ),
@@ -119,6 +143,20 @@ class Metric:
     asks: str = ""
     #: 见 `Derived.caveat` ——「这个数**是什么**」，与 provenance 的「准不准」是两件事。
     caveat: str = ""
+    #: 这一列全空时，这个量**还能不能从别的列算出来**。`(左, 右, 运算)`。
+    #:
+    #: 🔴 owner 2026-08-14 裁定: 普查此前问的是「这一列有没有填」, 而想知道的是
+    #:    「这个量能不能算出来」—— 两者不是一回事。实测: 两个真租户的
+    #:    `discount_amount` 列填充率都是 **0%**, 普查因此报「算不出」;
+    #:    而毛利那条路**正在用** `原价 − 实收` 算折扣(青花椒当天 2,614.71)。
+    #:    同一个量, 一条路说没有、一条路在用。
+    #:
+    #: ⛔ 这里只**声明**恒等式, 不改变取数行为 —— 执行器仍按 `exprs` 走。
+    #:    声明的作用是让「算不出」分成两种: 真的没有 vs **有但没接线**。
+    #:    后者是接线问题, 拿它去补 ETL 补不出东西来。
+    #: ⚠️ 放在登记表上而不是普查脚本里: 普查必须靠**反查**得出结论,
+    #:    手写清单一旦落地, 新登记的指标会悄悄落在表外而不报错。
+    derive_from: Optional[Tuple[str, str, str]] = None
 
     def expr_at(self, grain: str) -> Optional[str]:
         return self.exprs.get(grain)
@@ -158,6 +196,9 @@ METRICS: Dict[str, Metric] = {
         exprs={"txn": "SUM(t.discount_amount)"},
         requires=("fact_pos_transaction.discount_amount",),
         dimensions=_TXN_DIMS,
+        # 两个真租户这一列填充率都是 0%, 而毛利那条路一直在用「原价 − 实收」
+        # 算折扣。⇒ 这不是「没有折扣数据」, 是**这一列没接**。
+        derive_from=("gross_revenue", "revenue", "diff"),
     ),
     "tax_amount": Metric(
         key="tax_amount", category="营收和折扣", label="税额", unit="money", asks="税金/税额",
@@ -558,6 +599,21 @@ def assert_registry_self_consistent() -> None:
     #
     # ⛔ 手写名单的坏法是确定的: 新登记一个同类指标不会自动进名单,
     #    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    # ── `derive_from` 只能指向真实存在、且不是自己的指标 ──────────────────
+    # ⛔ 指向一个不存在的 key 不会当场报错 —— 普查只会安静地把「有但没接线」
+    #    降级成「算不出」, 而那正是这个字段要区分的两件事。
+    for key, entry in METRICS.items():
+        spec = getattr(entry, "derive_from", None)
+        if not spec:
+            continue
+        assert len(spec) == 3, f"{key}.derive_from 应为 (左, 右, 运算)"
+        left, right, op = spec
+        for side in (left, right):
+            assert side in METRICS or side in DERIVED, (
+                f"{key}.derive_from 指向了不存在的指标 {side!r}")
+            assert side != key, f"{key}.derive_from 指向了自己"
+        assert op in ("diff", "ratio"), f"{key}.derive_from 的运算 {op!r} 未登记"
+
     _MISREAD_AS_PROFIT = ("利润", "赚了多少")
     for key, entry in list(METRICS.items()) + list(DERIVED.items()):
         asks = getattr(entry, "asks", "") or ""
@@ -834,14 +890,43 @@ COST_SUSPECT_RATIO = 1.0
 COST_UNIT_ERROR_RATIO = 5.0
 
 
-def cost_outlier_predicate(cost_col: str = "c.food_cost",
-                           amount_col: str = "i.amount",
-                           qty_col: str = "i.qty",
-                           ratio: float = COST_UNIT_ERROR_RATIO) -> str:
-    """「这一行的成本卡是不是单位错了」的 SQL 判据。**唯一定义, 两条路都读它。**
+#: 单价上限。超过它的「成本卡」不是贵, 是坏数据(多打了几个零 / 把总额填成单价)。
+MAX_SANE_DISH_UNIT_COST = 99999.0
 
-    ⛔ 不许任何一侧抄一份 —— 抄一份就是同一个判据两个定义, 它一定会漂,
-       而漂的表现是「日结排除了这道菜, 问答没排除」, 两条路又给出两个数。
+
+def dish_cost_is_implausible(unit_cost, qty, revenue) -> bool:
+    """这道菜的成本卡是不是单位错了。**全仓唯一的一处判定。**
+
+    🔴 2026-08-14 owner 裁定: 判据的粒度是**菜**, 不是行。
+       成本卡挂在菜上, 所以「这张卡的单位错没错」是**菜的属性**。
+
+    ⛔ 曾经有过一个行级的 SQL 版本 `cost_outlier_predicate`, **已删**。
+       它按 `fact_pos_item` 逐行判 `food_cost > 5 * (amount/qty)`, 于是同一张卡
+       的判决取决于「那天这道菜恰好怎么卖的」—— 打折行/加量行/套餐行会把
+       `amount/qty` 抬高, 那些行就逃过过滤。
+       **2026-08-13 prod 实测**: 米饭聚合价 ¥16.80 / 卡 ¥167.20 = 9.95x,
+       整道菜被问答排除; 而它有一部分行 `amount/qty > 33.44`, 逐行判不触发 →
+       那些行照样进了毛利。两条路差 **19,131.37**, 残差**全部**来自这一道菜。
+
+    ⚠️ 判据是**比值不是名单** —— 卡改好了比值就变, 这道菜自动回到分子分母里。
+       (「米饭/附属用品不进主菜排名」是另一回事: 那是长期业务口径, 不自愈。)
+
+    ⛔ 谁都不许再写第二处 —— `tests/test_margin_parity.py` 里有一道闸在数它。
     """
-    unit_price = f"({amount_col} / NULLIF({qty_col}, 0))"
-    return f"{cost_col} > {ratio} * {unit_price}"
+    if unit_cost is None:
+        return False                      # 没有卡 != 卡是坏的, 由覆盖率那条路表达
+    try:
+        unit_cost = float(unit_cost)
+    except (TypeError, ValueError):
+        return True
+    if unit_cost != unit_cost or unit_cost in (float("inf"), float("-inf")):
+        return True                       # NaN / inf
+    if unit_cost < 0 or unit_cost >= MAX_SANE_DISH_UNIT_COST:
+        return True
+    try:
+        qty, revenue = float(qty or 0), float(revenue or 0)
+    except (TypeError, ValueError):
+        return False
+    if qty > 0 and revenue > 0:
+        return unit_cost > (revenue / qty) * COST_UNIT_ERROR_RATIO
+    return False
