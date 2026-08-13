@@ -60,6 +60,25 @@ class ObsoleteInputDropSourceContractTest {
     }
 
     @Test
+    @DisplayName("🔒 带确认的那条路只可能作用在 DRAFT 上 —— 绝不从 ACTIVE 里删行")
+    void confirmedPathCanOnlyTouchADraft() {
+        String c = code();
+        // 这是本次改动安全性的**关键性质**: 删除作用于传入的 family, 而带 dropObsoleteInputs
+        // 的两条调用路径都只可能拿到 DRAFT ——
+        //   · rebindDraftFamilyToExactRevision 顶部就断言 status != DRAFT → 抛;
+        //   · ensureDraft 的另一条分支操作的本就是 draft 对象。
+        // 从 ACTIVE 配方里删行会直接改动生产成本, 那正是我最初想放宽 deleteItem 时
+        // 差点做错的事。这条断言防止将来有人把 4 参重载接到某条 ACTIVE 路径上。
+        // 单行锚点: 3 参重载是 "Long targetRevisionId) {", 只有 4 参那个以逗号结尾。
+        int rebind = c.indexOf("Long targetRevisionId,");
+        assertTrue(rebind > 0, "找不到带确认参数的 rebind 重载");
+        String body = c.substring(rebind, Math.min(rebind + 500, c.length()));
+        assertTrue(body.contains("requested.getStatus() != BomRecipe.Status.DRAFT"),
+                "带确认的 rebind 必须保留「只有草稿可切换修订」这道闸 —— 它是"
+                        + "「确认丢弃只作用于 DRAFT」的结构保证");
+    }
+
+    @Test
     @DisplayName("激活路径不吃这个确认 —— 生效时遇到孤儿行必须照旧拦住")
     void activationPathStaysStrict() {
         String c = code();
