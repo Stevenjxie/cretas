@@ -32,6 +32,11 @@ export interface PackagingMaterialOption {
   movingAvgPrice?: number | null;
   unitPrice?: number | null;
   taxRate?: string | null;
+  /**
+   * 三级物料分类节点 id(后端 RawMaterialTypeDTO.classificationId ←
+   * raw_material_types.classification_segment_id)。替代包材的作用域判据就是它。
+   */
+  classificationId?: number | string | null;
 }
 
 /** 与落库行同形 —— 直接复用 API 的响应类型, 避免维护一份平行、容易漂移的 DTO。 */
@@ -79,15 +84,32 @@ const quantityUnit = computed(() => (
 const quantityUnitLabel = computed(() => displayUnit(quantityUnit.value));
 const baseUnitLabel = computed(() => displayUnit(props.baseUnit));
 
-/** 与 index.vue 的 packagingClassificationKey 同规则 —— 包材替代必须与主包材同一分类/包装作用域。 */
+/**
+ * 替代包材的作用域判据 —— 只有同一个三级分类节点的包材才允许互替。
+ *
+ * <h3>🔴 2026-08-13 真机实测: 旧判据在生产上恒为空</h3>
+ * 旧写法是「编码是 10 位以上纯数字 → 取前 10 位; 否则 category 不是『包材』→ 用 category」。
+ * 两条分支在生产上**都走不到**:
+ *
+ * - 10 位数字码: 全库 552 个启用物料, 命中 **0 个**(本仓编码是 BC001/WL0xx 这种短码,
+ *   「不再固定 16 位」之后再没有纯数字长码)。
+ * - category 分支: 能进包材选择器的 category 只有 `包材/packaging/PACKAGING`
+ *   (见 utils/materialCategory.ts#PACKAGING_CATEGORY_VALUES), 而这条分支正好把它们排除 ——
+ *   **构造上就死的**, 不是当前数据碰巧走不到。
+ *
+ * 于是「替代包材」这一栏对所有工厂、所有包材 100% 禁用, 而提示说「主包材缺少可验证的
+ * 分类」, 指向一个**没有任何可达数据状态能满足**的条件: 用户以为是自己档案没维护好,
+ * 实际上怎么维护都没用。闸的意图是对的(不能让「标签」被「真空袋」替代),
+ * 坏的是没人有路遵守它。
+ *
+ * <p>改用 `classificationId` —— 系统本来就为「分类/包装作用域」设计的载体
+ * (raw_material_types.classification_segment_id, 三级分类节点)。它可空;
+ * 空的时候仍然禁用替代, 但提示改成一个**做得到**的动作(去物料档案挂分类)。
+ */
 function packagingClassificationKey(material: PackagingMaterialOption | undefined): string {
   if (!material) return '';
-  const code = String(material.primaryCode || material.code || '').replace(/\s+/g, '');
-  if (/^\d{10,}$/.test(code)) return `code:${code.slice(0, 10)}`;
-  const category = String(material.category || material.materialCategory || '').trim();
-  return category && !['包材', 'PACKAGING'].includes(category.toUpperCase())
-    ? `category:${category}`
-    : '';
+  const segmentId = String(material.classificationId ?? '').trim();
+  return segmentId ? `seg:${segmentId}` : '';
 }
 
 const substituteCandidates = computed<PackagingMaterialOption[]>(() => {
@@ -249,7 +271,8 @@ async function submit() {
           type="warning"
           :closable="false"
           show-icon
-          title="主包材缺少可验证的分类/包装作用域，暂不能配置替代包材"
+          title="该包材还没挂物料分类，暂不能配置替代包材"
+          description="替代范围按三级物料分类判定。请到「仓储管理 → 原料类型字典」编辑这个包材、选好分类后再回来配置。"
         />
         <div v-if="form.substituteMaterialTypeIds.length" class="substitute-factors">
           <div v-for="materialTypeId in form.substituteMaterialTypeIds" :key="materialTypeId" class="substitute-factor-row">

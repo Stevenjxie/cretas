@@ -34,7 +34,13 @@ describe('material type short-code and taxonomy source contract', () => {
   });
 
   it('treats the three classification levels as optional all-or-none metadata', () => {
-    expect(source).toContain('const showSegmentEditor = computed(() => hasSegmentDictionary.value && !editingId.value)');
+    // 2026-08-13: 这条原本钉着 `&& !editingId.value`(分类只在新建时可选)。
+    // 那不是本用例守的意图 —— 它守的是「三级分类可选、要么全填要么全空」;
+    // `!editingId` 只是当时的形状, 而它的后果是**存量物料的分类永远补不上**
+    // (生产实测 479 个启用物料只有 10 个有分类, 包材 63 个里 0 个), 进而让画布上
+    // 「替代包材」对所有人恒灰。编辑态现在也显示分类段选择器,
+    // 由 packagingSubstituteScope.source.spec.ts 守住。
+    expect(source).toContain('const showSegmentEditor = computed(() => hasSegmentDictionary.value)');
     expect(source).toContain('详细分类（选填）');
     expect(source).toContain('分类可全部留空；一旦选择则须完整选到三级');
     expect(source).toContain('const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value)');
