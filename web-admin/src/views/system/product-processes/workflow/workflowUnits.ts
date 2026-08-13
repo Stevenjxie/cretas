@@ -169,12 +169,26 @@ export function workflowAutoConversionEquation(
   return `1${displayUnit(fromUnit, aliases)} = ${formatQuantity(fromFactor / toFactor)}${displayUnit(toUnit, aliases)}`;
 }
 
+/**
+ * 🔴 2026-08-13 生产实测(F006「叮咚好食光卤猪蹄(去大骨) 200g」): 同一个工序 Cell 里,
+ * 「产出单位: **盒**」「**盒**产出」「报工单位: **盒**」三处都对, 唯独这一行显示
+ * 「1**box** = 200g」—— 因为它拿的是原始码。
+ *
+ * #2526 已经把画布上**所有模板渲染点**包进 `unitLabel()` 了, 但这个 helper 在
+ * TS 里自己拼串, 不经过模板, 于是被漏下。判据: 「引入正确写法」要连**非模板的
+ * 字符串拼接点**一起改 —— 半截迁移会留下一个更难发现的孤点。
+ *
+ * 对照就在紧邻的上方: `workflowAutoConversionEquation` 做的是同一件事(拼带单位的
+ * 等式), 它一直用的是 `displayUnit(...)`。这里照它对齐, 连 `customAliases` 参数
+ * 的形状也保持一致, 免得下一个人又要在两个同类函数之间挑一个模仿。
+ */
 export function workflowSkuSpecificationEquation(
   unit: string | null | undefined,
   gramsPerUnit: number | null | undefined,
+  customAliases?: Record<string, string>,
 ): string | null {
   const grams = Number(gramsPerUnit);
-  const label = String(unit || '').trim();
+  const label = displayUnit(unit, normalizedAliases(customAliases)).trim();
   if (!label || !Number.isFinite(grams) || grams <= 0) return null;
   return `1${label} = ${formatQuantity(grams)}g`;
 }
