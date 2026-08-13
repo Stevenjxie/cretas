@@ -1,5 +1,14 @@
 # Dispatch 归档 — 2026-08-13
 
+## `UI-LIUSHANMEN-REVIEW-OVERLAY-20260813` — `review`
+
+- Owner: `/root`
+- Base SHA: `9dd0bb89e4431f5fa00cbe397b392f74a5ea7d69`
+- PR / commit: #2572，`33d648c7aef463736cb7235a9c3184db6664f014`
+- 结论：Label QC AI 初筛参考层已在照片中常显“托盘 / 白标 / 彩标”框及左上角类别标签；三层默认显示且可独立隐藏，未知 label type 不再误画成彩标，模型结果继续只作人工审核 proposal。
+- 验证：`npm.cmd run build:check` 通过；本地模拟审核 Playwright 1/1 通过，覆盖三层框、常显文字、托盘图层开关、审核提交与回读；PR 首轮 tracked-secret-scan、两条 Web vitest 和 web-dist 全部通过；用户已确认视觉方案。
+- 边界：未修改 ROI、模型、队列、原图、生产数据或部署配置；严格 `NOT_DEPLOYED`。
+
 ## `AUDIT-CRLF-DIFFCHECK-20260813` — `review`
 
 - Owner: `/root`

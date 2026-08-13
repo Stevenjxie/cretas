@@ -39,6 +39,18 @@ const detail = {
       imageUrl: 'https://qc-evidence.test/photo-1.jpg',
       aiModel: 'vision-review',
       promptVersion: 'qc-label-v3',
+      screeningDetail: JSON.stringify({
+        trays: [{
+          index: 0,
+          bbox: [0.05, 0.1, 0.65, 0.48],
+          trayConfidence: 0.91,
+          screenVerdict: 'CLEAR',
+          labels: [
+            { type: 'white', confidence: 0.88, bbox: [0.12, 0.2, 0.3, 0.3] },
+            { type: 'color', confidence: 0.79, bbox: [0.38, 0.12, 0.53, 0.22] },
+          ],
+        }],
+      }),
       annotations: [{
         id: 'ai-web-1',
         source: 'AI',
@@ -104,10 +116,10 @@ async function installPhotoRoute(page: Page) {
     return;
   }
   const fallbackSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="1152" height="2048">
-      <rect width="1152" height="2048" fill="#dce3df"/>
-      <rect x="90" y="180" width="972" height="1600" rx="28" fill="#87968e"/>
-      <text x="576" y="980" text-anchor="middle" font-family="sans-serif" font-size="54" fill="#ffffff">
+    <svg xmlns="http://www.w3.org/2000/svg" width="3072" height="4096">
+      <rect width="3072" height="4096" fill="#dce3df"/>
+      <rect x="240" y="360" width="2592" height="3200" rx="72" fill="#87968e"/>
+      <text x="1536" y="1960" text-anchor="middle" font-family="sans-serif" font-size="108" fill="#ffffff">
         包装标签拍检示例照片
       </text>
     </svg>`;
@@ -163,6 +175,25 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
 
     if (path === '/api/mobile/F006/notifications/unread-count' && request.method() === 'GET') {
       await route.fulfill(apiResponse({ unreadCount: 0 }));
+      return;
+    }
+
+    if (path === '/api/mobile/F006/sales/orders' && request.method() === 'GET') {
+      await route.fulfill(apiResponse({
+        content: [], page: 1, currentPage: 1, size: 20,
+        totalElements: 0, totalPages: 0, first: true, last: true,
+      }));
+      return;
+    }
+
+    if (
+      request.method() === 'GET'
+      && (
+        path === '/api/mobile/F006/warehouse/receiving/tasks'
+        || path === '/api/mobile/F006/operations/customer-material-arrivals'
+      )
+    ) {
+      await route.fulfill(apiResponse([]));
       return;
     }
 
@@ -231,6 +262,15 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
   await expect(page.getByRole('button', { name: '拒绝并移除框' })).toBeVisible();
   const mainImage = page.getByAltText('待审核包装标签照片');
   await expect(mainImage).toBeVisible();
+  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(1);
+  await expect(page.locator('.reference-box.layer-white')).toHaveCount(1);
+  await expect(page.locator('.reference-box.layer-color')).toHaveCount(1);
+  await expect(page.locator('.reference-tag')).toHaveText(['托盘 1', '白标', '彩标']);
+  const trayLayerToggle = page.locator('.layer-toggle').filter({ hasText: '托盘' });
+  await trayLayerToggle.click();
+  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(0);
+  await trayLayerToggle.click();
+  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(1);
   await expect(page.getByText('正在加载照片…')).toBeHidden();
   await expect.poll(() => mainImage.evaluate((image) => ({
     complete: (image as HTMLImageElement).complete,
