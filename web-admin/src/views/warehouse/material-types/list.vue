@@ -1019,7 +1019,20 @@ async function handleSave() {
       return ElMessage.warning('免税物料必须填写免税依据');
     }
     if (form.value.taxIncludedUnitPrice != null && Number(form.value.taxIncludedUnitPrice) <= 0) {
-      return ElMessage.warning('采购参考价如填写，必须大于 0；未知价格请留空');
+      return ElMessage.warning(isPackagingMaterial.value
+        ? '采购参考价必须大于 0'
+        : '采购参考价如填写，必须大于 0；未知价格请留空');
+    }
+    // 🔴 2026-08-13 真机: 包材的采购参考价在后端是【必填】——
+    // RawMaterialTypeServiceImpl 的 create/update 两条路径都有
+    // `if (packaging) validateRequiredPricing(...)`, 缺价直接 400「含税单价必须大于0」。
+    // 而界面上这个字段一直写着「选填；未知价格请留空」, 于是留空 → 保存 → 后端拒绝。
+    // LIUSHANMEN 25 个启用包材里 24 个价格是空的, 等于它们**保存任何修改都会被拦**
+    // (实测: 不带价格的 PUT 与带价格的 PUT 只差这一项, 前者 400 后者 200)。
+    // 这里先拦一道并说清原因, 免得用户按界面说的做了却存不进去。
+    if (isPackagingMaterial.value
+      && (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0)) {
+      return ElMessage.warning('包材必须填写采购参考价 —— BOM 要按它算包装成本，留空会被后端拒绝保存');
     }
   }
   const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
@@ -1625,16 +1638,29 @@ function handleSizeChange(size: number) {
           <el-form-item v-else label="免税依据" required>
             <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
           </el-form-item>
-          <el-form-item :label="form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
+          <!--
+            🔴 包材是【必填】: 后端 create/update 两条路径都有
+            `if (packaging) validateRequiredPricing(...)`, 缺价直接 400。
+            这里原本一律标「选填；未知价格请留空」—— 界面说的和闸判的不是一回事,
+            用户照界面留空就存不进去(实测 LIUSHANMEN 24/25 个包材因此改不动)。
+          -->
+          <el-form-item
+            :required="isPackagingMaterial"
+            :label="form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`"
+          >
             <el-input-number
               v-model="form.taxIncludedUnitPrice"
               :min="0.0001"
               :precision="4"
               :controls="false"
-              placeholder="选填；未知价格请留空"
+              :placeholder="isPackagingMaterial ? '包材必填' : '选填；未知价格请留空'"
               style="width: 100%"
             />
-            <div class="field-hint">价格按库存主单位维护，并可作为供应关系未单独报价时的采购参考；空值不会被当作 0 元。</div>
+            <div class="field-hint">
+              {{ isPackagingMaterial
+                ? '包材必填 —— BOM 按它算包装成本；留空会被后端拒绝保存。价格按库存主单位维护。'
+                : '价格按库存主单位维护，并可作为供应关系未单独报价时的采购参考；空值不会被当作 0 元。' }}
+            </div>
           </el-form-item>
           <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" :label="`未税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
             <el-input

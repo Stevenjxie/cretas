@@ -41,9 +41,16 @@ describe('BOM 页删除后仍然成立的契约(载体不是那个页面)', () =
     expect(materialTypeSource).toContain(
       "form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`",
     );
+    // 2026-08-13: 文案按类别分了岔 —— 包材的参考价在后端是**必填**
+    // (create/update 两条路径都有 `if (packaging) validateRequiredPricing`),
+    // 界面原本一律说「选填；未知价格请留空」, 照做就存不进去(24/25 个包材因此改不动)。
+    // 本用例守的意图是「填了就必须 > 0」, 那条对非包材仍然逐字成立;
+    // 包材必填由 packagingPriceRequired.source.spec.ts 守。
     expect(materialTypeSource).toContain(
-      "ElMessage.warning('采购参考价如填写，必须大于 0；未知价格请留空')",
+      "'采购参考价如填写，必须大于 0；未知价格请留空'",
     );
+    expect(materialTypeSource, '包材分支不能把这条正数校验也一起丢掉')
+      .toContain("'采购参考价必须大于 0'");
   });
 
   /**
