@@ -35,12 +35,14 @@ _REPO_ROOT = _PY_ROOT.parents[1]
 RUNNERS = [
     ("smartbi/scripts/replay_equivalence_probe.py", "_write_probe_out", "main"),
     ("smartbi/scripts/daily_close_push.py", "_write", "main"),
+    ("smartbi/scripts/margin_parity_probe.py", "_write", "main"),
 ]
 
 #: (cron 脚本, 它读的产出文件)
 CRONS = [
     ("scripts/cron/replay-equivalence-daily.sh", "/tmp/replay_equivalence.json"),
     ("scripts/cron/daily-close-push.sh", "/tmp/daily_close_push.json"),
+    ("scripts/cron/margin-parity-daily.sh", "/tmp/margin_parity.json"),
 ]
 
 
