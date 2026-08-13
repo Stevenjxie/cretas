@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from smartbi.gold.restaurant.provenance import (
@@ -333,6 +334,133 @@ def _derived_expr(d, grain: str = "txn") -> str:
     raise UnsupportedCell(f"未登记的派生运算: {d.op}")
 
 
+def _base_grains(key: str) -> set:
+    """一个指标自己支持的粒度集合。派生量取两个输入的并集。"""
+    m = METRICS.get(key)
+    if m is not None:
+        return set(m.exprs)
+    d = DERIVED.get(key)
+    if d is None:
+        return set()
+    return _base_grains(d.left) | _base_grains(d.right)
+
+
+def _needs_split_execution(item, agg) -> bool:
+    """这个派生量在**合计层**必须拆开算吗。
+
+    ## 🔴 为什么(owner 2026-08-13 裁定 2)
+
+    毛利 = 营收 − 食材成本。食材成本只有 item 粒度的表达式, 于是
+    `common = {item}`, 营收被迫用 `exprs["item"] = SUM(i.amount)` ——
+    那是**明细行原价合计**, 没有扣掉交易级折扣。
+
+    prod 实测(MOCK_REST / 2026-08-12): 749,009.00 − 242,259.58 = 506,749.42,
+    而实收营收是 717,883.41。**毛利虚高 31,125.59(折扣额, 约 6.5%)。**
+    靠满减跑量的店虚得更多。
+
+    ⛔ **用原价算收入等于把从未收到的钱算成收入。** 毛利的定义是实收减成本,
+       没有选择余地 —— 这不是「另一种口径」, 是错的。
+
+    ⚠️ 当初选 item 的理由是可以理解的工程直觉: 成本是 item 级的, 配 item 级
+       营收在同一粒度上, 而且能防扇出(2026-08-09 实测过 57 倍的扇出事故)。
+       **但粒度一致不能凌驾于口径正确。** 防扇出的正解是拆开算, 不是换口径。
+
+    ## 为什么只在合计层
+
+    分组层(按菜/按店)拿不到交易级折扣的归属 —— 「这张单的满减该摊到哪道菜」
+    是个有真争议的产品决定(按金额还是按份数?)。那一层**保持原样**并已挂账:
+    将来的处置是 `provenance=ESTIMATED` + basis「折扣是整单的，没法摊到单道菜」,
+    与成本卡那条同一个机制, 不用新建。
+
+    判据: `agg.needs_dimension is False` —— 用登记表**已有的声明**判「这是合计层」,
+    ⛔ 不新造假设。
+    """
+    if item.__class__.__name__ != "Derived":
+        return False
+    if getattr(agg, "needs_dimension", True):
+        return False
+    return _mixes_grains(item.key)
+
+
+def _mixes_grains(key: str) -> bool:
+    """这个派生量算出来会不会混口径。
+
+    ⚠️ **必须递归**: `gross_margin = gross_profit ÷ revenue` 的两个输入都含
+       txn 粒度, 看起来不混 —— 但分子 `gross_profit` 自己是混的。
+       第一版没递归, `gross_margin` 就绕过了修正, 于是「毛利」对了而「毛利率」
+       还是错的。**这条是被测试抓住的, 不是我想到的。**
+    """
+    d = DERIVED.get(key)
+    if d is None:
+        return False
+    # 两个输入共享 txn 粒度 → 这一层本来就能用实收营收, 这一层不混。
+    if "txn" not in (_base_grains(d.left) & _base_grains(d.right)):
+        return True
+    # 这一层不混, 但下面某一层可能混。
+    return _mixes_grains(d.left) or _mixes_grains(d.right)
+
+
+def _scalar(cell: "CellResult", key: str):
+    return cell.rows[0].get(key) if cell.rows else None
+
+
+async def _execute_derived_split(
+    conn, item, *, dimension_key: str, aggregation_key: str,
+    factory_id: str, date_range, available_columns,
+) -> "CellResult":
+    """把派生量拆成两个基础指标**各按自己的粒度**独立执行, 再在 Python 里合。
+
+    ⛔ 不新写 SQL —— 两边都走同一个 `execute_cell`, 各自拿到自己正确的粒度
+       (营收 → txn 实收; 食材成本 → item_cost)。**没有 join, 就没有扇出。**
+    """
+    async def _one(key: str) -> "CellResult":
+        return await execute_cell(
+            conn, factory_id=factory_id, metric_key=key,
+            dimension_key=dimension_key, aggregation_key=aggregation_key,
+            date_range=date_range, available_columns=available_columns)
+
+    left = await _one(item.left)
+    right = await _one(item.right)
+
+    label = getattr(item, "label", item.key)
+    unit = getattr(item, "unit", "count")
+    # 缺列要原样上报 —— ⛔ 少一边就把另一边当成全部, 那是拿半个数冒充结果。
+    missing = tuple(dict.fromkeys(left.missing_columns + right.missing_columns))
+    sql = f"-- split(左) --\n{left.sql}\n-- split(右) --\n{right.sql}"
+    if missing:
+        return CellResult(item.key, label, dimension_key, aggregation_key,
+                          unit, [], missing, sql)
+
+    lv, rv = _scalar(left, item.left), _scalar(right, item.right)
+    value = None
+    if lv is not None and rv is not None:
+        lv, rv = Decimal(str(lv)), Decimal(str(rv))
+        if item.op == "diff":
+            value = lv - rv
+        elif item.op == "ratio":
+            value = (lv / rv) if rv else None
+        elif item.op == "ratio_pct":
+            value = (lv / rv * 100) if rv else None
+        elif item.op == "ratio_of_diff":
+            # 分子本身是个派生量(毛利), 递归走同一条拆分路径。
+            inner = await _execute_derived_split(
+                conn, DERIVED[item.left], dimension_key=dimension_key,
+                aggregation_key=aggregation_key, factory_id=factory_id,
+                date_range=date_range, available_columns=available_columns)
+            iv = _scalar(inner, item.left)
+            value = (Decimal(str(iv)) / rv * 100) if (iv is not None and rv) else None
+        else:
+            raise UnsupportedCell(f"未登记的派生运算: {item.op}")
+
+    provenance, basis = _provenance_of(item.key)
+    coverage = (await _coverage_ratio_of(conn, factory_id, date_range)
+                if provenance == PROV_ESTIMATED else None)
+    return CellResult(
+        item.key, label, dimension_key, aggregation_key, unit,
+        [{item.key: value}], (), sql, provenance, basis, coverage,
+    )
+
+
 async def execute_cell(
     conn,
     *,
@@ -347,6 +475,14 @@ async def execute_cell(
 ) -> CellResult:
     """执行一个格子。缺列时**不发 SQL**，直接回「缺什么」。"""
     item, dim, agg = _resolve_spec(metric_key, dimension_key, aggregation_key)
+
+    # 🔴 合计层的口径修正 —— owner 2026-08-13 裁定 2。见 `_needs_split_execution`。
+    if _needs_split_execution(item, agg):
+        return await _execute_derived_split(
+            conn, item, dimension_key=dimension_key, aggregation_key=aggregation_key,
+            factory_id=factory_id, date_range=date_range,
+            available_columns=available_columns)
+
     sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key,
                                      limit_override=limit_override,
                                      entity_filter=entity_filter)

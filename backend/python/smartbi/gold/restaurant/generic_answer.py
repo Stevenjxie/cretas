@@ -108,6 +108,31 @@ def spec_to_cell(spec, _metric_override: Optional[str] = None) -> Optional[Tuple
             dim_key = mapped
             break
 
+    return metric_key, dim_key, spec_aggregation_key(spec, dim_key)
+
+
+def spec_dimension_key(spec) -> str:
+    """规格 → 维度键。`all` 表示**不分组**。"""
+    for d in list(getattr(spec, "dimensions", ()) or ()):
+        mapped = _dimension_key(d)
+        if mapped is not None:
+            return mapped
+    return "all"
+
+
+def spec_aggregation_key(spec, dim_key: Optional[str] = None) -> str:
+    """规格 → 聚合形态键。**这是这个决定的唯一定义。**
+
+    🔴 2026-08-13 从 `spec_to_cell` 里原样提出来的, 判断逻辑一行没改。
+       提它的理由: `_execution_mismatch` 那边要问「这个规格的聚合形态在不分组时
+       算不算得出」, 而 `spec_to_cell` 会因为**取指标失败**先返回 None ——
+       于是那个判断永远得不到答案, 放行逻辑在生产上根本不触发(形态 B)。
+    ⛔ 不要在别处再写一份推断: 两份迟早对同一个规格给出不同的聚合形态,
+       症状是「校验放行了、执行却拒绝」这种最难查的不一致。
+    """
+    if dim_key is None:
+        dim_key = spec_dimension_key(spec)
+
     # 🔑 规划器**直接说了**要哪种形态时，用它的。
     #    这是「打通 96% 死格子」的那一步：占比 / 集中度 / 两端 / 高于平均
     #    这四种形态，靠 analysis_action + ranking_direction **推不出来**，
@@ -117,7 +142,7 @@ def spec_to_cell(spec, _metric_override: Optional[str] = None) -> Optional[Tuple
         agg_key = stated
         if AGGREGATIONS[agg_key].needs_dimension and dim_key == "all":
             agg_key = "summary"
-        return metric_key, dim_key, agg_key
+        return agg_key
 
     # 规划器没表态 → 退回旧规则推断。⚠️ 这一段与加 `aggregation` 槽之前**逐字同义**，
     #    所以这个槽是纯增量：模型不填它，现有行为一点不变。
@@ -141,7 +166,7 @@ def spec_to_cell(spec, _metric_override: Optional[str] = None) -> Optional[Tuple
     # 用户问「哪个最高」而没说按什么分，给一个总数比什么都不给强。
     if AGGREGATIONS[agg_key].needs_dimension and dim_key == "all":
         agg_key = "summary"
-    return metric_key, dim_key, agg_key
+    return agg_key
 
 
 def spec_to_cells(spec) -> Tuple[List[Tuple[str, str, str]], List[str]]:

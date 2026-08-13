@@ -236,6 +236,78 @@ def test_mutation_forcing_measured_removes_the_qualifier():
     assert "¥8,642.00" in muted
 
 
+def test_gross_profit_uses_paid_revenue_not_list_price():
+    """🔴 owner 2026-08-13 裁定 2: 合计层的毛利 = **实收**营收 − 食材成本。
+
+    改之前: 749,009.00(明细行原价) − 242,259.58 = 506,749.42
+    改之后: 717,883.41(交易实收) − 242,259.58 = 475,623.83
+    差 31,125.59 = 折扣额。⛔ 用原价算收入 = 把从未收到的钱算成收入。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS, DERIVED
+
+    # 合计层(不分组)必须走拆分执行
+    assert ge._needs_split_execution(DERIVED["gross_profit"],
+                                     AGGREGATIONS["summary"]) is True
+    assert ge._needs_split_execution(DERIVED["gross_margin"],
+                                     AGGREGATIONS["summary"]) is True
+
+
+def test_split_execution_is_scoped_to_the_aggregate_level():
+    """⛔ 分组层**不拆** —— 那一层拿不到交易级折扣的归属, 已挂账。
+
+    阴性对照: 没有这条, 上面那条可能只是「所有情况都拆」。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS, DERIVED, METRICS
+
+    grouped = [a for a in AGGREGATIONS.values() if getattr(a, "needs_dimension", True)]
+    assert grouped, "没有需要分组的聚合形态 —— 这条对照失去意义"
+    for agg in grouped:
+        assert ge._needs_split_execution(DERIVED["gross_profit"], agg) is False, (
+            f"{agg} 这种分组形态也被拆了 —— 分组层没有折扣归属, 拆了算不对")
+
+    # 基础指标永远不拆
+    assert ge._needs_split_execution(METRICS["revenue"],
+                                     AGGREGATIONS["summary"]) is False
+
+
+def test_split_only_when_bases_do_not_share_the_txn_grain():
+    """判据是**两个输入共不共享 txn 粒度**, 不是硬编 gross_profit。
+
+    共享 txn 时原路径本来就用实收营收, 拆了纯属多跑一次查询。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS, DERIVED
+
+    # ⚠️ 判据要递归: `gross_margin` 自己的两个输入都含 txn, 但分子 `gross_profit`
+    #    是混的 —— 第一版我这条断言没跟着递归, 把 gross_margin 也算进「不该拆」,
+    #    于是**测试自己错了**(代码是对的)。取「自己不混 且 下层也不混」的那些。
+    clean = [k for k, d in DERIVED.items()
+             if "txn" in (ge._base_grains(d.left) & ge._base_grains(d.right))
+             and not ge._mixes_grains(d.left) and not ge._mixes_grains(d.right)]
+    assert clean, "没有任何派生量是干净的 —— 这条对照失去意义"
+    for k in clean:
+        assert ge._needs_split_execution(DERIVED[k], AGGREGATIONS["summary"]) is False, (
+            f"{k} 的两个输入都能用实收营收, 拆了只是多跑一次查询")
+
+    # 阳性对照: 混口径的那些确实被判为要拆 —— 否则上面全 False 也能过
+    dirty = [k for k in DERIVED if ge._mixes_grains(k)]
+    assert set(dirty) >= {"gross_profit", "gross_margin"}, dirty
+
+
+@pytest.mark.asyncio
+async def test_split_execution_subtracts_paid_revenue():
+    """跑在真入口上: 拆分执行确实用 txn 营收减 item 成本。"""
+    conn = _FakeConn({"revenue": 717883.41, "food_cost": 242259.58,
+                      "orders": 1970, "gross_profit": 999999.0})
+    cell = await ge.execute_cell(
+        conn, factory_id="T", metric_key="gross_profit",
+        dimension_key="all", aggregation_key="summary",
+        date_range=(date(2026, 8, 12), date(2026, 8, 12)))
+    got = float(cell.rows[0]["gross_profit"])
+    assert abs(got - 475623.83) < 0.01, (
+        f"毛利 = {got}, 期望 475623.83(实收 − 成本)。"
+        f"若得到 999999 说明还在走单条 SQL 那条路")
+
+
 def _cell_cov(coverage):
     """带覆盖率的毛利格子。"""
     prov, basis = ge._provenance_of("gross_profit")
