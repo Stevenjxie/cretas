@@ -4193,18 +4193,35 @@ async def resolve_gross_margin(
 
     total_paid_rev = await _paid_revenue_in_window(
         smartbi_pool, factory_id, window_start, window_end)
+
+    # 🔴 owner 2026-08-13 裁定: 毛利的**分子分母都只算有成本卡的那部分**,
+    #    且交易级折扣按明细金额比例摊到覆盖部分(折扣总额实测, 只有分配是估的)。
+    #    改之前「全额分子 vs 覆盖额分母」三个症状同源:
+    #      DEMO_REST 日结毛利率 88.3% / 青花椒问答整个拒答 / 正文自己算不平。
+    if total_paid_rev is not None and total_rev_items > 0:
+        _discount = total_rev_items - total_paid_rev
+        _share = total_rev_with_cost / total_rev_items
+        covered_net_rev = total_rev_with_cost - _discount * _share
+    else:
+        covered_net_rev = total_rev_with_cost
+
     if total_paid_rev is None:
         # ⛔ 取不到实收就**退回原口径并如实标注**, 不拿一个猜的数顶上。
         logger.warning("[gross_margin] 拿不到实收营收(factory=%s %s~%s), "
                        "合计层退回原价口径", factory_id, window_start, window_end)
         total_rev = total_rev_items
-        total_profit = total_rev_with_cost - total_cost
     else:
         total_rev = total_paid_rev
-        total_profit = total_paid_rev - total_cost
+    # ⚠️ 毛利只在覆盖部分上算 —— 与 generic_executor 的覆盖口径**同一个定义**,
+    #    两条路必须给出同一个数(margin-parity 那道闸每天钉住)。
+    total_profit = covered_net_rev - total_cost
+    # 🔴 两边同口径。改之前左边是「全额营收 − 成本」右边是覆盖额 ——
+    #    覆盖率 100% 时两者相等(MOCK_REST 上这道闸不可能红), 42.2% 时必炸。
+    # ⛔ 不是放宽这道闸让它别响 —— 它在青花椒上开火是对的, 拦下的是个不可能的数。
+    #    改的是被它拦下的那个算法。
     margin_invariant_pass = bool(
         math.isfinite(total_profit)
-        and total_profit <= total_rev_with_cost + 0.01
+        and total_profit <= covered_net_rev + 0.01
     )
     if not margin_invariant_pass:
         logger.error(
@@ -4367,9 +4384,10 @@ async def resolve_gross_margin(
     #    prod 实测漏了这一步: 分子已经换成实收口径(475,623.83), 分母还是
     #    item 口径(749,009) → 报出 63.5%, 而日结报 66.3% —— **毛利对上了,
     #    毛利率还是两个数**。改一半比不改更难发现: 最显眼的那个数已经一致了。
+    # 毛利率 = 覆盖毛利 ÷ **覆盖净营收**(与分子同口径)。
     avg_margin = (
-        total_profit / total_rev
-        if total_rev > 0 else None
+        total_profit / covered_net_rev
+        if covered_net_rev > 0 else None
     )
     ranking_rev_with_cost = sum(item["revenue"] for item in ranking_with_cost)
     ranking_profit = sum(
