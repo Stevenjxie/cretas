@@ -1,5 +1,14 @@
 # Dispatch 归档 — 2026-08-13
 
+## `LLM-AISTORE-ROUTER-20260813-001` — `review`
+
+- Owner: `/root`
+- Base SHA: `7d041d6d6c247acc2c781eb600543e321f60898e`
+- PR / commit: #2598，`9f9a90e57ff1459293cf28563b2c1c482a2289b1`
+- 结论：上海电信 AI Store `DeepSeek-V4-Flash-A` 成为餐饮 CHAT/INSIGHTS/CHART/MAPPER/REVIEW 主链，腾讯 DeepSeek 保持跨供应商后备；`Qwen3-32B` 隔离在 `simple_text`，`Qwen3-235B-A22B` 因 7 道枚举题出现 2 处越界，仅进入 CHART JSON 后备。三模型均显式 allowlist，并在 2026-09-13 硬停止；2xx error body 与无正文流式响应均 fail closed 并继续 fallback。
+- 验证：AI Store 项目真实 T3 契约 DeepSeek A 6/6（p50 2.97s）、Qwen 235B 6/6（p50 3.51s）；枚举合法性 DeepSeek 0/7、Qwen 2/7；router 109/109，餐饮/语义/洞察/图表相关 2041/2041（另 2 xfail）；compileall、Ruff、diff check、tracked secret scan 通过；PR 首轮两条 Python Gate 与 secret gate 全通过。
+- 凭证与生产：API key 未进入 tracked 文件、Git、CI、测试输出或发布回执；本归档提交时尚未合并或部署，后续仅从 clean exact `origin/main` 注入生产受控环境变量并发布 Python；生产 ERP 业务写入为 0。
+
 ## `UI-LIUSHANMEN-REVIEW-OVERLAY-20260813` — `review`
 
 - Owner: `/root`
