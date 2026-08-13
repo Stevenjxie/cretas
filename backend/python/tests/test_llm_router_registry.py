@@ -94,6 +94,12 @@ def test_non_aliyun_registry_matches_frozen_probe_result():
     actual = {k: v for k, v in llm_router._SAFE_MODELS.items()
               if not k[0].startswith("aliyun_")}
     assert actual == {
+        # Shanghai Telecom AI Store: owner-confirmed account auto-stop + live
+        # synthetic probes on 2026-08-13.  A conservative hard expiry prevents
+        # the one-month grant from remaining callable indefinitely.
+        ("aistore", "DeepSeek-V4-Flash-A"): datetime.date(2026, 9, 13),
+        ("aistore", "Qwen3-235B-A22B"): datetime.date(2026, 9, 13),
+        ("aistore", "Qwen3-32B"): datetime.date(2026, 9, 13),
         # tencent: owner 2026-08-13 控制台 14 个服务 ID ∩ 探针产出正文(len≥8)= 9 个。
         # ⚠️ GET /models 返回 **102** 个而控制台只有 14 个 —— **接口目录 ≠ 账号权益**,
         #    清单只认控制台。

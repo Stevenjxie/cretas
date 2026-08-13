@@ -130,6 +130,16 @@ _BULK_EXPIRY: Dict[str, datetime.date] = {
 
 _d = datetime.date
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # ── 上海电信 AI Store (owner 2026-08-13 confirmed 25M quota points and
+    #    automatic stop on exhaustion; synthetic live probes passed) ──
+    # The account is valid for about one month.  We deliberately hard-stop on
+    # 2026-09-13 even if the upstream would continue serving: a conservative
+    # availability cutoff is safer than assuming that an expired grant still
+    # has the same billing boundary.
+    ("aistore", "DeepSeek-V4-Flash-A"): _d(2026, 9, 13),
+    ("aistore", "Qwen3-235B-A22B"): _d(2026, 9, 13),
+    ("aistore", "Qwen3-32B"): _d(2026, 9, 13),
+
     # ══ 2026-08-13 全量重审 ════════════════════════════════════════
     # 判据不变: 控制台显示有余量 ∩ 生产探针非空 content。单边证据一律不收 ——
     # 探针 200 但控制台无余量的最危险: 那说明「免费额度用完即停」没覆盖它,
@@ -261,6 +271,12 @@ _THINKING_ONLY: frozenset = frozenset({
 # 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
 # "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
+    # AI Store's account-level auto-stop was explicitly confirmed by the owner;
+    # these remain admissible when the older shared registry becomes stale, but
+    # _refuse_reason still hard-drops all three at their 2026-09-13 expiry.
+    ("aistore", "DeepSeek-V4-Flash-A"),
+    ("aistore", "Qwen3-235B-A22B"),
+    ("aistore", "Qwen3-32B"),
     # 2026-08-13 重建。上一版(08-09 建)的9 个条目今天实测 **6 个已死** ——
     # 包括它自己的三根支柱 qwen3.8-max(三账号各 100 万、到期 11/01)。
     #
@@ -332,6 +348,10 @@ _CAPABILITY_PASS_FLOOR = 0.5
 #    它被钉在 _TEXT_TAIL 最后一位是 08-09 一次生产事故的结论(某些槽稳定超时,
 #    连累后面 4 个健康候选被熔断)。一次好读数推翻不了那条判据。
 _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
+    # Shanghai Telecom AI Store, 2026-08-13.  Measured through the production
+    # normalize -> slot-params -> T3 contract path, six real restaurant cases.
+    ("aistore", "DeepSeek-V4-Flash-A"): (1.0, 3.0),
+    ("aistore", "Qwen3-235B-A22B"): (1.0, 3.5),
     # ── 2026-08-13 重测: `python -m smartbi.scripts.llm_capability_rank
     #    --slot review` + `--slot reasoning`, 生产凭证、生产 prompt、生产判据 ──
     #
@@ -389,6 +409,11 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
 #    「稳定零越界」与「会编枚举」两档, 所以下面的 `_plan_schema_tier` 也只分档。
 _PLAN_SCHEMA_MEASURED_AT = datetime.date(2026, 8, 10)
 _PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
+    # Same-day seven-case schema probe.  DeepSeek stayed within the prompt's
+    # enums; Qwen invented yesterday + next_week, so it is not admitted to the
+    # semantic MAPPER/REVIEW pools despite passing the basic JSON contract.
+    ("aistore", "DeepSeek-V4-Flash-A"): 0,
+    ("aistore", "Qwen3-235B-A22B"): 2,
     ("aliyun_a", "qwen3.7-flash"): 0,
     ("aliyun_a", "qwen3.8-max"): 0,
     ("aliyun_b", "qwen3.8-max"): 0,
@@ -865,6 +890,7 @@ _quota_load_state()
 class SLOT(str, Enum):
     """Logical slot that maps to a specific model per provider."""
     CHAT = "chat"
+    SIMPLE_TEXT = "simple_text"
     INSIGHTS = "insights"
     CHART = "chart"
     MAPPER = "mapper"
@@ -1071,6 +1097,11 @@ _REASONING_ONLY: frozenset = frozenset({"MiniMax-M2.5"})
 # ≤4s), 各写一份 21 行迟早漂移成两张不一致的表。将来若真分化(例如 REVIEW 需要
 # 更强的多轮上下文继承能力, 见 2026-08-09 的判别实验), 再从这里拆开。
 _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
+    # AI Store quota expires first and is explicitly use-it-or-lose-it.  The A
+    # DeepSeek endpoint is the restaurant-quality head.  Qwen 235B passed the
+    # basic JSON contract but invented two time enums in the seven-case schema
+    # probe, so it is deliberately absent from this semantic quality pool.
+    ("aistore", "DeepSeek-V4-Flash-A"),
     # 🔴 2026-08-13 清空重建: 上一版 13 个条目**今天实测全部 403**(见 _SAFE_MODELS
     #    段落)。不是"淘汰几个", 是这个池一个活口都不剩 —— aliyun 三个账号今天只剩
     #    4 类模型有额度, 其中 qwen3.5-ocr 是 OCR SKU、另外三个都是 _THINKING_ONLY,
@@ -1097,10 +1128,19 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #
     # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
     SLOT.CHAT: [
+        ("aistore", "DeepSeek-V4-Flash-A"),
         ("tencent", "deepseek-v4-flash-202605"),   # 1.7s len=51
+    ],
+    # SIMPLE_TEXT — low-risk rewrite / summary / classification only.  Keeping
+    # Qwen3-32B in a separate slot prevents it from silently receiving semantic
+    # planning, chart or restaurant-review prompts when a larger model fails.
+    SLOT.SIMPLE_TEXT: [
+        ("aistore", "Qwen3-32B"),
     ],
     # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
     SLOT.CHART: [
+        ("aistore", "DeepSeek-V4-Flash-A"),
+        ("aistore", "Qwen3-235B-A22B"),
         ("tencent", "deepseek-v4-flash-202605"),
     ],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
@@ -1117,6 +1157,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #    亚秒级活口**(0.68-0.81s), 也**没有**放进任何池 —— 它们连 llm_capability_rank
     #    都没跑过, "快"不是"会输出合契约的 JSON"的证据。要用先测。
     SLOT.MAPPER: [
+        ("aistore", "DeepSeek-V4-Flash-A"),
         ("tencent", "deepseek-v4-flash-202605"),
     ],
     # INSIGHTS / REVIEW — 共用质量档池, 见上方 _QUALITY_TIER_POOL 定义。
@@ -1244,6 +1285,7 @@ _ALIYUN_ACCOUNTS: frozenset = frozenset({
 
 _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
     SLOT.CHAT:      {"enable_thinking": False},
+    SLOT.SIMPLE_TEXT: {"enable_thinking": False},
     SLOT.INSIGHTS:  {"enable_thinking": False},
     SLOT.CHART:     {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
     SLOT.MAPPER:    {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
@@ -1339,6 +1381,16 @@ _ZHIPU_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
     "glm-4.6v",
 })
 
+# Shanghai Telecom AI Store accepts the common ``thinking`` object for all
+# three admitted models.  Live probes also showed that this prevents the A
+# DeepSeek endpoint from spending a short response budget on reasoning_content
+# and returning empty content.
+_AISTORE_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
+    "DeepSeek-V4-Flash-A",
+    "Qwen3-235B-A22B",
+    "Qwen3-32B",
+})
+
 
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1373,6 +1425,12 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
     if (
         account == "zhipu"
         and model in _ZHIPU_THINKING_OBJECT_MODELS
+        and prof.get("enable_thinking") is False
+    ):
+        p["thinking"] = {"type": "disabled"}
+    if (
+        account == "aistore"
+        and model in _AISTORE_THINKING_OBJECT_MODELS
         and prof.get("enable_thinking") is False
     ):
         p["thinking"] = {"type": "disabled"}
@@ -1411,6 +1469,24 @@ def _extract_content(body_json: Dict[str, Any]) -> str:
         return (msg.get("content") or "").strip()
     except Exception:
         return ""
+
+
+def _extract_upstream_error(body_json: Dict[str, Any]) -> Optional[str]:
+    """Return a compact error label from an OpenAI-shaped response body.
+
+    Some compatible gateways have been observed returning HTTP 200 with an
+    ``error`` object.  A status-only success check would otherwise turn that
+    protocol error into an empty assistant answer and retry it on every call.
+    """
+    error = (body_json or {}).get("error")
+    if not error:
+        return None
+    if isinstance(error, dict):
+        label = error.get("code") or error.get("type") or "error_body"
+    else:
+        label = "error_body"
+    safe = "".join(ch for ch in str(label) if ch.isalnum() or ch in "._-")
+    return (safe or "error_body")[:80]
 
 
 def _validate_output(slot: SLOT, content: str) -> Optional[str]:
@@ -1463,6 +1539,13 @@ def _provider_config(account: str) -> Tuple[str, str]:
         "aliyun_b": (
             os.getenv("LLM_ALIYUN_B_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             os.getenv("LLM_ALIYUN_B_API_KEY", ""),
+        ),
+        # Shanghai Telecom AI Store: OpenAI-compatible endpoint.  The API key
+        # is production-secret-only; no fallback to another env name prevents
+        # an unrelated credential from being sent to this provider by mistake.
+        "aistore": (
+            os.getenv("LLM_AISTORE_BASE_URL", "https://ai.api.coregpu.cn/v1"),
+            os.getenv("LLM_AISTORE_API_KEY", ""),
         ),
         # tencent (TokenHub, June 1 2026): 腾讯云 TokenHub 90-day free trial,
         # OpenAI-compatible. "用完即停" like aliyun (no silent paid billing), so
@@ -1537,7 +1620,7 @@ def _provider_config(account: str) -> Tuple[str, str]:
 # Re-audit recommended ~every 2 weeks or whenever "All providers exhausted"
 # log line reappears (per `tests/qa-llm-quota/audit-matrix.md` cadence note).
 DEFAULT_CHAIN: List[str] = [
-    "aliyun_c", "aliyun_b", "aliyun_a", "tencent", "zhipu", "aliyun_a_deepseek",
+    "aistore", "aliyun_c", "aliyun_b", "aliyun_a", "tencent", "zhipu", "aliyun_a_deepseek",
 ]
 
 
@@ -1555,6 +1638,16 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     below since the string signature is provider-specific, not the 429 status alone.
     """
     lowered_body = body_text.lower()
+    # Compatible gateways may wrap an upstream quota failure in HTTP 200.
+    # Match only explicit quota/balance signatures; a generic 200 error body
+    # remains a short circuit-breaker failure rather than a long quota skip.
+    if status_code in (200, 402, 403, 429) and (
+        "allocationquota" in lowered_body
+        or "free_quota_exhausted" in lowered_body
+        or "insufficient balance" in lowered_body
+        or "余额不足" in body_text
+    ):
+        return True
     if status_code == 429 and "setlimitexceeded" in lowered_body:
         return True
     # Zhipu: 余额耗尽用 429 + 中文报文 + code 1113, 不含 SetLimitExceeded。
@@ -1567,7 +1660,7 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     if status_code == 429 and ("余额不足" in body_text or '"code":"1113"' in body_text):
         return True
     if status_code == 403:
-        return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
+        return "freetieronly" in lowered_body or "allocationquota" in lowered_body
     if status_code == 402 and (
         "insufficient balance" in lowered_body
         or "free_quota_exhausted" in lowered_body
@@ -1598,7 +1691,9 @@ def _normalize_payload_for_provider(payload: Dict[str, Any], account: str) -> Di
     return {**payload}
 
 
-_BUDGET_AWARE_FAST_SLOTS = frozenset({SLOT.CHAT, SLOT.CHART, SLOT.MAPPER})
+_BUDGET_AWARE_FAST_SLOTS = frozenset({
+    SLOT.CHAT, SLOT.SIMPLE_TEXT, SLOT.CHART, SLOT.MAPPER,
+})
 _FAST_SLOT_RESERVE_RATIO = 0.40
 _FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
 _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
@@ -1781,6 +1876,23 @@ async def call_chain(
 
             if 200 <= resp.status_code < 300:
                 body_json = resp.json()
+                upstream_error = _extract_upstream_error(body_json)
+                if upstream_error:
+                    _cb_record_failure(cb_key)
+                    if _is_quota_exhausted(resp.status_code, body_text):
+                        _quota_record_exhausted(cb_key)
+                        errors.append(
+                            f"{account}/{model}: quota_error_body_{upstream_error}"
+                        )
+                    else:
+                        errors.append(
+                            f"{account}/{model}: error_body_{upstream_error}"
+                        )
+                    logger.warning(
+                        f"[llm_router] slot={slot.value} {account}/{model} "
+                        f"returned a 2xx error body ({upstream_error}) — falling back"
+                    )
+                    continue
                 # Layer 4 — outcome validation: a 2xx with empty / garbage / invalid-
                 # JSON body is NOT success. Fall to the next chain entry instead of
                 # handing garbage to the caller (do NOT record CB success on bad output).
@@ -1955,6 +2067,7 @@ async def call_chain_stream(
         }
 
         first_delta_yielded = False
+        stream_error_text = ""
         try:
             logger.debug(f"[llm_router_stream] slot={slot.value} try {account}/{model}")
             async with client.stream(
@@ -2007,6 +2120,20 @@ async def call_chain_stream(
                     except json.JSONDecodeError:
                         continue
 
+                    upstream_error = _extract_upstream_error(obj)
+                    if upstream_error:
+                        stream_error_text = json.dumps(
+                            obj.get("error"), ensure_ascii=False,
+                        )
+                        if first_delta_yielded:
+                            logger.warning(
+                                f"[llm_router_stream] {account}/{model} "
+                                f"mid-stream error body ({upstream_error}) — "
+                                "preserving partial result"
+                            )
+                            return
+                        break
+
                     choices = obj.get("choices") or []
                     if choices:
                         delta = choices[0].get("delta") or {}
@@ -2049,6 +2176,21 @@ async def call_chain_stream(
                             logger.debug(f"[llm_router_stream] usage record skipped: {_e}")
                         if total:
                             yield {"type": "usage", "tokens": total}
+                if not first_delta_yielded:
+                    _cb_record_failure(cb_key)
+                    if stream_error_text and _is_quota_exhausted(200, stream_error_text):
+                        _quota_record_exhausted(cb_key)
+                        errors.append(f"{account}/{model}: quota_error_body")
+                    else:
+                        errors.append(
+                            f"{account}/{model}: "
+                            f"{'error_body' if stream_error_text else 'empty_stream'}"
+                        )
+                    logger.warning(
+                        f"[llm_router_stream] slot={slot.value} {account}/{model} "
+                        "ended before any content delta — falling back"
+                    )
+                    continue
                 # Successful stream — record CB success and return
                 _cb_record_success(cb_key)
                 _quota_record_success(cb_key)

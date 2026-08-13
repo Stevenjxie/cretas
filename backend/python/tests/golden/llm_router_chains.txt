@@ -1,19 +1,30 @@
-== chat (len=4)
+== chat (len=5)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
    2099-01-01  tencent/deepseek-v4-flash-202605
    2099-01-01  ark/doubao-seed-2-0-code-preview-260215
    2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== insights (len=4)
+== simple_text (len=5)
+   2026-09-13  aistore/Qwen3-32B
    2099-01-01  tencent/deepseek-v4-flash-202605
    2099-01-01  ark/doubao-seed-2-0-code-preview-260215
    2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== chart (len=4)
+== insights (len=5)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
    2099-01-01  tencent/deepseek-v4-flash-202605
    2099-01-01  ark/doubao-seed-2-0-code-preview-260215
    2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== mapper (len=4)
+== chart (len=6)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
+   2026-09-13  aistore/Qwen3-235B-A22B
+   2099-01-01  tencent/deepseek-v4-flash-202605
+   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
+   2099-01-01  tencent/minimax-m2.7
+   2099-01-01  zhipu/glm-4.5-air
+== mapper (len=5)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
    2099-01-01  tencent/deepseek-v4-flash-202605
    2099-01-01  ark/doubao-seed-2-0-code-preview-260215
    2099-01-01  tencent/minimax-m2.7
@@ -30,7 +41,8 @@
    2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
 == vl (len=0)
-== review (len=4)
+== review (len=5)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
    2099-01-01  tencent/deepseek-v4-flash-202605
    2099-01-01  ark/doubao-seed-2-0-code-preview-260215
    2099-01-01  tencent/minimax-m2.7
