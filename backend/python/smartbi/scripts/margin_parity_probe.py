@@ -62,8 +62,13 @@ async def main() -> int:
                        if cell.rows and cell.rows[0].get("gross_profit") is not None
                        else None)
 
+    # 🔴 必须带角色。不带 → RBAC 判成无价格权限 → 返回 `rbac_masked`, 一个数都没有。
+    #    2026-08-13 实测: 对账闸连着两次报 rc=2, 我据此推断「meta 构造点没补全」——
+    #    **推断错了**, 真因是这里没传 role。
+    #    ⛔ 判据: 闸报「没量到」时先查**仪器自己的调用参数**, 再去查被测对象。
     answer = await resolve_gross_margin(
-        pool, FACTORY, date_range=(_DAY, _DAY), window_label=str(_DAY))
+        pool, FACTORY, role=ctx.role,
+        date_range=(_DAY, _DAY), window_label=str(_DAY))
     resolver_profit = None
     meta = getattr(answer, "meta", None) or {}
     # ⚠️ 具名字段优先。kpis 没有 label, 按标签猜必然读不到 —— 实测第一次

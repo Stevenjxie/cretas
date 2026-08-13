@@ -200,3 +200,43 @@ def test_resolver_exposes_the_aggregate_for_the_parity_gate():
     probe = io.open(_PY_ROOT / "smartbi/scripts/margin_parity_probe.py",
                     encoding="utf-8", newline="").read()
     assert "aggregate_gross_profit" in probe, "闸没读那个具名字段"
+
+
+def test_parity_probe_passes_a_price_viewing_role():
+    """🔴 对账探针必须带角色，否则 RBAC 把金额全抹掉。
+
+    prod 实测：不带 role → `meta = {"rbac_masked": True}`，一个数都没有，
+    闸连报两次 rc=2。而我据此推断「meta 构造点没补全」—— **推断错了**。
+
+    ⛔ 判据：闸报「没量到」时**先查仪器自己的调用参数**，再去查被测对象。
+    """
+    probe = io.open(_PY_ROOT / "smartbi/scripts/margin_parity_probe.py",
+                    encoding="utf-8", newline="").read()
+    assert "role=ctx.role" in probe, (
+        "对账探针没传角色 —— RBAC 会把金额抹掉, 闸永远读不到 resolver 那一侧")
+
+
+def test_basis_shape_is_enforced_at_the_consumer():
+    """🔴 basis 形状约束放在**消费端**，不是每个产出端。
+
+    同一个错犯过两次（成本卡、折扣）。「犯过、记过、又犯」说明记在 memory 里
+    挡不住 —— 写 basis 的时候不会去翻 memory。改成当场炸。
+    """
+    import pytest as _pytest
+
+    from smartbi.gold.restaurant.provenance import (
+        ESTIMATED, ProvenanceError, qualifier)
+
+    # ⛔ 整句 → 炸（正是 prod 上打出乱码那一句的形状）
+    with _pytest.raises(ProvenanceError, match="名词短语|超过"):
+        qualifier(ESTIMATED, "这里没扣折扣 —— 折扣是整单的，摊不到单道菜")
+    with _pytest.raises(ProvenanceError, match="名词短语"):
+        qualifier(ESTIMATED, "成本卡的理论用量。实际用了多少要等盘点")
+
+    # ✅ 名词短语 → 过，且套进模板读得通
+    text = qualifier(ESTIMATED, "没扣折扣的单菜价")
+    assert "用没扣折扣的单菜价估算" in text
+
+    # 阳性对照: 现役的两个 basis 都必须过 —— 否则这道闸会把生产打挂
+    from smartbi.gold.restaurant.generic_executor import _COST_CARD_BASIS
+    qualifier(ESTIMATED, _COST_CARD_BASIS)
