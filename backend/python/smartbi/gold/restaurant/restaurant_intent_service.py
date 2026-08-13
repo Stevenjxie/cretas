@@ -32,6 +32,8 @@ from smartbi.gold.restaurant import answer_contract as _contract
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
     canonical_dimensions as _canonical_dimensions,
+    grouping_dimensions as _grouping_dimensions,
+    non_grouping_dimensions as _non_grouping_dimensions,
 )
 from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
@@ -335,9 +337,9 @@ def _execution_mismatch(
     #    ① 差集恰好是 {all} —— 其余任何一个不被支持的分组照样拦
     #    ② 该聚合形态 `needs_dimension is False` —— 有些聚合在不分组时确实算不出,
     #       用登记表**已有的声明**判, 不新造假设
-    if asked_dimensions - supported_dimensions == {_NO_GROUPING_DIMENSION}:
+    if (asked_dimensions - supported_dimensions) == _NO_GROUPING_DIMENSIONS:
         if _aggregation_needs_no_grouping(spec):
-            asked_dimensions = asked_dimensions - {_NO_GROUPING_DIMENSION}
+            asked_dimensions = set(_grouping_dimensions(sorted(asked_dimensions)))
     if not asked_dimensions.issubset(supported_dimensions):
         # 🔴 2026-08-13 去黑话。原文「查询维度超出计划 resolver 的能力范围」
         #    一句踩两个:「维度」在 `INTERNAL_VOCAB` 里,「resolver」是「解析器」
@@ -350,9 +352,10 @@ def _execution_mismatch(
     return None
 
 
-#: 「不分组」那个维度键。⛔ 它不是一种分组, 所以永远不会出现在
-#: `_RESOLVER_DIMENSIONS`(那张表列的是「能按什么分组」)里。
-_NO_GROUPING_DIMENSION = "all"
+#: 「不分组」的那些维度键。⛔ 从登记表推导(`group_expr is None`), 不手写名字。
+#: 它们不是分组, 所以永远不会出现在 `_RESOLVER_DIMENSIONS`(那张表列的是
+#: 「能按什么分组」)里 —— 拿它们去查那张表是范畴错误。
+_NO_GROUPING_DIMENSIONS = set(_non_grouping_dimensions())
 
 
 def _aggregation_needs_no_grouping(spec) -> bool:
@@ -589,9 +592,12 @@ def _execution_receipt(
         "executed_resolvers": list(executed_codes),
         "execution_plan_match": executed_codes == plan,
         "actual_dimensions": sorted(supported_dimensions),
+        # ⛔ 同一个范畴错误的第三处: 拿「不分组」去比「能按什么分组」。
+        #    不减掉的话, 任何全店合计问句的回执都会写 scope_matches_request=False。
         "scope_matches_request": bool(
             receipt.get("scope_matches_request", True)
-            and set(spec.dimensions).issubset(supported_dimensions)
+            and set(_grouping_dimensions(spec.dimensions)).issubset(
+                supported_dimensions)
         ),
     })
     return receipt
