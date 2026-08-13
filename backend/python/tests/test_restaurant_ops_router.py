@@ -1571,9 +1571,14 @@ def test_store_margin_excludes_missing_cost_and_uses_distinct_bill_count():
         {"store_id": 2, "store_name": "完整成本店", "dish_name": "C", "normalized_name": "C",
          "qty": 5, "revenue": 500.0, "bills": 4},
     ]
+    # ⚠️ 映射的键由 `normalize_dish_name` 产出(strip + lower), 手搭夹具必须走
+    #    同一个函数 —— 写死 `{"A": ...}` 在 ASCII 名字上会静默配不上, 症状是
+    #    「有成本卡的店毛利也是 None」, 完全不像「夹具的键没规范化」。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        normalize_dish_name as _norm)
     stores = aggregate(
         rows,
-        {"A": "P-A", "B": "P-B", "C": "P-C"},
+        {_norm(n): pk for n, pk in (("A", "P-A"), ("B", "P-B"), ("C", "P-C"))},
         {"P-B": 30.0, "P-C": 20.0},
         {1: 8, 2: 9},
     )
@@ -1776,6 +1781,11 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
                     if include_cost
                     else []
                 )
+            # 成本键解析的存量兜底层。⚠️ 必须排在下面按 `args[2]` 取日期之前 ——
+            #    这条查询只有一个参数, 落到下面会 IndexError, 而那个 IndexError
+            #    会被解析器包成「权威来源不可用」, 症状完全不像「夹具没跟上」。
+            if "FROM dim_restaurant_cost_product" in query:
+                return []
             current_rows = rows_by_range.get((args[2], args[3]), [])
             if "COUNT(DISTINCT t.id)::int AS bills" in query:
                 return [{"store_id": sid, "bills": 8}
@@ -1798,15 +1808,19 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
             return _AcquireContext()
 
     class _CretasConnection:
+        #: ⚠️ 新的解析取**整个租户**的 product_types(只传 factory_id), 不再按
+        #:    名字过滤 —— 夹具因此不能再从入参里读名字清单。
+        _NAMES = ("测试菜",)
+
         async def fetch(self, query, *_args):
             if "FROM product_types" in query:
                 return [
-                    {
-                        "id": "PT-DISH" if name == "测试菜" else f"PT-{name}",
-                        "name": name,
-                    }
-                    for name in _args[1]
+                    {"id": "PT-DISH" if name == "测试菜" else f"PT-{name}",
+                     "name": name}
+                    for name in self._NAMES
                 ]
+            if "dim_product_alias" in query:
+                return []
             raise AssertionError(f"unexpected Cretas query: {query}")
 
         async def close(self):

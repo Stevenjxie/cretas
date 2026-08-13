@@ -2274,10 +2274,14 @@ def _aggregate_store_margin_entries(
     cost_by_pk: Dict[str, float],
     bill_count_by_store: Optional[Dict[Any, int]] = None,
 ) -> List[Dict[str, Any]]:
-    """Aggregate store margins without turning missing dish cost into zero."""
+    """Aggregate store margins without turning missing dish cost into zero.
+
+    ⚠️ 取键走 `cost_key_of` —— 与毛利问答/日结**同一份**规范化。
+    """
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_key_of
     per_store: Dict[Any, Dict[str, Any]] = {}
     for row in store_dish_rows:
-        source_pk = name_to_pk.get(row["normalized_name"])
+        source_pk = cost_key_of(name_to_pk, row["normalized_name"])
         cost_present = (
             source_pk is not None
             and source_pk in cost_by_pk
@@ -5790,45 +5794,33 @@ async def resolve_store_margin(
             },
         )
 
-    # Lookup cretas product_types + dim_product_alias (P0-2) + agg_product_cost for food cost.
-    dish_names = list({r["normalized_name"] for r in store_dish_rows})
-    name_to_pk: Dict[str, str] = {}
-    try:
-        import asyncpg as _asyncpg
-        from config import get_settings as _get_settings
-        cretas = await _asyncpg.connect(_get_settings().food_kb_db_url)
-        try:
-            rows = await cretas.fetch(
-                "SELECT id, name FROM product_types WHERE factory_id = $1 AND name = ANY($2::text[])",
-                factory_id, dish_names,
-            )
-            for r in rows:
-                name_to_pk[r["name"]] = r["id"]
-            unmapped = [n for n in dish_names if n not in name_to_pk]
-            if unmapped:
-                try:
-                    alias_rows = await cretas.fetch(
-                        """SELECT pos_name, product_type_id FROM dim_product_alias
-                            WHERE factory_id = $1 AND pos_name = ANY($2::text[])""",
-                        factory_id, unmapped,
-                    )
-                    for r in alias_rows:
-                        name_to_pk[r["pos_name"]] = r["product_type_id"]
-                except Exception as e:
-                    if "does not exist" not in str(e):
-                        logger.warning(f"[store_margin] alias lookup failed: {e}")
-        finally:
-            await cretas.close()
-    except Exception as e:
-        logger.warning(f"[store_margin] cretas lookup failed: {e}")
-
-    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
-    name_to_pk = await merge_cost_product_mapping(
-        smartbi_pool,
-        factory_id,
-        dish_names,
-        name_to_pk,
+    # 菜名 → 成本键。⛔ 与毛利问答/日结读**同一份**实现, 见
+    #    `restaurant_cost_mapping.resolve_cost_keys` 顶部。
+    #    改之前这里是第三份内联的 cretas 查询 —— 三份实现就有三种「这家店有哪些
+    #    菜算得出成本」, 按门店的毛利加总不等于全店毛利, 而没有任何东西会报错。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        CostKeySourceUnavailable,
+        resolve_cost_keys,
     )
+    async with smartbi_pool.acquire() as _map_conn:
+        await _map_conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id)
+        try:
+            name_to_pk = await resolve_cost_keys(_map_conn, factory_id)
+        except CostKeySourceUnavailable as exc:
+            logger.error("[store_margin] 成本键权威来源不可用 factory=%s: %s",
+                         factory_id, exc)
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title="门店毛利",
+                answer_text=(
+                    "现在算不了各店毛利 —— 菜品成本的数据源连不上。\n\n"
+                    "这不是「你的菜没有成本卡」，是我这边取不到，"
+                    "所以我不给你一个可能偏高的数。稍后再问一次。"
+                ),
+                charts=[], kpis=[],
+                meta={"no_data": True, "reason": "cost_key_source_unavailable"},
+            )
 
     cost_by_pk: Dict[str, float] = {}
     if name_to_pk:
