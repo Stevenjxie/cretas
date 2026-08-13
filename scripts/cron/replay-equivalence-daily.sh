@@ -50,6 +50,12 @@ LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
     echo "WARN: 拿不到活服务进程 environ (pid=${svc_pid:-none}) —— 库名可能落到默认值(测试库)"
   fi
 
+  # ⛔ 先删上一次的产出 —— 与 python 侧「早退也写文件」互为两道。
+  #    只要有一条路径不写文件, 台账就会把**上一次的计数**配上**这一次的 rc**,
+  #    而那种行格式合法、字段齐全、看起来完全正常。
+  #    我们靠台账做盖章决定, 一行脏读会让所有基于它的判断打折。
+  rm -f /tmp/replay_equivalence.json
+
   out=$(PROBE_OUT=/tmp/replay_equivalence.json PYTHONIOENCODING=utf-8 \
         python -X utf8 -u -m smartbi.scripts.replay_equivalence_probe 2>&1)
   rc=$?

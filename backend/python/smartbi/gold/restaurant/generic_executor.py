@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from smartbi.gold.restaurant.provenance import (
     ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
+    coverage_ratio as prov_coverage_ratio,
     qualifier as provenance_qualifier,
     validate as validate_provenance,
 )
@@ -66,6 +67,15 @@ class CellResult:
     provenance: str = PROV_MEASURED
     #: ESTIMATED 时**必填**的依据(如「行业默认成本率 32%」)。限定语由它生成。
     estimation_basis: str = ""
+    #: 有成本卡的营收 ÷ 全部营收。`None` = 这个格子不按覆盖率表达。
+    #:
+    #: 🔴 为什么必须有: `food_cost` 的表达式是
+    #:      `SUM(i.qty * COALESCE(c.food_cost, 0))`
+    #:    —— **没有成本卡的菜按 0 成本计入**, 毛利被抬高, 而限定语只说
+    #:    「按成本卡估算」, 不说这个估只覆盖了几成。覆盖率 40% 的租户会看到
+    #:    一个高得离谱的毛利 + 一句听起来已经解释过了的限定语。
+    #: ⚠️ 分母用 **item 口径**(`SUM(i.amount)`), 因为 food_cost 是 item 粒度的。
+    coverage_ratio: Optional[float] = None
 
     def __post_init__(self) -> None:
         # 出处不自洽当场炸, 不静默降级 —— 一个估出来的数被当成账上的数端出去,
@@ -360,9 +370,14 @@ async def execute_cell(
     # 值列名: 派生量用它自己的 key, 基础指标用它的 key —— 两者都是 item.key。
     processed = _post_process([dict(r) for r in rows], agg, getattr(item, "key", metric_key))
     provenance, basis = _provenance_of(metric_key)
+    # ⚠️ 只有靠成本卡估出来的格子才需要覆盖率 —— 别的格子多跑一次查询纯属浪费,
+    #    而且 `qualifier()` 对 MEASURED + 覆盖率不足会说出「未覆盖成本的菜品
+    #    无法判断盈亏」, 那对一个跟成本无关的指标(比如订单数)是句错话。
+    coverage = (await _coverage_ratio_of(conn, factory_id, date_range)
+                if provenance == PROV_ESTIMATED else None)
     return CellResult(
         metric_key, label, dimension_key, aggregation_key, unit,
-        processed, (), sql, provenance, basis,
+        processed, (), sql, provenance, basis, coverage,
     )
 
 
@@ -407,6 +422,39 @@ def _effective_requires(metric_key: str) -> Tuple[str, ...]:
         if derived is not None:
             stack.extend((derived.left, derived.right))
     return tuple(sorted(cols))
+
+
+#: 覆盖率查询。**join 从 `GRAINS["item_cost"]` 取**, 不在这里重抄一份 ——
+#: 抄一份就是同一条 join 有两个定义, 而漂的表现是「覆盖率和毛利算的不是同一批菜」。
+_COVERAGE_SQL_TEMPLATE = (
+    "SELECT COALESCE(SUM(i.amount), 0) AS total,\n"
+    "       COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL), 0) AS covered\n"
+    "  FROM {frm}\n  {join}\n"
+    " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+)
+
+
+async def _coverage_ratio_of(conn, factory_id: str, date_range) -> Optional[float]:
+    """这段时间里, 有成本卡的营收占多少。
+
+    ⛔ 算不出来时返回 `None`(= 不按覆盖率表达), **不返回 1.0** ——
+       返回 1.0 等于说「全覆盖」, 那是拿一个猜测冒充读数, 且方向最危险
+       (覆盖不足的租户会被说成全覆盖)。
+    """
+    frm, join, alias = GRAINS["item_cost"]
+    sql = _COVERAGE_SQL_TEMPLATE.format(frm=frm, join=join, alias=alias)
+    try:
+        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1])
+    except Exception:  # noqa: BLE001 — 覆盖率拿不到不该让整个格子失败
+        logger.warning("[generic-executor] 覆盖率查询失败, 本格不带覆盖率",
+                       exc_info=True)
+        return None
+    if row is None:
+        return None
+    total = float(row["total"] or 0)
+    if not total:
+        return None
+    return prov_coverage_ratio(float(row["covered"] or 0), total)
 
 
 def _provenance_of(metric_key: str) -> Tuple[str, str]:

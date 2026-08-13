@@ -215,6 +215,16 @@ def _fmt(value: Any, unit: str) -> str:
     return f"{num:,.0f}"
 
 
+def _caveat_of(metric_key: str) -> str:
+    """这个指标「是什么」的那句话。⛔ 只从 registry 取, 不在叙述层写。
+
+    手写的坏法是确定的: 新登记一个同类指标不会自动带上, 而漏掉**不报错** ——
+    只是那个数从此可以被安全地误读。registry 那道闸负责保证该有的都有。
+    """
+    entry = METRICS.get(metric_key) or DERIVED.get(metric_key)
+    return (getattr(entry, "caveat", "") or "").strip() if entry else ""
+
+
 def render(result: CellResult, window_label: str) -> str:
     """正文 = 主体 + **出处限定语**。
 
@@ -232,8 +242,19 @@ def render(result: CellResult, window_label: str) -> str:
         return body
 
     parts = [body]
-    # ② 限定语 —— 由 provenance 字段生成, 不手写。
-    qualifier = result.qualifier(coverage_ratio=None)
+    # ②a 这个数**是什么** —— 来自 registry 的 `caveat`, 不手写。
+    #
+    # 🔴 与 ②b 是两件事, 缺一不可:
+    #      ②a 说「毛利不是利润」(这个数是什么)
+    #      ②b 说「按成本卡估的」  (这个数准不准)
+    #    只有 ②b 时, 店长看到「今天全部门店毛利合计 ¥50 万」最可能的读法是
+    #    「今天赚了 50 万」—— 而扣掉人工/房租/水电之后完全可能是亏的。
+    #    ⛔ 防住了「估算」防不住「把毛利当利润」, 后者的代价更大。
+    caveat = _caveat_of(result.metric_key)
+    if caveat:
+        parts.append(f"> {caveat}")
+    # ②b 限定语 —— 由 provenance 字段生成, 不手写。
+    qualifier = result.qualifier(coverage_ratio=result.coverage_ratio)
     if qualifier:
         parts.append(qualifier)
     # ③ 开价 —— 估出来的数配一条「补什么能从估变实」。

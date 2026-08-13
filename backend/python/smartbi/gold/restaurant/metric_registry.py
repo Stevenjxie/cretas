@@ -112,6 +112,8 @@ class Metric:
     #: 🔴 给规划器看的一句话: 用户怎么问才算要这个指标。
     #: ⛔ 与 Dimension/Aggregation 的 `asks` 同一条纪律 —— prompt 由它渲染。
     asks: str = ""
+    #: 见 `Derived.caveat` ——「这个数**是什么**」，与 provenance 的「准不准」是两件事。
+    caveat: str = ""
 
     def expr_at(self, grain: str) -> Optional[str]:
         return self.exprs.get(grain)
@@ -260,6 +262,17 @@ class Derived:
     category: str = ""
     #: 给规划器看的一句话。派生量在业务嘴里是独立指标, 必须能被指到。
     asks: str = ""
+    #: 🔴 **这个数容易被读成别的东西**时, 在这里写一句人话说清它不是什么。
+    #:
+    #: 与 `provenance` 那条限定语是两件事, 缺一不可:
+    #:   · provenance 说的是「这个数**准不准**」(估的还是账上的)
+    #:   · caveat 说的是「这个数**是什么**」(毛利不是利润)
+    #: 店长看到「今天全部门店毛利合计 ¥50 万」, 最可能的误读是「今天赚了 50 万」——
+    #: 而毛利扣掉人工/房租/水电之后完全可能是亏的。只防「估算」防不住这个。
+    #:
+    #: ⛔ 不在叙述层手写 —— 手写的话新登记一个同类指标不会自动带上,
+    #:    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    caveat: str = ""
 
 
 #: ⛔ 这 8 个在业务嘴里都是「指标」，数学上没有一个是新的取数 ——
@@ -278,11 +291,15 @@ DERIVED: Dict[str, Derived] = {
                               asks="人均消费/每人花多少"),
     "gross_profit": Derived("gross_profit", "毛利", "diff", "revenue", "food_cost", "money",
                                 category="成本和毛利",
-                              asks="毛利/赚了多少(金额)"),
+                              asks="毛利/赚了多少(金额)",
+                              caveat="这是毛利，只扣了食材成本；人工、房租、水电"
+                                     "都还没扣 —— 不等于今天赚了多少。"),
     "gross_margin": Derived("gross_margin", "毛利率", "ratio_of_diff",
                             "gross_profit", "revenue", "pct",
                             category="成本和毛利",
-                              asks="毛利率/利润率(百分比)"),
+                              asks="毛利率/利润率(百分比)",
+                              caveat="这是毛利率，只扣了食材成本；人工、房租、水电"
+                                     "都还没扣 —— 不是利润率。"),
     "discount_rate": Derived("discount_rate", "折扣率", "ratio_pct",
                              "discount_amount", "gross_revenue", "pct",
                              category="营收和折扣",
@@ -523,6 +540,24 @@ def assert_registry_self_consistent() -> None:
     ⛔ 这些错会拼出跑不通的 SQL 或**跑得通但算错**的 SQL，
        后者尤其危险 —— 它会给出一个看起来合理的数字。
     """
+    # ── 会被读成「利润」的指标必须自己说清它不是 ──────────────────────────
+    #
+    # 🔴 判据不是手写名单, 是**登记表自己的声明**: 一个指标的 `asks` 里如果承认
+    #    用户会用「利润 / 赚了多少」来问它, 那它就必然会被那样读回去。
+    #    `gross_profit.asks = "毛利/赚了多少(金额)"` —— 登记表早就写着了。
+    #
+    # ⛔ 手写名单的坏法是确定的: 新登记一个同类指标不会自动进名单,
+    #    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    _MISREAD_AS_PROFIT = ("利润", "赚了多少")
+    for key, entry in list(METRICS.items()) + list(DERIVED.items()):
+        asks = getattr(entry, "asks", "") or ""
+        if any(w in asks for w in _MISREAD_AS_PROFIT):
+            assert (getattr(entry, "caveat", "") or "").strip(), (
+                f"{key} 的 asks 里承认用户会用「利润/赚了多少」问它"
+                f"({asks!r}), 却没有 caveat —— 店长会把它读成利润。"
+                f"人工/房租/水电都没扣, 毛利再高也可能是亏的。"
+            )
+
     # ── 大类: 每一个已登记的指标都必须有, 且必须是 CATEGORIES 里的 ──────────
     #
     # 🔴 owner 2026-08-12 裁定的落地点。拒答时那句「我这儿有的是…」按类说,

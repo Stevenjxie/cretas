@@ -127,6 +127,17 @@ async def ask(phrase):
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def _write_probe_out(out) -> None:
+    """产出**永远**落盘, 包括所有早退路径。
+
+    ⛔ 「没量到」不等于「沿用上次」。不写文件时, 读者(cron)分不清
+       「这次没产出」和「这次产出恰好和上次一样」—— 而它默认按后者办。
+    """
+    dest = os.environ.get("PROBE_OUT", "/tmp/replay_equivalence.json")
+    with open(dest, "w", encoding="utf-8", newline="") as fh:
+        json.dump(out, fh, ensure_ascii=False, indent=2)
+
+
 async def main():
     pool = await ctx.pool()
     print(f"# _PLAN_VERSION = {getattr(ri, '_PLAN_VERSION', '?')!r}")
@@ -146,6 +157,11 @@ async def main():
             ri._PLAN_VERSION, FACTORY)
     print(f"# 表里可载入的行数 = {len(rows)}")
     if not rows:
+        # 🔴 早退也必须写产出文件。不写的话 cron 的 `[ -r ... ]` 会读到
+        #    **上一次**留下的 json, 于是台账里出现「这次的 rc + 上次的计数」——
+        #    一行混着两次运行的读数, 格式合法、字段齐全、不报错。
+        #    2026-08-13 在日结那条链上实测出现过一次, 同形状在这里也成立。
+        _write_probe_out([])
         print("⛔ 0 行 —— plan_version 对不上, 这不是「没有存量计划」而是仪器问题")
         return 2
 
@@ -181,9 +197,7 @@ async def main():
         print(f"[{i:>2}/{len(rows)}] {cls}  hitA={hit_a}  {phrase[:32]}")
 
     ri._routing_rules_fingerprint = _REAL_FP_FN
-    dest = os.environ.get("PROBE_OUT", "/tmp/replay_equivalence.json")
-    with open(dest, "w", encoding="utf-8") as fh:
-        json.dump(out, fh, ensure_ascii=False, indent=2)
+    _write_probe_out(out)
 
     hits = sum(1 for r in out if r["hit_a"])
     print("\n=== 阳性对照 ===")
@@ -201,7 +215,7 @@ async def main():
     for r in out:
         if r["class"].startswith(("②", "③")):
             print(f"  [{r['i']:>2}] A={r['A'].get('kind')} B={r['B'].get('kind')}  {r['phrase']}")
-    print(f"\n明细: {dest}")
+    print(f"\n明细: {os.environ.get('PROBE_OUT', '/tmp/replay_equivalence.json')}")
     return 0 if counts["②执行不等价"] == 0 and counts["③执行失败"] == 0 else 1
 
 

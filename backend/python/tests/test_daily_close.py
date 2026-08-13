@@ -146,6 +146,65 @@ def test_gross_profit_is_estimated_because_it_depends_on_the_cost_card():
     assert ge._provenance_of("orders")[0] == "MEASURED"
 
 
+def test_gross_profit_says_it_is_not_profit():
+    """🔴 owner P0 口径的 ② 是**两句**，我第一版只出了第二句。
+
+    漏掉的那句更要紧：店长看到「今天全部门店毛利合计 ¥50 万」很可能直接读成
+    「今天赚了 50 万」，而毛利扣掉人工/房租/水电之后完全可能是亏的。
+    ⛔ 只防「估算」防不住「把毛利当利润」。
+    """
+    prov, basis = ge._provenance_of("gross_profit")
+    text = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
+
+    assert "不等于今天赚了多少" in text, f"没说「毛利不是利润」: {text}"
+    assert "人工" in text and "房租" in text and "水电" in text, (
+        f"没点名扣的是哪几样开销: {text}")
+    # ⛔ 两句都要在, 不是二选一
+    assert "成本卡的理论用量" in text, f"「按成本卡估算」那句丢了: {text}"
+
+
+def test_caveat_comes_from_the_registry_not_the_narrator(monkeypatch):
+    """🔴 变异对照打在**被守的行为**上: caveat 是登记表里的字段, 不是叙述层写死的。
+
+    ⛔ 只断言「正文里有这句话」证明不了它是登记驱动的 —— 手写一句同样能过。
+    """
+    from smartbi.gold.restaurant import generic_answer as ga
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    prov, basis = ge._provenance_of("gross_profit")
+    before = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
+    assert "不等于今天赚了多少" in before
+
+    patched = dict(reg.DERIVED)
+    original = patched["gross_profit"]
+    patched["gross_profit"] = type(original)(
+        **{**original.__dict__, "caveat": "换了一句完全不同的话"})
+    # ⚠️ 打在 generic_answer 绑定的那个名字上 —— 它是 from-import。
+    monkeypatch.setattr(reg, "DERIVED", patched)
+    monkeypatch.setattr(ga, "DERIVED", patched)
+
+    after = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
+    assert "换了一句完全不同的话" in after, (
+        "改了 registry 的 caveat 而正文没变 —— 说明那句话是在叙述层写死的")
+    assert "不等于今天赚了多少" not in after
+
+
+def test_registry_gate_requires_a_caveat_when_asks_admits_profit(monkeypatch):
+    """闸的判据不是手写名单, 是**登记表自己的声明**。
+
+    `gross_profit.asks = "毛利/赚了多少(金额)"` —— 登记表早就承认用户会那样问它。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    patched = dict(reg.DERIVED)
+    original = patched["gross_profit"]
+    patched["gross_profit"] = type(original)(**{**original.__dict__, "caveat": ""})
+    monkeypatch.setattr(reg, "DERIVED", patched)
+
+    with pytest.raises(AssertionError, match="读成利润"):
+        reg.assert_registry_self_consistent()
+
+
 def test_three_segments_all_present():
     """判据 1: 数字 + 限定语 + 开价。"""
     prov, basis = ge._provenance_of("gross_profit")
@@ -175,6 +234,48 @@ def test_mutation_forcing_measured_removes_the_qualifier():
     assert "从估变实" not in muted, "MEASURED 还开「从估变实」的价"
     # 阳性对照: 数字本身没变 —— 变的只是出处那一层
     assert "¥8,642.00" in muted
+
+
+def _cell_cov(coverage):
+    """带覆盖率的毛利格子。"""
+    prov, basis = ge._provenance_of("gross_profit")
+    return CellResult("gross_profit", "毛利", "all", "total", "money",
+                      [{"gross_profit": 8642.0}], (), "", prov, basis, coverage)
+
+
+def test_qualifier_states_how_much_of_revenue_lacks_a_cost_card():
+    """🔴 判据 2: **构造**覆盖率不足的场景, 限定语要跟着变。
+
+    ⛔ MOCK_REST 的覆盖率是 100.0%, 在那个租户上永远量不出这条 ——
+       「平租户让闸恒绿」。所以这里必须构造。
+    """
+    text = render(_cell_cov(0.40), "今天")
+    assert "60.0% 的营收没有配方成本" in text, f"没说覆盖了几成: {text}"
+    # 另一句仍在 —— 覆盖率是加在限定语前面的, 不是替换它
+    assert "不是账上的数" in text
+
+
+def test_qualifier_percentage_follows_the_coverage_number():
+    """🔴 变异对照: 换一个覆盖率, 那个百分比必须跟着变。
+
+    ⛔ 只断言「出现了 60.0%」证明不了它是算出来的 —— 写死一个 60.0% 同样能过。
+    """
+    assert "60.0% 的营收没有配方成本" in render(_cell_cov(0.40), "今天")
+    assert "75.0% 的营收没有配方成本" in render(_cell_cov(0.25), "今天")
+    # 阴性对照: 全覆盖时那句话**必须消失**, 否则它就是句无条件的废话
+    full = render(_cell_cov(1.0), "今天")
+    assert "没有配方成本" not in full, f"全覆盖还在说有菜没成本卡: {full}"
+    assert "不是账上的数" in full, "全覆盖时「按成本卡估的」那句不该跟着消失"
+
+
+def test_unknown_coverage_is_not_reported_as_full():
+    """⛔ 覆盖率算不出来时是 `None`, 不许当成 1.0。
+
+    当成 1.0 = 拿猜测冒充读数, 而且方向最危险: 覆盖不足的租户会被说成全覆盖。
+    """
+    text = render(_cell_cov(None), "今天")
+    assert "没有配方成本" not in text
+    assert "不是账上的数" in text
 
 
 def test_revenue_section_has_no_qualifier():

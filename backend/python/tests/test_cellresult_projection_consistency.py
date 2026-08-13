@@ -46,6 +46,10 @@ PROJECTED = {
     "missing_columns",
     "provenance",
     "estimation_basis",
+    # 覆盖率。与 provenance / estimation_basis 同一类: 都是「这个数能不能用」
+    # 的元信息。前端要打「覆盖 40%」这种标时拿得到, 不用自己再算一遍
+    # (自己算就是同一个量的第二份定义, 必漂)。
+    "coverage_ratio",
 }
 
 #: **显式排除**。每一条都要写清楚为什么不投影 —— 登记是留痕，不是豁免。
