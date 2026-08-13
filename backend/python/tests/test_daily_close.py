@@ -247,7 +247,15 @@ def test_three_segments_all_present():
 
     assert "¥8,642.00" in text, f"① 数字没出来: {text}"
     assert "不能当实际毛利用" in text, f"② 限定语没出来: {text}"
-    assert "从估变实" in text, f"③ 开价没出来: {text}"
+    # 🔴 2026-08-14 订正: 原来断言的是「从估变实」——**那是一句系统做不到的承诺**。
+    #    `_provenance_of` 是指标键的纯函数, `gross_profit` 恒为 ESTIMATED:
+    #    把全店的卡补齐它还是 ESTIMATED(basis 是成本卡的**理论**用量,
+    #    实际耗用要盘点)。补卡提高的是**覆盖率**, 不是出处。
+    #    ⇒ 现在守的是「开价出来了且**不撒谎**」。
+    assert "要盘一次库才知道" in text, f"③ 开价没出来: {text}"
+    assert "从估变实" not in text, (
+        "🔴 又承诺「补上就变实」了 —— 补卡改不了 provenance, 这是做不到的")
+    assert "就是账上的了" not in text, "同上: 承诺了做不到的准确性"
     # ⛔ 限定语不许复述成两遍(② 和 ③ 相邻)
     assert text.count("成本卡的理论用量") == 1, f"basis 复述了两遍: {text}"
     # ⛔ 2026-08-13 定稿: 「不是账上的数」和「不能当实际毛利用」是同一件事,
@@ -269,7 +277,7 @@ def test_mutation_forcing_measured_removes_the_qualifier():
     muted = render(_cell("gross_profit", "毛利", 8642.0, "MEASURED", ""), "今天")
     assert "不能当实际毛利用" not in muted, (
         "改成 MEASURED 限定语还在 —— 说明它是手写的, 不是由字段生成的")
-    assert "从估变实" not in muted, "MEASURED 还开「从估变实」的价"
+    assert "要盘一次库才知道" not in muted, "MEASURED 还在开「估的」那条价"
     # 阳性对照: 数字本身没变 —— 变的只是出处那一层
     assert "¥8,642.00" in muted
 
@@ -641,7 +649,7 @@ async def test_push_sends_the_three_segments_to_the_manager():
     body = sent[0]["body"]
     assert "¥" in body, f"① 数字没发出去: {body}"
     assert "不能当实际毛利用" in body, f"② 限定语没发出去: {body}"
-    assert "从估变实" in body, f"③ 开价没发出去: {body}"
+    assert "要盘一次库才知道" in body, f"③ 开价没发出去: {body}"
     assert "2026-08-13" in sent[0]["title"]
 
 

@@ -30,7 +30,7 @@
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # ⛔ 用**模块引用**而不是 `from ... import METRICS` —— from-import 会把名字绑死在
 #    本模块上, `monkeypatch.setattr(reg, "METRICS", ...)` 够不着它。
@@ -166,16 +166,74 @@ def offers_for_estimated(
     if not metric_labels:
         return []
     # ⚠️ 2026-08-13: **不再复述 basis**。开价紧跟在限定语后面, 而限定语已经把
-    #    「按什么估的」说过一遍了 —— 复述读成啰嗦:
-    #      「…按成本卡的理论用量（实际用了多少要等盘点）估算，这部分是估出来的…」
-    #      「这些数字里有一部分是按成本卡的理论用量（实际用了多少要等盘点）估的；…」
-    #    开价要回答的是**下一句**:「那我该做什么」。
+    #    「按什么估的」说过一遍了。开价要回答的是**下一句**:「那我该做什么」。
     # ⛔ `basis` 仍然原样带在结构化字段里 —— 前端/下游要对上时拿得到, 只是不进正文。
+    #
+    # 🔴 2026-08-14 订正: 原文是
+    #      「补齐对应的成本卡，毛利就能从估变实 —— 那时这个数就是账上的了」
+    #    **那是一句系统结构上做不到的承诺。** `_provenance_of` 是**指标键的纯函数**:
+    #    只要依赖里有成本卡那一列, 就恒为 ESTIMATED —— 把全店的卡补齐, 它还是
+    #    ESTIMATED, 因为 basis 是「成本卡的**理论**用量」, 而实际耗用要**盘点**才知道。
+    #    补卡能提高的是**覆盖率**, 不是出处。两件事, 原文混成了一件。
+    #    ⚠️ 这正是 owner 2026-08-14 收窄的那条: ⛔「补上就准了」。
     return [{
         "kind": "upgrade",
-        "text": (f"补齐对应的成本卡，{'、'.join(metric_labels)}就能从估变实 —— "
-                 f"那时这个数就是账上的了"),
+        "text": (f"{'、'.join(metric_labels)}用的是成本卡上的**理论**用量 —— "
+                 f"实际用了多少要盘一次库才知道"),
         "basis": estimation_basis,
+    }]
+
+
+#: 一次开价最多点名几道。⚠️ 不是审美 —— 「先补这几道」超过 3 条就不再是
+#: 优先级, 是另一张清单; 店长照着做的成功率随长度掉。
+_TOP_N_GAPS = 3
+
+
+def offers_for_cost_gaps(
+    cost_gaps: Sequence[Dict[str, Any]],
+    coverage_ratio: float,
+    coverage_denominator: float,
+    top_n: int = _TOP_N_GAPS,
+) -> List[Dict[str, object]]:
+    """T2 前两层：**哪几道菜没卡**（第一层）+ **补了覆盖率能到多少**（第二层）。
+
+    🔴 owner 2026-08-14 放行前两层, 第三层「成本率可疑」**挂账**
+       （触发条件还没定, 平阈值会误伤天然低成本项）。
+
+    🔴 措辞收窄, 这条承重:
+         ✅ 「补这 3 道，能算进毛利的营收从 42% 提到约 50%」
+         ⛔ 「补上就准了」
+       覆盖率**不依赖卡录得全不全**, 所以覆盖率这句站得住;
+       而我们已经实测到「卡是对的但只录了主料」这种形状 ——
+       **「补上就准了」是一句我们知道可能不成立的话。**
+
+    ⚠️ 分母用调用方传进来的 `coverage_denominator`(算 `coverage_ratio` 用的
+       那一个), ⛔ 不在这里另取一次数 —— 两个分母就是两个覆盖率。
+    """
+    if not cost_gaps or not coverage_denominator or coverage_denominator <= 0:
+        return []
+    picked = list(cost_gaps)[:max(1, top_n)]
+    gained = sum(float(g.get("revenue") or 0) for g in picked)
+    if gained <= 0:
+        return []
+    after = min(1.0, coverage_ratio + gained / coverage_denominator)
+    # ⛔ 提升不到 0.1 个百分点就不开价 —— 「从 42.2% 提到 42.2%」读起来像坏了。
+    if (after - coverage_ratio) * 100 < 0.1:
+        return []
+    names = "、".join(str(g.get("name") or "") for g in picked)
+    return [{
+        "kind": "fill_dishes",
+        # 结构化字段原样带出去, 前端要自己排版时不用再解析正文
+        "dishes": tuple({"name": g.get("name"),
+                         "revenue": float(g.get("revenue") or 0)} for g in picked),
+        "coverage_before": coverage_ratio,
+        "coverage_after": after,
+        "gap_total": len(cost_gaps),
+        # ⚠️ 「约」不是谦虚 —— 补卡之后那道菜可能被判成异常卡而重新排除,
+        #    所以这是上界不是承诺。⛔ 但**不许**因此就不给数。
+        "text": (f"先补这 {len(picked)} 道的成本卡（{names}）——"
+                 f"能算进毛利的营收会从 {coverage_ratio * 100:.1f}% "
+                 f"提到约 {after * 100:.1f}%"),
     }]
 
 
@@ -185,10 +243,21 @@ def build_fill_offers(
     provenance: str = MEASURED,
     estimation_basis: str = "",
     estimated_metric_labels: Sequence[str] = (),
+    cost_gaps: Sequence[Dict[str, Any]] = (),
+    coverage_ratio: Optional[float] = None,
+    coverage_denominator: Optional[float] = None,
 ) -> List[Dict[str, object]]:
-    """T2 的唯一入口。两个触发条件都在这里：
-    `missing_columns` 非空，或 `provenance != MEASURED`。
+    """T2 的唯一入口。触发条件：`missing_columns` 非空，或 `provenance != MEASURED`。
+
+    🔴 2026-08-14 起多一层：知道**哪几道菜没卡**时，开价点名 + 给覆盖率增量，
+       ⛔ 不再只说一句笼统的「补齐对应的成本卡」。
     """
+    dish_offers = (
+        offers_for_cost_gaps(cost_gaps, coverage_ratio, coverage_denominator)
+        if (cost_gaps and coverage_ratio is not None
+            and coverage_denominator is not None) else []
+    )
     return (offers_for_missing_columns(missing_columns)
+            + dish_offers
             + offers_for_estimated(provenance, estimation_basis,
                                    estimated_metric_labels))
