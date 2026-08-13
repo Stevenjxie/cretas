@@ -694,6 +694,36 @@ _REGISTRY_TO_PIPELINE_DIMENSION: Dict[str, str] = {
 }
 
 
+def non_grouping_dimensions() -> frozenset:
+    """**不分组**的那些维度键 —— 从登记表推导, ⛔ 不手写。
+
+    `Dimension.group_expr is None` 就是「它不产生 GROUP BY」。今天只有 `all`,
+    但判据是那个字段, 不是那个名字。
+    """
+    return frozenset(k for k, d in DIMENSIONS.items() if d.group_expr is None)
+
+
+def grouping_dimensions(names) -> Tuple[str, ...]:
+    """只保留**真正会分组**的维度。
+
+    ## 🔴 为什么需要它(2026-08-13)
+
+    `_RESOLVER_DIMENSIONS` 那张表列的是每个 resolver **能按什么分组**。
+    拿「不分组」去查那张表是**范畴错误**: `all` 不在任何集合里, **也不可能在**,
+    于是 `{'all'} ⊆ {'store'}` 恒不成立 —— **任何「全店合计」问句都被拒**,
+    与指标无关、与 resolver 无关。
+
+    prod 实测: 「今天赚多少」「今天营业额多少」「今天多少单」三题同一个形状被拒,
+    而日结推送用同一批数字答得好好的。
+
+    ⛔ **同一个比较在三处出现过**(执行前校验 / 契约修复 / 回执 scope 判定)。
+       第一次只修了一处, 于是拒答只是从一道闸挪到了下一道 —— 实测到过。
+       所以这个「减掉不分组维度」的动作收敛成**这一个函数**, 三处都调它。
+    """
+    skip = non_grouping_dimensions()
+    return tuple(n for n in (names or ()) if n not in skip)
+
+
 def canonical_dimensions(names) -> Tuple[str, ...]:
     """把维度名归一到**管线内部**的写法, 去重且保序。
 

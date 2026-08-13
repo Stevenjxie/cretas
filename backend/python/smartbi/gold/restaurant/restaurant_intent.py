@@ -2436,9 +2436,15 @@ def _build_spec(
         from smartbi.gold.restaurant.restaurant_intent_service import (
             _RESOLVER_DIMENSIONS,
         )
-        repair_target_serves_dimensions = set(dimensions).issubset(
-            _RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())
-        )
+        # ⛔ 同一个范畴错误的第二处: `all` 是「不分组」, 不在任何 resolver 的
+        #    「能按什么分组」集合里, 也不可能在。不减掉的话这里恒为 False,
+        #    契约修复对**任何全店合计问句**都会被跳过。
+        #    2026-08-13 实测: 修好了执行前那道闸之后, 拒答只是挪到了这里。
+        from smartbi.gold.restaurant.metric_registry import grouping_dimensions
+
+        repair_target_serves_dimensions = set(
+            grouping_dimensions(dimensions)
+        ).issubset(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset()))
         if not repair_target_serves_dimensions:
             logger.warning(
                 "[restaurant-intent] contract-repair SKIPPED %s -> %s: 目标 resolver "
