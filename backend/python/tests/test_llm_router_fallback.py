@@ -214,9 +214,18 @@ def test_review_still_reaches_a_non_aliyun_floor_after_aliyun_exhausts():
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
     non_aliyun = [(a, m) for a, m in chain if a not in llm_router._ALIYUN_ACCOUNTS]
     assert non_aliyun, "REVIEW has no non-aliyun floor at all"
-    last_aliyun_idx = max(
-        i for i, (a, _m) in enumerate(chain) if a in llm_router._ALIYUN_ACCOUNTS
-    )
+    aliyun_idx = [i for i, (a, _m) in enumerate(chain)
+                  if a in llm_router._ALIYUN_ACCOUNTS]
+    if not aliyun_idx:
+        # 🔴 2026-08-13: REVIEW 链里**一个 aliyun 条目都没有**了。当天 aliyun 三个
+        #    账号仅存 4 类模型有额度, 其中 qwen3.5-ocr 是 OCR SKU(实测对业务问句
+        #    只复读三个字), 另外三个都是 _THINKING_ONLY —— 没有一个满足质量档的
+        #    「关思考 ≤4s 通用文本」。本条要守的是「非 aliyun 地板可达」, 那一半
+        #    仍然有效且已在上面断过; 「严格排在 aliyun 之后」在没有 aliyun 时空真。
+        #    ⚠️ 不把它写成 pass 掉的绿灯 —— 留下这段, 等 aliyun 有额度回来时它会
+        #       自动重新开始守那一半。
+        return
+    last_aliyun_idx = max(aliyun_idx)
     first_floor_idx = min(chain.index(p) for p in non_aliyun)
     assert first_floor_idx > last_aliyun_idx, (
         "non-aliyun floor precedes an aliyun pair -- floor should be the "
@@ -258,19 +267,23 @@ def test_flash_quota_pair_retired_from_b_and_c_survives_only_on_a():
     整体移除。CHAT/CHART/MAPPER 链头仍是旧字面量(SLOT_MODELS 由 Task 4 重排),
     这里只钉注册表这张事实表, 不断言尚未重排的链头。
     """
-    expected = [
-        ("aliyun_a", "qwen3.7-flash-2026-07-15"),
-        ("aliyun_a", "qwen3.7-flash"),
-    ]
-    for pair in expected:
-        assert llm_router._SAFE_MODELS[pair] == datetime.date(2026, 10, 23)
-        assert pair in llm_router._MINIMAL_SAFE_SET
+    # 🔴 2026-08-13: aliyun_a 上那两条**也 403 了**, 三个账号至此全部退出。
+    #    它们到期日是 10/23, 是全表跑道最长的几条之一, 且是 _MINIMAL_SAFE_SET
+    #    的成员 —— 08-09 那次重建正是挑「跑道最长」进的兜底集。
+    #    判据: **到期日只说「什么时候一定没」, 不说「今天还有没有」。**
+    #    本条于是从「只在 a 上存活」翻转成「三账号全退」, 断言方向随之翻转。
     for retired in [
+        ("aliyun_a", "qwen3.7-flash-2026-07-15"), ("aliyun_a", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.7-flash-2026-07-15"), ("aliyun_c", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "qwen3.7-flash"), ("aliyun_c", "qwen3.7-flash"),
     ]:
         assert retired not in llm_router._SAFE_MODELS, (
-            f"{retired} should have been retired by the 08-09 audit"
+            f"{retired} should have been retired (08-09 audit for b/c, "
+            f"08-13 probe for a — all three 403 FreeTierOnly)"
+        )
+    for pair in [("aliyun_a", "qwen3.7-flash"), ("aliyun_a", "qwen3.7-flash-2026-07-15")]:
+        assert pair not in llm_router._MINIMAL_SAFE_SET, (
+            f"{pair} 已死却还留在 fail-safe 集合里 —— 退守目标本身是死的"
         )
 
 
@@ -283,18 +296,18 @@ def test_vl_chain_is_vision_only():
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 8, 12)  # registry audit date → not stale
+_TODAY = datetime.date(2026, 8, 13)  # registry audit date → not stale
 # (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
 
 def test_refuse_allows_current_registered_model():
-    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-2026-05-17", _TODAY) is None
+    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-preview", _TODAY) is None
     assert llm_router._refuse_reason(
-        "aliyun_a", "qwen3.7-flash-2026-07-15", _TODAY
+        "aliyun_a", "qwen3.7-max-2026-05-17", _TODAY
     ) is None
     assert llm_router._refuse_reason(
-        "aliyun_a", "qwen3.7-flash", _TODAY
+        "aliyun_a", "kimi-k2.7-code", _TODAY
     ) is None
 
 
@@ -558,7 +571,13 @@ def _patch_keys(monkeypatch):
 # registry, so these call_chain smoke tests monkeypatch a small deterministic
 # chain out of CURRENTLY-registered pairs instead of relying on the real
 # (not-yet-migrated) chain literal.
-_CHAT_SMOKE_CHAIN = [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17")]
+# 2026-08-13: 原夹具的 (aliyun_a, qwen3.7-flash) 与 (aliyun_b, qwen3.7-max-2026-05-17)
+# 当天实测 403 并已退出 _SAFE_MODELS, 于是这一整批用例被 _refuse_reason 判
+# not_allowlisted、一步都走不到就 All providers exhausted。换成当天双证通过的两条。
+# 📌 判据: **夹具里的模型名也是会过期的数据。** 它不像 golden 那样有闸盯着,
+#    坏了的表现是一整批用例集体报同一个与被测行为无关的错(not_allowlisted),
+#    很容易被读成"我这次改坏了什么"。
+_CHAT_SMOKE_CHAIN = [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code")]
 
 
 @pytest.mark.asyncio
@@ -592,7 +611,7 @@ async def test_call_chain_falls_through_403_to_next(monkeypatch):
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
     assert result == ok
-    assert client.call_log == [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17")]
+    assert client.call_log == [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code")]
 
 
 @pytest.mark.asyncio
@@ -609,7 +628,7 @@ async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     """
     _patch_keys(monkeypatch)
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
-    first_account, first_model = "aliyun_a", "qwen3.7-flash"
+    first_account, first_model = "aliyun_a", "kimi-k2.7-code"
     second_account, second_model = "zhipu", "glm-4.5-air"
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
@@ -669,8 +688,8 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
-        [("aliyun_a", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-max-2026-05-17"),
-         ("aliyun_c", "qwen3.7-max-2026-05-17"), ("zhipu", "glm-4.5-air")],
+        [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code"),
+         ("aliyun_c", "kimi-k2.7-code"), ("zhipu", "glm-4.5-air")],
     )
 
     class _SlowClient(_ScriptedClient):
@@ -1024,7 +1043,14 @@ def test_ark_models_carry_a_dated_callable_id():
 # 控制台每个模型旁边那个徽章不作数, 只认账号级确认), model id 取自 owner 提供的
 # 详情页 `deepseek-v4-flash-ga-260731` —— ⛔ 不是控制台显示名, 那是 _provider_config
 # 里 ark 段落警告过的 404 陷阱。生产同源探针 SLOT.REVIEW 连过两轮, 0.8s。
-_ARK_VIABLE: set = {"deepseek-v4-flash-ga-260731"}
+# 🔴 2026-08-13 复审: 上一版这唯一一条 `deepseek-v4-flash-ga-260731` 实测
+# **429 TooManyRequests** —— 它 08-12 刚以「0.8s 快地板」的身份加进来, 24 小时后
+# 死在地板位上(同批死的还有 tencent/hy3, 402 Payment Required)。
+# owner 从文档页提供了 18 个官方 Model ID, 逐条实打**只有 3 个可调**; 3 个里:
+#   doubao-seed-2-0-code-preview-260215  6/6 4.4s        → 唯一进链的
+#   doubao-seed-2-0-pro-260215           45.5s 且已在 _ARK_CONTRACT_REJECTED
+#   doubao-seed-character-260628         角色扮演 SKU, 没跑过契约
+_ARK_VIABLE: set = {"doubao-seed-2-0-code-preview-260215"}
 
 # The former chain is now paused per model by SetLimitExceeded. Keeping any of these
 # reachable would reintroduce a deterministic 429 before every healthy fallback.
@@ -1149,10 +1175,17 @@ def test_floor_is_exactly_the_2026_08_09_survivor_set():
         (a, m) for (a, m) in llm_router._TEXT_TAIL
         if a not in llm_router._ALIYUN_ACCOUNTS
     ]
+    # 🔴 2026-08-13: 上一版这五条里**头两条死了**(ark 429 / tencent/hy3 402),
+    #    而它们正是 08-12 刚以「快地板」身份加进来的。地板排在链尾, 只有前面全挂
+    #    才会被走到 —— 所以它坏了最不容易被发现, 而它坏的那天正是最需要它的那天。
+    # ⚠️ 上面 docstring 里「到期日都是 None → 稳定排序原样保留书写顺序 → 这个列表
+    #    就是链尾的真实顺序」那句话是**错的**: 排序键在到期日之前还有能力档和延迟
+    #    档两位。真正守链尾顺序的是
+    #    test_fast_non_dashscope_floor_precedes_the_slow_one(已改成断言 SLOT_MODELS)
+    #    加上 _ABSOLUTE_LAST 这个结构键。本条只守 _TEXT_TAIL 的**成员**。
     assert floor == [
-        ("ark", "deepseek-v4-flash-ga-260731"),
-        ("tencent", "hy3"),
         ("tencent", "deepseek-v4-flash-202605"),
+        ("ark", "doubao-seed-2-0-code-preview-260215"),
         ("tencent", "minimax-m2.7"),
         ("zhipu", "glm-4.5-air"),
     ]

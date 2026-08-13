@@ -258,7 +258,12 @@ def test_slots_for_pool_only_member_is_unaffected():
     from common import llm_router
     from scripts.probe_llm_registry import _slots_for
 
-    pair = ("aliyun_c", "MiniMax-M2.5")  # 仅在 REASONING 池里(关思考会 400)
+    # 2026-08-13: 原来用的 ("aliyun_c", "MiniMax-M2.5") 当天实测 403 并已退出
+    # 注册表, 于是 _slots_for 返回空、断言拿到的是别的槽。换成当天仍然只在
+    # REASONING 池里的一条(它是 _THINKING_ONLY, 进不了任何关思考的槽)。
+    # 📌 与夹具模型名同源的问题: **测试里写死的 (账号,模型) 也是会过期的数据**,
+    #    它挑的是"当时恰好只属于一个槽"的那一条, 而"属于哪些槽"每轮都在变。
+    pair = ("aliyun_b", "kimi-k2.7-code")
     assert pair not in llm_router._TEXT_TAIL
     assert _slots_for(pair) == [llm_router.SLOT.REASONING]
 

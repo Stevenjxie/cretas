@@ -35,38 +35,28 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 #   aliyun_c/qwen3-max-2025-09-23, aliyun_c/qwen3-vl-32b-instruct,
 #   aliyun_c/qwen3.7-max (与 qwen3.7-max-2026-05-17/-preview/-2026-05-20 不同模型)。
 _FROZEN_ALIYUN_REGISTRY = {
-    ("aliyun_a", "qwen3.8-max"): datetime.date(2026, 11, 1),
-    ("aliyun_a", "deepseek-v4-flash-0731"): datetime.date(2026, 10, 31),
-    ("aliyun_a", "qwen3.7-flash"): datetime.date(2026, 10, 23),
-    ("aliyun_a", "qwen3.7-flash-2026-07-15"): datetime.date(2026, 10, 23),
+    # 2026-08-13 全量重审: owner 三账号控制台余量截图 ∩ 生产探针非空 content。
+    # 上一版 26 条 → 本版 9 条。删掉的 17 条**全部实测 403 FreeTierOnly**,
+    # 不是"人审觉得不该留", 是它们当天真的调不动了。
+    #
+    # 🔴 被删的里面包括 qwen3.8-max(三账号各 100 万、到期 11/01)与
+    #    qwen3.7-flash 系列(10/23) —— 全表跑道最长的那几条, 昨天还都是双证通过的。
+    #    判据: **到期日只说「什么时候一定没」, 不说「今天还有没有」。**
+    #
+    # ⛔ aliyun_c/deepseek-v4-flash-0731 单独说明: 控制台写着剩 479,703、到期
+    #    10/31, 而探针 403。单边证据不收 —— 控制台与运行时打架时**不是**"控制台
+    #    更权威所以加上"。
     ("aliyun_a", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
     ("aliyun_a", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
     ("aliyun_a", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
     ("aliyun_a", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
 
-    ("aliyun_b", "qwen3.8-max"): datetime.date(2026, 11, 1),
-    ("aliyun_b", "deepseek-v4-flash-0731"): datetime.date(2026, 10, 31),
     ("aliyun_b", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
     ("aliyun_b", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
-    ("aliyun_b", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
 
-    ("aliyun_c", "qwen3.8-max"): datetime.date(2026, 11, 1),
-    ("aliyun_c", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
     ("aliyun_c", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
-    ("aliyun_c", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
+    ("aliyun_c", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
     ("aliyun_c", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
-    ("aliyun_c", "qwen3.7-max-2026-05-20"): datetime.date(2026, 8, 20),
-    ("aliyun_c", "deepseek-v3.2-exp"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3.6-plus-2026-04-02"): datetime.date(2026, 8, 13),
-    # 2026-08-12 新增: owner 控制台余量截图 ∩ 生产同源探针(SLOT.REVIEW)连过两轮。
-    # 带日期的快照 403 而不带日期的别名 OK —— 控制台上是两行、两份独立免费额度。
-    ("aliyun_c", "qwen3.6-plus"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3.6-max-preview"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "kimi-k2-thinking"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "deepseek-r1"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "deepseek-r1-0528"): datetime.date(2026, 8, 13),
-    ("aliyun_c", "MiniMax-M2.5"): datetime.date(2026, 8, 13),
 }
 
 
@@ -104,32 +94,57 @@ def test_non_aliyun_registry_matches_frozen_probe_result():
     actual = {k: v for k, v in llm_router._SAFE_MODELS.items()
               if not k[0].startswith("aliyun_")}
     assert actual == {
-        ("tencent", "minimax-m2.7"): None,
+        # tencent: owner 2026-08-13 控制台 14 个服务 ID ∩ 探针产出正文(len≥8)= 9 个。
+        # ⚠️ GET /models 返回 **102** 个而控制台只有 14 个 —— **接口目录 ≠ 账号权益**,
+        #    清单只认控制台。
         ("tencent", "deepseek-v4-flash-202605"): None,
-        ("tencent", "hy3"): None,
-        ("ark", "deepseek-v4-flash-ga-260731"): None,
+        ("tencent", "kimi-k2.7-code-highspeed"): None,
+        ("tencent", "kimi-k2.7-code"): None,
+        ("tencent", "minimax-m2.7"): None,
+        ("tencent", "mimo-v2.5-pro"): None,
+        # 特化 SKU(hy-mt2=机器翻译 / hy-role、hunyuan-role=角色扮演)。
+        # 在白名单里 = 计费安全且 owner 确认; **不在任何池里** = 没跑过契约。
+        ("tencent", "hunyuan-role-latest"): None,
+        ("tencent", "hy-mt2-lite"): None,
+        ("tencent", "hy-role"): None,
+        ("tencent", "hy-mt2-plus"): None,
+        # ark: owner 给的 18 个官方 Model ID 逐条实打, **只有 3 个可调**;
+        # 3 个里 2 个不合契约(见 _ARK_CONTRACT_REJECTED / 角色扮演 SKU)。
+        ("ark", "doubao-seed-2-0-code-preview-260215"): None,
         ("zhipu", "glm-4.5-air"): None,
     }
 
 
 def test_fast_non_dashscope_floor_precedes_the_slow_one():
-    """快地板必须排在 minimax-m2.7(6.7s) 和 zhipu 之前。
+    """慢地板不能排在快地板前面, 且 zhipu 必须是**链的最后一位**。
 
-    _TEXT_TAIL 三条新条目到期日都是 None, `_build_chain` 的稳定排序会原样保留
-    书写顺序 —— 所以顺序**由 _TEXT_TAIL 那几行决定**, 这条断言守的就是那个顺序。
     判据来自 2026-08-09 的生产事故: 链是串行且共享同一个总预算, 把慢的排在前面
     会让后面本来 1s 就能答的候选因为分不到时间而跟着超时、连续 2 次即被熔断。
+
+    🔴 2026-08-13 改了断言对象。旧版量的是 `_TEXT_TAIL` **这个列表的书写下标**,
+       理由写的是「到期日都是 None, 稳定排序原样保留书写顺序」。那句话是错的 ——
+       `_build_chain` 的排序键在到期日之前还有能力档和延迟档两位, 它们一旦不同,
+       书写顺序就完全不起作用。当天实测: zhipu 被算到链的**第 2 位**, 而这条闸
+       全绿。**它守的东西和真正决定行为的东西不是同一个。**
+       现在断言 `SLOT_MODELS`(真正被 call_chain 遍历的那个), 并由
+       `llm_router._ABSOLUTE_LAST` 这个结构键保证 zhipu 置底。
     """
-    tail = llm_router._TEXT_TAIL
-    idx = {pair: i for i, pair in enumerate(tail)}
-    slow_floor = idx[("tencent", "minimax-m2.7")]
-    for fast in (("ark", "deepseek-v4-flash-ga-260731"),
-                 ("tencent", "hy3"),
-                 ("tencent", "deepseek-v4-flash-202605")):
-        assert idx[fast] < slow_floor, (
-            f"{fast} 必须排在 minimax-m2.7 之前, 否则 6.7s 会把它们的预算吃掉"
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        if not chain:
+            continue                      # VL 是空链, 见 spec §9.1
+        assert chain[-1] == ("zhipu", "glm-4.5-air"), (
+            f"{slot.value}: zhipu 必须是链的最后一位, 实际链尾是 {chain[-1]}"
         )
-    assert idx[("zhipu", "glm-4.5-air")] == len(tail) - 1, "zhipu 必须留在最后一位"
+        idx = {p: i for i, p in enumerate(chain)}
+        slow = idx.get(("tencent", "minimax-m2.7"))
+        if slow is None:
+            continue
+        for fast in (("tencent", "deepseek-v4-flash-202605"),
+                     ("ark", "doubao-seed-2-0-code-preview-260215")):
+            if fast in idx:
+                assert idx[fast] < slow, (
+                    f"{slot.value}: {fast} 必须排在 minimax-m2.7 之前"
+                )
 
 
 def test_registry_audit_date_is_not_stale():
