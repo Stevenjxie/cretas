@@ -99,7 +99,7 @@ def test_per_dish_view_says_it_will_not_add_up():
 
     src = inspect.getsource(router.resolve_gross_margin)
     assert "per_dish_no_discount_note" in src
-    assert "按菜加起来会比合计高" in src, "没说清为什么加不起来"
+    assert "按菜加起来会比上面的合计高" in src, "没说清为什么加不起来"
     assert "折扣是整单的" in src
     # ⛔ 由 provenance 生成, 不手写限定语
     assert "provenance_qualifier(" in src and "PROV_ESTIMATED" in src, (
@@ -126,3 +126,59 @@ def test_parity_cron_exists_and_is_three_state():
     assert "rm -f" in src, "跑批前没清上一次的产出(台账会脏读)"
     assert "INSTRUMENT DEAD" in src, "rc=2 没有单独告警"
     assert "-eq 2" in src, "退出码不是三态"
+
+
+def test_margin_rate_denominator_matches_the_numerator():
+    """🔴 毛利率的分母必须和分子**同口径**。
+
+    prod 实测漏过这一步：分子换成实收（475,623.83），分母还是 item 口径
+    （749,009）→ 问答报 63.5%，日结报 66.3%。**毛利对上了，毛利率还是两个数。**
+    ⛔ 改一半比不改更难发现：最显眼的那个数已经一致了。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    assert "total_profit / total_rev\n" in src or \
+           "total_profit / total_rev\b" in src or \
+           "        total_profit / total_rev\n" in src, (
+        "毛利率的分母不是实收营收 —— 与分子不同口径")
+    assert "total_profit / total_rev_with_cost" not in src, (
+        "毛利率还在用 item 口径的分母")
+
+
+def test_customer_text_avoids_jargon_that_sanitize_would_rewrite():
+    """⛔ 自己敲进源码的串不许靠 sanitize 兜。
+
+    prod 实测：正文写「计算口径：」，而「口径」在 `INTERNAL_VOCAB` 里 →
+    sanitize 替换成「计算方法」→ 店长看到「**计算计算方法：**」。
+    """
+    from smartbi.gold.customer_text import INTERNAL_VOCAB
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    # 只看进正文的那几行（f-string 里以 "> " 或 "- " 开头的）
+    for line in src.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith('f"'):
+            continue
+        if "⛔" in line or "⚠️" in line or "#" in line.split('f"')[0]:
+            continue
+        for word in INTERNAL_VOCAB:
+            assert word not in stripped, (
+                f"正文里出现黑话 {word!r}，sanitize 会改写它，改写后读不通：\n{stripped}")
+
+
+def test_the_no_discount_note_reads_correctly_in_the_template():
+    """⚠️ basis 是**名词短语** —— 限定语模板是「用{basis}估算，…」。
+
+    prod 实测塞了一整句进去，读成
+    「用这里没扣折扣 —— 折扣是整单的…会比合计高估算，这部分是估出来的」。
+    ⛔ 同一个错在成本卡那条 basis 上已经犯过一次。判据：**把模板套一遍读出声**。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    assert 'PROV_ESTIMATED, "没扣折扣的单菜价"' in src, (
+        "basis 不是名词短语 —— 套进「用{basis}估算」会读不通")
+    # 解释放在模板外面, 不塞进 basis
+    assert "折扣是整单的，摊不到单道菜" in src
