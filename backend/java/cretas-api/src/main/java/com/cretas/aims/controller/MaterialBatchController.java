@@ -117,6 +117,22 @@ public class MaterialBatchController {
 
     /** material_batch_adjustments.reason 是 varchar(255), 超长会落库失败成 500。 */
     private static final int ADJUSTMENT_REASON_MAX_LENGTH = 255;
+
+    private static String trimToNull(String s) {
+        return StringUtils.hasText(s) ? s.trim() : null;
+    }
+
+    /**
+     * MaterialConsumption 只有 notes 一个自由文本列, 没有 purpose 列。
+     * 把领料用途拼进 notes 一并落库, 而不是收下就丢。两者皆空时返回 null
+     * (让 notes 保持 NULL, 不写一个空串进去)。
+     */
+    private static String joinConsumptionNotes(String purpose, String notes) {
+        String p = trimToNull(purpose);
+        String n = trimToNull(notes);
+        if (p == null) return n;
+        return n == null ? "用途: " + p : "用途: " + p + " — " + n;
+    }
     private final PriceMaskResolver priceMaskResolver;
     private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
 
@@ -543,8 +559,16 @@ public class MaterialBatchController {
             throw new BusinessException(400, "使用数量不能为空").withHint("请填写使用数量").withHintTarget("usedQuantity");
         }
 
+        // 🔴 2026-08-13: purpose / notes 此前收下就丢 —— 生产库 39 条消耗记录 notes 全空。
+        // MaterialConsumption 没有 purpose 列, 按本仓既有做法(web-admin 对「其他」调整原因、
+        // 以及 adjust 端点对 notes)把它拼进 notes 一并落库, 而不是继续假装收下。
+        String consumptionNotes = request != null
+                ? joinConsumptionNotes(request.getPurpose(), request.getNotes())
+                : null;
+
         log.info("使用批次材料: factoryId={}, batchId={}, quantity={}", factoryId, batchId, actualQuantity);
-        MaterialBatchDTO batch = materialBatchService.useBatchMaterial(factoryId, batchId, actualQuantity, actualPlanId, userId);
+        MaterialBatchDTO batch = materialBatchService.useBatchMaterial(
+                factoryId, batchId, actualQuantity, actualPlanId, userId, consumptionNotes);
         return ApiResponse.success("材料使用成功", batch);
     }
 
@@ -774,8 +798,12 @@ public class MaterialBatchController {
     /**
      * 消耗批次材料
      * 兼容两种参数格式：
-     * 1. RequestBody: {"quantity": 100, "processId": "xxx"}
-     * 2. URL Params: ?quantity=100&processId=xxx
+     * 1. RequestBody: {"quantity": 100, "processId": "xxx", "notes": "..."}
+     * 2. URL Params: ?quantity=100&productionPlanId=xxx  (processId 为旧名别名)
+     *
+     * ⚠️ 计划ID 落库到 {@code MaterialConsumption.productionPlanId}
+     * (FK → production_plans)。表里另有 {@code production_batch_id}
+     * (FK → production_batches), 本端点不写它 —— 不要把加工批次ID传进来。
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
@@ -790,7 +818,9 @@ public class MaterialBatchController {
             @RequestHeader("Authorization") String authorization,
             @Parameter(description = "消耗数量 (URL参数)", hidden = true)
             @RequestParam(required = false) BigDecimal quantity,
-            @Parameter(description = "加工流程ID (URL参数)", hidden = true)
+            @Parameter(description = "生产计划ID (URL参数)", hidden = true)
+            @RequestParam(required = false) String productionPlanId,
+            @Parameter(description = "加工流程ID (URL参数, 旧名, 等价于 productionPlanId)", hidden = true)
             @RequestParam(required = false) String processId,
             @RequestBody(required = false) ConsumeMaterialBatchRequest request) {
 
@@ -800,14 +830,20 @@ public class MaterialBatchController {
 
         // 兼容URL参数和RequestBody两种格式
         BigDecimal actualQuantity = quantity;
-        String actualProcessId = processId;
+        // 🔴 2026-08-13: 本端点原来【只】收 processId, 而 /use /reserve /release 三个
+        // 兄弟端点收的都是 productionPlanId, RN 客户端对四个端点统一发 productionPlanId
+        // (materialBatchApiClient.consumeBatch)。于是这里恒绑不上 → 落库
+        // MaterialConsumption.productionPlanId 永远是 null, 原料消耗与生产计划的
+        // 追溯关联被静默丢弃 —— 而服务层参数名与实体字段本来就叫 productionPlanId,
+        // 只有这个 controller 参数走偏了。现在优先收 productionPlanId, processId 保留为旧名别名。
+        String actualPlanId = productionPlanId != null ? productionPlanId : processId;
 
         if (request != null) {
             if (request.getQuantity() != null) {
                 actualQuantity = request.getQuantity();
             }
             if (request.getProcessId() != null) {
-                actualProcessId = request.getProcessId();
+                actualPlanId = request.getProcessId();
             }
         }
 
@@ -815,9 +851,12 @@ public class MaterialBatchController {
             throw new BusinessException(400, "消耗数量不能为空").withHint("请填写消耗数量").withHintTarget("consumedQuantity");
         }
 
-        log.info("消耗批次材料: factoryId={}, batchId={}, quantity={}, processId={}",
-                factoryId, batchId, actualQuantity, actualProcessId);
-        materialBatchService.consumeBatchMaterial(factoryId, batchId, actualQuantity, actualProcessId, userId);
+        String consumptionNotes = request != null ? trimToNull(request.getNotes()) : null;
+
+        log.info("消耗批次材料: factoryId={}, batchId={}, quantity={}, productionPlanId={}",
+                factoryId, batchId, actualQuantity, actualPlanId);
+        materialBatchService.consumeBatchMaterial(
+                factoryId, batchId, actualQuantity, actualPlanId, userId, consumptionNotes);
         return ApiResponse.success("材料消耗成功", null);
     }
 

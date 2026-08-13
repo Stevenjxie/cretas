@@ -157,6 +157,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Autowired(required = false)
     private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
+
+    /**
+     * 校验 MaterialConsumption.productionPlanId 前置存在性 (optional — null → fail-open,
+     * 与本类既有的 purchaseReceiveRecordRepository 约定一致)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
     @Autowired(required = false)
     private FactoryMaterialRequisitionRepository factoryMaterialRequisitionRepository;
     @Autowired(required = false)
@@ -1364,6 +1371,34 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Override
     @Transactional
     public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId) {
+        return useBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId, null);
+    }
+
+    /**
+     * MaterialConsumption.productionPlanId 有外键指向 production_plans。传一个不存在的 ID
+     * 会在落库时炸成通用 500 —— 在这里拦成可读的 404。
+     *
+     * <p>🔴 2026-08-13 接通 /consume 的计划ID 透传时**必须**配这道校验: 那条路以前
+     * 恒为 null(controller 参数名走偏, 见该端点注释), 接上之后, 现存唯一的调用方
+     * (RN BatchOperationsTestScreen) 传的是硬编码的 {@code 1} —— 不校验就是把一个
+     * 静默丢弃直接换成 FK 500。
+     */
+    private void validateProductionPlanRef(String productionPlanId) {
+        if (productionPlanId == null || productionPlanId.isBlank()) {
+            return;   // 不关联计划是合法的 (WHOutboundIssueScreen 的领料出库就不传)
+        }
+        if (productionPlanRepository != null && !productionPlanRepository.existsById(productionPlanId)) {
+            throw new BusinessException(404, "生产计划不存在: " + productionPlanId)
+                    .withHint("请确认生产计划ID; 不关联计划时请不要传该参数")
+                    .withHintTarget("productionPlanId");
+        }
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
+                                             String productionPlanId, Long operatorId, String notes) {
+        validateProductionPlanRef(productionPlanId);
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
 
@@ -1414,6 +1449,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             consumption.setTotalCost(quantity.multiply(unitPrice));
             consumption.setRecordedBy(operatorId);
             consumption.setConsumptionTime(LocalDateTime.now());
+            // 2026-08-13: 此前从不写 notes —— 生产库 39 条消耗记录该列全空,
+            // 而 UseMaterialBatchRequest 一直对外公布 purpose/notes 两个字段。
+            consumption.setNotes(notes);
             materialConsumptionRepository.save(consumption);
         }
 
@@ -1515,6 +1553,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHintTarget("reservedQuantity");
         }
 
+        // 本方法**新建** ProductionPlanBatchUsage 行, 那张表的 production_plan_id 同样有
+        // 外键指向 production_plans —— 传一个不存在的计划会炸成通用 500。与 use/consume
+        // 用同一道校验, 免得同样的输入在四个兄弟端点上得到两种错误。
+        // (releaseBatchReservation 是【查】已有 usage 行, 查不到只是静默跳过, 不会 500,
+        //  在那里加校验属于另一种行为改变, 本次不动。)
+        validateProductionPlanRef(productionPlanId);
+
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足以预留")
                     .withHint("请刷新批次库存或减少预留数量");
@@ -1605,6 +1650,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Override
     @Transactional
     public void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId) {
+        consumeBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
+                                     String productionPlanId, Long operatorId, String notes) {
+        validateProductionPlanRef(productionPlanId);
         MaterialBatch batch = materialBatchRepository.findById(batchId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
@@ -1665,6 +1718,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         consumption.setTotalCost(quantity.multiply(consumeUnitPrice));
         consumption.setRecordedBy(operatorId);
         consumption.setConsumptionTime(LocalDateTime.now());
+        // 2026-08-13: 同 useBatchMaterial —— ConsumeMaterialBatchRequest.notes 此前无处可去。
+        consumption.setNotes(notes);
         materialConsumptionRepository.save(consumption);
 
         ProductionPlanBatchUsage usage = productionPlanBatchUsageRepository

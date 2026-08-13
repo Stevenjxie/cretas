@@ -242,6 +242,19 @@ public interface MaterialBatchService {
      * @param operatorId 操作人用户ID, 写入 MaterialConsumption.recordedBy (NOT NULL + FK users)。
       */
     MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId);
+
+    /**
+     * 使用批次材料, 并把领料备注写进 {@code MaterialConsumption.notes}。
+     *
+     * <p>🔴 2026-08-13: {@code UseMaterialBatchRequest} 一直公布 {@code purpose}/{@code notes}
+     * 两个字段, 但 controller 从不透传, 实现也从不 set —— 生产库 39 条消耗记录
+     * {@code notes} 全为空。这里加 default 重载而不是改原签名, 是为了不破坏既有实现方
+     * (仓内另有 8 处测试桩实现本接口); 真实现覆写本方法, 5 参版委派过来。
+      */
+    default MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
+                                              String productionPlanId, Long operatorId, String notes) {
+        return useBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId);
+    }
      /**
      * 设置批次数量到绝对值 (newQuantity = param, NOT current + param).
      *
@@ -269,6 +282,15 @@ public interface MaterialBatchService {
      * @param operatorId 操作人用户ID, 写入 MaterialConsumption.recordedBy (NOT NULL + FK users)。
       */
     void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId);
+
+    /**
+     * 消耗批次材料, 并把备注写进 {@code MaterialConsumption.notes}。理由同
+     * {@link #useBatchMaterial(String, String, BigDecimal, String, Long, String)}。
+      */
+    default void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
+                                      String productionPlanId, Long operatorId, String notes) {
+        consumeBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId);
+    }
      /**
      * 获取库存统计
       */
