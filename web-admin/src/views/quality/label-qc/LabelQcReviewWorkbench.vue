@@ -595,7 +595,7 @@ type ScreenTray = {
 };
 
 const LAYER_META: Record<ScreenLayer, { key: string; text: string; color: string }> = {
-  tray: { key: '1', text: '盒子', color: '#2f6fdd' },
+  tray: { key: '1', text: '托盘', color: '#2f6fdd' },
   white: { key: '2', text: '白标', color: '#06b6d4' },
   color: { key: '3', text: '彩标', color: '#a855f7' },
 };
@@ -618,7 +618,13 @@ const screenTrays = computed<ScreenTray[]>(() => {
 
 const hasScreenDetail = computed(() => screenTrays.value.length > 0);
 
-type RefBox = { key: string; layer: ScreenLayer; style: Record<string, string>; title: string };
+type RefBox = {
+  key: string;
+  label: string;
+  layer: ScreenLayer;
+  style: Record<string, string>;
+  title: string;
+};
 
 const referenceBoxes = computed<RefBox[]>(() => {
   const out: RefBox[] = [];
@@ -626,16 +632,20 @@ const referenceBoxes = computed<RefBox[]>(() => {
     if (visibleLayers.value.tray && tray.bbox?.length === 4) {
       out.push({
         key: `tray-${tray.index}`,
+        label: `${LAYER_META.tray.text} ${tray.index + 1}`,
         layer: 'tray',
         style: boxStyleFrom(tray.bbox, LAYER_META.tray.color),
-        title: `盒子 #${tray.index + 1}`,
+        title: `${LAYER_META.tray.text} #${tray.index + 1}${tray.trayConfidence != null
+          ? ` ${Math.round(tray.trayConfidence * 100)}%` : ''}`,
       });
     }
     for (const [i, label] of (tray.labels ?? []).entries()) {
-      const layer: ScreenLayer = label.type === 'white' ? 'white' : 'color';
+      if (label.type !== 'white' && label.type !== 'color') continue;
+      const layer: ScreenLayer = label.type;
       if (!visibleLayers.value[layer] || label.bbox?.length !== 4) continue;
       out.push({
         key: `lb-${tray.index}-${i}`,
+        label: LAYER_META[layer].text,
         layer,
         style: boxStyleFrom(label.bbox, LAYER_META[layer].color),
         title: `${LAYER_META[layer].text} ${label.confidence != null
@@ -654,6 +664,7 @@ function boxStyleFrom(bbox: number[], color: string): Record<string, string> {
     width: `${(x1 - x0) * 100}%`,
     height: `${(y1 - y0) * 100}%`,
     borderColor: color,
+    '--reference-color': color,
   };
 }
 
@@ -1061,7 +1072,9 @@ onBeforeUnmount(() => {
               :class="`layer-${ref.layer}`"
               :style="ref.style"
               :title="ref.title"
-            />
+            >
+              <span class="reference-tag">{{ ref.label }}</span>
+            </div>
             <div
               v-for="item in visibleItems"
               :key="item.key"
@@ -1790,19 +1803,38 @@ button {
   opacity: .85;
 }
 
-/* AI 初筛参考层：更细、半透明、不可交互，避免和人工标注框抢视觉 */
+/* AI 初筛参考层：常显类别，但保持不可交互，避免被误当成人工结论 */
 .reference-box {
   position: absolute;
   z-index: 1;
-  border: 1px solid;
+  border: 2px solid;
   border-radius: 3px;
   pointer-events: none;
-  opacity: .85;
+  opacity: .92;
 }
 
 .reference-box.layer-tray {
   border-style: dashed;
-  opacity: .6;
+  opacity: .78;
+}
+
+.reference-tag {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  display: block;
+  max-width: max-content;
+  padding: 2px 6px 3px;
+  border-radius: 2px 0 4px;
+  color: #fff;
+  background: var(--reference-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, .35);
 }
 
 /* 单层细框：原先是 3px 边框 + 1px 白描边 (选中时再叠 3px 白 + 6px 绿 = 一圈 9px)，
