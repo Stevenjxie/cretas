@@ -12,3 +12,10 @@ backend/python/smartbi/services/materialized_analytics/templates/period_comparis
 # no-behavior-change LF normalization makes the same range pass without them.
 backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FormAssistantController.java whitespace=trailing-space,cr-at-eol
 backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductTypeController.java whitespace=trailing-space,cr-at-eol
+
+# These three files still store CRLF blobs. Keep real trailing-space checks
+# strict while treating CR as EOL; remove these exact rules after a dedicated
+# no-behavior-change LF normalization makes the same daily range pass.
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialBatchController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/types/navigation.ts whitespace=trailing-space,cr-at-eol
