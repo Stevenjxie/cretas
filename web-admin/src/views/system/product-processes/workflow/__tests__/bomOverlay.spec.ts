@@ -392,3 +392,80 @@ describe('🔴 selectObsoleteBomInputs —— 旧工艺遗留配方行的判据'
     expect(selectObsoleteBomInputs(items, live)).toEqual([]);
   });
 });
+
+/**
+ * 🔴 2026-08-13 生产实测(F006「叮咚好食光红烧猪蹄 250g」): 点已有包材行 → 409
+ * 「旧工艺中的原料投入在目标工艺中已不存在: 2015胸肉」, **而且没有出口可点**。
+ *
+ * 真实数据:
+ *   配方行 2015胸肉  node=material:raw  port=input:1786391451226
+ *   当前画布 wf168   node material:raw 还在; 活端口 input:1786474222618 / …244078 / …150041
+ *
+ * 后端按【槽位/投入口有没有被认领】判过期, 这里却只问节点在不在 ——
+ * 而 material:raw 是通用稳定 id, 任何带原料的画布上都有。于是判据恒不成立,
+ * repairObsoleteBomInputs 拿到空数组直接 return false, 原始 409 原样抛出。
+ */
+describe('🔴 selectObsoleteBomInputs —— 节点还在但投入口没了', () => {
+  const liveNodes = new Set(['material:raw', 'process:A', 'material:finished:A']);
+  const livePorts = new Set(['input:1786474222618', 'output:1786474222618']);
+
+  it('实测那一行: 节点在、端口不在 → 判为孤儿(出口要打开)', () => {
+    const items = [{
+      id: 611,
+      materialName: '2015胸肉',
+      materialCategory: 'RAW',
+      workflowMaterialNodeId: 'material:raw',
+      workflowInputPortId: 'input:1786391451226',
+    }];
+    expect(selectObsoleteBomInputs(items, liveNodes, livePorts).map((i) => i.id)).toEqual([611]);
+  });
+
+  it('反向: 端口还活着就不算孤儿 —— 不能把在用的配方行判成要删', () => {
+    const items = [{
+      id: 1,
+      materialName: '活着的料',
+      materialCategory: 'RAW',
+      workflowMaterialNodeId: 'material:raw',
+      workflowInputPortId: 'input:1786474222618',
+    }];
+    expect(selectObsoleteBomInputs(items, liveNodes, livePorts)).toEqual([]);
+  });
+
+  it('PACKAGING 仍然不算 —— 与后端那道过滤保持一致', () => {
+    const items = [{
+      id: 2,
+      materialName: '2030真空袋（16s）',
+      materialCategory: 'PACKAGING',
+      workflowMaterialNodeId: 'material:raw',
+      workflowInputPortId: 'input:早就没了',
+    }];
+    expect(selectObsoleteBomInputs(items, liveNodes, livePorts)).toEqual([]);
+  });
+
+  it('不传端口集时保持旧行为 —— 只按节点判, 不误伤没传的调用方', () => {
+    const items = [{
+      id: 3,
+      materialName: '2015胸肉',
+      materialCategory: 'RAW',
+      workflowMaterialNodeId: 'material:raw',
+      workflowInputPortId: 'input:1786391451226',
+    }];
+    expect(selectObsoleteBomInputs(items, liveNodes)).toEqual([]);
+  });
+
+  it('节点整个没了仍然算孤儿 —— 原有判据不被新判据顶掉', () => {
+    const items = [{
+      id: 4,
+      materialName: '旧节点上的料',
+      materialCategory: 'RAW',
+      workflowMaterialNodeId: 'material:semi:GONE',
+      workflowInputPortId: 'input:1786474222618',
+    }];
+    expect(selectObsoleteBomInputs(items, liveNodes, livePorts).map((i) => i.id)).toEqual([4]);
+  });
+
+  it('从没绑过画布的行不算孤儿', () => {
+    const items = [{ id: 5, materialName: '手工加的', materialCategory: 'RAW' }];
+    expect(selectObsoleteBomInputs(items, liveNodes, livePorts)).toEqual([]);
+  });
+});

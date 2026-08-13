@@ -1388,8 +1388,17 @@ async function repairObsoleteBomInputs(productTypeId: string, error: unknown): P
   } catch {
     return false;   // 读不到配方就别猜, 让原始报错照常显示
   }
-  const liveNodeIds = new Set(flowNodes.value.filter((n) => !isBomOverlayNode(n)).map((n) => n.id));
-  const obsolete = selectObsoleteBomInputs(items, liveNodeIds);
+  const realNodes = flowNodes.value.filter((n) => !isBomOverlayNode(n));
+  const liveNodeIds = new Set(realNodes.map((n) => n.id));
+  // 后端判过期看的是【槽位/投入口】有没有被认领, 不是节点在不在 —— 只按节点判的话,
+  // `material:raw` 这种通用稳定 id 任何画布上都有, 出口对原料投入永远打不开(2026-08-13 实测)。
+  const liveInputPortIds = new Set(
+    realNodes.flatMap((n) => {
+      const ports = (n.data as { ports?: Array<{ id?: string | null }> } | undefined)?.ports ?? [];
+      return ports.map((p) => p?.id).filter((id): id is string => !!id);
+    }),
+  );
+  const obsolete = selectObsoleteBomInputs(items, liveNodeIds, liveInputPortIds);
   if (obsolete.length === 0) return false;                          // 判据对不上就别动手
 
   const names = obsolete.map((item) => item.materialName || item.materialTypeId).join('、');
