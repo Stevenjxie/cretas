@@ -33,6 +33,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.provenance import (
+    ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
     qualifier as provenance_qualifier,
 )
@@ -3542,6 +3543,31 @@ async def resolve_requisition_trend(
     )
 
 
+async def _paid_revenue_in_window(pool, factory_id: str, start, end):
+    """这段时间的**实收**营收（`SUM(t.net_amount)`，扣了交易级折扣）。
+
+    ⛔ 不能在明细 join 上直接 `SUM(t.net_amount)` —— 一张订单有多条明细, 会扇出
+       (2026-08-09 实测过 57 倍)。所以单独查订单表, 不 join 明细。
+
+    ⚠️ 与 `generic_executor` 里 `revenue` 的 txn 粒度表达式是**同一个口径**;
+       两条路必须给出同一个合计毛利, 由 `scripts/cron/margin-parity-daily.sh`
+       那道闸每天钉住。
+    """
+    if not start or not end:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT SUM(t.net_amount)::float AS paid "
+                "  FROM fact_pos_transaction t "
+                " WHERE t.factory_id = $1 AND t.date >= $2 AND t.date <= $3",
+                factory_id, start, end)
+    except Exception:  # noqa: BLE001 — 拿不到就让调用方退回原口径并标注
+        logger.warning("[gross_margin] 实收营收查询失败", exc_info=True)
+        return None
+    return None if row is None or row["paid"] is None else float(row["paid"])
+
+
 async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None, query: Optional[str] = None,
@@ -4151,9 +4177,31 @@ async def resolve_gross_margin(
     ranking_with_cost = [item for item in ranking_pool if item["has_cost"]]
     primary_excluded_count = len(enriched) - len(ranking_pool)
     top_slice = _rank_cost_complete_margin_entries(ranking_pool, top_n)
-    total_rev = sum(item["revenue"] for item in enriched)
+    # 🔴 owner 2026-08-13 裁定 a: **合计层用实收营收**, 逐菜明细保持 item 口径。
+    #
+    # 明细行的 `revenue` 是 `SUM(i.amount)` —— **原价**, 没扣交易级折扣。
+    # 拿它算合计毛利等于把从未收到的钱算成收入(prod 实测虚高 31,125.59, 约 6.5%)。
+    # ⛔ 逐菜那一层**不改**: 交易级折扣摊不到单道菜, 摊派规则本身有真争议。
+    #
+    # ⚠️ `total_rev_items` 只用于**覆盖率**(分子分母都得是 item 口径, 否则
+    #    「可计算毛利的营收 ÷ 全部营收」会算出 >100%)。
+    total_rev_items = sum(item["revenue"] for item in enriched)
     total_rev_with_cost = sum(item["revenue"] for item in with_cost)
-    total_profit = sum(float(item["gross_profit"]) for item in with_cost)
+    # 成本与营收口径无关 —— 它就是那批菜的食材成本。
+    total_cost = total_rev_with_cost - sum(
+        float(item["gross_profit"]) for item in with_cost)
+
+    total_paid_rev = await _paid_revenue_in_window(
+        smartbi_pool, factory_id, window_start, window_end)
+    if total_paid_rev is None:
+        # ⛔ 取不到实收就**退回原口径并如实标注**, 不拿一个猜的数顶上。
+        logger.warning("[gross_margin] 拿不到实收营收(factory=%s %s~%s), "
+                       "合计层退回原价口径", factory_id, window_start, window_end)
+        total_rev = total_rev_items
+        total_profit = total_rev_with_cost - total_cost
+    else:
+        total_rev = total_paid_rev
+        total_profit = total_paid_rev - total_cost
     margin_invariant_pass = bool(
         math.isfinite(total_profit)
         and total_profit <= total_rev_with_cost + 0.01
@@ -4327,7 +4375,10 @@ async def resolve_gross_margin(
         ranking_profit / ranking_rev_with_cost
         if ranking_rev_with_cost > 0 else None
     )
-    coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
+    # ⚠️ 覆盖率的分子分母**都必须是 item 口径** —— 分母换成实收会算出 >100%
+    #    (可计算毛利的营收 749,009 ÷ 实收 717,883 = 104.3%)。
+    coverage_ratio = (total_rev_with_cost / total_rev_items
+                      if total_rev_items > 0 else 0.0)
     low_margin = sorted(
         [item for item in ranking_with_cost if item["revenue"] >= 1000],
         key=lambda item: item["margin_rate"],
@@ -4546,13 +4597,27 @@ async def resolve_gross_margin(
             "2. 不要在成本缺失或成本异常的菜品上直接调价。\n"
             "3. 不要做全店无差别打折，先在高销量低毛利菜品上小范围验证。"
         )
+    # 🔴 owner 2026-08-13: 合计用实收、逐菜用原价, **拆开就加不起来**
+    #    (prod 实测差 31,125.59 = 折扣额)。店长点开按菜看、一加发现比合计高,
+    #    会觉得系统在骗他。⛔ 这一句不是挂账, 是本次修复的组成部分:
+    #    不说明就会立刻产生一个更隐蔽的不一致 —— 数字都对, 但对不上, 而且没人说。
+    # ⛔ 用已建好的机制不新建: 标 ESTIMATED, 限定语由 `provenance` 生成。
+    per_dish_no_discount_note = ""
+    if total_paid_rev is not None and abs(total_rev_items - total_paid_rev) > 0.01:
+        per_dish_no_discount_note = provenance_qualifier(
+            PROV_ESTIMATED,
+            "这里没扣折扣 —— 折扣是整单的，摊不到单道菜；"
+            "所以按菜加起来会比合计高",
+        ) + "\n"
+
     answer = (
         f"**菜品毛利分析（{window_label}）**\n"
         f"- 全部销售营收 **¥{total_rev:,.2f}**；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
         f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
-        f"计算过程：`毛利 ¥{total_profit:,.2f} = 可计算毛利营收 ¥{total_rev_with_cost:,.2f}"
-        f" − 对应菜品成本 ¥{total_rev_with_cost - total_profit:,.2f}`\n\n"
-        f"> 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
+        f"计算过程：`毛利 ¥{total_profit:,.2f} = 实收营收 ¥{total_rev:,.2f}"
+        f" − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
+        f"> 计算口径：毛利 = 实收营收 − 对应菜品成本；期间与菜品范围完全一致。\n"
+        f"{per_dish_no_discount_note}"
         f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
         f"需要关注的低毛利菜品:\n\n{low_margin_text}{joint_priority_text}{prohibited_actions_text}\n\n"

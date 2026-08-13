@@ -51,6 +51,42 @@ MSG="$1"
 shift
 FILES=("$@")
 
+# ── 硬约束 7 的机械触发点 ────────────────────────────────────────────────
+#
+# 🔴 squash 合并把整个分支压成 main 上的**一个新 commit**, 原分支的 commit
+#    不再是 main 的祖先。在原分支上继续追加再开 PR, `gh pr merge` 直接冲突。
+#    2026-08-13 一天踩**四次**(#2564 / #2566 / #2578 各作废一轮 CI)。
+#
+# ⚠️ 规则写进文件里挡不住 —— 我写下那条规则之后当天又犯了两次。
+#    问题不在判据不机械, 在**触发点靠记得**。所以把它放在 commit 这一步上。
+#
+# ⛔ 不能按 commit hash 检测: squash 让 hash 对不上。按 **PR 状态**能绕开。
+# ⚠️ 拿不到状态(离线 / gh 未登录 / 分支没开过 PR)一律**放行** ——
+#    这道闸是防手滑的, 不该在断网时把人挡死。
+_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+if [ -n "$_branch" ] && [ "$_branch" != "HEAD" ] && [ "$_branch" != "main" ]; then
+    _pr_state="$(gh pr view "$_branch" --json state --jq .state 2>/dev/null || echo '')"
+    if [ "$_pr_state" = "MERGED" ]; then
+        cat >&2 <<EOF
+[safe-commit] ⛔ 拒绝提交: 当前分支 '$_branch' 的 PR 已经 MERGED。
+
+squash 合并之后这个分支已经和 main 分叉, 在它上面继续提交, 下一个 PR 必然冲突
+(2026-08-13 一天因此作废三个 PR)。
+
+正确做法 —— 开新分支, 把改动 cherry-pick 过去:
+    git stash list                 # 先确认栈里没有别人的东西(rule 8)
+    git fetch origin main
+    git worktree add -b codex/claude-<task>-<n> ../cretas-<task>-<n> origin/main
+    cd ../cretas-<task>-<n>
+    # 改动还没提交的话: 直接在新 worktree 里重做; 已提交的: git cherry-pick <sha>
+
+⛔ 不要 'git merge origin/main' 去救旧分支 —— 那会把已经 squash 进 main 的改动
+   再合一遍, PR diff 变脏。
+EOF
+        exit 1
+    fi
+fi
+
 # Sanity: all listed files must exist
 for f in "${FILES[@]}"; do
     if [ ! -e "$f" ]; then
