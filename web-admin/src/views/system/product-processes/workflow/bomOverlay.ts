@@ -318,13 +318,14 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
   return { nodes, edges };
 }
 
-/** 判定「配方行是不是绑在已经不存在的画布节点上」所需的最小字段。 */
+/** 判定「配方行是不是绑在已经不存在的画布槽位上」所需的最小字段。 */
 export interface ObsoleteBomInputCandidate {
   id: number;
   materialName?: string | null;
   materialTypeId?: string | null;
   materialCategory?: string | null;
   workflowMaterialNodeId?: string | null;
+  workflowInputPortId?: string | null;
 }
 
 /**
@@ -337,15 +338,40 @@ export interface ObsoleteBomInputCandidate {
  * ⚠️ **按绑定判, 不按物料名判**。错误消息里只有物料名, 照着名字删会误删 ——
  * 同一个物料完全可能一行是活的、一行是孤儿(比如换了投入口但料没换)。
  * ⚠️ PACKAGING 不算: 它不绑投入口, 与后端 reconcileUpgradedInputSkeletons 的过滤一致。
+ *
+ * 🔴 **2026-08-13 订正: 只看节点 id 的话, 这个出口对它本该服务的场景永远打不开。**
+ *
+ * 生产实测(F006「叮咚好食光红烧猪蹄 250g」, 点已有包材行 → 409 且没有出口):
+ *
+ * ```
+ *   配方行 2015胸肉  node=material:raw   port=input:1786391451226
+ *   当前画布 168     node=material:raw ✅ 还在
+ *                    活端口 = input:1786474222618 / …244078 / …150041  ← 那个 port 不在
+ * ```
+ *
+ * 后端 `reconcileUpgradedInputSkeletons` 判过期的口径是**槽位(端口)有没有被认领**;
+ * 这里却只问「节点 id 还在不在」。而 `material:raw` 是个**通用稳定 id** ——
+ * 任何带原料的画布上都有它, 于是这条判据对原料投入几乎恒为 false,
+ * `repairObsoleteBomInputs` 拿到空数组就 `return false`, 把原始 409 原样放出来。
+ * 用户看到的就是「操作被拒绝」加一句让他去删、却没有地方可点。
+ *
+ * 判据: **修复出口的判据必须与【产生这个错误的那一侧】同口径** ——
+ * 两边各判各的, 出口会在最需要它的时候恰好关着。
  */
 export function selectObsoleteBomInputs<T extends ObsoleteBomInputCandidate>(
   items: readonly T[],
   liveCanvasNodeIds: ReadonlySet<string>,
+  liveCanvasInputPortIds?: ReadonlySet<string>,
 ): T[] {
   return items.filter((item) => {
     if (item.materialCategory === 'PACKAGING') return false;
-    const bound = item.workflowMaterialNodeId;
-    if (!bound) return false;
-    return !liveCanvasNodeIds.has(bound);
+    const node = item.workflowMaterialNodeId;
+    const port = item.workflowInputPortId;
+    if (!node && !port) return false;                       // 从没绑过画布, 不是孤儿
+    if (node && !liveCanvasNodeIds.has(node)) return true;   // 节点整个没了
+    // 节点还在、但它当初绑的那个投入口已经不在 —— 后端正是按这个判过期的。
+    // liveCanvasInputPortIds 缺省时保持旧行为(只按节点判), 不误伤没传端口集的调用方。
+    if (port && liveCanvasInputPortIds && !liveCanvasInputPortIds.has(port)) return true;
+    return false;
   });
 }
