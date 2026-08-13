@@ -215,7 +215,12 @@ METRICS: Dict[str, Metric] = {
     # ── 成本类 ────────────────────────────────────────────────────────────
     "food_cost": Metric(
         key="food_cost", category="成本和毛利", label="食材成本", unit="money", asks="菜品成本/食材成本/配方成本",
-        exprs={"item": "SUM(i.qty * COALESCE(c.food_cost, 0))"},
+        # 🔴 owner 2026-08-13: 去掉 COALESCE(.., 0)。**没有成本卡的菜不是零成本的菜。**
+        #    补 0 是编数据(撞 CLAUDE.md 原则 1「禁止降级处理」), 而且编出来的方向
+        #    **让毛利虚高** —— 正好是最不该错的那个方向。
+        #    prod 实测: DEMO_REST 61.3% 覆盖率下日结毛利率报到 88.3%。
+        # ⚠️ SQL 的 SUM 天然跳过 NULL, 缺卡行**自动退出**毛利计算, 不需要额外过滤。
+        exprs={"item": "SUM(i.qty * c.food_cost)"},
         requires=("fact_pos_item.qty", "agg_restaurant_product_cost.food_cost"),
         dimensions=_ITEM_DIMS,
     ),

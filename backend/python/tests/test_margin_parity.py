@@ -54,8 +54,8 @@ def test_resolver_aggregate_uses_paid_revenue():
 
     src = inspect.getsource(router.resolve_gross_margin)
     assert "_paid_revenue_in_window" in src, "合计层没取实收营收"
-    assert "total_paid_rev - total_cost" in src, (
-        "合计毛利不是「实收 − 成本」—— 口径没改到位")
+    assert "covered_net_rev - total_cost" in src, (
+        "合计毛利不是「覆盖净营收 − 覆盖成本」—— 口径没改到位")
     # ⛔ 旧写法不许残留：逐菜 gross_profit 直接加总当合计
     assert 'sum(\n        float(item["gross_profit"]) for item in with_cost)' in src \
         or "total_cost = total_rev_with_cost - sum(" in src, (
@@ -154,12 +154,11 @@ def test_margin_rate_denominator_matches_the_numerator():
     from smartbi.gold.restaurant import restaurant_ops_router as router
 
     src = inspect.getsource(router.resolve_gross_margin)
-    assert "total_profit / total_rev\n" in src or \
-           "total_profit / total_rev\b" in src or \
-           "        total_profit / total_rev\n" in src, (
-        "毛利率的分母不是实收营收 —— 与分子不同口径")
-    assert "total_profit / total_rev_with_cost" not in src, (
-        "毛利率还在用 item 口径的分母")
+    assert "total_profit / covered_net_rev" in src, (
+        "毛利率的分母不是覆盖净营收 —— 与分子不同口径")
+    # ⛔ 旧分母(实收全额)不许残留 —— 用词边界判, 免得把 covered_net_rev 也算上。
+    assert "total_profit / total_rev " not in src, (
+        "毛利率还在用未摊折扣/未按覆盖口径的分母")
 
 
 def test_customer_text_avoids_jargon_that_sanitize_would_rewrite():

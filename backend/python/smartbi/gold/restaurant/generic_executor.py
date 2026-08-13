@@ -71,8 +71,8 @@ class CellResult:
     #: 有成本卡的营收 ÷ 全部营收。`None` = 这个格子不按覆盖率表达。
     #:
     #: 🔴 为什么必须有: `food_cost` 的表达式是
-    #:      `SUM(i.qty * COALESCE(c.food_cost, 0))`
-    #:    —— **没有成本卡的菜按 0 成本计入**, 毛利被抬高, 而限定语只说
+    #:      `SUM(i.qty * c.food_cost)`(2026-08-13 去掉 COALESCE 之前是补 0 的)
+    #:    —— 补 0 时**没有成本卡的菜按零成本计入**, 毛利被抬高, 而限定语只说
     #:    「按成本卡估算」, 不说这个估只覆盖了几成。覆盖率 40% 的租户会看到
     #:    一个高得离谱的毛利 + 一句听起来已经解释过了的限定语。
     #: ⚠️ 分母用 **item 口径**(`SUM(i.amount)`), 因为 food_cost 是 item 粒度的。
@@ -404,6 +404,59 @@ def _scalar(cell: "CellResult", key: str):
     return cell.rows[0].get(key) if cell.rows else None
 
 
+#: 覆盖部分的四个量, 一次查出来 —— 分子分母必须来自**同一批行**。
+#: join 从 `GRAINS["item_cost"]` 取, 不重抄(抄一份就是同一条 join 两个定义)。
+_COVERED_MARGIN_SQL = (
+    "SELECT COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL), 0)"
+    "         AS covered_gross,\n"
+    "       COALESCE(SUM(i.amount), 0)                    AS all_gross,\n"
+    "       COALESCE(SUM(i.qty * c.food_cost), 0)         AS covered_cost\n"
+    "  FROM {frm}\n  {join}\n"
+    " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+)
+
+#: 折扣按明细金额比例摊派 —— owner 2026-08-13 裁定。
+#: 🔑 **折扣总额是实测的, 只有它在明细行之间怎么分是估的** ——
+#:    我们不是在猜折扣, 是在**分配一个已知的数**。
+#: 📌 为什么摊比不摊好: 不摊的误差**系统性偏向好看**(折扣永远是减项, 不减就一律虚高);
+#:    按比例摊的误差不系统偏向任何一边。**两者不是同一档的近似。**
+#: ⛔ 这不解冻「精确摊派规则」那条挂账 —— 那条争的是**定向折扣该不该归给它针对的
+#:    那道菜**, 只改分配、不改总额。按比例摊是分配问题的默认解。
+_DISCOUNT_ALLOC_BASIS = "按明细金额摊派的折扣"
+
+
+async def _covered_margin(conn, factory_id: str, date_range):
+    """覆盖部分的 (净营收, 成本, 覆盖率)。算不出来返回 None。
+
+    🔴 owner 2026-08-13 裁定: **毛利的分子和分母都只算有成本卡的那部分。**
+       改之前分子用全额营收、分母用覆盖额, 三个症状同源:
+         DEMO_REST 日结毛利率 88.3% / 青花椒问答整个拒答 / 问答正文自己算不平。
+    """
+    frm, join, alias = GRAINS["item_cost"]
+    sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias)
+    try:
+        row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1])
+        paid = await conn.fetchval(
+            "SELECT COALESCE(SUM(t.net_amount), 0) FROM fact_pos_transaction t "
+            " WHERE t.factory_id = $1 AND t.date >= $2 AND t.date <= $3",
+            factory_id, date_range[0], date_range[1])
+    except Exception:  # noqa: BLE001
+        logger.warning("[generic-executor] 覆盖毛利取数失败", exc_info=True)
+        return None
+    if row is None:
+        return None
+    covered_gross = Decimal(str(row["covered_gross"] or 0))
+    all_gross = Decimal(str(row["all_gross"] or 0))
+    covered_cost = Decimal(str(row["covered_cost"] or 0))
+    if not all_gross:
+        return None
+    # 折扣总额 = 明细原价合计 − 交易实收。⛔ 它是**实测的**, 不是估的。
+    discount = all_gross - Decimal(str(paid or 0))
+    share = covered_gross / all_gross
+    covered_net = covered_gross - discount * share
+    return covered_net, covered_cost, share
+
+
 async def _execute_derived_split(
     conn, item, *, dimension_key: str, aggregation_key: str,
     factory_id: str, date_range, available_columns,
@@ -413,6 +466,34 @@ async def _execute_derived_split(
     ⛔ 不新写 SQL —— 两边都走同一个 `execute_cell`, 各自拿到自己正确的粒度
        (营收 → txn 实收; 食材成本 → item_cost)。**没有 join, 就没有扇出。**
     """
+    label = getattr(item, "label", item.key)
+    unit = getattr(item, "unit", "count")
+
+    # 🔴 靠成本卡的派生量走**覆盖口径**: 分子分母都只算有成本卡的那部分,
+    #    且折扣按明细金额比例摊到覆盖部分。⛔ 不再「全额分子 vs 覆盖额分母」。
+    if _COST_CARD_COLUMN in _effective_requires(item.key):
+        got = await _covered_margin(conn, factory_id, date_range)
+        if got is None:
+            return CellResult(item.key, label, dimension_key, aggregation_key,
+                              unit, [], (), "-- covered-margin: 取数失败 --")
+        covered_net, covered_cost, share = got
+        profit = covered_net - covered_cost
+        if item.op == "diff":                 # 毛利
+            value = profit
+        elif item.op == "ratio_of_diff":      # 毛利率 = 覆盖毛利 ÷ **覆盖净营收**
+            value = (profit / covered_net * 100) if covered_net else None
+        else:
+            raise UnsupportedCell(f"覆盖口径不支持的派生运算: {item.op}")
+        return CellResult(
+            item.key, label, dimension_key, aggregation_key, unit,
+            [{item.key: value}], (), _COVERED_MARGIN_SQL,
+            PROV_ESTIMATED,
+            # ⚠️ 用顿号不用分号: 分号在 `_BASIS_FORBIDDEN` 里(它是句子的标志),
+            #    而 basis 必须是名词短语 —— 我自己上一轮立的那条约束。
+            f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}",
+            float(share),
+        )
+
     async def _one(key: str) -> "CellResult":
         return await execute_cell(
             conn, factory_id=factory_id, metric_key=key,
@@ -421,9 +502,6 @@ async def _execute_derived_split(
 
     left = await _one(item.left)
     right = await _one(item.right)
-
-    label = getattr(item, "label", item.key)
-    unit = getattr(item, "unit", "count")
     # 缺列要原样上报 —— ⛔ 少一边就把另一边当成全部, 那是拿半个数冒充结果。
     missing = tuple(dict.fromkeys(left.missing_columns + right.missing_columns))
     sql = f"-- split(左) --\n{left.sql}\n-- split(右) --\n{right.sql}"
