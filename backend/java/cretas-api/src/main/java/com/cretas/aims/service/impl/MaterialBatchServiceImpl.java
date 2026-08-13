@@ -1503,6 +1503,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
 
+        // 🔴 2026-08-13: 必须挡在「剩余是否够」之前 —— 负数天然满足 remaining >= quantity,
+        // 会一路走到 reserved += 负数, 把 reserved 推成负值。而 currentQuantity =
+        // receipt − used − reserved, reserved 为负时**可用量会大于实物量**;
+        // DB 那道 ck_material_batch_no_overconsume (used+reserved ≤ receipt) 对负 reserved
+        // 只会更容易满足, 兜不住。DTO 上的 @DecimalMin("0.01") 因 controller 没写 @Valid 从未生效。
+        // 同类的 useBatchMaterial / consumeBatchMaterial 本来就有这道闸, 这里补齐对称。
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "预留数量必须大于0")
+                    .withHint("请填写大于 0 的预留数量")
+                    .withHintTarget("reservedQuantity");
+        }
+
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足以预留")
                     .withHint("请刷新批次库存或减少预留数量");
@@ -1545,6 +1557,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         if (!batch.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
+        }
+
+        // 🔴 2026-08-13: 同 reserveBatchMaterial —— 负数满足「预留够不够」这道比较,
+        // 然后 reserved -= 负数 变成**用释放接口做预留**。同样挡在充足性检查之前。
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "释放数量必须大于0")
+                    .withHint("请填写大于 0 的释放数量")
+                    .withHintTarget("releaseQuantity");
         }
 
         // 验证预留数量是否充足
