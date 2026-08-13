@@ -599,6 +599,21 @@ def assert_registry_self_consistent() -> None:
     #
     # ⛔ 手写名单的坏法是确定的: 新登记一个同类指标不会自动进名单,
     #    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    # ── `derive_from` 只能指向真实存在、且不是自己的指标 ──────────────────
+    # ⛔ 指向一个不存在的 key 不会当场报错 —— 普查只会安静地把「有但没接线」
+    #    降级成「算不出」, 而那正是这个字段要区分的两件事。
+    for key, entry in METRICS.items():
+        spec = getattr(entry, "derive_from", None)
+        if not spec:
+            continue
+        assert len(spec) == 3, f"{key}.derive_from 应为 (左, 右, 运算)"
+        left, right, op = spec
+        for side in (left, right):
+            assert side in METRICS or side in DERIVED, (
+                f"{key}.derive_from 指向了不存在的指标 {side!r}")
+            assert side != key, f"{key}.derive_from 指向了自己"
+        assert op in ("diff", "ratio"), f"{key}.derive_from 的运算 {op!r} 未登记"
+
     _MISREAD_AS_PROFIT = ("利润", "赚了多少")
     for key, entry in list(METRICS.items()) + list(DERIVED.items()):
         asks = getattr(entry, "asks", "") or ""
