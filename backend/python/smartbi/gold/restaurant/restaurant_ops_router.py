@@ -4363,9 +4363,13 @@ async def resolve_gross_margin(
             },
         )
 
+    # 🔴 毛利率的分母必须和分子**同口径**。
+    #    prod 实测漏了这一步: 分子已经换成实收口径(475,623.83), 分母还是
+    #    item 口径(749,009) → 报出 63.5%, 而日结报 66.3% —— **毛利对上了,
+    #    毛利率还是两个数**。改一半比不改更难发现: 最显眼的那个数已经一致了。
     avg_margin = (
-        total_profit / total_rev_with_cost
-        if total_rev_with_cost > 0 else None
+        total_profit / total_rev
+        if total_rev > 0 else None
     )
     ranking_rev_with_cost = sum(item["revenue"] for item in ranking_with_cost)
     ranking_profit = sum(
@@ -4604,19 +4608,28 @@ async def resolve_gross_margin(
     # ⛔ 用已建好的机制不新建: 标 ESTIMATED, 限定语由 `provenance` 生成。
     per_dish_no_discount_note = ""
     if total_paid_rev is not None and abs(total_rev_items - total_paid_rev) > 0.01:
+        # ⚠️ basis 必须是**名词短语** —— 限定语模板是「用{basis}估算，…」。
+        #    prod 实测塞了一整句进去, 读成:
+        #      「用这里没扣折扣 —— 折扣是整单的…会比合计高估算，这部分是估出来的」
+        #    ⛔ 同一个错我在成本卡那条 basis 上already 犯过一次并记过 ——
+        #       写 basis 时**把模板套一遍读出声**, 不要只看这个串本身。
         per_dish_no_discount_note = provenance_qualifier(
-            PROV_ESTIMATED,
-            "这里没扣折扣 —— 折扣是整单的，摊不到单道菜；"
-            "所以按菜加起来会比合计高",
-        ) + "\n"
+            PROV_ESTIMATED, "没扣折扣的单菜价",
+        ).rstrip() + (
+            "（折扣是整单的，摊不到单道菜；所以下面按菜加起来会比上面的合计高。）\n")
 
     answer = (
         f"**菜品毛利分析（{window_label}）**\n"
-        f"- 全部销售营收 **¥{total_rev:,.2f}**；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
+        # ⚠️ 只报覆盖率百分比, ⛔ 不再把 item 口径的「可计算毛利的营收」金额摆出来:
+        #    它是 749,009 而上面的实收是 717,883 —— 并排放会读成「其中」比「全部」还大。
+        #    覆盖率本身仍是 item 口径算的(分子分母同源), 那个百分比是对的。
+        f"- 实收营收 **¥{total_rev:,.2f}**，其中 {coverage_ratio * 100:.1f}% 的销售有成本卡、能算毛利\n"
         f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
         f"计算过程：`毛利 ¥{total_profit:,.2f} = 实收营收 ¥{total_rev:,.2f}"
         f" − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
-        f"> 计算口径：毛利 = 实收营收 − 对应菜品成本；期间与菜品范围完全一致。\n"
+        # ⛔ 不写「口径」——它在 INTERNAL_VOCAB 里, sanitize 会替换成「计算方法」,
+        #    于是 prod 上打出「计算计算方法：」。⚠️ 自己敲进源码的串不许靠 sanitize 兜。
+        f"> 怎么算的：毛利 = 实收营收 − 对应菜品成本；期间与菜品范围完全一致。\n"
         f"{per_dish_no_discount_note}"
         f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
