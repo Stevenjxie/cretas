@@ -4838,6 +4838,12 @@ async def resolve_gross_margin(
             "invalid_cost_count": invalid_cost_count,
             "total_dishes": len(enriched),
             "cost_covered_revenue": total_rev_with_cost,
+            # 🔴 合计层的两个数**具名带出去** —— 两条路对账那道闸要读它们。
+            #    不带的话闸只能去 kpis 里按标签猜, 而 kpis 没有 label,
+            #    结果是闸每天报 rc=2(读不到) —— 实测第一次跑就是这样。
+            #    ⛔ 闸读不到 = 闸不存在, 只是它诚实地说了「没量到」。
+            "aggregate_gross_profit": total_profit,
+            "aggregate_paid_revenue": total_rev,
             "covered_cost": total_rev_with_cost - total_profit,
             "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
             "targetDish": dish_scope_row["dish_name"] if dish_scope_row is not None else None,
