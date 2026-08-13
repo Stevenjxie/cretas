@@ -232,9 +232,8 @@ export type ManagementStackParamList = {
   FactorySettings: undefined;
   MaterialSpecManagement: undefined; // Phase 4: 物料规格管理（已实现但暂未启用）
 
-  // M-BOM-1 (Track D1, 2026-05-14): BOM 配方主子表
-  BomConfigList: undefined;                       // BOM 配方列表
-  BomConfigEdit: { recipeId?: string };           // BOM 配方编辑 (无 id = 新建)
+  // 🔴 2026-08-14 退役: BomConfigList / BomConfigEdit 两条路由随 RN 侧 BOM 屏一并摘除。
+  // 类型声明也要删 —— 留着别处仍能 navigate('BomConfigEdit') 且类型检查不报错。
 
   DisposalRecordManagement: undefined; // 报废记录管理
   WorkSessionManagement: undefined; // 工作会话管理
