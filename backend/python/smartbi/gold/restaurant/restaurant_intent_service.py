@@ -30,6 +30,7 @@ from smartbi.gold.customer_text import (
 
 from smartbi.gold.restaurant import answer_contract as _contract
 from smartbi.gold.restaurant.metric_registry import (
+    AGGREGATIONS,
     canonical_dimensions as _canonical_dimensions,
 )
 from smartbi.gold.restaurant.restaurant_intent import (
@@ -318,7 +319,26 @@ def _execution_mismatch(
     supported_dimensions = set(_canonical_dimensions(sorted(set().union(
         *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
     ))))
-    if not set(_canonical_dimensions(spec.dimensions)).issubset(supported_dimensions):
+    asked_dimensions = set(_canonical_dimensions(spec.dimensions))
+    # 🔴 `all` 不是一种分组, 是**不分组** —— 拿它去查「能按什么分组」的表是范畴错误。
+    #
+    # `Dimension("all").group_expr is None`, 而 `_RESOLVER_DIMENSIONS` 列的是每个
+    # resolver **能按什么分组**。`all` 不在任何一个集合里, **也不可能在** ——
+    # 于是 `{'all'} ⊆ {'store'}` 恒不成立, **任何「全店合计」问句都被拒**,
+    # 与指标无关、与 resolver 无关。prod 实测: 「今天赚多少」「今天营业额多少」
+    # 「今天多少单」三题同一个形状, 而日结推送同一批数字答得好好的。
+    #
+    # 旁证 resolver 本来就出得了: `RESTAURANT_OPS_SALES_SUMMARY` 自己的注释写着
+    # 它返回 "a real per-store Top-N table **in addition to the chain aggregate**"。
+    #
+    # ⛔ 放行条件收窄到两条(owner 2026-08-13 裁定 1), **不是**「差集是 all 就放」:
+    #    ① 差集恰好是 {all} —— 其余任何一个不被支持的分组照样拦
+    #    ② 该聚合形态 `needs_dimension is False` —— 有些聚合在不分组时确实算不出,
+    #       用登记表**已有的声明**判, 不新造假设
+    if asked_dimensions - supported_dimensions == {_NO_GROUPING_DIMENSION}:
+        if _aggregation_needs_no_grouping(spec):
+            asked_dimensions = asked_dimensions - {_NO_GROUPING_DIMENSION}
+    if not asked_dimensions.issubset(supported_dimensions):
         # 🔴 2026-08-13 去黑话。原文「查询维度超出计划 resolver 的能力范围」
         #    一句踩两个:「维度」在 `INTERNAL_VOCAB` 里,「resolver」是「解析器」
         #    的英文。prod 实测这句**天天在发给店长**(「今天赚多少」就撞它)。
@@ -328,6 +348,38 @@ def _execution_mismatch(
         #    所以它自己写成一个能接在后面的短语。
         return "我不确定你要看的是哪一层的数"
     return None
+
+
+#: 「不分组」那个维度键。⛔ 它不是一种分组, 所以永远不会出现在
+#: `_RESOLVER_DIMENSIONS`(那张表列的是「能按什么分组」)里。
+_NO_GROUPING_DIMENSION = "all"
+
+
+def _aggregation_needs_no_grouping(spec) -> bool:
+    """这个规格要的聚合形态, 在**不分组**时算得出来吗。
+
+    ⛔ 不自己推断聚合形态 —— `generic_answer.spec_aggregation_key` 是这个决定的
+       **唯一**定义(它还处理了规划器没表态时的回退)。在这里再写一份推断,
+       两份迟早会对同一个规格给出不同的聚合形态, 而症状是
+       「校验放行了、执行却拒绝」这种最难查的不一致。
+
+    🔴 ⚠️ 问的是 `spec_aggregation_key` 而**不是** `spec_to_cell` ——
+       后者会因为**取指标失败**先返回 None(它读 `requested_metrics`),
+       于是这个判断永远得不到答案, 放行在生产上根本不触发。
+       第一版就是这么写的, 被单测当场抓住: `spec_to_cell(spec) is None`。
+       **「这个规格要哪种聚合」和「这个规格取哪个指标」是两件事, 不该耦合。**
+
+    ⚠️ 判据用登记表**已有的声明** `Aggregation.needs_dimension`, 不新造假设 ——
+       有些聚合(排名/对比)在不分组时确实算不出, 那些照样该拦。
+    """
+    from smartbi.gold.restaurant.generic_answer import spec_aggregation_key
+
+    try:
+        agg_key = spec_aggregation_key(spec)
+    except Exception:  # noqa: BLE001 — 判不出来就当它需要分组(保守侧)
+        return False
+    agg = AGGREGATIONS.get(agg_key)
+    return agg is not None and not agg.needs_dimension
 
 
 async def _known_data_gap(pool, factory_id: str, query: str):
