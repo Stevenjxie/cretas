@@ -34,6 +34,7 @@ from smartbi.gold.restaurant.provenance import (
 )
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
+    cost_outlier_predicate,
     DERIVED,
     DIMENSIONS,
     GRAINS,
@@ -407,12 +408,25 @@ def _scalar(cell: "CellResult", key: str):
 #: 覆盖部分的四个量, 一次查出来 —— 分子分母必须来自**同一批行**。
 #: join 从 `GRAINS["item_cost"]` 取, 不重抄(抄一份就是同一条 join 两个定义)。
 _COVERED_MARGIN_SQL = (
-    "SELECT COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL), 0)"
+    "SELECT COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL"
+    "                                       AND NOT ({outlier})), 0)"
     "         AS covered_gross,\n"
     "       COALESCE(SUM(i.amount), 0)                    AS all_gross,\n"
-    "       COALESCE(SUM(i.qty * c.food_cost), 0)         AS covered_cost\n"
+    "       COALESCE(SUM(i.qty * c.food_cost) FILTER (WHERE NOT ({outlier})), 0)"
+    "         AS covered_cost\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+)
+
+#: 被排除的那几道菜, 指名带出来给正文用。
+_COST_OUTLIER_SQL = (
+    "SELECT dp.normalized_name AS name,\n"
+    "       max(c.food_cost)                       AS card_cost,\n"
+    "       SUM(i.amount) / NULLIF(SUM(i.qty), 0)  AS avg_price\n"
+    "  FROM {frm}\n  {join}\n"
+    " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+    "   AND c.food_cost IS NOT NULL AND ({outlier})\n"
+    " GROUP BY 1 ORDER BY max(c.food_cost) DESC LIMIT 5\n"
 )
 
 #: 折扣按明细金额比例摊派 —— owner 2026-08-13 裁定。
@@ -433,7 +447,11 @@ async def _covered_margin(conn, factory_id: str, date_range):
          DEMO_REST 日结毛利率 88.3% / 青花椒问答整个拒答 / 问答正文自己算不平。
     """
     frm, join, alias = GRAINS["item_cost"]
-    sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias)
+    # ⛔ 判据从 registry 取, 两条路读**同一份** —— 抄一份就会漂, 而漂的表现是
+    #    「日结排除了这道菜, 问答没排除」, 两条路又给出两个数。
+    outlier = cost_outlier_predicate()
+    sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias,
+                                     outlier=outlier)
     try:
         row = await conn.fetchrow(sql, factory_id, date_range[0], date_range[1])
         paid = await conn.fetchval(
@@ -454,7 +472,24 @@ async def _covered_margin(conn, factory_id: str, date_range):
     discount = all_gross - Decimal(str(paid or 0))
     share = covered_gross / all_gross
     covered_net = covered_gross - discount * share
-    return covered_net, covered_cost, share
+
+    # 被排除的菜**指名带出去** —— owner: 那不是一句免责声明, 是一条
+    # **可执行的修复指令**(「米饭成本卡 167.20 而它卖 16.80, 请核对单位」)。
+    # ⚠️ 拿不到不影响主结果, 但要留痕。
+    outliers = []
+    try:
+        rows = await conn.fetch(
+            _COST_OUTLIER_SQL.format(frm=frm, join=join, alias=alias,
+                                     outlier=outlier),
+            factory_id, date_range[0], date_range[1])
+        outliers = [
+            {"name": r["name"], "card_cost": float(r["card_cost"] or 0),
+             "avg_price": float(r["avg_price"] or 0)}
+            for r in (rows or []) if r["name"]
+        ]
+    except Exception:  # noqa: BLE001
+        logger.warning("[generic-executor] 异常成本卡清单取不到", exc_info=True)
+    return covered_net, covered_cost, share, outliers
 
 
 async def _execute_derived_split(
@@ -476,7 +511,7 @@ async def _execute_derived_split(
         if got is None:
             return CellResult(item.key, label, dimension_key, aggregation_key,
                               unit, [], (), "-- covered-margin: 取数失败 --")
-        covered_net, covered_cost, share = got
+        covered_net, covered_cost, share, cost_outliers = got
         profit = covered_net - covered_cost
         if item.op == "diff":                 # 毛利
             value = profit
