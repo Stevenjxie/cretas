@@ -127,6 +127,23 @@ def _grain_of(metric_key):
     return sorted(grains)[0] if grains else "txn"
 
 
+def _derivable(item, computed_by_key):
+    """这个量能不能从**别的、算得出来的**列导出。
+
+    ⛔ 恒等式来自 `Metric.derive_from`(登记表), 本函数只做反查与可算性校验。
+    ⚠️ 两个输入必须**自己都算得出来** —— 否则「可导出」是句空话。
+    """
+    spec = getattr(item, "derive_from", None)
+    if not spec:
+        return None
+    left, right, op = spec
+    for side in (left, right):
+        got = computed_by_key.get(side)
+        if got is None or got.get("value") is None:
+            return None
+    return left, right, op
+
+
 async def census_one(conn, factory_id, wiring):
     from smartbi.gold.restaurant.generic_executor import (
         _effective_requires, execute_cell, existing_columns, uses_cost_bridge)
@@ -192,6 +209,15 @@ async def census_one(conn, factory_id, wiring):
                        exec_error=f"{type(exc).__name__}: {exc}",
                        traceback=traceback.format_exc().splitlines()[-3:])
 
+        out.append(rec)
+
+    by_key = {r["metric"]: r for r in out}
+    for rec in out:
+        item = METRICS.get(rec["metric"]) or DERIVED.get(rec["metric"])
+        fills = rec["fill"]
+        missing_schema = rec["missing_from_schema"]
+        wired = wiring.get(rec["metric"], {"tokens": [], "fixed_cells": False,
+                                            "planner_nameable": False})
         # ── 分类 ────────────────────────────────────────────────────────
         if rec["exec_error"]:
             rec["verdict"] = "执行失败"
@@ -202,9 +228,25 @@ async def census_one(conn, factory_id, wiring):
         elif rec["value"] is None:
             empty = [c for c, f in fills.items()
                      if isinstance(f, dict) and f.get("fill_rate") == 0.0]
-            rec["verdict"] = "算不出"
-            rec["why"] = ("参与计算的行里这些列全空: " + ", ".join(empty)) if empty \
-                else "这段时间没有参与计算的行"
+            # 🔴 owner 2026-08-14: 「算不出」要先问一句**「这个量能不能从别的列
+            #    导出」**。第一版问的是「这一列有没有填」—— 两个真租户的
+            #    discount_amount 都是 0% 填充, 于是报「算不出」, 而毛利那条路
+            #    **正在用**「原价 − 实收」算折扣。同一个量, 一条路说没有、
+            #    一条路在用。⇒ 这是形态 A: 我量的不是我想知道的那个。
+            # ⚠️ 恒等式从 `Metric.derive_from` **反查**, ⛔ 不在这里手写清单。
+            derived = _derivable(item, by_key)
+            if derived:
+                left, right, op = derived
+                rec["verdict"] = "有但没接线"
+                rec["derivable_from"] = f"{left} {op} {right}"
+                rec["why"] = (
+                    f"这一列没接({', '.join(empty) or '无数据'}), 但这个量可由"
+                    f"「{left} − {right}」算出来 —— 是**接线**问题不是缺数据, "
+                    f"拿它去补 ETL 补不出东西")
+            else:
+                rec["verdict"] = "算不出"
+                rec["why"] = ("参与计算的行里这些列全空: " + ", ".join(empty)) if empty \
+                    else "这段时间没有参与计算的行"
         elif rec["provenance"] == ESTIMATED:
             rec["verdict"] = "是估的"
             cov = rec["coverage_ratio"]
@@ -221,7 +263,6 @@ async def census_one(conn, factory_id, wiring):
             rec["unwired"] = True
         elif not wired["tokens"] and not wired["fixed_cells"]:
             rec["no_keyword_shortcut"] = True
-        out.append(rec)
     return out
 
 

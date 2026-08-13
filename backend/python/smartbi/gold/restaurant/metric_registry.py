@@ -143,6 +143,20 @@ class Metric:
     asks: str = ""
     #: 见 `Derived.caveat` ——「这个数**是什么**」，与 provenance 的「准不准」是两件事。
     caveat: str = ""
+    #: 这一列全空时，这个量**还能不能从别的列算出来**。`(左, 右, 运算)`。
+    #:
+    #: 🔴 owner 2026-08-14 裁定: 普查此前问的是「这一列有没有填」, 而想知道的是
+    #:    「这个量能不能算出来」—— 两者不是一回事。实测: 两个真租户的
+    #:    `discount_amount` 列填充率都是 **0%**, 普查因此报「算不出」;
+    #:    而毛利那条路**正在用** `原价 − 实收` 算折扣(青花椒当天 2,614.71)。
+    #:    同一个量, 一条路说没有、一条路在用。
+    #:
+    #: ⛔ 这里只**声明**恒等式, 不改变取数行为 —— 执行器仍按 `exprs` 走。
+    #:    声明的作用是让「算不出」分成两种: 真的没有 vs **有但没接线**。
+    #:    后者是接线问题, 拿它去补 ETL 补不出东西来。
+    #: ⚠️ 放在登记表上而不是普查脚本里: 普查必须靠**反查**得出结论,
+    #:    手写清单一旦落地, 新登记的指标会悄悄落在表外而不报错。
+    derive_from: Optional[Tuple[str, str, str]] = None
 
     def expr_at(self, grain: str) -> Optional[str]:
         return self.exprs.get(grain)
@@ -182,6 +196,9 @@ METRICS: Dict[str, Metric] = {
         exprs={"txn": "SUM(t.discount_amount)"},
         requires=("fact_pos_transaction.discount_amount",),
         dimensions=_TXN_DIMS,
+        # 两个真租户这一列填充率都是 0%, 而毛利那条路一直在用「原价 − 实收」
+        # 算折扣。⇒ 这不是「没有折扣数据」, 是**这一列没接**。
+        derive_from=("gross_revenue", "revenue", "diff"),
     ),
     "tax_amount": Metric(
         key="tax_amount", category="营收和折扣", label="税额", unit="money", asks="税金/税额",
