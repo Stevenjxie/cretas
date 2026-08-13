@@ -894,6 +894,29 @@ function openCreate() {
   dialogVisible.value = true;
 }
 
+/**
+ * 把物料已有的三级分类 id 反解成 L1/L2/L3 并回填选择器。
+ *
+ * 后端 `RawMaterialTypeDTO.classificationId` 给的是 **L3** 节点 id, 而界面是三级级联,
+ * 所以要沿 `segmentTree` 往上找它的 L2/L1。找不到(分类被停用/删了/树还没加载)就保持
+ * 三个都为空 —— 空表示「本次不改分类」, 提交时不带 classificationId, 后端不动原值。
+ */
+function applyExistingClassification(classificationId: number | string | null | undefined): void {
+  const target = Number(classificationId ?? NaN);
+  if (!Number.isFinite(target)) return;
+  for (const l1 of segmentTree.value) {
+    for (const l2 of l1.children ?? []) {
+      const l3 = (l2.children ?? []).find((node) => Number(node.id) === target);
+      if (l3) {
+        segmentL1.value = l1.id;
+        segmentL2.value = l2.id;
+        segmentL3.value = l3.id;
+        return;
+      }
+    }
+  }
+}
+
 async function openEdit(row: TableRow) {
   editingId.value = String(row.id || '');
   form.value = {
@@ -917,14 +940,16 @@ async function openEdit(row: TableRow) {
   loadCustomers();
   resetPackaging();
   resetManuallyEditedFlags();
-  // Edit mode keeps the existing classification unchanged.
   segmentL1.value = null;
   segmentL2.value = null;
   segmentL3.value = null;
   resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
-  if (segmentTree.value.length === 0) loadSegmentTree();
+  if (segmentTree.value.length === 0) await loadSegmentTree();
+  // 🔴 回填已有分类。不回填的话三级选择器一打开就是空的, 用户随手一保存
+  // 就会把原来的分类改成别的(或者以为自己没选就不会动它, 其实选了才会动)。
+  applyExistingClassification(row.classificationId as number | string | null | undefined);
   // 原料、辅料和包材共用计量/包装层级；库存基本单位始终来自 form.unit。
   try {
     const res = await get<{
@@ -972,7 +997,17 @@ async function openEdit(row: TableRow) {
 }
 
 const submitting = ref(false);
-const showSegmentEditor = computed(() => hasSegmentDictionary.value && !editingId.value);
+/**
+ * 🔴 2026-08-13: 原本是 `&& !editingId.value` —— 分类段只在【新建】时能选,
+ * 编辑既有物料时这一段整个不显示, 提交时也不带 `classificationId`。
+ * 后果是**存量物料的分类永远补不上**: 生产实测 479 个启用物料只有 10 个挂了分类
+ * (包材 63 个里 0 个)。而画布上「替代包材」正是按分类判作用域的, 于是那栏
+ * 对所有人恒灰, 提示让人去维护档案 —— 档案里却没有这个控件。
+ *
+ * 后端两条路径本来就都支持(createMaterialType / updateMaterialType 都会
+ * requireValidSegmentChain + ensureCategoryMatchesSegment), 缺的只是界面。
+ */
+const showSegmentEditor = computed(() => hasSegmentDictionary.value);
 async function handleSave() {
   if (!form.value.name) return ElMessage.warning('请填写原料名称');
   if (!form.value.category) return ElMessage.warning('请选择类别');
@@ -1059,6 +1094,9 @@ async function handleSave() {
     if (editingId.value) {
       const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, {
         ...materialPayload,
+        // 与新建同源: 不带这个字段, 存量物料的分类就永远补不上(见 showSegmentEditor 注释)。
+        // 后端 updateMaterialType 只在非 null 时才动它, 所以没选分类时保持原值。
+        classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
       });
       if (!res.success) throw new Error(res.message || '更新失败');
       materialId = editingId.value;
