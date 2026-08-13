@@ -118,6 +118,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe ensureDraft(
             String factoryId, String productTypeId, Long workflowRevisionId) {
+        return ensureDraft(factoryId, productTypeId, workflowRevisionId, false);
+    }
+
+    @Override
+    @Transactional
+    public BomRecipe ensureDraft(
+            String factoryId, String productTypeId, Long workflowRevisionId,
+            boolean dropObsoleteInputs) {
         ProductType product = loadProductForUpdate(factoryId, productTypeId);
         validateProductOutputMetadata(product);
 
@@ -186,7 +194,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     }
                 }
                 List<BomRecipe> family = activationFamily(factoryId, draft);
-                reconcileUpgradedInputSkeletons(factoryId, family);
+                reconcileUpgradedInputSkeletons(factoryId, family, dropObsoleteInputs);
                 validateFamilyContracts(factoryId, family);
             }
             List<BomRecipeItem> freshItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(draft.getId());
@@ -236,7 +244,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         BomRecipe cloned = cloneRecipe(factoryId, currentActive.get(0).getId());
         if (workflowRevisionId != null
                 && !Objects.equals(workflowRevisionId, cloned.getWorkflowRevisionId())) {
-            return rebindDraftFamilyToExactRevision(factoryId, cloned, workflowRevisionId);
+            return rebindDraftFamilyToExactRevision(
+                    factoryId, cloned, workflowRevisionId, dropObsoleteInputs);
         }
         return cloned;
     }
@@ -594,6 +603,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      */
     private BomRecipe rebindDraftFamilyToExactRevision(
             String factoryId, BomRecipe requested, Long targetRevisionId) {
+        return rebindDraftFamilyToExactRevision(factoryId, requested, targetRevisionId, false);
+    }
+
+    private BomRecipe rebindDraftFamilyToExactRevision(
+            String factoryId, BomRecipe requested, Long targetRevisionId,
+            boolean dropObsoleteInputs) {
         if (requested.getStatus() != BomRecipe.Status.DRAFT) {
             throw bomError(409,
                     "只有 BOM 草稿可以切换 Workflow 修订",
@@ -687,7 +702,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recipeRepo.flush();
 
         List<BomRecipe> reboundFamily = new ArrayList<>(membersByProduct.values());
-        reconcileUpgradedInputSkeletons(factoryId, reboundFamily);
+        reconcileUpgradedInputSkeletons(factoryId, reboundFamily, dropObsoleteInputs);
         validateFamilyContracts(factoryId, reboundFamily);
         BomRecipe rebound = membersByProduct.get(requested.getProductTypeId());
         recomputeFamilyCosts(rebound);
@@ -1161,6 +1176,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     }
 
     private void reconcileUpgradedInputSkeletons(String factoryId, List<BomRecipe> family) {
+        reconcileUpgradedInputSkeletons(factoryId, family, false);
+    }
+
+    /**
+     * @param dropObsoleteConfirmed 用户已在界面上逐行看过并确认「这些旧工艺遗留的投入行可以丢」。
+     *
+     * <p>🔴 2026-08-13 生产实测(F006「叮咚好食光红烧猪蹄 250g」): 下面那道
+     * BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT 闸拦得对(不能悄悄丢掉用户填过的用量/成本),
+     * 但它指的那个出口**结构上走不通** ——
+     *
+     * <ul>
+     *   <li>闸在**建草稿**时触发, 此刻草稿还没建成, 那些行属于 ACTIVE 配方;</li>
+     *   <li>而 {@code deleteItem} 第一件事就是 {@code status != DRAFT → 拒};</li>
+     *   <li>就算配方是 DRAFT, {@code hasCompleteWorkflowIdentity} 也会拒 ——
+     *       **而"绑着画布槽位"正是这些行被选中的判据**, 挑选条件与拒绝条件完全相同。</li>
+     * </ul>
+     *
+     * 于是提示写着「请确认是否删除这些原料规则后再重试」, 而任何路径都删不掉它们。
+     * 更别扭的是那句提示让人「先在 Workflow 中删除对应投入」—— 用户**早就删了**,
+     * 那正是这些行成为孤儿的原因: 闸恰好对着"已经照它说的做过"的人开火。
+     *
+     * 处置: 不放宽 {@code deleteItem} 的任何一道闸(从 ACTIVE 里删行会直接改动生产成本,
+     * 本就该走草稿→激活), 而是让**这里**在同一个事务里删掉它自己刚算出来的那几行。
+     * 判定权始终在服务端 —— 客户端只送一个"用户已确认"的布尔, 不送要删哪几行。
+     */
+    private void reconcileUpgradedInputSkeletons(
+            String factoryId, List<BomRecipe> family, boolean dropObsoleteConfirmed) {
         BomRecipe main = family.stream()
                 .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.MAIN)
                 .findFirst()
@@ -1294,11 +1336,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .distinct()
                     .limit(6)
                     .collect(java.util.stream.Collectors.joining("、"));
-            throw bomError(409,
-                    "旧工艺中的原料投入在目标工艺中已不存在：" + materials,
-                    "BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT",
-                    "请确认是否删除这些原料规则后再重试",
-                    "bomItems");
+            if (!dropObsoleteConfirmed) {
+                throw bomError(409,
+                        "旧工艺中的原料投入在目标工艺中已不存在：" + materials,
+                        "BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT",
+                        "请确认是否删除这些原料规则后再重试",
+                        "bomItems");
+            }
+            // 用户已逐行确认。删的是**服务端自己刚算出来的** obsoleteBoundItems,
+            // 不是客户端送来的 id 列表 —— 判定权不外移。
+            log.warn("BOM 升级: 用户确认丢弃 {} 行旧工艺遗留投入 (factory={}, materials={})",
+                    obsoleteBoundItems.size(), factoryId, materials);
+            for (BomRecipeItem stale : obsoleteBoundItems) {
+                stale.softDelete();
+            }
+            itemRepo.saveAll(obsoleteBoundItems);
         }
         for (BomRecipe member : family) {
             List<BomRecipeItem> additions =

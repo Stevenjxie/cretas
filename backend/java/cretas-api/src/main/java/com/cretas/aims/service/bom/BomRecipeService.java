@@ -35,6 +35,18 @@ public interface BomRecipeService {
      */
     BomRecipe ensureDraft(String factoryId, String productTypeId, Long workflowRevisionId);
 
+    /**
+     * @param dropObsoleteInputs 用户已在界面上逐行看过并确认「旧工艺遗留的投入行可以丢」。
+     *
+     * <p>false 时行为不变(遇到孤儿行抛 BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT)。
+     * true 时由**服务端自己**算出哪几行是孤儿并在同一事务里软删 —— 客户端只送布尔,
+     * 不送 id 列表, 判定权不外移。default 方法保证既有实现方(含测试桩)不被打断。
+     */
+    default BomRecipe ensureDraft(String factoryId, String productTypeId,
+                                  Long workflowRevisionId, boolean dropObsoleteInputs) {
+        return ensureDraft(factoryId, productTypeId, workflowRevisionId);
+    }
+
     /** 创建草稿 (status=DRAFT). 自动生成 recipeCode (BOM-YYYYMMDD-NNN). */
     BomRecipe createRecipe(String factoryId, CreateBomRecipeRequest request);
 

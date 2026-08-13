@@ -1412,10 +1412,13 @@ async function repairObsoleteBomInputs(productTypeId: string, error: unknown): P
   } catch {
     return false;   // 用户选择不动
   }
-  for (const item of obsolete) {
-    await bomRecipeApi.removeItem(props.factoryId, item.id);
-  }
-  ElMessage.success(`已移除 ${obsolete.length} 行旧工艺遗留配方`);
+  // 🔴 2026-08-13: 这里原来逐行 DELETE /bom-recipes/items/{id} —— **那条路结构上走不通**:
+  //   · 闸在建草稿时触发, 此刻草稿还没建成, 这些行属于 ACTIVE 配方, 而 deleteItem 第一件事
+  //     就是 status != DRAFT → 拒;
+  //   · 就算是 DRAFT, hasCompleteWorkflowIdentity 也会拒 —— 而「绑着画布槽位」正是这些行
+  //     被选中的判据, 挑选条件与拒绝条件完全相同。
+  // 生产实测: 点「移除并重试」后那几行原封不动, 用户回到原地。
+  // 改为把「人已确认」回传给 ensure-draft, 由后端在同一事务里删它自己算出的孤儿行。
   return true;
 }
 
@@ -1445,7 +1448,10 @@ async function resolveWritableRecipeId(
     // 这里把出口补上: 算出到底是哪几行成了孤儿, 列给用户确认后逐行移除, 然后重试一次。
     if (await repairObsoleteBomInputs(productTypeId, error)) {
       try {
-        await ensureBomDraftRecipe(props.factoryId, productTypeId, definition.value?.revisionId);
+        // 带上「人已确认」重试。删哪几行由后端重算, 前端不送 id 列表。
+        await ensureBomDraftRecipe(
+          props.factoryId, productTypeId, definition.value?.revisionId, true);
+        ElMessage.success('已移除旧工艺遗留的配方行');
       } catch (retryError) {
         ElMessage.error(retryError instanceof Error ? retryError.message : '移除后仍无法创建 BOM 草稿');
         return null;
