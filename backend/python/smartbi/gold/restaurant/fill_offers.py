@@ -1,4 +1,4 @@
-"""T2 补数据开价 —— 「补 X，能算出 / 能把 Y 从估变实」。
+"""T2 补数据开价 —— 「补 X，能算出 Y」/「先补这几道，覆盖率能到 Z」。
 
 ## 为什么它必须是 registry 反查，而不是写文案
 
@@ -23,7 +23,10 @@
 ## 两类文案对应两种影响
 
 - **完全算不出**（`missing_columns` 非空）→ 「补 {列的人话名}，能算出 {指标 label}」
-- **精度降级**（`provenance == ESTIMATED`）→ 「补 {basis 缺的那样}，{指标} 从估变实」
+- **缺成本卡的菜**（`cost_gaps` 非空）→ 「先补这 N 道，覆盖率从 a% 到 b%」
+- **精度降级**（`provenance == ESTIMATED`）→ 「用的是理论用量，实际耗用要盘点」
+  ⛔ 这一条**不许**写成「补上就变实」—— `_provenance_of` 是指标键的纯函数,
+     补卡改不了出处。2026-08-14 订正, 见 `offers_for_estimated`。
 
 ⛔ 「列的人话名」取自 `metric_registry.COLUMN_LABELS`，**不在本模块里写映射表** ——
 与 `category` 同一条判据，手写映射一旦落地，新登记的列会悄悄落在表外而不报错。
@@ -155,7 +158,7 @@ def offers_for_estimated(
     estimation_basis: str,
     metric_labels: Sequence[str],
 ) -> List[Dict[str, object]]:
-    """精度降级 → 「补 {basis 缺的那样}，{指标} 从估变实」。
+    """精度降级 → 说清「这是理论用量」以及「要变准该做什么」。
 
     ⚠️ `estimation_basis` 说的是**用什么估的**（例：行业默认成本率 32%）。
        开价要说的是**缺什么**，所以措辞是「这些菜还没有成本卡」而不是复述 basis。

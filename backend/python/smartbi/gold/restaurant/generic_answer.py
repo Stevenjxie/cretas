@@ -296,7 +296,8 @@ def render(result: CellResult, window_label: str) -> str:
             f"而它卖 ¥{bad['avg_price']:,.2f} —— 成本比售价还高 "
             f"{bad['card_cost'] / bad['avg_price']:.0f} 倍，多半是单位记错了"
             f"（比如一袋当成一份）。这道菜暂时没算进毛利，改好就会自动算回来。")
-    # ③ 开价 —— 估出来的数配一条「补什么能从估变实」。
+    # ③ 开价 —— 估出来的数配一条「先补哪几道、覆盖率能到多少」。
+    #    ⛔ 不说「补上就变实」: 补卡提高的是覆盖率, 出处仍是 ESTIMATED。
     #    ⛔ 与 ② 同一个出口: 分开写会出现「说了是估的、却没说怎么变实」,
     #       而那正是店长看完限定语之后立刻会问的那句。
     from smartbi.gold.restaurant.fill_offers import build_fill_offers
