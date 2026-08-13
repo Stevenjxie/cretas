@@ -148,6 +148,7 @@ _PRODUCTION_SOP_KEYWORDS = frozenset({
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
     "标签", "拍检", "复核台", "白标", "彩标", "质检", "画笔", "拉框",
     "会计期间", "关账", "oa", "手机", "rn", "仓储",
+    "表单助手", "ai 表单", "ai填表", "ai 录入",
 })
 _BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
     "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
@@ -361,6 +362,24 @@ _FACTORY_CURRENT_GATES_ANSWER = """\
 4. **标签证据：** 生产日期最多可选当前日期后 3 天；Web 可按生产日期筛选并切换每页 200/500 条。单张可下载原图；批量下载按批次建目录生成 ZIP，任一选中照片缺失时整批失败。备份时间与人工审核结论分开，下载或备份成功不代表审核通过。
 
 **验收结果：** 保存后单位字面回读一致；BOM/Workflow 错误指出具体缺项或错误码；不可用库存只展示不扣减；下载包完整且审核状态仍以服务端人工结论为准。"""
+_FACTORY_WORKFLOW_MAINTENANCE_ANSWER = """\
+Workflow 当前维护遵守四条边界：
+
+1. 页面把规范单位码显示为用户可读中文标签，但保存和提交仍保持规范单位码，不能把展示文案写回成另一套单位。
+2. 没有辅料时辅料 Cell 可折叠成窄条；需要新增或编辑时再展开，折叠不代表删除历史配置。
+3. 没有 ACTIVE BOM 基线时，首版草稿按当前画布唯一终端产出投影创建，不要求修复一个不存在的版本状态。
+4. 旧投入已不在新画布时，页面逐行列出并要求确认移除。确认后清除对应旧数量和成本绑定并重试；取消则保持原样。系统不能静默删除，也不能把修复失败包装成成功。"""
+_FACTORY_MATERIAL_SALES_ANSWER = """\
+原料、辅料和包材可以直接进入销售订单，只有半成品保持不可售。
+
+1. 物料行使用物料字典中的名称与库存单位，不要求成品箱规，也不需要先建立生产计划。
+2. 创建发货任务时允许 0.5kg 等小数；“只、个、件”按原字面保存和回读，不能统一改写成“件”。
+3. 物料行不参加成品批次分配。仓库确认发货时，服务端从物料批次按 FIFO 自动扣减；页面应显示“物料无需分配批次”，不能提示先生产入库，也不能提交空的成品分配列表。
+4. 物料库存不足时整次发货失败，不能少扣后仍发货。成品行继续走原有 FEFO、库存归属与批次分配门禁。"""
+_FACTORY_FORM_ASSISTANT_RESULT_ANSWER = """\
+AI 表单助手只有在服务端实际执行成功且业务结果可以回读时，才能报告操作成功。
+
+自然语言解析、关闭助手面板、把字段填入草稿或模型文字声称“已成功”，都不等于业务写入完成。若本轮没有实际写入、服务端拒绝、权限/状态校验失败或写后回读失败，页面必须明确显示未执行或失败，并保留真实原因；不能信任模型自报结果，也不能返回假成功。用户仍须在目标表单核对实体、日期、数量、单位和关联对象后按页面流程提交。"""
 _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 中餐的单菜精确毛利算不准，也不能自动或实时算出每一道菜的真实毛利。
 
@@ -370,6 +389,21 @@ _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 4. 菜品平均毛利率和菜品四象限中的毛利轴可以用于相对比较，但不是每道菜的精确财务结果；配方覆盖不足时，应先补齐销量靠前菜品的配方。
 
 餐饮导览助手只说明以上口径并指向 SmartBI 餐饮 AI，不替用户计算或分析真实经营数据。"""
+_RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER = """\
+餐饮问答只在时间是唯一缺项且规划结果可信时默认最近 30 天，并在答案里明确披露；如果还缺门店、指标等其它条件，或规划不可确认，系统继续澄清，不能用默认时间绕过门禁。
+
+结果中的数字区分实测与估算。估算值必须同时说明估算依据，不能当成账上实数；正文表格与结构化行必须同源，缺少结构化投影不代表没有业务数据。事实不足时，系统按当前指标登记关系用业务语言提示“补 X，能算 Y”，不向店长暴露数据库字段，也不手写一套容易漂移的依赖表。
+
+餐饮导览助手只解释规则并指向 SmartBI 餐饮 AI，不替用户计算或分析真实经营数据。"""
+_RESTAURANT_DAILY_CLOSE_ANSWER = """\
+打烊后问“今天怎么样”，当前回答按当天、当前门店汇总营收、订单与毛利。
+
+1. 三项复用现有登记指标；任一部分为估算时，整体标为估算并说明依据。
+2. “没有业务”和“没有数据”分开说明，两种空态都不主动推送，不能包装成正常经营结论。
+3. 金额字段继续受角色权限控制；主动通知复用既有通知链路、幂等和审计规则，不另造无审计通道。
+4. 这份经营摘要不是逐食材“理论消耗 vs 实际盘存”的传统日清日结，不能据此宣称已完成食材偏差核算。
+
+餐饮导览助手只说明入口、口径和提问方法，不替用户计算或分析真实门店数据。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -807,6 +841,28 @@ def _needs_factory_current_gates_guard(query: str) -> bool:
     )
 
 
+def _needs_factory_workflow_maintenance_guard(query: str) -> bool:
+    normalized = (query or "").lower()
+    return "workflow" in normalized and any(
+        term in normalized
+        for term in ("旧投入", "旧绑定", "辅料 cell", "折叠", "没有 active bom", "首版草稿", "单位显示")
+    )
+
+
+def _needs_factory_material_sales_guard(query: str) -> bool:
+    normalized = (query or "").lower()
+    material = any(term in normalized for term in ("原料", "辅料", "包材", "物料"))
+    sales = any(term in normalized for term in ("销售订单", "发货", "卖", "出售"))
+    return material and sales
+
+
+def _needs_factory_form_assistant_result_guard(query: str) -> bool:
+    normalized = (query or "").lower()
+    assistant = any(term in normalized for term in ("表单助手", "ai 表单", "ai填表", "ai 录入"))
+    result = any(term in normalized for term in ("成功", "写入", "执行", "提交", "模型说"))
+    return assistant and result
+
+
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
     """Use the reviewed SmartBI session-scope contract for follow-up questions."""
     normalized = (query or "").lower()
@@ -1047,6 +1103,18 @@ def _needs_restaurant_single_dish_margin_guard(query: str) -> bool:
         )
     )
     return mentions_margin and mentions_single_dish_precision
+
+
+def _needs_restaurant_default_time_provenance_guard(query: str) -> bool:
+    normalized = (query or "").lower()
+    default_time = any(term in normalized for term in ("只缺时间", "默认最近30天", "默认时间"))
+    provenance = any(term in normalized for term in ("数字出处", "实测", "估算", "补什么", "能算什么", "补数据"))
+    return default_time or provenance
+
+
+def _needs_restaurant_daily_close_guard(query: str) -> bool:
+    normalized = (query or "").lower()
+    return any(term in normalized for term in ("今天怎么样", "打烊经营", "打烊后", "经营摘要"))
 
 
 def _needs_restaurant_data_availability_guard(query: str) -> bool:
@@ -1371,6 +1439,8 @@ SYSTEM_PROMPT = """\
 3m. 【五部门与金额权限】运营、市场、财务、人事、采购五个部门按各自事实源与权限展示；人事缺在岗人数和目标人效时显示缺项空态，财务缺成本覆盖时显示“—”，都不得造假 KPI。餐饮老板为全局读写角色；店长管运营并只读人事，市场、财务、人事、采购分别由对应部门角色管理，厨师长已退役。左侧顶层“AI 工作台”菜单进入 `/dashboard/ai-value` 查看 AI 价值汇总；餐饮运营 → 市场 → 营销员提成进入 `/restaurant/commission`，按营销员和月份查看复购阶梯提成，金额无价权时显示“—”，待发放记录必须确认后标记。两个页面当前菜单与路由均已接通；角色可见、可管理、可写和金额读取仍是不同权限，菜单、路由和金额请求都必须经过后端中央角色/模块/金额闸，不能靠前端隐藏代替授权。
 3n. 【预测排班】SmartBI 餐饮 AI 与“预测排班”页面支持明天、下周、下个月，按门店及午市/下午茶/晚市/夜宵展示。数字只来自确定性预测 FactBook：当前预订、过去 7/30/365 天 POS 与客流趋势、岗位技能、工时和目标人效；历史实际人效只作证据，大模型只解释、不补数字。预订来源标注模拟或平台；看板只读，调整必须预览后按相同计划指纹精确确认，保留幂等回执与审计，过期计划拒绝提交。导览助手只解释入口与方法，不替用户取数或调整排班。
 3o. 【主动发现与行动建议】店长“今日营运台”不等提问就展示排序后的经营发现，委派回答可附同口径提示。已检查无发现、数据不足跳过、规则查询失败三态必须分开，不能把后两者说成正常。谜题菜按高单位贡献毛利与低销量识别，时段高峰使用 Gold 事实；大模型不得猜数字。行动建议能力只整理同一批发现事实，每条渲染事实彼此独立，禁止把不同对象或指标揉成一条建议；检查不完整、模型空产出、跨发现错归因或出现事实外数字时整次拒绝。当前页面只宣称实际可见的发现卡；客户端未接入动作前不得宣称页面已能生成策划案。
+3p. 【默认时间、数字出处与补数】只有时间是唯一缺项且规划可信时才默认最近 30 天并显式披露；仍缺其它条件或规划不可确认时继续澄清。数字区分实测与估算，估算必须说明依据；事实不足时按指标登记关系提示“补 X，能算 Y”，不暴露数据库字段。正文表格与结构化行必须同源。
+3q. 【打烊经营摘要】“今天怎么样”按当天、当前门店汇总营收、订单与毛利；任一部分为估算则整体标为估算。无业务和无数据分开且均不主动推送，金额权限继续生效。它不是逐食材理论消耗与盘存偏差的日清日结，不能冒充食材日清。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -1460,6 +1530,9 @@ FACTORY_SYSTEM_PROMPT = """\
 - 副产物先在原料类型字典建立带“副产”标记的 SKU，再在画布的 BOM 副产配置中声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
 - 副产抵扣只按盘点实际数量 × 盘点时人工确认单价，由服务端统一计算；未确认数量或单价时显示“未确认/未抵扣”，不能显示 0，只有人工明确确认单价为 0 时才显示 0.00。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
+- Workflow 维护时单位显示中文标签但提交规范单位码；无辅料的辅料 Cell 可折叠。没有 ACTIVE BOM 基线时按当前画布唯一终端产出创建首版投影；旧投入失效时必须逐行确认后再清除旧数量/成本绑定，取消则不改，不能静默删除。
+- 原料、辅料和包材可直接销售，只有半成品不可售。物料行不查成品箱规、不参加成品批次分配，发货时从物料批次 FIFO 扣减；保留“只/个/件”字面与小数数量，库存不足整体失败。
+- AI 表单助手只能以服务端实际成功和写后回读为成功依据；模型自报成功、填入草稿或关闭面板都不等于业务写入。
 - 如果检索片段出现旧版“全部必投、主投入、固定转换率、Workflow 填出成率”等冲突说法，以当前 F006 生产全链路 SOP 为准，不得拼接旧口径。
 
 【输出限制】
@@ -2028,6 +2101,21 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_workflow_maintenance_guard(request.question)
+    ):
+        guard_answer = _FACTORY_WORKFLOW_MAINTENANCE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_material_sales_guard(request.question)
+    ):
+        guard_answer = _FACTORY_MATERIAL_SALES_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_form_assistant_result_guard(request.question)
+    ):
+        guard_answer = _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_current_gates_guard(request.question)
     ):
         # A current-gates question can intentionally combine Workflow skuId,
@@ -2061,6 +2149,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_default_time_provenance_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_daily_close_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DAILY_CLOSE_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_flywheel_governance_guard(request.question)
