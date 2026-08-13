@@ -209,6 +209,15 @@ async def cost_bridge_pairs(
         if raw and key:
             names.append(raw)
             keys.append(key)
+    if mapping and not names:
+        # ⚠️ 解析出了映射却一道菜都配不上 —— 数组传空的后果是「一张卡都桥不上」,
+        #    也就是**成本恒为 0、毛利率 100%**, 而且不报错。
+        #    最常见的成因是 `dim_product` 这一读被 RLS 挡了(GUC 没设/设成了
+        #    事务级而连接在 autocommit)。留痕, 别让它安静地过去。
+        logger.warning(
+            "[cost-key] factory=%s 解析到 %d 条映射, 但 dim_product 一条都没配上 "
+            "—— 检查 app.factory_id 是否是**会话级**(第三个参数 false)",
+            factory_id, len(mapping))
     return names, keys
 
 
