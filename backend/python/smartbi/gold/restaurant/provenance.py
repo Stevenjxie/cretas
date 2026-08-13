@@ -70,6 +70,44 @@ def validate(provenance: str, estimation_basis: str = "") -> None:
             "provenance=ESTIMATED 却没写 estimation_basis —— "
             "一个估出来的数没有出处，店长无从判断能不能用它做决定。"
         )
+    _validate_basis_shape(estimation_basis)
+
+
+#: basis 会被套进「用{basis}估算，…」，所以它必须是**名词短语**。
+#: ⛔ 约束放在**消费端**(这里)而不是每个产出端 —— basis 已经有多个产出点
+#:    (成本卡 / 折扣 / 将来还会有), 约束它比约束每个产出点便宜, 也不会漏。
+_BASIS_MAX_CHARS = 24
+_BASIS_FORBIDDEN = ("。", "；", ";", "——", "\n")
+
+
+def _validate_basis_shape(estimation_basis: str) -> None:
+    """basis 必须是名词短语。
+
+    🔴 同一个错犯过**两次**: 成本卡那条塞了整句, 折扣那条又塞了整句。
+       第二次在 prod 上打出:
+         「用这里没扣折扣 —— 折扣是整单的…会比合计高估算，这部分是估出来的」
+    ⛔ 「犯过、记过、又犯」说明**记在 memory 里挡不住** ——
+       写 basis 的时候不会去翻 memory。所以改成结构性约束: 当场炸。
+
+    ⚠️ 判据是形状不是内容: 带句号/分号/破折号 = 它是句子; 太长 = 它是句子。
+       ⛔ 不检查语义 —— 那会变成一张越来越长的词表(形态 E)。
+    """
+    b = (estimation_basis or "").strip()
+    if not b:
+        return
+    for mark in _BASIS_FORBIDDEN:
+        if mark in b:
+            raise ProvenanceError(
+                f"estimation_basis 里出现 {mark!r} —— 它会被套进「用{{basis}}估算，…」，"
+                f"塞一句完整的话进去读不通。请写成**名词短语**，"
+                f"解释放到模板外面。当前值: {b!r}"
+            )
+    if len(b) > _BASIS_MAX_CHARS:
+        raise ProvenanceError(
+            f"estimation_basis 有 {len(b)} 字，超过 {_BASIS_MAX_CHARS} —— "
+            f"这么长基本就是句子了。套进「用{{basis}}估算，…」会读不通。"
+            f"当前值: {b!r}"
+        )
 
 
 def qualifier(
