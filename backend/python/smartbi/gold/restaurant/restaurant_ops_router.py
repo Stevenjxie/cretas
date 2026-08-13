@@ -32,6 +32,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from smartbi.gold.restaurant.metric_registry import (
+    COST_UNIT_ERROR_RATIO as _COST_UNIT_ERROR_RATIO,
+)
 from smartbi.gold.restaurant.provenance import (
     ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
@@ -1876,7 +1879,12 @@ def _compute_margin_dragger(
 
 
 _MAX_SANE_DISH_UNIT_COST = 99999.0
-_MAX_COST_TO_REALIZED_PRICE_RATIO = 10.0
+# 🔴 owner 2026-08-13: 这条判据**只能有一处定义**, 两条路读同一份。
+# 改之前这里是 10.0 而 generic_executor 那侧是 5.0 —— 同一个判据两个值,
+# 正是形态 D。实测后果: 青花椒的「米饭」成本卡 ¥167.20 / 售价 ¥16.80 = 9.95 倍,
+# **恰好卡在两个阈值之间** —— 一条路排除它、另一条不排除, 两条路给出两个数。
+# ⛔ 不在这里写死数字, 从登记表取。
+_MAX_COST_TO_REALIZED_PRICE_RATIO = _COST_UNIT_ERROR_RATIO
 
 
 def _is_plausible_dish_unit_cost(

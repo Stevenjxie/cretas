@@ -282,6 +282,18 @@ def render(result: CellResult, window_label: str) -> str:
     qualifier = result.qualifier(coverage_ratio=result.coverage_ratio)
     if qualifier:
         parts.append(qualifier)
+    # ②c 被排除的菜**指名道姓**。
+    #
+    # 🔴 owner 2026-08-13: 这不是一句免责声明, 是一条**可执行的修复指令**。
+    #    ⛔ 静默排除 = 降级处理 —— 答案看起来正常而数据是坏的, 没人会去修。
+    # ⚠️ 说「暂时不算」而不是「已排除」: 判据是比值不是名单,
+    #    卡一改这道菜**自动回到**计算里(自愈), 措辞要如实反映这一点。
+    for bad in (result.cost_outliers or ())[:3]:
+        parts.append(
+            f"> ⚠️ **{bad['name']}**的成本卡是 ¥{bad['card_cost']:,.2f} 一份，"
+            f"而它卖 ¥{bad['avg_price']:,.2f} —— 成本比售价还高"
+            f"{bad['card_cost'] / bad['avg_price']:.0f} 倍，多半是单位记错了"
+            f"（比如一袋当成一份）。这道菜暂时没算进毛利，改好就会自动算回来。")
     # ③ 开价 —— 估出来的数配一条「补什么能从估变实」。
     #    ⛔ 与 ② 同一个出口: 分开写会出现「说了是估的、却没说怎么变实」,
     #       而那正是店长看完限定语之后立刻会问的那句。

@@ -281,3 +281,49 @@ def test_the_real_koujing_mutation_probe_is_kept():
     # ⛔ 不许退化成容差变异
     assert "PARITY_TOLERANCE" not in src, (
         "真口径变异不许靠改容差 —— 那测不出两侧同源")
+
+
+def test_cost_outlier_threshold_has_exactly_one_definition():
+    """🔴 判据只能有**一处定义**，两条路读同一份。
+
+    改之前：registry 5.0 / router **10.0** —— 同一个判据两个值（形态 D）。
+    实测后果：青花椒「米饭」成本卡 ¥167.20 / 售价 ¥16.80 = **9.95 倍**，
+    **恰好卡在两个阈值之间** —— 一条路排除它、另一条不排除，两条路给出两个数。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+    from smartbi.gold.restaurant.metric_registry import COST_UNIT_ERROR_RATIO
+
+    assert router._MAX_COST_TO_REALIZED_PRICE_RATIO is COST_UNIT_ERROR_RATIO, (
+        "router 又写了一份阈值 —— 两份迟早漂到不同的值上")
+
+    # 阳性对照: 那个真实样本必须落在阈值之内(否则这条断言守的是个不存在的场景)
+    assert 167.20 > COST_UNIT_ERROR_RATIO * 16.80, "米饭那张坏卡抓不到了"
+    # 阴性对照: 同租户正常的那张不许被误伤
+    assert not (2.20 > COST_UNIT_ERROR_RATIO * 58.04), "把正常成本卡也排除了"
+
+
+def test_excluded_dishes_are_named_not_silently_dropped():
+    """⛔ 静默排除 = 降级处理：答案看起来正常而数据是坏的，没人会去修。
+
+    🔴 owner: 这不是一句免责声明，是一条**可执行的修复指令**。
+    """
+    from smartbi.gold.restaurant.generic_answer import render
+    from smartbi.gold.restaurant.generic_executor import CellResult
+
+    cell = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1000.0}], (), "", "ESTIMATED", "成本卡的理论用量", 0.42,
+        ({"name": "米饭", "card_cost": 167.20, "avg_price": 16.80},),
+    )
+    text = render(cell, "今天")
+    assert "米饭" in text, "被排除的菜没有指名"
+    assert "167.20" in text and "16.80" in text, "没给出成本卡与售价, 修不了"
+    assert "单位" in text, "没说清楚要核对什么"
+    # ⚠️ 措辞要反映它能自愈 —— 判据是比值不是名单, 卡改好就自动回到计算里
+    assert "自动算回来" in text, "没说清改好之后会自愈"
+
+    # 阴性对照: 没有异常卡时**不许**出现这段(否则它是句无条件的噪音)
+    clean = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1000.0}], (), "", "ESTIMATED", "成本卡的理论用量", 1.0)
+    assert "单位记错" not in render(clean, "今天")

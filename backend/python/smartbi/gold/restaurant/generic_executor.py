@@ -79,6 +79,12 @@ class CellResult:
     #: ⚠️ 分母用 **item 口径**(`SUM(i.amount)`), 因为 food_cost 是 item 粒度的。
     coverage_ratio: Optional[float] = None
 
+    #: 因**成本卡单位明显错误**被排除出毛利计算的菜, 指名带出来。
+    #: 🔴 owner 2026-08-13: 那不是一句免责声明, 是一条**可执行的修复指令** ——
+    #:    「米饭这道菜的成本卡是 167.20 元一份, 而它卖 16.80, 请核对单位」。
+    #: ⚠️ 静默排除 = 降级处理: 答案看起来正常而数据是坏的, 没人会去修。
+    cost_outliers: Tuple[Dict[str, Any], ...] = ()
+
     def __post_init__(self) -> None:
         # 出处不自洽当场炸, 不静默降级 —— 一个估出来的数被当成账上的数端出去,
         # 比不给数字更糟。
@@ -527,6 +533,7 @@ async def _execute_derived_split(
             #    而 basis 必须是名词短语 —— 我自己上一轮立的那条约束。
             f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}",
             float(share),
+            tuple(cost_outliers),
         )
 
     async def _one(key: str) -> "CellResult":
