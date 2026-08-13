@@ -29,5 +29,12 @@ print(json.dumps({
     # 只看 notified 分不清「都推过了」和「这次没量到东西」。
     "sections_computed": sum(r.get("sections_computed", 0) for r in rows),
     "provenance": sorted({r["provenance"] for r in rows if r.get("provenance")}),
+    # 🔴 每家店当天判成什么, **逐店记**。不记的话「某家店连续 N 天 no_business」
+    #    就看不出来 —— 而 ETL 挂掉的表现恰好是它: 店长觉得「系统好像忘了我」,
+    #    而我们这边一切正常(不推送不告警本来就是 no_business 的设计)。
+    # ⛔ 记 factory_id → status 的映射而不是只记计数: 只记「今天有 1 家 no_business」
+    #    分不出是同一家连着 7 天, 还是 7 家各一天 —— 前者是故障, 后者是正常。
+    "status_by_factory": {r["factory_id"]: r.get("status")
+                          for r in rows if r.get("factory_id")},
     "errors": [r["error"] for r in rows if r.get("error")],
 }, ensure_ascii=False), file=sys.stdout)
