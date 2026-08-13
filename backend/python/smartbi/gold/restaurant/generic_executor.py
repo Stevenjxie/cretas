@@ -36,6 +36,7 @@ from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
     COST_BRIDGE_KEY_PARAM,
     dish_cost_is_implausible,
+    effective_requires as _reg_effective_requires,
     DERIVED,
     DIMENSIONS,
     GRAINS,
@@ -798,32 +799,10 @@ _COST_CARD_COLUMN = "agg_restaurant_product_cost.food_cost"
 _COST_CARD_BASIS = "成本卡的理论用量"
 
 
-def _effective_requires(metric_key: str) -> Tuple[str, ...]:
-    """这个指标**实际依赖的列**, 派生量递归展开到基础指标。
-
-    🔴 不展开就会漏: `gross_profit = revenue - food_cost` 是 `Derived`,
-       它**没有 `requires`**(空元组), 于是「毛利」会被判成 MEASURED ——
-       而毛利的成本项正来自成本卡。实测当场抓到这一条。
-    ⛔ 与 `fill_offers` 那边的闭包是同一件事的两面, 但**不共用实现**:
-       那边问「补这一列能解锁什么」, 这边问「这个数依赖哪些列」——
-       方向相反, 合并会让两边都变得难读。⚠️ 两边都要跟着 registry 走, 别手写。
-    """
-    seen: set = set()
-    stack = [metric_key]
-    cols: set = set()
-    while stack:
-        key = stack.pop()
-        if key in seen:
-            continue
-        seen.add(key)
-        base = METRICS.get(key)
-        if base is not None:
-            cols.update(base.requires)
-            continue
-        derived = DERIVED.get(key)
-        if derived is not None:
-            stack.extend((derived.left, derived.right))
-    return tuple(sorted(cols))
+#: 这个指标实际依赖的列。⛔ **登记表那一份**, 这里只留个别名 ——
+#: 它是对登记表的查询, 不是执行逻辑; 两份实现会在「毛利算不算 ESTIMATED」
+#: 这种判定上悄悄漂开。
+_effective_requires = _reg_effective_requires
 
 
 #: 覆盖率查询。**join 从 `GRAINS["item_cost"]` 取**, 不在这里重抄一份 ——

@@ -642,3 +642,82 @@ def test_t2_offer_follows_requires_not_a_handwritten_list(monkeypatch):
     assert "gross_margin" not in after, (
         "🔴 变异没生效 —— 开价读的不是 registry, 是别处")   # 行为真的变了
     assert before != after, "反查结果一个字没变, 这条对照是空转"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ESTIMATED 有两种 —— owner 2026-08-14
+#   (a) 可补的估算   缺某列数据, 补了就实    → 「补 X, Y 从估变实」 ✅
+#   (b) 结构性估算   数据齐了也只能是估的    → 那句永远兑现不了     ⛔
+# 判据: 承诺「补 X 就变准」之前, 先问「补齐之后它会不会仍然是估的」。
+# ═══════════════════════════════════════════════════════════════════════════
+def test_structural_estimate_never_promises_it_will_become_actual():
+    """(b) 类不许出现「从估变实」。日毛利就是 (b)。"""
+    from smartbi.gold.restaurant.fill_offers import offers_for_estimated
+    from smartbi.gold.restaurant.metric_registry import (
+        ESTIMATE_STRUCTURAL, estimate_kind)
+
+    assert estimate_kind("gross_profit") == ESTIMATE_STRUCTURAL, (
+        "毛利被判成 (a) 了 —— 成本卡给的是理论用量, 补齐也不会变成实际耗用")
+    got = offers_for_estimated(
+        "ESTIMATED", "成本卡的理论用量", ["毛利"], ["gross_profit"])
+    text = got[0]["text"]
+    assert "从估变实" not in text, f"(b) 类承诺了兑现不了的事: {text}"
+    assert "只能是估的" in text, f"没说清它是结构性的: {text}"
+    assert "盘" in text, f"没说清要变实得改什么经营动作: {text}"
+
+
+def test_reducible_estimate_still_gets_the_upgrade_promise():
+    """阳性对照 —— (a) 类**该**说「补了就实」。
+
+    ⛔ 没有这条, 上面那条阴性断言就是恒真式: 把「从估变实」整句删掉,
+       它照样绿。本仓踩过这个形状。
+    """
+    from smartbi.gold.restaurant.fill_offers import offers_for_estimated
+    from smartbi.gold.restaurant.metric_registry import (
+        ESTIMATE_REDUCIBLE, estimate_kind)
+
+    assert estimate_kind("revenue") == ESTIMATE_REDUCIBLE
+    got = offers_for_estimated(
+        "ESTIMATED", "行业默认成本率 32%", ["营收"], ["revenue"])
+    assert "从估变实" in got[0]["text"], (
+        "(a) 类也不说「补了就实」—— 那这个区分就没有任何行为差别")
+
+
+def test_mislabelling_b_as_a_flips_the_copy_and_is_caught(monkeypatch):
+    """🔴 变异对照: 把 (b) 误标成 (a), 文案必须变回「从估变实」并被抓住。
+
+    ⚠️ 先证明**行为变了**再看断言 —— 「变异没生效」与「守卫没覆盖」长得一样。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+    from smartbi.gold.restaurant.fill_offers import offers_for_estimated
+
+    before = offers_for_estimated(
+        "ESTIMATED", "成本卡的理论用量", ["毛利"], ["gross_profit"])[0]["text"]
+    assert "从估变实" not in before                      # 改之前是对的
+
+    # 变异: 把「成本卡是理论用量」这条标注拿掉 → 毛利被误判成 (a)
+    monkeypatch.setattr(reg, "IRREDUCIBLE_ESTIMATE_COLUMNS", {})
+    assert reg.estimate_kind("gross_profit") == reg.ESTIMATE_REDUCIBLE, (
+        "🔴 变异没生效 —— (a)/(b) 的判定读的不是登记表")   # 行为真的变了
+
+    after = offers_for_estimated(
+        "ESTIMATED", "成本卡的理论用量", ["毛利"], ["gross_profit"])[0]["text"]
+    assert "从估变实" in after, "文案没跟着标注变 —— 那它是手写的, 不是推出来的"
+    assert before != after, "变异前后一个字没变, 这条对照是空转"
+
+
+def test_the_irreducible_annotation_is_the_only_hand_written_bit():
+    """⚠️ 这一处**是靠人标的**, 卡上写明了。闸只能守住它不过期。
+
+    「理论用量 ≠ 实际耗用」是业务语义, 推不出来。能机械查的是:
+    标了的列必须真的被人依赖, 且必须写清楚为什么。
+    """
+    from smartbi.gold.restaurant.metric_registry import (
+        IRREDUCIBLE_ESTIMATE_COLUMNS, METRICS, assert_registry_self_consistent)
+
+    assert IRREDUCIBLE_ESTIMATE_COLUMNS, "一条都没有 —— 这条断言会恒真"
+    required = {c for m in METRICS.values() for c in m.requires}
+    for column, reason in IRREDUCIBLE_ESTIMATE_COLUMNS.items():
+        assert column in required, f"{column} 没有任何指标依赖它 —— 过期标注"
+        assert reason.strip(), f"{column} 没写为什么补齐也还是估的"
+    assert_registry_self_consistent()

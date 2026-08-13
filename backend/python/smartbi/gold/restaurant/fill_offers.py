@@ -157,6 +157,7 @@ def offers_for_estimated(
     provenance: str,
     estimation_basis: str,
     metric_labels: Sequence[str],
+    metric_keys: Sequence[str] = (),
 ) -> List[Dict[str, object]]:
     """精度降级 → 说清「这是理论用量」以及「要变准该做什么」。
 
@@ -179,10 +180,44 @@ def offers_for_estimated(
     #    ESTIMATED, 因为 basis 是「成本卡的**理论**用量」, 而实际耗用要**盘点**才知道。
     #    补卡能提高的是**覆盖率**, 不是出处。两件事, 原文混成了一件。
     #    ⚠️ 这正是 owner 2026-08-14 收窄的那条: ⛔「补上就准了」。
+    # 🔴 owner 2026-08-14: ESTIMATED **有两种**, 从前当成一种。
+    #   (a) 可补的估算  缺某列数据, 补了就实   → 「补 X, Y 从估变实」  ✅
+    #   (b) 结构性估算  数据齐了也只能是估的   → 上面那句永远兑现不了  ⛔
+    # 判据: **承诺「补 X 就变准」之前, 先问「补齐之后它会不会仍然是估的」。**
+    # ⚠️ 判哪一种从 `effective_requires` **推**, ⛔ 不查手写清单。
+    #    推不出来时(没给 metric_keys)按 (b) 走 —— 那是安全的一侧:
+    #    少给一句「补了就实」不会骗人, 多给一句会。
+    kind = _reg.ESTIMATE_STRUCTURAL
+    reason = ""
+    for key in metric_keys:
+        kind = _reg.estimate_kind(key)
+        reason = _reg.irreducible_reason(key)
+        if kind == _reg.ESTIMATE_STRUCTURAL:
+            break
+    names = "、".join(metric_labels)
+    if kind == _reg.ESTIMATE_REDUCIBLE:
+        # (a): 这句是**兑现得了**的 —— 补齐那一列, provenance 真的会变。
+        return [{
+            "kind": "upgrade",
+            "estimate_kind": kind,
+            "text": f"补齐对应的数据，{names}就能从估变实",
+            "basis": estimation_basis,
+        }]
+    # (b): 诚实的说法不是「补数据」, 是「这个数只能是估的, 以及为什么」。
+    # ⛔ 不在这里写理由 —— 理由在登记表上(`IRREDUCIBLE_ESTIMATE_COLUMNS`),
+    #    写两份就会漂, 而漂的方向是「说了个过期的理由」。
+    # ⏸ 「要不要把盘点频率这个取舍摆给店长看」是产品判断, owner 挂账 ——
+    #    这里只说清现状, ⛔ 不推着他去天天盘库。
+    if reason:
+        text = f"{names}只能是估的 —— {reason}"
+    else:
+        # 说不出**为什么**时就别加破折号后面那半句 —— 「只能是估的 —— 这个数
+        # 只能是估的」是自我复读, 比不解释更糟。
+        text = f"{names}只能是估的"
     return [{
         "kind": "upgrade",
-        "text": (f"{'、'.join(metric_labels)}用的是成本卡上的**理论**用量 —— "
-                 f"实际用了多少要盘一次库才知道"),
+        "estimate_kind": kind,
+        "text": text,
         "basis": estimation_basis,
     }]
 
@@ -246,6 +281,7 @@ def build_fill_offers(
     provenance: str = MEASURED,
     estimation_basis: str = "",
     estimated_metric_labels: Sequence[str] = (),
+    estimated_metric_keys: Sequence[str] = (),
     cost_gaps: Sequence[Dict[str, Any]] = (),
     coverage_ratio: Optional[float] = None,
     coverage_denominator: Optional[float] = None,
@@ -263,4 +299,5 @@ def build_fill_offers(
     return (offers_for_missing_columns(missing_columns)
             + dish_offers
             + offers_for_estimated(provenance, estimation_basis,
-                                   estimated_metric_labels))
+                                   estimated_metric_labels,
+                                   estimated_metric_keys))

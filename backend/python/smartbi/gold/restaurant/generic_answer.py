@@ -306,6 +306,8 @@ def render(result: CellResult, window_label: str) -> str:
         provenance=result.provenance,
         estimation_basis=result.estimation_basis,
         estimated_metric_labels=[result.metric_label],
+        # (a)/(b) 由 key 推出来 —— ⛔ 不传 key 就只能按 (b) 走(安全的一侧)
+        estimated_metric_keys=[result.metric_key],
         # T2 前两层的原料。⚠️ 与 `coverage_ratio` 同源(同一次 `_covered_margin`),
         #    ⛔ 不在开价那边另取一次数 —— 两个分母就是两个覆盖率。
         cost_gaps=result.cost_gaps,
