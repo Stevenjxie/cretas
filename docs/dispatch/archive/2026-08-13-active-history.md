@@ -9,3 +9,13 @@
 - 删除条件：在独立、无行为改动的提交中把这两个完整文件统一为 LF，且移除属性后同一范围默认 `git diff --check` 仍通过。
 - 验证：`git check-attr whitespace` 两个路径均为 `trailing-space,cr-at-eol`；`git diff --check 4e7eb9c4490c9286a2170a578d24494545789358` 通过。
 - 边界：未修改 Java 运行代码、API、数据库、生产数据、部署或 LIUSHANMEN。
+
+## `SOP-RAG-SYNC-20260813` — `merged`
+
+- Owner: `/root`
+- Base SHA: `488851111400949fac3f8005b7685dfffd9b82b3`
+- PR / main: #2570，`fe505d4eddb26a502d356c602a83ed6501d1f39e`
+- 工厂：AI Assist、F006 在线 SOP、canonical KB 与确定性回答已同步 Workflow 维护、物料销售/发货、单位/小数和表单助手真实成功边界；生产问答 4/4 仅引用 `f006-production-full-chain-sop.md`。
+- 餐饮：AI Assist、在线 SOP 与三个注册 source 已同步默认时间、实测/估算出处、补数据提示和打烊经营摘要；生产问答 3/3 仅引用餐饮注册 source，单菜毛利固定红线通过。
+- 验证：目标 pytest 96/96、Python compile、HTML 解析、CI Python/Web/secret scan 全通过；三页线上 SHA 与 exact main 一致；RAG 正式块 71 / 84 / 244 / 175，`.NEW=0`；Python、Embedding、PostgreSQL 健康。
+- 生产：Python 从 clean exact main 发布；三页和三份餐饮 docs 均先备份、校验 SHA 后原子替换；四个 changed canonical source 原子重建。生产 ERP 业务写入为 0。
