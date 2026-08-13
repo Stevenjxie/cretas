@@ -156,6 +156,40 @@ async def main():
             """,
             ri._PLAN_VERSION, FACTORY)
     print(f"# 表里可载入的行数 = {len(rows)}")
+
+    # ── 台账拆两行(owner 2026-08-13 裁定 ⑥) ────────────────────────────
+    #
+    # 🔴 旧台账把两件事压成一个数, 于是「仪器坏了」和「存量确实没有」
+    #    **长得一模一样**:
+    #      (a) 回放这条机制今天还能不能开火   → 恒 0 = 仪器坏了
+    #      (b) 存量里有多少条今天真的会回放   → 恒 0 = **真事实**
+    #
+    # positive_control: 用一条**合成的、当前格式**的指纹走格式门。恒 1, 不为 0。
+    #   ⛔ 不打桩 `plan_semantics_segment` —— 那是「关掉闸来证明闸能开」, 恒真式。
+    #   ⛔ 不往 ai_promoted_routes 写任何行 —— 合成值只在进程内。
+    # ⚠️ **代理判据, 标出来**: 它验的是「当前格式能通过格式门」, 不验下游执行链。
+    #    下游由 ①②③ 三分类覆盖。要替换它, 就把合成行注入
+    #    `ri._PROMOTED_ROUTES_CACHE` 驱动一次真回放。
+    live_sem = ri._plan_semantics_fingerprint()
+    synthetic_fp = ri.compose_routing_fingerprint()
+    positive_control = int(ri.plan_semantics_segment(synthetic_fp) == live_sem)
+
+    # eligible_stored: 存量里 normalize 后能对上活语义段的条数。
+    # ⚠️ 今天大概率是 0 —— 那**不是故障**, 是「39 条人审晋升是旧格式」这个事实的读数。
+    eligible_stored = sum(
+        1 for r in rows
+        if ri.plan_semantics_segment(r["routing_fingerprint"] or "") == live_sem
+    )
+    print(f"# positive_control = {positive_control} (1=机制能开火)")
+    print(f"# eligible_stored  = {eligible_stored}/{len(rows)} (存量今天真的会回放的条数)")
+    if not positive_control:
+        print("⛔ 合成阳性对照没通过 —— 格式门本身坏了, 本轮读数作废")
+        # ⚠️ 产出形状与正常出口一致, 否则台账那一行会缺列(而缺列长得像 0)。
+        _write_probe_out({"rows": [], "positive_control": 0,
+                          "eligible_stored": eligible_stored,
+                          "stored_total": len(rows)})
+        return 2
+
     if not rows:
         # 🔴 早退也必须写产出文件。不写的话 cron 的 `[ -r ... ]` 会读到
         #    **上一次**留下的 json, 于是台账里出现「这次的 rc + 上次的计数」——
@@ -197,7 +231,14 @@ async def main():
         print(f"[{i:>2}/{len(rows)}] {cls}  hitA={hit_a}  {phrase[:32]}")
 
     ri._routing_rules_fingerprint = _REAL_FP_FN
-    _write_probe_out(out)
+    # 🔴 两个数写进产出, 台账才看得见拆分。⛔ 不要只 print ——
+    #    台账读的是这份 json, print 只进日志。
+    _write_probe_out({
+        "rows": out,
+        "positive_control": positive_control,
+        "eligible_stored": eligible_stored,
+        "stored_total": len(rows),
+    })
 
     hits = sum(1 for r in out if r["hit_a"])
     print("\n=== 阳性对照 ===")
