@@ -61,7 +61,12 @@ GRAINS: Dict[str, Tuple[str, str, str]] = {
         "AND dp.factory_id = i.factory_id "
         "LEFT JOIN dim_restaurant_cost_product b "
         "ON b.factory_id = i.factory_id "
-        "AND b.normalized_name = dp.normalized_name "
+        # 🔴 大小写归一。2026-08-13 实测: 桥接表存小写 `营养多c番茄味(单人份)`,
+        #    而 dim_product 存大写 `营养多C番茄味(单人份)` —— 精确等值全部落空,
+        #    6 道菜的成本卡被漏掉, 日结与问答因此差 7,297.97 元。
+        # ⚠️ 只归一大小写, **不动别的** —— 名字里还有 `【无刺】`/`【直播专享】`
+        #    这类前缀和括号差异, 那些两条路都算「没卡」, 是另一件事(已挂账)。
+        "AND lower(b.normalized_name) = lower(dp.normalized_name) "
         "LEFT JOIN agg_restaurant_product_cost c "
         "ON c.factory_id = b.factory_id "
         "AND c.product_source_pk = b.product_source_pk",
