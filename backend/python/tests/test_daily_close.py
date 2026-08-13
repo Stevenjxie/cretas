@@ -211,10 +211,13 @@ def test_three_segments_all_present():
     text = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
 
     assert "¥8,642.00" in text, f"① 数字没出来: {text}"
-    assert "不是账上的数" in text, f"② 限定语没出来: {text}"
+    assert "不能当实际毛利用" in text, f"② 限定语没出来: {text}"
     assert "从估变实" in text, f"③ 开价没出来: {text}"
     # ⛔ 限定语不许复述成两遍(② 和 ③ 相邻)
     assert text.count("成本卡的理论用量") == 1, f"basis 复述了两遍: {text}"
+    # ⛔ 2026-08-13 定稿: 「不是账上的数」和「不能当实际毛利用」是同一件事,
+    #    留一个。留了后者(更直接说清后果)。
+    assert "不是账上的数" not in text, f"同一件事说了两遍: {text}"
 
 
 def test_mutation_forcing_measured_removes_the_qualifier():
@@ -225,11 +228,11 @@ def test_mutation_forcing_measured_removes_the_qualifier():
     """
     prov, basis = ge._provenance_of("gross_profit")
     with_qualifier = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
-    assert "不是账上的数" in with_qualifier
+    assert "不能当实际毛利用" in with_qualifier
 
     # 变异: 同一个数, 出处强改成 MEASURED
     muted = render(_cell("gross_profit", "毛利", 8642.0, "MEASURED", ""), "今天")
-    assert "不是账上的数" not in muted, (
+    assert "不能当实际毛利用" not in muted, (
         "改成 MEASURED 限定语还在 —— 说明它是手写的, 不是由字段生成的")
     assert "从估变实" not in muted, "MEASURED 还开「从估变实」的价"
     # 阳性对照: 数字本身没变 —— 变的只是出处那一层
@@ -322,9 +325,10 @@ def test_qualifier_states_how_much_of_revenue_lacks_a_cost_card():
        「平租户让闸恒绿」。所以这里必须构造。
     """
     text = render(_cell_cov(0.40), "今天")
-    assert "60.0% 的营收没有配方成本" in text, f"没说覆盖了几成: {text}"
-    # 另一句仍在 —— 覆盖率是加在限定语前面的, 不是替换它
-    assert "不是账上的数" in text
+    # 🔴 正反都说: 只说否定面会让店长觉得这数没用, 只说正面会淡化风险。
+    assert "40.0% 的营收能算准" in text, f"没说能算准的那部分: {text}"
+    assert "60.0% 没有配方成本" in text, f"没说估的那部分: {text}"
+    assert "不能当实际毛利用" in text
 
 
 def test_qualifier_percentage_follows_the_coverage_number():
@@ -332,12 +336,14 @@ def test_qualifier_percentage_follows_the_coverage_number():
 
     ⛔ 只断言「出现了 60.0%」证明不了它是算出来的 —— 写死一个 60.0% 同样能过。
     """
-    assert "60.0% 的营收没有配方成本" in render(_cell_cov(0.40), "今天")
-    assert "75.0% 的营收没有配方成本" in render(_cell_cov(0.25), "今天")
+    assert "40.0% 的营收能算准" in render(_cell_cov(0.40), "今天")
+    assert "25.0% 的营收能算准" in render(_cell_cov(0.25), "今天")
+    assert "75.0% 没有配方成本" in render(_cell_cov(0.25), "今天")
     # 阴性对照: 全覆盖时那句话**必须消失**, 否则它就是句无条件的废话
     full = render(_cell_cov(1.0), "今天")
     assert "没有配方成本" not in full, f"全覆盖还在说有菜没成本卡: {full}"
-    assert "不是账上的数" in full, "全覆盖时「按成本卡估的」那句不该跟着消失"
+    assert "能算准" not in full, f"全覆盖还在拆分正反两面: {full}"
+    assert "不能当实际毛利用" in full, "全覆盖时「按成本卡估的」那句不该跟着消失"
 
 
 def test_unknown_coverage_is_not_reported_as_full():
@@ -347,7 +353,7 @@ def test_unknown_coverage_is_not_reported_as_full():
     """
     text = render(_cell_cov(None), "今天")
     assert "没有配方成本" not in text
-    assert "不是账上的数" in text
+    assert "不能当实际毛利用" in text
 
 
 def test_revenue_section_has_no_qualifier():
@@ -358,7 +364,7 @@ def test_revenue_section_has_no_qualifier():
     prov, basis = ge._provenance_of("revenue")
     text = render(_cell("revenue", "营收", 31200.0, prov, basis), "今天")
     assert "¥31,200.00" in text
-    assert "不是账上的数" not in text
+    assert "不能当实际毛利用" not in text
     assert "从估变实" not in text
 
 
@@ -545,7 +551,7 @@ async def test_push_sends_the_three_segments_to_the_manager():
     assert out["notify"]["notified"] == ["restaurant_manager"]
     body = sent[0]["body"]
     assert "¥" in body, f"① 数字没发出去: {body}"
-    assert "不是账上的数" in body, f"② 限定语没发出去: {body}"
+    assert "不能当实际毛利用" in body, f"② 限定语没发出去: {body}"
     assert "从估变实" in body, f"③ 开价没发出去: {body}"
     assert "2026-08-13" in sent[0]["title"]
 

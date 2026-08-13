@@ -71,7 +71,7 @@ def test_each_path_qualifier_explains_its_own_number():
     # ESTIMATED 那条：说清楚「另外 40% 是估的，依据是什么」
     assert "40.0%" in estimated_q
     assert "行业默认成本率 32%" in estimated_q
-    assert "不是账上的数" in estimated_q
+    assert "不能当实际毛利用" in estimated_q
 
     # 两句话必须不同 —— 相同就说明限定语没有跟着出处走。
     assert measured_q != estimated_q
@@ -120,8 +120,8 @@ def test_cellresult_generates_its_qualifier_from_the_field():
     )
     assert mea.provenance == MEASURED, "默认必须是 MEASURED(安全的一侧)"
 
-    assert "不是账上的数" in est.qualifier(coverage_ratio=0.6)
-    assert "不是账上的数" not in mea.qualifier(coverage_ratio=0.6)
+    assert "不能当实际毛利用" in est.qualifier(coverage_ratio=0.6)
+    assert "不能当实际毛利用" not in mea.qualifier(coverage_ratio=0.6)
     assert mea.qualifier(coverage_ratio=1.0) == ""
     # 同一个格子, 只改出处 → 限定语跟着变。
     assert est.qualifier(coverage_ratio=0.6) != mea.qualifier(coverage_ratio=0.6)
@@ -215,7 +215,7 @@ async def test_real_dish_margin_path_at_partial_coverage(monkeypatch):
     # 限定语由字段生成, 且解释了那 272 元是哪来的
     assert "40.0%" in data["qualifier"]
     assert "行业默认成本率 32%" in data["qualifier"]
-    assert "不是账上的数" in data["qualifier"]
+    assert "不能当实际毛利用" in data["qualifier"]
 
 
 @pytest.mark.asyncio
