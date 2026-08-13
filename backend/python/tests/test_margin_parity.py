@@ -18,6 +18,22 @@ owner 2026-08-13 裁定：不选「合计层改走 `generic_executor`」——
 ⚠️ 真正的跨库对账在 `scripts/cron/margin-parity-daily.sh`（形状抄
 `replay-equivalence-daily.sh`：同一天同一租户各算一次，比）。本模块守的是
 **口径本身**：两边的公式必须是同一个。
+
+## 🔴 两道闸各自看不见什么（写下来，别让人以为哪道是全覆盖）
+
+| 闸 | 抓什么 | **看不见什么** |
+|---|---|---|
+| 源码闸（本模块） | 明写的列名变了 | **变量拼装 / 等价写法** —— 它比的是字符串，resolver 哪天把 `t.net_amount` 换成变量或等价 SQL，它一声不吭（f-string 那个老盲区） |
+| 对账闸（cron） | 两条路的数不一样了 | **两侧同源** —— 若两边最终走到同一段代码，口径一变两侧一起变，diff 恒 0，它永远绿 |
+
+⇒ 两道**互补**，缺一不可：源码闸兜「数字碰巧相等但口径已经不同」，
+对账闸兜「源码看着没变但算出来不一样」。
+
+⚠️ 对账闸的「两侧同源」盲区**已经用真口径变异验过**（2026-08-13）：
+把 `_paid_revenue_in_window` 打桩成 None → resolver 走自己的回退路径退回
+item 口径 → diff = **-31,125.59**（正是折扣额），而 executor 侧一动不动。
+⇒ 两侧确实独立。⛔ 这一步不能用容差变异代替：容差变异硬改阈值，
+   不管两侧从哪来，测不出同源。
 """
 import inspect
 import io
@@ -240,3 +256,29 @@ def test_basis_shape_is_enforced_at_the_consumer():
     # 阳性对照: 现役的两个 basis 都必须过 —— 否则这道闸会把生产打挂
     from smartbi.gold.restaurant.generic_executor import _COST_CARD_BASIS
     qualifier(ESTIMATED, _COST_CARD_BASIS)
+
+
+def test_the_real_koujing_mutation_probe_is_kept():
+    """🔴 真口径变异要**留在仓库里**，不是跑一次就丢。
+
+    2026-08-13 prod 实测（`smartbi/scripts/margin_parity_mutation.py`）：
+
+    | | executor | resolver | diff |
+    |---|---|---|---|
+    | 基线 | 475,623.834 | 475,623.834 | -0.0 |
+    | 变异 | 475,623.834 | 506,749.424 | **-31,125.59** |
+
+    四条判据全过：基线绿 / 变异红 / **红出的正是折扣额** / **两侧独立**。
+
+    ⛔ 「红了」不够，要「红出正确的数」—— 红了但 diff 是别的数，
+       等于变异没打到该打的地方（形态 C″ 的镜像）。
+    """
+    src = io.open(_PY_ROOT / "smartbi/scripts/margin_parity_mutation.py",
+                  encoding="utf-8", newline="").read()
+    for key in ("red_for_the_right_reason", "sides_are_independent",
+                "baseline_green", "mutation_red"):
+        assert key in src, f"变异探针少了判据 {key}"
+    assert "EXPECTED_DISCOUNT" in src, "没有钉住「红出的必须是折扣额」"
+    # ⛔ 不许退化成容差变异
+    assert "PARITY_TOLERANCE" not in src, (
+        "真口径变异不许靠改容差 —— 那测不出两侧同源")
