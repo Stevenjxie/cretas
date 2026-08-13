@@ -38,6 +38,8 @@ item 口径 → diff = **-31,125.59**（正是折扣额），而 executor 侧一
 import inspect
 import io
 import re
+
+import pytest
 from pathlib import Path
 
 _PY_ROOT = Path(__file__).resolve().parents[1]
@@ -569,3 +571,74 @@ def test_the_rejected_cost_card_value_survives_for_the_message():
     ok = router._build_margin_entries(
         rows, {"米饭": "PK"}, {"PK": 3.0})[0]
     assert ok["invalid_cost"] is False and ok["invalid_cost_value"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T2 前两层（owner 2026-08-14 放行；第三层「成本率可疑」挂账）
+# ═══════════════════════════════════════════════════════════════════════════
+def test_t2_names_the_dishes_and_quantifies_the_lift():
+    """第一层缺口 + 第二层影响，都必须是**算出来的**。"""
+    from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
+
+    gaps = [{"name": "顺德干蒸鲜排骨", "revenue": 300.0},
+            {"name": "老广腊味煲仔饭", "revenue": 200.0},
+            {"name": "豉油蒸海鲈鱼", "revenue": 100.0},
+            {"name": "小菜", "revenue": 1.0}]
+    got = offers_for_cost_gaps(gaps, 0.422, 10000.0)
+    assert got, "有缺口却没开价"
+    text = got[0]["text"]
+    # 第一层: 点名, ⛔ 不许只报个数
+    for name in ("顺德干蒸鲜排骨", "老广腊味煲仔饭", "豉油蒸海鲈鱼"):
+        assert name in text, f"没点名 {name}: {text}"
+    assert "小菜" not in text, "超出 top_n 还点名了 —— 那就不是优先级是清单"
+    # 第二层: 覆盖率增量算得对 (300+200+100)/10000 = 6pp
+    assert "42.2%" in text and "48.2%" in text, text
+    assert got[0]["coverage_after"] == pytest.approx(0.482)
+    assert got[0]["gap_total"] == 4, "缺口总数没带出去"
+
+
+def test_t2_never_promises_accuracy():
+    """🔴 承重: ⛔「补上就准了」。
+
+    覆盖率不依赖卡录得全不全, 所以覆盖率那句站得住;
+    而「卡是对的但只录了主料」已经实测到 —— 承诺准确是一句我们**知道**
+    可能不成立的话。
+    """
+    from smartbi.gold.restaurant.fill_offers import (
+        build_fill_offers, offers_for_cost_gaps)
+
+    banned = ("就准了", "从估变实", "就是账上的了", "准确", "就对了")
+    texts = [o["text"] for o in offers_for_cost_gaps(
+        [{"name": "A", "revenue": 500.0}], 0.4, 1000.0)]
+    texts += [o["text"] for o in build_fill_offers(
+        provenance="ESTIMATED", estimation_basis="成本卡的理论用量",
+        estimated_metric_labels=["毛利"])]
+    assert texts, "一条开价都没有 —— 这条断言会恒真"      # 阳性对照
+    for t in texts:
+        for word in banned:
+            assert word not in t, f"开价承诺了准确性: {t!r} 命中 {word!r}"
+
+
+def test_t2_offer_follows_requires_not_a_handwritten_list(monkeypatch):
+    """🔴 判据三的变异对照: 改一条 `requires`，开价必须跟着变。
+
+    ⚠️ 先证明**行为变了**再看断言 —— 「变异没生效」和「守卫没覆盖」长得一样
+       但成因相反(本仓踩过三次)。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+    from smartbi.gold.restaurant import fill_offers
+
+    column = "agg_restaurant_product_cost.food_cost"
+    before = fill_offers.unlocked_by_column().get(column, ())
+    assert "gross_margin" in before, "阳性对照: 补成本卡本来就该解锁毛利率"
+
+    # 变异: 把毛利的分子换掉, 于是成本卡不再解锁毛利率
+    mutated = dict(reg.DERIVED)
+    mutated.pop("gross_profit")
+    mutated.pop("gross_margin")
+    monkeypatch.setattr(reg, "DERIVED", mutated)
+
+    after = fill_offers.unlocked_by_column().get(column, ())
+    assert "gross_margin" not in after, (
+        "🔴 变异没生效 —— 开价读的不是 registry, 是别处")   # 行为真的变了
+    assert before != after, "反查结果一个字没变, 这条对照是空转"

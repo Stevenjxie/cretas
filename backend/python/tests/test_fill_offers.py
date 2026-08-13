@@ -106,8 +106,15 @@ def test_estimated_offer_says_from_estimate_to_actual():
     #    「说清补什么、变成什么」, 而**对得上**由**相邻**保证。
     # ⛔ basis 仍在结构化字段里(下游要对上时拿得到), 只是不进正文。
     assert offers[0]["basis"] == "行业默认成本率 32%", "basis 字段丢了, 下游对不上"
-    assert "补齐" in text and "成本卡" in text, f"没说清该补什么: {text}"
-    assert "从估变实" in text
+    # 🔴 2026-08-14 订正: 原文断言「从估变实」与「补齐…成本卡」——
+    #    **那是一句系统结构上做不到的承诺**。`_provenance_of` 是指标键的纯函数,
+    #    只要依赖里有成本卡那一列就恒为 ESTIMATED: 把全店的卡补齐它还是 ESTIMATED,
+    #    因为 basis 是「成本卡的**理论**用量」, 实际耗用要**盘点**。
+    #    补卡提高的是**覆盖率**(那句由 `offers_for_cost_gaps` 说, 带数), 不是出处。
+    #    ⇒ 这里守的改成「说清它是理论用量、以及要变准该做什么(盘库)」。
+    assert "理论" in text, f"没说清这是理论用量: {text}"
+    assert "盘" in text, f"没说清要变准该做什么: {text}"
+    assert "从估变实" not in text, "🔴 又承诺「补上就变实」了 —— 补卡改不了 provenance"
     assert "毛利率" in text
     # 阴性对照: 正文里不该复述 basis(那正是这次要消掉的重复)
     assert "行业默认成本率" not in text, f"又复述了一遍 basis: {text}"

@@ -95,6 +95,13 @@ class CellResult:
     #: ⚠️ 静默排除 = 降级处理: 答案看起来正常而数据是坏的, 没人会去修。
     cost_outliers: Tuple[Dict[str, Any], ...] = ()
 
+    #: T2 第一层「缺口」: 当期有销售但**没有成本卡**的菜, 按营收从高到低。
+    #: 第二层「优先级」就是这个顺序 —— ⛔ 不另设一套打分。
+    cost_gaps: Tuple[Dict[str, Any], ...] = ()
+    #: 覆盖率的分母(item 口径全额营收)。开价要算「补 N 道能到几成」, 分母
+    #: **必须**是算 `coverage_ratio` 用的那一个, ⛔ 不许另取一次数。
+    coverage_denominator: Optional[float] = None
+
     def __post_init__(self) -> None:
         # 出处不自洽当场炸, 不静默降级 —— 一个估出来的数被当成账上的数端出去,
         # 比不给数字更糟。
@@ -466,7 +473,10 @@ _DISH_COST_FACTS_SQL = (
     "       max(c.food_cost)                      AS unit_cost\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
-    "   AND c.food_cost IS NOT NULL\n"
+    # ⚠️ 2026-08-14: **不再**在 SQL 里滤掉「没有卡」的菜 —— 同一份取数要同时
+    #    服务两件事: ①判卡对不对(只看有卡的) ②T2 开价(恰恰要没卡的那些)。
+    #    ⛔ 为②另写一条 SQL 就是同一条事实链两个定义, 这一周修的就是这个病。
+    #    有没有卡在 Python 里按 `unit_cost is None` 分, 一处判断。
     " GROUP BY 1\n"
 )
 
@@ -478,36 +488,67 @@ _EXCLUDED_PARAM = 6
 _EXCLUDED_EXPR = f"dp.normalized_name = ANY(${_EXCLUDED_PARAM}::text[])"
 
 
-async def _cost_outliers(conn, factory_id: str, date_range, bridge):
-    """按**菜**判成本卡单位错没错。返回 (排除名单, 指名用的明细)。
+async def _dish_cost_facts(conn, factory_id: str, date_range, bridge):
+    """逐菜 (名字, 份数, 营收, 卡)。**一次取数, 两个消费者。**
 
-    🔴 判定只调 `dish_cost_is_implausible` —— 全仓唯一的一处。
-       本函数负责取数和组装, **一个比较符号都不写**。
+    ⛔ 不在 SQL 里滤「有没有卡」—— 判卡对不对要有卡的, T2 开价要没卡的,
+       两条 SQL 就是同一条事实链两个定义。
     """
     frm, join, alias = GRAINS["item_cost"]
     names, keys = bridge
     rows = await conn.fetch(
         _DISH_COST_FACTS_SQL.format(frm=frm, join=join, alias=alias),
         factory_id, date_range[0], date_range[1], names, keys)
-    excluded, detail = [], []
+    out = []
     for row in rows or ():
         name = row["name"]
         if not name:
             continue
-        unit_cost = row["unit_cost"]
-        qty = float(row["qty"] or 0)
-        revenue = float(row["revenue"] or 0)
-        if not dish_cost_is_implausible(unit_cost, qty, revenue):
-            continue
-        excluded.append(name)
-        detail.append({
+        out.append({
             "name": name,
+            "qty": float(row["qty"] or 0),
+            "revenue": float(row["revenue"] or 0),
+            "unit_cost": row["unit_cost"],
+        })
+    return out
+
+
+def _cost_outliers(facts):
+    """按**菜**判成本卡单位错没错。返回 (排除名单, 指名用的明细)。
+
+    🔴 判定只调 `dish_cost_is_implausible` —— 全仓唯一的一处。
+       本函数负责组装, **一个比较符号都不写**。
+    """
+    excluded, detail = [], []
+    for f in facts:
+        unit_cost = f["unit_cost"]
+        if unit_cost is None:          # 没有卡 ≠ 卡是坏的, 那一类由 T2 开价管
+            continue
+        if not dish_cost_is_implausible(unit_cost, f["qty"], f["revenue"]):
+            continue
+        excluded.append(f["name"])
+        detail.append({
+            "name": f["name"],
             "card_cost": float(unit_cost or 0),
             # 均价与判据用的是**同一个** revenue/qty, ⛔ 不许在正文里另算一个
-            "avg_price": (revenue / qty) if qty else 0.0,
+            "avg_price": (f["revenue"] / f["qty"]) if f["qty"] else 0.0,
         })
     detail.sort(key=lambda d: d["card_cost"], reverse=True)
     return excluded, tuple(detail[:5])
+
+
+def _cost_gaps(facts):
+    """T2 第一层: **哪几道菜没有成本卡**, 按营收从高到低。
+
+    🔴 owner 2026-08-14 放行 T2 前两层。第一层是「缺口」, 排序就是第二层的
+       「优先级」—— ⛔ 优先级不是另一套打分, 就是营收本身。
+    ⚠️ 只算**当期有销售**的菜: 菜单上有而没卖的补了也不改变毛利覆盖率,
+       把它排进「先补这几道」是浪费店长的时间。
+    """
+    gaps = [{"name": f["name"], "revenue": f["revenue"]}
+            for f in facts if f["unit_cost"] is None and f["revenue"] > 0]
+    gaps.sort(key=lambda g: g["revenue"], reverse=True)
+    return tuple(gaps)
 
 
 #: 折扣按明细金额比例摊派 —— owner 2026-08-13 裁定。
@@ -538,10 +579,14 @@ async def _covered_margin(conn, factory_id: str, date_range, bridge):
     #    SQL 只照名单剔除。⛔ 曾经这里是一条行级 SQL 判据, 与问答那侧的
     #    菜级判据长得像但不等价, 实测两条路差 19,131.37 全部来自一道菜。
     try:
-        excluded, outliers = await _cost_outliers(conn, factory_id, date_range, bridge)
+        facts = await _dish_cost_facts(conn, factory_id, date_range, bridge)
     except Exception:  # noqa: BLE001
-        logger.warning("[generic-executor] 成本卡异常判定取数失败", exc_info=True)
+        logger.warning("[generic-executor] 逐菜成本取数失败", exc_info=True)
         return None
+    excluded, outliers = _cost_outliers(facts)
+    # T2 第一层+第二层的原料: 没卡的菜, 按营收排好序。
+    # ⛔ 与上面同一份 `facts` —— 两次取数会让「缺口」和「覆盖率」算的不是同一批菜。
+    gaps = _cost_gaps(facts)
 
     sql = _COVERED_MARGIN_SQL.format(frm=frm, join=join, alias=alias,
                                      excluded=_EXCLUDED_EXPR)
@@ -571,7 +616,10 @@ async def _covered_margin(conn, factory_id: str, date_range, bridge):
     # **可执行的修复指令**(「米饭成本卡 167.20 而它卖 16.80, 请核对单位」)。
     # 🔑 owner 2026-08-14: 这句话是当初冻结那张卡的**全部理由** ——
     #    差额归零但产品说不出这句, 这一节不算做完。
-    return covered_net, covered_cost, share, outliers
+    #
+    # `gaps` / `all_gross` 是 T2 前两层的原料: 补某几道之后覆盖率能到多少,
+    # 分母**必须是这里的 all_gross** —— 另取一次数就是第二个定义。
+    return covered_net, covered_cost, share, outliers, gaps, float(all_gross)
 
 
 async def _execute_derived_split(
@@ -593,7 +641,7 @@ async def _execute_derived_split(
         if got is None:
             return CellResult(item.key, label, dimension_key, aggregation_key,
                               unit, [], (), "-- covered-margin: 取数失败 --")
-        covered_net, covered_cost, share, cost_outliers = got
+        covered_net, covered_cost, share, cost_outliers, cost_gaps, denom = got
         profit = covered_net - covered_cost
         if item.op == "diff":                 # 毛利
             value = profit
@@ -610,6 +658,8 @@ async def _execute_derived_split(
             f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}",
             float(share),
             tuple(cost_outliers),
+            tuple(cost_gaps),
+            denom,
         )
 
     async def _one(key: str) -> "CellResult":
