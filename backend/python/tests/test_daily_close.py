@@ -665,3 +665,31 @@ async def test_screen_provenance_is_conservative_not_majority():
     assert len(estimated) * 2 < len(screen["sections"]), (
         "估算段占了多数 —— 这条变异对照失去意义, 换个构造")
     assert screen["provenance"] == "ESTIMATED"
+
+
+def test_ledger_records_status_per_factory():
+    """🔴 `no_business` 不推不告警 —— 所以它**必须**在台账里留痕。
+
+    某家店连续 N 天 no_business，是 ETL 挂了的长相：店长觉得
+    「系统好像忘了我」，而我们这边一切正常（不推不告警本来就是设计）。
+
+    ⛔ 记 `factory_id → status` 的映射，不是只记计数 —— 只记「今天 1 家
+       no_business」分不出「同一家连着 7 天」和「7 家各一天」，
+       前者是故障，后者正常。
+    """
+    # ⚠️ 读文本不 import: `daily_close_ledger` 在**模块级**就读产出文件,
+    #    import 它会当场 FileNotFoundError(实测踩到)。
+    import io as _io
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    src = _io.open(root / "smartbi/scripts/daily_close_ledger.py",
+                   encoding="utf-8", newline="").read()
+    assert "status_by_factory" in src, "台账不记每家店的 status —— 静默失效看不出来"
+    assert 'r.get("status")' in src
+
+    # 阳性对照: 产出侧真的带了 status(否则台账记的是一片 None)
+    push = _io.open(root / "smartbi/scripts/daily_close_push.py",
+                    encoding="utf-8", newline="").read()
+    assert '"status": screen["status"]' in push, (
+        "跑批产出里没有 status —— 台账那一列会是空的")
