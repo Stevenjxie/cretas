@@ -289,12 +289,20 @@ def test_cost_outlier_threshold_has_exactly_one_definition():
     改之前：registry 5.0 / router **10.0** —— 同一个判据两个值（形态 D）。
     实测后果：青花椒「米饭」成本卡 ¥167.20 / 售价 ¥16.80 = **9.95 倍**，
     **恰好卡在两个阈值之间** —— 一条路排除它、另一条不排除，两条路给出两个数。
+
+    ⚠️ 2026-08-14 订正: 共用阈值**不够**。同一个常量下, SQL 侧按【行】判、
+    Python 侧按【菜】判 —— 判据 = 阈值 + 作用粒度, 只共用前者等于没共用。
+    实测残差 19,131.37 全部来自米饭一道菜。现在整条判据只有一处实现。
     """
     from smartbi.gold.restaurant import restaurant_ops_router as router
-    from smartbi.gold.restaurant.metric_registry import COST_UNIT_ERROR_RATIO
+    from smartbi.gold.restaurant.metric_registry import (
+        COST_UNIT_ERROR_RATIO, dish_cost_is_implausible)
 
-    assert router._MAX_COST_TO_REALIZED_PRICE_RATIO is COST_UNIT_ERROR_RATIO, (
-        "router 又写了一份阈值 —— 两份迟早漂到不同的值上")
+    # router 不再持有任何阈值 —— 它整条判据都委托出去了
+    assert not hasattr(router, "_MAX_COST_TO_REALIZED_PRICE_RATIO"), (
+        "router 又拿回了一份阈值 —— 两份迟早漂到不同的值上")
+    assert router._is_plausible_dish_unit_cost(167.20, 759.55, 12760.36) is False
+    assert dish_cost_is_implausible(167.20, 759.55, 12760.36) is True
 
     # 阳性对照: 那个真实样本必须落在阈值之内(否则这条断言守的是个不存在的场景)
     assert 167.20 > COST_UNIT_ERROR_RATIO * 16.80, "米饭那张坏卡抓不到了"
@@ -327,3 +335,162 @@ def test_excluded_dishes_are_named_not_silently_dropped():
         "gross_profit", "毛利", "all", "summary", "money",
         [{"gross_profit": 1000.0}], (), "", "ESTIMATED", "成本卡的理论用量", 1.0)
     assert "单位记错" not in render(clean, "今天")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 owner 2026-08-14 判据五: 防「两份判据」的闸
+#
+# 为什么需要它: `cost_outlier_predicate()` 的 docstring 逐字写着
+# 「唯一定义, 两条路都读它」——**而问答那条路从来没读过它**。
+# 注释里写「唯一定义」不构成唯一定义, 这是本项目第二次同形
+# (上一次是「zhipu 必须排最后」, 注释写着, 没有任何东西执行它)。
+# ⇒ 这次要结构保证 + 一条能红的断言, ⛔ 只把注释写详细不算。
+# ═══════════════════════════════════════════════════════════════════════════
+import pathlib
+import re
+
+_PY_ROOT = pathlib.Path(__file__).resolve().parents[1]
+#: 判据的家。⚠️ 用相对路径比对, ⛔ 不按类简名找文件 ——
+#: 仓里有过两个同名文件, glob 顺序在 Windows/Linux 不同, 判决会随平台漂。
+_RULE_HOME = pathlib.Path("smartbi/gold/restaurant/metric_registry.py")
+
+
+def _strip_prose(src: str) -> str:
+    """去掉注释和 docstring, 只留**会执行的代码**。
+
+    🔴 这一步不是洁癖。第一版没有它, 闸当场把自己的说明文字数了进去:
+       我在 router 里写了一句「⛔ 这里不再 import COST_UNIT_ERROR_RATIO」,
+       闸就报「router 出现 1 次」。方向荒谬 —— **写文档=判据变多**。
+    ⚠️ 本仓 2026-08-13 已经踩过一次完全相同的形状(数 `@RequireModule` 不剥注释,
+       把注解自己的用法示例也计入)。⇒ 用正则在源码里数东西前, 先问
+       「注释里会不会也有它」—— 代码里最爱出现某个名字的地方恰恰是解释它的注释。
+    ⛔ 只剥注释和 docstring, **保留其余字符串字面量** —— SQL 模板是字符串,
+       而「有人把行级判据写回 SQL 模板里」正是要抓的东西。
+    """
+    import io
+    import tokenize
+
+    out, prev_end = [], (1, 0)
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return src                     # 剥不动就原样给, ⛔ 不静默跳过这个文件
+    docstring_positions = set()
+    try:
+        import ast
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Module, ast.ClassDef,
+                                     ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = getattr(node, "body", None) or []
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstring_positions.add((body[0].lineno, body[0].col_offset))
+    except SyntaxError:
+        pass
+    for tok in tokens:
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.type == tokenize.STRING and tok.start in docstring_positions:
+            continue
+        out.append(tok.string)
+        prev_end = tok.end
+    del prev_end
+    return "\n".join(out)
+
+
+def _product_sources():
+    """产品代码(排除测试与探针脚本)。探针本来就该调产品的函数, 不该自己算。"""
+    for path in _PY_ROOT.rglob("*.py"):
+        rel = path.relative_to(_PY_ROOT)
+        parts = set(rel.parts)
+        if parts & {"tests", "venv", "venv-current", "node_modules", ".git"}:
+            continue
+        if rel.name.startswith("test_"):
+            continue
+        yield rel, _strip_prose(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def test_the_cost_outlier_rule_has_exactly_one_home():
+    """成本卡异常判据只能在一个文件里被计算。
+
+    判据(机械可查, 不依赖注释):
+      · `COST_UNIT_ERROR_RATIO` 只允许出现在 `metric_registry.py`
+      · 那个文件里, 它只允许出现两次: 定义一次 + 判定里用一次
+    """
+    offenders = []
+    for rel, src in _product_sources():
+        hits = src.count("COST_UNIT_ERROR_RATIO")
+        if not hits:
+            continue
+        if rel != _RULE_HOME:
+            offenders.append(f"{rel} 出现 {hits} 次")
+        elif hits != 2:
+            offenders.append(f"{rel} 出现 {hits} 次(应为 定义1 + 判定1)")
+    assert not offenders, (
+        "🔴 成本卡异常判据出现了第二处计算点: " + "; ".join(offenders) +
+        " —— 两份判据一定会漂, 2026-08-13 实测漂出 19,131.37 元的差额")
+
+
+def test_the_row_level_predicate_never_comes_back():
+    """行级版本已删, ⛔ 不许以任何形式回来。
+
+    它错在**粒度**: 成本卡挂在菜上, 逐行判会让同一张卡的判决取决于
+    「那天这道菜恰好怎么卖的」—— 打折行/加量行会把 amount/qty 抬高。
+    """
+    for rel, src in _product_sources():
+        assert "cost_outlier_predicate" not in src, (
+            f"🔴 {rel} 里出现了行级判据 —— 判据的粒度是菜不是行")
+
+
+def test_the_margin_sql_never_judges_a_cost_card_itself():
+    """SQL 只按**名单**剔除, ⛔ 不许自己比大小。
+
+    🔴 这是行级判据回来的最可能形态: 有人图省事在模板里加一句
+       `AND c.food_cost > 5 * (i.amount / i.qty)`。那样判据又变成两处,
+       而且是**粒度不同**的两处 —— 正是 19,131.37 那笔差额的成因。
+
+    ⚠️ 第一版这条我写成了「全仓只许有一处 revenue/qty」, 结果它在
+       `product_summary_writer` / `restaurant_analyzer` 上开火 —— 那两处算的是
+       正常的均价, 与成本卡判定无关。**一个在无关代码上开火的判据不区分好坏。**
+       改成只盯这两个模板。
+    """
+    from smartbi.gold.restaurant.generic_executor import (
+        _COVERED_MARGIN_SQL, _DISH_COST_FACTS_SQL, _EXCLUDED_EXPR)
+
+    # ⚠️ `_EXCLUDED_EXPR` 必须一起查。第一版只查两个模板, 做变异时发现:
+    #    把行级判据塞进 `_EXCLUDED_EXPR`(模板里只是 `{excluded}` 占位符)
+    #    这道闸**一个字都不会说**。变异抓出来的, 不是我想到的。
+    for name, tpl in (("covered_margin", _COVERED_MARGIN_SQL),
+                      ("dish_cost_facts", _DISH_COST_FACTS_SQL),
+                      ("excluded_expr", _EXCLUDED_EXPR)):
+        squashed = re.sub(r"\s+", "", tpl)
+        assert "food_cost>" not in squashed and "food_cost<" not in squashed, (
+            f"🔴 {name} 里又出现了对成本卡的比较 —— 判据必须留在 Python 一处")
+
+    # 阳性对照: 排除确实是**发生了**的, 只是靠名单
+    assert "{excluded}" in _COVERED_MARGIN_SQL, "覆盖毛利根本没做排除"
+    assert "ANY($6::text[])" in _EXCLUDED_EXPR, "排除不是按名单做的"
+
+
+def test_both_paths_reach_that_one_home():
+    """阳性对照 —— 上面三条都是阴性断言(「不许出现」)。
+
+    ⛔ 没有这一条, 把判据整个删掉那三条也全绿: 「没有第二处」在
+       「一处都没有」时同样成立。这正是本仓踩过的恒真式形态。
+    """
+    import inspect
+
+    from smartbi.gold.restaurant import generic_executor as ge
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+    from smartbi.gold.restaurant.metric_registry import dish_cost_is_implausible
+
+    assert "dish_cost_is_implausible" in inspect.getsource(ge._cost_outliers), (
+        "日结/执行器那条路没有调用唯一判据")
+    assert "_dish_cost_is_implausible" in inspect.getsource(
+        router._is_plausible_dish_unit_cost), "问答那条路没有调用唯一判据"
+    # 两条路拿同一组输入必须得到同一个判决(米饭当天的真实读数)
+    assert dish_cost_is_implausible(167.20, 759.55, 12760.36) is True
+    assert router._is_plausible_dish_unit_cost(167.20, 759.55, 12760.36) is False

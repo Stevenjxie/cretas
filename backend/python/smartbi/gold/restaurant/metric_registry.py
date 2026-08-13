@@ -858,14 +858,43 @@ COST_SUSPECT_RATIO = 1.0
 COST_UNIT_ERROR_RATIO = 5.0
 
 
-def cost_outlier_predicate(cost_col: str = "c.food_cost",
-                           amount_col: str = "i.amount",
-                           qty_col: str = "i.qty",
-                           ratio: float = COST_UNIT_ERROR_RATIO) -> str:
-    """「这一行的成本卡是不是单位错了」的 SQL 判据。**唯一定义, 两条路都读它。**
+#: 单价上限。超过它的「成本卡」不是贵, 是坏数据(多打了几个零 / 把总额填成单价)。
+MAX_SANE_DISH_UNIT_COST = 99999.0
 
-    ⛔ 不许任何一侧抄一份 —— 抄一份就是同一个判据两个定义, 它一定会漂,
-       而漂的表现是「日结排除了这道菜, 问答没排除」, 两条路又给出两个数。
+
+def dish_cost_is_implausible(unit_cost, qty, revenue) -> bool:
+    """这道菜的成本卡是不是单位错了。**全仓唯一的一处判定。**
+
+    🔴 2026-08-14 owner 裁定: 判据的粒度是**菜**, 不是行。
+       成本卡挂在菜上, 所以「这张卡的单位错没错」是**菜的属性**。
+
+    ⛔ 曾经有过一个行级的 SQL 版本 `cost_outlier_predicate`, **已删**。
+       它按 `fact_pos_item` 逐行判 `food_cost > 5 * (amount/qty)`, 于是同一张卡
+       的判决取决于「那天这道菜恰好怎么卖的」—— 打折行/加量行/套餐行会把
+       `amount/qty` 抬高, 那些行就逃过过滤。
+       **2026-08-13 prod 实测**: 米饭聚合价 ¥16.80 / 卡 ¥167.20 = 9.95x,
+       整道菜被问答排除; 而它有一部分行 `amount/qty > 33.44`, 逐行判不触发 →
+       那些行照样进了毛利。两条路差 **19,131.37**, 残差**全部**来自这一道菜。
+
+    ⚠️ 判据是**比值不是名单** —— 卡改好了比值就变, 这道菜自动回到分子分母里。
+       (「米饭/附属用品不进主菜排名」是另一回事: 那是长期业务口径, 不自愈。)
+
+    ⛔ 谁都不许再写第二处 —— `tests/test_margin_parity.py` 里有一道闸在数它。
     """
-    unit_price = f"({amount_col} / NULLIF({qty_col}, 0))"
-    return f"{cost_col} > {ratio} * {unit_price}"
+    if unit_cost is None:
+        return False                      # 没有卡 != 卡是坏的, 由覆盖率那条路表达
+    try:
+        unit_cost = float(unit_cost)
+    except (TypeError, ValueError):
+        return True
+    if unit_cost != unit_cost or unit_cost in (float("inf"), float("-inf")):
+        return True                       # NaN / inf
+    if unit_cost < 0 or unit_cost >= MAX_SANE_DISH_UNIT_COST:
+        return True
+    try:
+        qty, revenue = float(qty or 0), float(revenue or 0)
+    except (TypeError, ValueError):
+        return False
+    if qty > 0 and revenue > 0:
+        return unit_cost > (revenue / qty) * COST_UNIT_ERROR_RATIO
+    return False

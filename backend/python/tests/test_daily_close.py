@@ -457,6 +457,14 @@ class _FakeConn:
                     for n, pk in self.BRIDGE_ROWS]
         if "SELECT DISTINCT normalized_name FROM dim_product" in sql:
             return [{"normalized_name": n} for n in self.DISH_NAMES]
+        if "AS unit_cost" in sql:
+            # 成本卡异常判定的**输入**(按菜聚合)。⚠️ 2026-08-14 起排除判据在
+            #    Python 里按菜算, 执行器要先查这一条再拼覆盖毛利。
+            # ⚠️ 这里给一张**正常**的卡: 3.00 一份而卖 10.00 —— 不触发排除,
+            #    于是下面几条对毛利数值的断言不受影响(阳性对照在
+            #    test_margin_parity 里, 用米饭那张真实的坏卡)。
+            return [{"name": n, "qty": 100.0, "revenue": 1000.0,
+                     "unit_cost": 3.0} for n in self.DISH_NAMES]
         self.fetched_sql.append(sql)
         key = next((k for k in self._values if k in sql), None)
         return [{k: v for k, v in self._values.items()}]

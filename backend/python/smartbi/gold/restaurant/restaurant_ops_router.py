@@ -33,8 +33,14 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.metric_registry import (
-    COST_UNIT_ERROR_RATIO as _COST_UNIT_ERROR_RATIO,
+    MAX_SANE_DISH_UNIT_COST as _REG_MAX_SANE_DISH_UNIT_COST,
+    dish_cost_is_implausible as _dish_cost_is_implausible,
 )
+# ⛔ 这里**不再** import `COST_UNIT_ERROR_RATIO` —— 本模块已经没有任何一处
+#    自己拿它做比较了。改之前 import 它是为了「两处共用同一个阈值」, 而那正是
+#    上一版的错觉: 共用了阈值, 粒度还是两套。现在整条判据都在登记表里。
+#    `tests/test_margin_parity.py::test_the_cost_outlier_rule_has_exactly_one_home`
+#    会在有人把它 import 回来时红。
 from smartbi.gold.restaurant.provenance import (
     ESTIMATED as PROV_ESTIMATED,
     MEASURED as PROV_MEASURED,
@@ -1878,28 +1884,28 @@ def _compute_margin_dragger(
     return best
 
 
-_MAX_SANE_DISH_UNIT_COST = 99999.0
-# 🔴 owner 2026-08-13: 这条判据**只能有一处定义**, 两条路读同一份。
-# 改之前这里是 10.0 而 generic_executor 那侧是 5.0 —— 同一个判据两个值,
-# 正是形态 D。实测后果: 青花椒的「米饭」成本卡 ¥167.20 / 售价 ¥16.80 = 9.95 倍,
-# **恰好卡在两个阈值之间** —— 一条路排除它、另一条不排除, 两条路给出两个数。
-# ⛔ 不在这里写死数字, 从登记表取。
-_MAX_COST_TO_REALIZED_PRICE_RATIO = _COST_UNIT_ERROR_RATIO
+# 🔴 owner 2026-08-13/14: 这条判据**只能有一处定义**, 在
+#    `metric_registry.dish_cost_is_implausible`。本函数是它的一层薄封装,
+#    ⛔ 不在这里重写任何比较。
+#
+# 这里踩过**两次**同一个坑, 一次比一次隐蔽:
+#   ① 阈值两份: 这里 10.0 / 执行器 5.0 —— 米饭 9.95 倍恰好卡在中间。
+#      修法是共用常量, 当时以为收敛完了。
+#   ② **粒度两份**: 常量确实只有一处了, 但执行器那侧按 `fact_pos_item` 逐行判、
+#      这里按整道菜的聚合价判。同一张卡, 两种判决。
+#      实测(RES_3101_009 / 2026-08-12): 两条路差 **19,131.37**, 残差全部来自米饭。
+# ⇒ 判据 = 阈值 + **作用粒度**。只共用前者等于没共用。
+_MAX_SANE_DISH_UNIT_COST = _REG_MAX_SANE_DISH_UNIT_COST
 
 
 def _is_plausible_dish_unit_cost(
     unit_cost: Optional[float], qty: float, revenue: float,
 ) -> bool:
-    """Reject corrupted cost cards before they can poison a margin answer."""
-    if unit_cost is None or not math.isfinite(unit_cost):
-        return False
-    if unit_cost < 0 or unit_cost >= _MAX_SANE_DISH_UNIT_COST:
-        return False
-    if qty > 0 and revenue > 0:
-        realized_unit_revenue = revenue / qty
-        if unit_cost > realized_unit_revenue * _MAX_COST_TO_REALIZED_PRICE_RATIO:
-            return False
-    return True
+    """Reject corrupted cost cards before they can poison a margin answer.
+
+    ⛔ 判定本身在登记表里, 本函数只做取反。
+    """
+    return not _dish_cost_is_implausible(unit_cost, qty, revenue)
 
 
 def _build_margin_entries(
