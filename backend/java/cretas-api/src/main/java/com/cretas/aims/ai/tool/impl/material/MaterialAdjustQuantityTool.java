@@ -96,6 +96,20 @@ public class MaterialAdjustQuantityTool extends AbstractBusinessTool {
         log.info("调整批次库存: factoryId={}, batchId={}, quantity={}, reason={}, userId={}",
                 factoryId, batchId, quantity, reason, userId);
 
+        // 🔴 2026-08-13: previousQuantity 必须在**任何写入之前**抓。原实现取的是
+        // updatedBatch.getReceiptQuantity() —— 那是调整**之后**的【入库总量】,
+        // 既不是"之前"也不是同一个量纲(currentQuantity 是剩余量)。于是 AI 会拿一对
+        // 都属于调整后状态的数去跟操作员确认: 实测把剩余 53 调成 3, 它报的是
+        // 「从 5 调整为 3」—— 看着自洽, 全错, 操作员据此无法发现调错了。
+        BigDecimal previousQuantity = null;
+        try {
+            MaterialBatchDTO before = materialBatchService.getMaterialBatchById(factoryId, batchId);
+            previousQuantity = before != null ? before.getCurrentQuantity() : null;
+        } catch (Exception e) {
+            // 读不到就如实留空, 不拿别的数顶替 —— 编一个"之前"比没有更糟。
+            log.warn("调整前读取批次失败, previousQuantity 置空: batchId={}, err={}", batchId, e.toString());
+        }
+
         // 调用服务层执行调整
         MaterialBatchDTO updatedBatch = materialBatchService.adjustBatchQuantity(
                 factoryId, batchId, quantity, reason, userId);
@@ -104,7 +118,7 @@ public class MaterialAdjustQuantityTool extends AbstractBusinessTool {
         Map<String, Object> result = new HashMap<>();
         result.put("batchId", updatedBatch.getId());
         result.put("batchNumber", updatedBatch.getBatchNumber());
-        result.put("previousQuantity", updatedBatch.getReceiptQuantity());
+        result.put("previousQuantity", previousQuantity);
         result.put("currentQuantity", updatedBatch.getCurrentQuantity());
         result.put("unit", updatedBatch.getUnit());
         result.put("adjustmentReason", reason);
