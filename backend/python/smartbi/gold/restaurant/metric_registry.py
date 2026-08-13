@@ -585,6 +585,91 @@ COLUMN_LABELS: Dict[str, str] = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ESTIMATED 有两种 —— owner 2026-08-14 裁定
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 🔴 起因是一个读数: `_provenance_of` 是**指标键的纯函数**, 只要依赖里有成本卡
+#    那一列就恒为 ESTIMATED —— **把全店的卡补齐, 它还是 ESTIMATED。**
+#    而 T2 当时的开价是「补齐对应的成本卡, 毛利就能从估变实」。那句话
+#    **有一整个分支是空头支票**, 而且已经上线过。
+#
+#   (a) 可补的估算   缺某列数据, 补了就实       → 「补 X, Y 从估变实」  ✅
+#   (b) 结构性估算   数据齐了也只能是估的       → 上面那句永远兑现不了  ⛔
+#
+# 🔑 判据: **在承诺「补 X 就变准」之前, 先问「补齐之后它会不会仍然是估的」——
+#          如果会, 那不是数据缺口, 是方法本身的下限。**
+#
+#: 这些列**即使填满也只能给出估算**, 以及为什么。
+#:
+#: ⚠️ 标注挂在**列**上而不是指标上 —— 「成本卡记的是理论用量」是那一列的语义,
+#:    不是某个指标的属性。于是指标的 (a)/(b) 由 `effective_requires` **推**出来,
+#:    ⛔ 没有一张「哪些指标是 (b)」的手写清单: 将来任何新指标只要依赖这一列,
+#:    自动就是 (b), 不需要有人记得去登记。
+#:
+#: ⚠️⚠️ **但这张表本身是靠人标的** —— 「理论用量 ≠ 实际耗用」这件事推不出来,
+#:    它是业务语义。这一处是本登记表里少数几个**非推导**的地方之一,
+#:    设计卡上写明了。新增一列时必须同时写清楚「为什么补齐也还是估的」。
+IRREDUCIBLE_ESTIMATE_COLUMNS: Dict[str, str] = {
+    "agg_restaurant_product_cost.food_cost":
+        "成本卡记的是**理论**用量(配方上应该用多少), 实际用了多少要盘库才知道",
+}
+
+
+def effective_requires(metric_key: str) -> Tuple[str, ...]:
+    """这个指标**实际依赖的列**, 派生量递归展开到基础指标。
+
+    🔴 不展开就会漏: `gross_profit = revenue - food_cost` 是 `Derived`,
+       它**没有 `requires`**(空元组), 于是「毛利」会被判成 MEASURED ——
+       而毛利的成本项正来自成本卡。
+    ⚠️ 放在登记表里(而不是执行器里): 它是对**登记表**的查询, 不是执行逻辑。
+       出处判定、(a)/(b) 判定、普查都读它, 一份实现。
+    """
+    seen: set = set()
+    stack = [metric_key]
+    cols: set = set()
+    while stack:
+        key = stack.pop()
+        if key in seen:
+            continue
+        seen.add(key)
+        base = METRICS.get(key)
+        if base is not None:
+            cols.update(base.requires)
+            continue
+        derived = DERIVED.get(key)
+        if derived is not None:
+            stack.extend((derived.left, derived.right))
+    return tuple(sorted(cols))
+
+
+#: (a) —— 补数据就能消除的估算
+ESTIMATE_REDUCIBLE = "reducible"
+#: (b) —— 数据齐了也只能是估的
+ESTIMATE_STRUCTURAL = "structural"
+
+
+def estimate_kind(metric_key: str) -> str:
+    """这个指标的估算是 (a) 可补的还是 (b) 结构性的。**推出来的, 不查清单。**
+
+    ⚠️ 返回 `ESTIMATE_STRUCTURAL` 只要**有任何一个**依赖列是不可消除的 ——
+       混合时按坏的那一侧算: 说「补了就准」而其中一半永远不准, 比不说更糟。
+    """
+    for column in effective_requires(metric_key):
+        if column in IRREDUCIBLE_ESTIMATE_COLUMNS:
+            return ESTIMATE_STRUCTURAL
+    return ESTIMATE_REDUCIBLE
+
+
+def irreducible_reason(metric_key: str) -> str:
+    """(b) 的理由 —— 用来说人话, ⛔ 不在文案层再写一份。"""
+    for column in effective_requires(metric_key):
+        reason = IRREDUCIBLE_ESTIMATE_COLUMNS.get(column)
+        if reason:
+            return reason
+    return ""
+
+
 def assert_registry_self_consistent() -> None:
     """登记表内部矛盾在跑之前就该发现，不必等打库。
 
@@ -599,6 +684,18 @@ def assert_registry_self_consistent() -> None:
     #
     # ⛔ 手写名单的坏法是确定的: 新登记一个同类指标不会自动进名单,
     #    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    # ── 不可消除估算的列必须真的被人依赖 ──────────────────────────────────
+    # ⛔ 过期的标注比没有更糟: 它会让某个指标被判成 (b) 而拿不到「补了就实」
+    #    那句开价, 而没有任何东西会报错。
+    _all_required = {c for m in METRICS.values() for c in m.requires}
+    for column in sorted(IRREDUCIBLE_ESTIMATE_COLUMNS):
+        assert column in _all_required, (
+            f"列 {column} 被标成「补齐也只能是估的」, 却没有任何指标依赖它 —— "
+            f"过期的标注")
+        assert IRREDUCIBLE_ESTIMATE_COLUMNS[column].strip(), (
+            f"列 {column} 标成了不可消除, 却没写为什么 —— "
+            f"那句话是要说给店长听的, 空着就只能说「反正就是估的」")
+
     # ── `derive_from` 只能指向真实存在、且不是自己的指标 ──────────────────
     # ⛔ 指向一个不存在的 key 不会当场报错 —— 普查只会安静地把「有但没接线」
     #    降级成「算不出」, 而那正是这个字段要区分的两件事。

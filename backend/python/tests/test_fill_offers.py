@@ -95,8 +95,11 @@ def test_removing_a_requires_shrinks_the_offer(monkeypatch):
 
 # ── 两类文案 ────────────────────────────────────────────────────
 def test_estimated_offer_says_from_estimate_to_actual():
+    # ⚠️ 必须传 metric_keys —— (a)/(b) 由它推。不传就只能按 (b) 走(安全的一侧),
+    #    那测的就不是这条路径了。
     offers = offers_for_estimated(
-        ESTIMATED, "行业默认成本率 32%", ["毛利", "毛利率"])
+        ESTIMATED, "行业默认成本率 32%", ["毛利", "毛利率"],
+        ["gross_profit", "gross_margin"])
     assert len(offers) == 1
     text = offers[0]["text"]
     # 🔴 2026-08-13 按形态 C‴ 改: 原文断言 `"行业默认成本率 32%" in text`,
@@ -112,6 +115,7 @@ def test_estimated_offer_says_from_estimate_to_actual():
     #    因为 basis 是「成本卡的**理论**用量」, 实际耗用要**盘点**。
     #    补卡提高的是**覆盖率**(那句由 `offers_for_cost_gaps` 说, 带数), 不是出处。
     #    ⇒ 这里守的改成「说清它是理论用量、以及要变准该做什么(盘库)」。
+    assert "只能是估的" in text, f"没说清它是结构性的估算: {text}"
     assert "理论" in text, f"没说清这是理论用量: {text}"
     assert "盘" in text, f"没说清要变准该做什么: {text}"
     assert "从估变实" not in text, "🔴 又承诺「补上就变实」了 —— 补卡改不了 provenance"
