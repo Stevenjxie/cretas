@@ -320,3 +320,36 @@ describe('🔴 workflowDisplayUnit —— 单位显示收敛', () => {
     expect(workflowDisplayUnit(null)).toBe('');
   });
 });
+
+describe('🔴 workflowSkuSpecificationEquation —— 规范码也要翻成中文', () => {
+  // 2026-08-13 生产实测(F006「叮咚好食光卤猪蹄(去大骨) 200g」): 同一个工序 Cell 里
+  // 「产出单位: 盒」「盒产出」「报工单位: 盒」都对, 唯独 SKU 规格那行是「1box = 200g」。
+  // 本文件顶部原有的断言只喂过中文「盒」—— 那个形状改前改后都绿, 缺陷因此一直活着。
+  it('规范码 box 翻成盒(实测那条: 1box = 200g)', () => {
+    expect(workflowSkuSpecificationEquation('box', 200)).toBe('1盒 = 200g');
+  });
+
+  it('其它规范码同样收敛', () => {
+    expect(workflowSkuSpecificationEquation('bag', 500)).toBe('1袋 = 500g');
+    expect(workflowSkuSpecificationEquation('pack', 250)).toBe('1包 = 250g');
+  });
+
+  it('中文标签原样保留, 不被改写', () => {
+    expect(workflowSkuSpecificationEquation('盒', 800)).toBe('1盒 = 800g');
+    expect(workflowSkuSpecificationEquation('只', 120)).toBe('1只 = 120g');
+  });
+
+  it('与相邻的 workflowAutoConversionEquation 口径一致', () => {
+    // 两个 helper 做的是同一件事(拼带单位的等式), 显示口径必须一样,
+    // 否则同一张画布上又会出现两种写法。
+    const spec = workflowSkuSpecificationEquation('box', 200);
+    expect(spec?.startsWith(`1${workflowDisplayUnit('box')}`)).toBe(true);
+  });
+
+  it('没单位/没克重仍然返回 null —— 不因为改了显示口径而多吐一行', () => {
+    expect(workflowSkuSpecificationEquation('', 200)).toBeNull();
+    expect(workflowSkuSpecificationEquation(null, 200)).toBeNull();
+    expect(workflowSkuSpecificationEquation('box', 0)).toBeNull();
+    expect(workflowSkuSpecificationEquation('box', null)).toBeNull();
+  });
+});
