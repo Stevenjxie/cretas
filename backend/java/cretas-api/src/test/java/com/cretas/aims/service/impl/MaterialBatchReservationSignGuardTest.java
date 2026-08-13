@@ -9,7 +9,9 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.FuturePlanMatchingService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.utils.ExcelUtil;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,10 @@ class MaterialBatchReservationSignGuardTest {
                 mock(ProductionPlanBatchUsageRepository.class),
                 mock(ExcelUtil.class),
                 mock(FuturePlanMatchingService.class));
+        // 字段注入的依赖: 正向对照会一路走到 publishStockChangedEventIfApplicable,
+        // 不打桩就是 NPE —— 而 NPE 恰好说明这条对照真的驱动到了实现深处, 不是空跑。
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher",
+                mock(InventoryLowStockEventPublisher.class));
     }
 
     /** 收 100 / 已用 0 / 已预留 10 —— 一个完全正常的批次。 */

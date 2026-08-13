@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -113,6 +114,9 @@ public class MaterialBatchController {
 
     private final MaterialBatchService materialBatchService;
     private final MobileService mobileService;
+
+    /** material_batch_adjustments.reason 是 varchar(255), 超长会落库失败成 500。 */
+    private static final int ADJUSTMENT_REASON_MAX_LENGTH = 255;
     private final PriceMaskResolver priceMaskResolver;
     private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
 
@@ -548,7 +552,19 @@ public class MaterialBatchController {
      * 调整批次数量
      * 支持两种参数传递方式：
      * 1. URL参数：newQuantity, reason（前端当前使用）
-     * 2. RequestBody：quantity, reason, adjustmentType
+     * 2. RequestBody：quantity, reason
+     *
+     * ⚠️ 数量语义是【调整后的剩余数量(绝对值)】, 不是增减量 —— service 侧
+     * {@code adjustment = newQuantity − 当前剩余}, receiptQuantity 按该差额加减。
+     *
+     * 🔴 2026-08-13: 此前 DTO 还公布了一个 {@code adjustmentType}(INCREASE/DECREASE)
+     * 字段, 与 quantity 合起来长得像「增减量」契约, 但本方法从来不读它 —— 照
+     * Swagger 发 {@code {adjustmentType:"DECREASE", quantity:50}} 会被执行成
+     * 「把剩余量设为 50」, 方向相反且**可以凭空造出库存**(剩 3 的批次会变成 50),
+     * 落库的审计行还会被标成 INCREASE。web-admin 早就在自己那侧把 delta 换算成
+     * 绝对值绕过去了(见 warehouse/inventory/index.vue 的 W-03 注释), 但绕过写在
+     * 一个客户端里, 对外公布的契约仍是错的。现在改为**显式拒绝**: 宁可 400,
+     * 不做方向相反的静默写入。
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
@@ -567,10 +583,6 @@ public class MaterialBatchController {
             @RequestParam(required = false) String reason,
             @RequestBody(required = false) AdjustMaterialBatchRequest request) {
 
-        // 获取当前用户ID
-        String token = TokenUtils.extractToken(authorization);
-        Long userId = mobileService.getUserFromToken(token).getId();
-
         // 优先使用URL参数，其次使用RequestBody
         BigDecimal actualQuantity = newQuantity;
         String actualReason = reason;
@@ -582,11 +594,47 @@ public class MaterialBatchController {
             actualReason = request.getReason();
         }
 
+        // ⚠️ 入参校验全部排在取 token / 调 service 之前 —— 这几道 guard 只依赖入参,
+        // 放在前面才能保证「被拒的请求一次写入都没发生过」是可断言的。
+
+        // 拒绝「增减量」契约: 该字段从未被实现, 静默忽略会做出方向相反的写入。
+        if (request != null && StringUtils.hasText(request.getAdjustmentType())) {
+            throw new BusinessException(400, "本接口不接受 adjustmentType(增减量语义)")
+                    .withHint("quantity 是调整后的剩余数量(绝对值), 不是增减量。"
+                            + "要减少请传【调整后应剩多少】, 例如剩 53 要减 50 就传 3")
+                    .withHintTarget("adjustmentType");
+        }
+
         if (actualQuantity == null) {
             throw new BusinessException(400, "调整数量不能为空").withHint("请填写调整数量").withHintTarget("adjustQuantity");
         }
 
-        log.info("调整批次数量: factoryId={}, batchId={}, quantity={}, reason={}",
+        // reason 落库列是 NOT NULL, 缺它会在 service 里炸成通用 500 —— 在入口拦成 400。
+        if (!StringUtils.hasText(actualReason)) {
+            throw new BusinessException(400, "调整原因不能为空")
+                    .withHint("库存调整必须留下原因, 会写入调整审计记录")
+                    .withHintTarget("reason");
+        }
+
+        // notes 在审计表里没有独立入口, 不拼进 reason 就是彻底丢掉。拼法与 web-admin
+        // 对「其他」原因的既有做法一致(warehouse/inventory/index.vue Bug 5)。
+        if (request != null && StringUtils.hasText(request.getNotes())) {
+            actualReason = actualReason + " — " + request.getNotes().trim();
+        }
+        // reason 列是 varchar(255), 超长会在落库时炸成通用 500 —— 同样拦成 400。
+        // 不截断: 审计原因被悄悄砍掉一半比报错更糟。
+        if (actualReason.length() > ADJUSTMENT_REASON_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "调整原因过长(" + actualReason.length() + "/" + ADJUSTMENT_REASON_MAX_LENGTH + " 字)")
+                    .withHint("原因与备注会拼接后写入审计记录, 请精简")
+                    .withHintTarget("reason");
+        }
+
+        // 获取当前用户ID
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("调整批次数量: factoryId={}, batchId={}, newRemainingQuantity={}, reason={}",
                 factoryId, batchId, actualQuantity, actualReason);
         MaterialBatchDTO batch = materialBatchService.adjustBatchQuantity(factoryId, batchId, actualQuantity, actualReason, userId);
         return ApiResponse.success("批次数量调整成功", batch);
