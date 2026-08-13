@@ -148,6 +148,44 @@ def test_grouping_aggregation_with_all_is_not_waved_through():
             f"{k} 需要分组, 却被判成「不分组也算得出」")
 
 
+def test_every_capability_comparison_strips_non_grouping_dims():
+    """🔴 **同一个比较在三处出现**, 修一处不够。
+
+    2026-08-13 实测: 修好执行前那道闸之后, 拒答只是**挪到了 contract-repair**
+    —— 同一个范畴错误的第二处。判据: 凡是拿维度去比 `_RESOLVER_DIMENSIONS`
+    的地方, 都必须先减掉「不分组」的那些。
+
+    ⚠️ 这条是**源码闸**(代理判据, 标出来): 它证明每个比较点都调了那个 helper,
+       不证明调对了 —— 调对了由上面那些行为断言守。
+    """
+    import inspect
+
+    from smartbi.gold.restaurant import restaurant_intent as ri
+
+    for mod in (ris, ri):
+        src = inspect.getsource(mod)
+        for i, line in enumerate(src.splitlines(), 1):
+            if "_RESOLVER_DIMENSIONS.get(" not in line:
+                continue
+            if "issubset" not in line and "issubset" not in src.splitlines()[i - 2]:
+                continue  # 不是子集比较(比如只是取出来打日志)
+            window = "\n".join(src.splitlines()[max(0, i - 6):i + 2])
+            assert "grouping_dimensions" in window or "sorted(" in window, (
+                f"{mod.__name__}:{i} 拿维度比能力表却没先减掉「不分组」——\n{window}")
+
+
+def test_non_grouping_set_is_derived_not_hardcoded():
+    """⛔ 「哪些是不分组」从登记表推导, 不写死名字。"""
+    from smartbi.gold.restaurant.metric_registry import (
+        grouping_dimensions, non_grouping_dimensions)
+
+    assert non_grouping_dimensions() == frozenset(
+        k for k, d in DIMENSIONS.items() if d.group_expr is None)
+    assert "all" in non_grouping_dimensions()
+    # 真正的分组维度不许被减掉 —— 否则这个 helper 会把闸悄悄拆光
+    assert grouping_dimensions(("all", "store", "product")) == ("store", "product")
+
+
 def test_summary_is_the_one_that_needs_no_grouping():
     """判据来源自查: `summary` 确实声明了 `needs_dimension=False`。"""
     assert AGGREGATIONS["summary"].needs_dimension is False
