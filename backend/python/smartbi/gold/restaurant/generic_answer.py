@@ -291,7 +291,9 @@ def render(result: CellResult, window_label: str) -> str:
     for bad in (result.cost_outliers or ())[:3]:
         parts.append(
             f"> ⚠️ **{bad['name']}**的成本卡是 ¥{bad['card_cost']:,.2f} 一份，"
-            f"而它卖 ¥{bad['avg_price']:,.2f} —— 成本比售价还高"
+            # ⚠️ 数字前后要有空格 —— prod 实测打出「成本比售价还高11 倍」,
+            #    中文与数字挤在一起, 读起来像「高11」是个词。
+            f"而它卖 ¥{bad['avg_price']:,.2f} —— 成本比售价还高 "
             f"{bad['card_cost'] / bad['avg_price']:.0f} 倍，多半是单位记错了"
             f"（比如一袋当成一份）。这道菜暂时没算进毛利，改好就会自动算回来。")
     # ③ 开价 —— 估出来的数配一条「补什么能从估变实」。

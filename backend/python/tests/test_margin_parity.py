@@ -494,3 +494,78 @@ def test_both_paths_reach_that_one_home():
     # 两条路拿同一组输入必须得到同一个判决(米饭当天的真实读数)
     assert dish_cost_is_implausible(167.20, 759.55, 12760.36) is True
     assert router._is_plausible_dish_unit_cost(167.20, 759.55, 12760.36) is False
+
+
+def test_both_bodies_name_the_bad_cost_card_not_just_count_it():
+    """🔑 owner 2026-08-14 判据三: 两条路的正文都要**指着它说出来**。
+
+    这一条不是附加项 —— 它是当初冻结 ¥167.20 那张卡的**全部理由**:
+    「产品能指着它说『167.20 一份而卖 16.80，请核对单位』的那天，才算这块做完」。
+    差额归零但产品说不出这句话, 这一节不算做完。
+
+    ⚠️ 改之前问答那条只说「1 个菜品成本值明显异常」—— 对店长不产生任何动作:
+       他不知道是哪道菜, 也不知道该改什么。
+    """
+    src = pathlib.Path(
+        _PY_ROOT / "smartbi/gold/restaurant/restaurant_ops_router.py"
+    ).read_text(encoding="utf-8")
+    # 问答那条: 计数之后必须跟着名字与两个数
+    assert "个菜品成本值明显异常：" in src, "问答只报了个数, 没有指名"
+    assert "invalid_cost_value" in src.split("个菜品成本值明显异常")[1][:900], (
+        "指名了但没给成本卡的数, 店长照样修不了")
+
+    # 日结那条(generic_answer) 的阳性对照已在
+    # `test_excluded_dishes_are_named_not_silently_dropped` 里, 这里只钉住
+    # 「两条路都做这件事」这个事实本身。
+    from smartbi.gold.restaurant.generic_answer import render
+    from smartbi.gold.restaurant.generic_executor import CellResult
+    cell = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1.0}], (), "", "ESTIMATED", "成本卡的理论用量", 0.4,
+        ({"name": "米饭", "card_cost": 167.20, "avg_price": 14.97},))
+    assert "米饭" in render(cell, "今天")
+
+
+def test_the_margin_formula_line_actually_adds_up():
+    """正文里那条「计算过程」自己必须算得平。
+
+    🔴 prod 实测(2026-08-12 / RES_3101_009): 它印的是
+       `毛利 ¥124,071.85 = 实收营收 ¥373,832.93 − 对应菜品成本 ¥26,254.12`
+       —— 店长照着减一遍得 347,578.81。**答案自己跟自己打架。**
+       减数必须是**覆盖部分**的净营收, 与被减出来的毛利同源。
+    """
+    src = pathlib.Path(
+        _PY_ROOT / "smartbi/gold/restaurant/restaurant_ops_router.py"
+    ).read_text(encoding="utf-8")
+    formula = [ln for ln in src.splitlines() if "计算过程：`毛利" in ln]
+    assert formula, "找不到那条计算过程"
+    for line in formula:
+        assert "total_rev:" not in line, (
+            "🔴 计算过程又拿全额实收当减数 —— 与它算出来的覆盖毛利不同源")
+
+
+def test_the_rejected_cost_card_value_survives_for_the_message():
+    """被判无效的那张卡**要留下值** —— 否则指名那句会打出 ¥0.00。
+
+    🔴 prod 实测(2026-08-14): 「米饭（成本卡 ¥0.00 一份，实际卖 ¥14.97）」——
+       `food_cost_unit` 只在 has_cost 时才填, 异常项恒为 None。
+       一个既没信息量又明显是假的数字, 店长照着核对只会更糊涂。
+    ⚠️ 这个字段**不进任何计算**, 只服务那句话。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    rows = [{"dish_name": "米饭", "normalized_name": "米饭", "total_qty": 100.0,
+             "total_revenue": 1497.0, "bills": 50}]
+    entries = router._build_margin_entries(
+        rows, {"米饭": "PK"}, {"PK": 167.20})
+    bad = entries[0]
+    assert bad["invalid_cost"] is True, "这张卡该被判无效(167.20 vs 均价 14.97)"
+    assert bad["has_cost"] is False, "无效的卡不许进计算"
+    assert bad["food_cost_unit"] is None, "无效的卡不许出现在计算字段里"
+    assert bad["invalid_cost_value"] == 167.20, (
+        "🔴 无效卡的值没留下 —— 指名那句会打出 ¥0.00")
+
+    # 阳性对照: 正常的卡不许被塞进这个字段(否则它就不是「无效卡」的标记了)
+    ok = router._build_margin_entries(
+        rows, {"米饭": "PK"}, {"PK": 3.0})[0]
+    assert ok["invalid_cost"] is False and ok["invalid_cost_value"] is None

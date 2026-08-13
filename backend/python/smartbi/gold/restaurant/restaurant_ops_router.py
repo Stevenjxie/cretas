@@ -1951,6 +1951,12 @@ def _build_margin_entries(
             "margin_rate": margin_rate,
             "has_cost": has_cost,
             "invalid_cost": invalid_cost,
+            # 🔴 被判无效的那张卡**要留下值**。`food_cost_unit` 只在 has_cost
+            #    时才填, 于是异常项那里恒为 None —— 正文照着印会打出
+            #    「成本卡 ¥0.00 一份」(2026-08-14 prod 实测), 一个既没信息量
+            #    又明显是假的数字, 店长照着去核对只会更糊涂。
+            # ⚠️ 它**不进任何计算**, 只用于指名道姓那句话。
+            "invalid_cost_value": candidate_cost if invalid_cost else None,
         })
     return entries
 
@@ -4497,7 +4503,24 @@ async def resolve_gross_margin(
     if missing_cost_count > 0:
         exclusion_notes.append(f"{missing_cost_count} 个菜品缺少完整成本")
     if invalid_cost_count > 0:
-        exclusion_notes.append(f"{invalid_cost_count} 个菜品成本值明显异常")
+        # 🔴 owner 2026-08-14 判据三: **指名道姓**, 不许只报个数。
+        #    「1 个菜品成本值明显异常」对店长不产生任何动作 —— 他不知道是哪道菜、
+        #    也不知道该改什么。日结那条路早就点名了(generic_answer), 问答这条
+        #    只数了个数 —— 又一处「两条路说的不是同一件事」。
+        # ⚠️ 均价与判据用的是**同一个** revenue/qty, ⛔ 不在这里另算一个。
+        worst = sorted(
+            (e for e in enriched if e["invalid_cost"]),
+            key=lambda e: (e["invalid_cost_value"] or 0), reverse=True,
+        )[:2]
+        named = "、".join(
+            f"{e['name']}（成本卡 ¥{(e['invalid_cost_value'] or 0):,.2f} 一份，"
+            f"实际卖 ¥{(e['revenue'] / e['qty']) if e['qty'] else 0:,.2f}）"
+            for e in worst
+        )
+        exclusion_notes.append(
+            f"{invalid_cost_count} 个菜品成本值明显异常：{named}，多半是单位记错"
+            f"（比如一袋当成一份），改好就会自动算回来"
+            if named else f"{invalid_cost_count} 个菜品成本值明显异常")
     if primary_excluded_count > 0:
         exclusion_notes.append(
             f"{primary_excluded_count} 个米饭/附属用品仅计入总额、不参与主菜排名与建议"
@@ -4651,11 +4674,16 @@ async def resolve_gross_margin(
         #    覆盖率本身仍是 item 口径算的(分子分母同源), 那个百分比是对的。
         f"- 实收营收 **¥{total_rev:,.2f}**，其中 {coverage_ratio * 100:.1f}% 的销售有成本卡、能算毛利\n"
         f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
-        f"计算过程：`毛利 ¥{total_profit:,.2f} = 实收营收 ¥{total_rev:,.2f}"
-        f" − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
+        # 🔴 2026-08-14: 这里原来印的是**全额实收** ¥373,832.93, 而结果是
+        #    **覆盖部分**的毛利 —— 店长照着减一遍得 347,578.81, 与上面那行
+        #    124,071.85 对不上。**答案自己跟自己打架**, 比不给过程更糟。
+        # ⛔ 分子分母同源: 减数是覆盖部分的净营收, 不是全店实收。
+        f"计算过程：`毛利 ¥{total_profit:,.2f} = 有成本卡那部分的净营收 "
+        f"¥{covered_net_rev:,.2f} − 对应菜品成本 ¥{total_cost:,.2f}`\n\n"
         # ⛔ 不写「口径」——它在 INTERNAL_VOCAB 里, sanitize 会替换成「计算方法」,
         #    于是 prod 上打出「计算计算方法：」。⚠️ 自己敲进源码的串不许靠 sanitize 兜。
-        f"> 怎么算的：毛利 = 实收营收 − 对应菜品成本；期间与菜品范围完全一致。\n"
+        f"> 怎么算的：毛利 = 有成本卡那部分的净营收 − 对应菜品成本；"
+        f"期间与菜品范围完全一致。\n"
         f"{per_dish_no_discount_note}"
         f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
