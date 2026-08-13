@@ -126,13 +126,22 @@ def qualifier(
     validate(provenance, estimation_basis)
 
     if provenance == ESTIMATED:
-        head = ""
+        # 🔴 owner 2026-08-13 定稿, 三处改动:
+        #
+        # ① 「不是账上的数」和「不能当实际毛利用」**是同一件事说两遍**, 留一个。
+        # ② **正反都说**。只说否定面(「45% 没有配方成本」)会让店长觉得这数没用;
+        #    只说正面(「55% 能算准」)会淡化风险。两个都给, 他自己判断这 55%
+        #    够不够他做决定。
+        # ③ basis 里那个括号「(实际用了多少要等盘点)」去掉 —— 第三层嵌套,
+        #    而且**对店长不产生行动**: 他不会因为这句去改盘点周期。
+        #    真要改, 第三段的开价会告诉他。
         if coverage_ratio is not None and coverage_ratio < _FULL_COVERAGE:
-            head = f"其中 {(1 - coverage_ratio) * 100:.1f}% 的营收没有配方成本，"
-        return (
-            f"> {head}用{estimation_basis}估算，"
-            f"这部分是估出来的，不是账上的数，不能当实际毛利用。"
-        )
+            return (
+                f"> 其中 {coverage_ratio * 100:.1f}% 的营收能算准，"
+                f"另外 {(1 - coverage_ratio) * 100:.1f}% 没有配方成本、"
+                f"是按{estimation_basis}估的 —— 估出来的部分不能当实际毛利用。"
+            )
+        return f"> 用{estimation_basis}估算，估出来的部分不能当实际毛利用。"
 
     # MEASURED
     if coverage_ratio is None or coverage_ratio >= _FULL_COVERAGE:
