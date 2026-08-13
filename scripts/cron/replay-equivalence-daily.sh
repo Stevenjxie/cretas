@@ -75,13 +75,24 @@ LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
     python - "$rc" <<'PY' >> "$LEDGER"
 import json, sys, datetime
 from collections import Counter
-rows = json.load(open('/tmp/replay_equivalence.json', encoding='utf-8'))
+payload = json.load(open('/tmp/replay_equivalence.json', encoding='utf-8'))
+# 🔴 2026-08-13 拆两行: 产出从「一个 list」变成「带两个数的 dict」。
+#    兼容旧格式(list), 免得升级当天的那一行读不出来。
+rows = payload if isinstance(payload, list) else payload.get('rows', [])
+meta = {} if isinstance(payload, list) else payload
 c = Counter(r['class'] for r in rows)
 print(json.dumps({
     "date": datetime.date.today().isoformat(),
     "rc": int(sys.argv[1]),
     "total": len(rows),
-    "positive_control_hits": sum(1 for r in rows if r.get('hit_a')),
+    # ⚠️ 三个数, 各自回答一个问题, ⛔ 不许再压成一个:
+    #   positive_control  机制今天还能不能开火(恒 1, 为 0 = 仪器坏了)
+    #   eligible_stored   存量里今天真的会回放几条(为 0 是**事实**不是故障)
+    #   replay_hits       这一轮实际命中了几条(旧口径, 保留可比性)
+    "positive_control": meta.get('positive_control'),
+    "eligible_stored": meta.get('eligible_stored'),
+    "stored_total": meta.get('stored_total'),
+    "replay_hits": sum(1 for r in rows if r.get('hit_a')),
     "counts": {k: v for k, v in c.items()},
     "not_equivalent": [r['phrase'] for r in rows if r['class'].startswith(('2', '②', '3', '③'))],
 }, ensure_ascii=False))
