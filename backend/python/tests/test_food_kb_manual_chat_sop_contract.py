@@ -11,6 +11,9 @@ from food_kb.api.manual_chat import (
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
+    _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
+    _FACTORY_MATERIAL_SALES_ANSWER,
+    _FACTORY_WORKFLOW_MAINTENANCE_ANSWER,
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
     _FACTORY_REPORTING_RUNTIME_ANSWER,
@@ -40,6 +43,8 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
+    _RESTAURANT_DAILY_CLOSE_ANSWER,
+    _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER,
     _RESTAURANT_STAFFING_SCOPE_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
@@ -47,6 +52,9 @@ from food_kb.api.manual_chat import (
     _needs_factory_byproduct_lifecycle_guard,
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
+    _needs_factory_form_assistant_result_guard,
+    _needs_factory_material_sales_guard,
+    _needs_factory_workflow_maintenance_guard,
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
     _needs_factory_reporting_runtime_guard,
@@ -76,6 +84,8 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_read_write_boundary_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
+    _needs_restaurant_daily_close_guard,
+    _needs_restaurant_default_time_provenance_guard,
     _needs_restaurant_staffing_scope_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
@@ -170,6 +180,35 @@ def test_scope_prompt_distinguishes_depth_and_business_line():
     assert "全量数据闭环" in full_sales
     assert "开票和收款" in full_sales
     assert mvp_stock != full_sales
+
+
+def test_20260813_factory_contracts_are_deterministic_and_isolated():
+    assert _needs_factory_workflow_maintenance_guard(
+        "Workflow 没有 ACTIVE BOM 时首版草稿怎么建，旧投入怎么确认移除？"
+    )
+    assert "不能静默删除" in _FACTORY_WORKFLOW_MAINTENANCE_ANSWER
+    assert _needs_factory_material_sales_guard(
+        "原料、辅料和包材怎样加入销售订单并发货？"
+    )
+    assert "只有半成品保持不可售" in _FACTORY_MATERIAL_SALES_ANSWER
+    assert "物料批次按 FIFO" in _FACTORY_MATERIAL_SALES_ANSWER
+    assert _needs_factory_form_assistant_result_guard(
+        "AI 表单助手模型说成功但没有写入怎么办？"
+    )
+    assert "服务端实际执行成功" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    assert not _needs_factory_material_sales_guard("餐饮今天怎么样？")
+
+
+def test_20260813_restaurant_contracts_are_deterministic_and_isolated():
+    assert _needs_restaurant_default_time_provenance_guard(
+        "只缺时间时为什么默认最近30天，数字出处和补数据怎么说？"
+    )
+    assert "时间是唯一缺项" in _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER
+    assert "补 X，能算 Y" in _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER
+    assert _needs_restaurant_daily_close_guard("打烊后问今天怎么样会回答什么？")
+    assert "营收、订单与毛利" in _RESTAURANT_DAILY_CLOSE_ANSWER
+    assert "不是逐食材" in _RESTAURANT_DAILY_CLOSE_ANSWER
+    assert not _needs_restaurant_daily_close_guard("Workflow 怎么发布？")
 
 
 def test_only_production_chain_questions_force_the_current_sop_source():
@@ -1019,7 +1058,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-12" in html
+    assert "origin/main · SOP sync 2026-08-13" in html
     assert "存放位置不等于“本图产出”" in html
     assert "中间 WIP 批次沿用同一生产计划身份" in html
     assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
@@ -1666,6 +1705,36 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "谜题菜、损耗提示、几点最忙分别怎么理解？",
             "restaurant",
             _RESTAURANT_PROACTIVE_FINDINGS_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "Workflow 没有 ACTIVE BOM 时首版草稿怎么建，旧投入怎么确认移除？",
+            "factory",
+            _FACTORY_WORKFLOW_MAINTENANCE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "原料、辅料和包材怎样加入销售订单并发货？",
+            "factory",
+            _FACTORY_MATERIAL_SALES_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "AI 表单助手模型说成功但没有写入怎么办？",
+            "factory",
+            _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "只缺时间时为什么默认最近30天，数字出处和补数据怎么说？",
+            "restaurant",
+            _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "打烊后问今天怎么样会回答什么？",
+            "restaurant",
+            _RESTAURANT_DAILY_CLOSE_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
     ],

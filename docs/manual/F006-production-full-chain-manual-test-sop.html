@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-<span class="stamp code">origin/main · SOP sync 2026-08-12</span>
+<span class="stamp code">origin/main · SOP sync 2026-08-13</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -499,6 +499,7 @@
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>在 Workflow 画布配置并激活 BOM / 配方</h3><p>辅料、包材和副产是画布派生的配置叠层，不是新的 Workflow 拓扑节点</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择目标 SKU</div>
         <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役，不得作为新计划的替代路径。旧“BOM/配方维护”菜单已退出日常入口；保留的深链接只用于诊断或历史兼容。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
+        <div class="callout blue"><strong>当前画布维护行为</strong>单位显示用户可读中文标签，保存和提交仍使用规范单位码；没有辅料时辅料 Cell 可折叠成窄条，需要新增或编辑时再展开。没有 ACTIVE BOM 基线时，首版草稿按当前画布的唯一终端产出投影创建，不要求修复不存在的版本状态。旧投入已不在新画布时，页面逐行列出并让用户确认移除；确认后清除旧数量/成本绑定并重试，取消则保持原样，不能静默删除。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>当前画布中目标 SKU 的 Workflow 草稿修订</td><td>无；画布只读展示</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
@@ -668,9 +669,10 @@
       <section id="sales" class="sales-only">
         <div class="section-head"><span class="section-no">B</span><div class="section-title"><h3>路线 B：销售订单生产</h3><p>订单行决定成品与数量，审批通过后再排产</p></div></div>
         <div class="path">销售管理 <b>›</b> 销售订单 <b>›</b> 新建销售订单</div>
+        <div class="callout blue"><strong>物料也可直接销售</strong>销售选品包括成品以及原料、辅料和包材，只有半成品保持不可售。物料行直接使用物料名称与库存单位，不要求成品箱规或先建生产计划；计件单位“件/个/只”按原字面保留，kg 等数量允许小数。</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-0"><span></span></span><span><h4>创建并复核客户档案</h4><p>进入“销售管理 → 客户管理”，建立测试客户，填写名称、联系人、电话、收货地址、信用信息及负责销售；在客户详情确认地址和价格记忆等页签可打开。</p><span class="expect">销售订单选择客户后自动带出正确地址和客户信息；同名客户不会误选历史档案。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-1"><span></span></span><span><h4>创建销售订单</h4><p>使用“普通新建”：选客户、交货日期/地址、业务员；在产品明细选择成品、下单数量、单位、包装规格、未税单价、税率和来源仓库。</p><span class="expect">成品单位与 SKU 一致；配置多个箱规时必须选正确箱规，箱数只读自动计算。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-1"><span></span></span><span><h4>创建销售订单</h4><p>使用“普通新建”：选客户、交货日期/地址、业务员；在产品明细选择成品或可售物料、下单数量、单位、未税单价、税率和来源仓库。成品按需选择包装规格；物料行不查成品箱规。</p><span class="expect">成品单位与 SKU 一致；物料名称和库存单位可回读，“只/个/件”不互相改写，0.5kg 等小数原值保留；半成品不出现在可售列表。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-2"><span></span></span><span><h4>提交审批判定</h4><p>订单创建后点“提交审批判定”。系统按配置自动分流：可能自动通过，也可能进入财务审核。以页面最终状态为准。</p><span class="expect">订单不再是草稿；达到可排产/已财务审核状态。若待财审，先完成财务审核。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-3"><span></span></span><span><h4>从订单创建生产计划</h4><p>若系统已自动创建计划，直接打开；否则点订单行的“创建生产计划”，或进入生产计划新建页，来源选“销售订单”并选择该订单。</p><span class="expect">订单客户和产品行自动带出，不能手填另一套产品。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-4"><span></span></span><span><h4>选择订单产品行并确认路线</h4><p>产品行默认全选，可取消不生产的行；每保留一行各建一张生产计划，产品/数量来自订单行。多订单合并时，追加订单必须已财务审核。</p><span class="expect">计划数量等于订单行数量；Workflow 路线、版本与目标成品一致。歧义时必须显式选择并预览 Cell 图。</span></span></label>
@@ -863,7 +865,8 @@
         <div class="path">销售管理 <b>›</b> 销售订单全生命周期工作台 <b>›</b> 创建发货单　＋　仓库角色 <b>›</b> 待确认发货</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-1"><span></span></span><span><h4>在统一生命周期工作台创建发货单</h4><p>按草稿、审批、生产、待发货、部分发货和已完成等生命周期筛选订单；选择已入主仓/外仓的成品，填写计划发货日期、地址和各行计划数量，创建发货单。</p><span class="expect">只生成待仓库确认的任务单，不立即扣库存；产品、客户和订单号自动关联，列表状态与详情、仓库任务一致。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-2"><span></span></span><span><h4>仓库角色核对库存归属并确认发货</h4><p>从销售订单详情创建的待确认发货任务进入仓库确认页，核对实际数量、来源仓、FEFO 批次和库存归属。公司所有显示“公司库存”；客户所有必须显示客户名称/编码，归属读取失败时显示缺失并阻止，不得默认成公司库存。每行批次分配合计必须等于实发量，再确认发货。</p><span class="expect">确认后才扣成品库存并生成送货单；客户订单不得误用其他客户或公司所有批次。库存不足、仓库不符、归属不符或分配合计不等时阻止。“仓储管理 → 出货记录”只用于历史查询，不是正式写入口。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-2"><span></span></span><span><h4>仓库角色核对库存归属并确认发货</h4><p>从销售订单详情创建的待确认发货任务进入仓库确认页。成品行核对实际数量、来源仓、FEFO 批次和库存归属；物料行不参加成品批次分配，由服务端在确认发货时从物料批次按 FIFO 自动扣减，页面应明确显示“物料无需分配批次”。</p><span class="expect">确认后才扣对应库存并生成送货单；物料行不查询成品库存、不给“请先生产入库”的错误提示，也不提交空的成品批次分配。物料库存不足必须整体阻止；成品行仍按原 FEFO 与归属门禁执行。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-material"><span></span></span><span><h4>回归物料行、单位与小数数量</h4><p>分别选择一项原料、辅料或包材，核对品名、库存单位和数量；创建 0.5kg 等小数发货任务，并检查“只/个/件”没有互相改写。</p><span class="expect">物料品名可回读；小数订单量原值进入发货计划；整单物料显示自动扣减而不是“已分配 0/N”。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-3"><span></span></span><span><h4>核对部分发货和订单状态</h4><p>先只发部分数量，再发剩余数量；每次回看销售订单详情、发货记录和库存。</p><span class="expect">状态依次为部分发货/已发货；累计实发不超过订单量，每个发货单只扣一次。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-4"><span></span></span><span><h4>开票与收款/应收核对</h4><p>按权限从销售订单发起开票申请，由财务审核；在收款管理登记回款，再到应收应付和客户详情的发票/付款页签核对。</p><span class="expect">订单金额、已开票、已收款和应收余额可计算闭合；销售人员不能越权完成财务审核。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-5"><span></span></span><span><h4>销售退货与退款分支</h4><p>对已发货行发起销售退货，数量不得超过累计已发货量；提交审批后分别核对退货入库、退款/销售付款申请和应收变化。</p><span class="expect">DRAFT 退货不直接改库存或资金；审批后动作可追溯，重复审批不重复入库/退款。</span></span></label>
