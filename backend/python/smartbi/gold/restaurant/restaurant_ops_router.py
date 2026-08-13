@@ -1907,10 +1907,16 @@ def _build_margin_entries(
     cretas_map: Dict[str, str],
     cost_map: Dict[str, float],
 ) -> List[Dict[str, Any]]:
-    """Build margin rows while preserving unknown cost as unknown."""
+    """Build margin rows while preserving unknown cost as unknown.
+
+    ⚠️ 取键**必须**走 `cost_key_of` —— 它连着 `normalize_dish_name`, 是两条路
+       共用的那一份规范化。直接 `cretas_map.get(name)` 会绕开它, 于是一侧对
+       大小写敏感一侧不敏感, 差异表现成「日结算了这道菜, 问答没算」。
+    """
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_key_of
     entries: List[Dict[str, Any]] = []
     for row in pos_rows:
-        source_pk = cretas_map.get(row["normalized_name"])
+        source_pk = cost_key_of(cretas_map, row["normalized_name"])
         qty = float(row["total_qty"])
         revenue = float(row["total_revenue"])
         cost_present = (
@@ -4099,55 +4105,39 @@ async def resolve_gross_margin(
             },
         )
 
-    # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
-    # P0-2: alias lets merchants bind POS name → any product_type, handles the
-    # "POS xlsx name vs recipe name" drift problem (括号/空格/[] differences).
-    normalized_names = list({r["normalized_name"] for r in pos_rows})
-    cretas_map: Dict[str, str] = {}  # pos_name → source_pk (product_type_id)
-    try:
-        import asyncpg as _asyncpg
-        from config import get_settings as _get_settings
-        cretas_url = _get_settings().food_kb_db_url
-        cretas = await _asyncpg.connect(cretas_url)
-        try:
-            # Primary: exact name match
-            name_rows = await cretas.fetch(
-                "SELECT id, name FROM product_types WHERE factory_id = $1 AND name = ANY($2::text[])",
-                factory_id, normalized_names,
-            )
-            for r in name_rows:
-                cretas_map[r["name"]] = r["id"]
-            # Fallback: alias table (table may not exist on older schemas → catch)
-            unmapped = [n for n in normalized_names if n not in cretas_map]
-            if unmapped:
-                try:
-                    alias_rows = await cretas.fetch(
-                        """SELECT pos_name, product_type_id FROM dim_product_alias
-                            WHERE factory_id = $1 AND pos_name = ANY($2::text[])""",
-                        factory_id, unmapped,
-                    )
-                    for r in alias_rows:
-                        cretas_map[r["pos_name"]] = r["product_type_id"]
-                except Exception as e:
-                    # Table doesn't exist yet — ignore, name match still works
-                    if "does not exist" not in str(e):
-                        logger.warning(f"[gross_margin] alias lookup failed: {e}")
-        finally:
-            await cretas.close()
-    except Exception as e:
-        logger.warning(f"[gross_margin] cretas name lookup failed: {e}")
-
-    # Historical/demo Gold cost rows can outlive the operational product_types
-    # seed that originally produced them.  Supplement only unresolved names
-    # from SmartBI's tenant-scoped cost-product read model; ambiguous names stay
-    # unresolved rather than guessing a COGS key.
-    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
-    cretas_map = await merge_cost_product_mapping(
-        smartbi_pool,
-        factory_id,
-        normalized_names,
-        cretas_map,
+    # Step 2: 菜名 → 成本键。
+    #
+    # 🔴 2026-08-13 owner 裁定条件 2: 这一步的实现**只有一份**, 在
+    #    `restaurant_cost_mapping.resolve_cost_keys` —— 日结那条路读的是同一份。
+    #    改之前这里是三十行内联的 cretas 查询, 日结那边是一条 SQL join,
+    #    两边够得着的菜不一样(青花椒 9 道只在运营库里), 于是同一天同一家店
+    #    日结毛利 103,370.22 而问答 124,071.85。
+    # ⛔ 谁都不许在这里「顺手」再补一级 fallback: 补了日结就少一级。
+    from smartbi.gold.restaurant.restaurant_cost_mapping import (
+        CostKeySourceUnavailable,
+        resolve_cost_keys,
     )
+    async with smartbi_pool.acquire() as _map_conn:
+        await _map_conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id)
+        try:
+            cretas_map = await resolve_cost_keys(_map_conn, factory_id)
+        except CostKeySourceUnavailable as exc:
+            # ⛔ 不降级成「这些菜没有成本卡」—— 那会把毛利算高而且不留痕迹。
+            #    宁可这一问明确说取不到。
+            logger.error("[gross_margin] 成本键权威来源不可用 factory=%s: %s",
+                         factory_id, exc)
+            return OpsAnswer(
+                code="RESTAURANT_OPS_GROSS_MARGIN",
+                title="毛利",
+                answer_text=(
+                    "现在算不了毛利 —— 菜品成本的数据源连不上。\n\n"
+                    "这不是「你的菜没有成本卡」，是我这边取不到，"
+                    "所以我不给你一个可能偏高的数。稍后再问一次。"
+                ),
+                charts=[], kpis=[],
+                meta={"no_data": True, "reason": "cost_key_source_unavailable"},
+            )
 
     # Step 3: load food cost per source_pk
     cost_map: Dict[str, float] = {}

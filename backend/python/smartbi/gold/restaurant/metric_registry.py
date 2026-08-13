@@ -47,6 +47,17 @@ from typing import Dict, Optional, Tuple
 #:    `assert_registry_self_consistent` 当场红。
 CATEGORIES: Tuple[str, ...] = ("营收和折扣", "成本和毛利", "损耗", "客流和销量")
 
+#: 成本桥接的两个数组参数占位符, 位置**固定**。
+#:
+#: 🔴 为什么钉成常量而不是各处手写 `$4`/`$5`: 拼 SQL 的地方有四处
+#:    (`build_sql` / 覆盖毛利 / 异常成本卡清单 / 覆盖率), 准备实参的只有一处。
+#:    手写就会有一处写错序号, 而 asyncpg 的报错是「参数类型不匹配」——
+#:    读起来完全不像「桥接没接上」。
+#: ⚠️ 因此在 item_cost 粒度上, `entity_filter` 的占位符要往后挪到 $6,
+#:    由 `build_sql` 按 `uses_cost_bridge()` 统一决定, ⛔ 两处不许各判各的。
+COST_BRIDGE_NAME_PARAM = 4
+COST_BRIDGE_KEY_PARAM = 5
+
 GRAINS: Dict[str, Tuple[str, str, str]] = {
     "txn": ("fact_pos_transaction t", "", "t"),
     "item": (
@@ -59,16 +70,29 @@ GRAINS: Dict[str, Tuple[str, str, str]] = {
         "JOIN fact_pos_item i ON i.transaction_id = t.id "
         "LEFT JOIN dim_product dp ON dp.product_id = i.product_id "
         "AND dp.factory_id = i.factory_id "
-        "LEFT JOIN dim_restaurant_cost_product b "
-        "ON b.factory_id = i.factory_id "
-        # 🔴 大小写归一。2026-08-13 实测: 桥接表存小写 `营养多c番茄味(单人份)`,
-        #    而 dim_product 存大写 `营养多C番茄味(单人份)` —— 精确等值全部落空,
-        #    6 道菜的成本卡被漏掉, 日结与问答因此差 7,297.97 元。
-        # ⚠️ 只归一大小写, **不动别的** —— 名字里还有 `【无刺】`/`【直播专享】`
-        #    这类前缀和括号差异, 那些两条路都算「没卡」, 是另一件事(已挂账)。
-        "AND lower(b.normalized_name) = lower(dp.normalized_name) "
+        # 🔴 2026-08-13 owner 裁定条件 2: 菜名→成本键的解析**只有一处**, 在
+        #    `restaurant_cost_mapping.resolve_cost_keys`。这里不再直接 join
+        #    SmartBI 的桥接表 —— 那张表只是三层来源中的**第三层**(存量兜底),
+        #    权威层在运营库 `cretas_db.product_types`。
+        #
+        #    实测: 青花椒有 9 道菜的映射只在运营库里, 桥接表 exact=0/ci=0 ——
+        #    日结只连 SmartBI 一个池, 于是日结毛利 103,370.22 而问答 124,071.85。
+        #    **两条路够得着的映射不一样, 结构上就不可能给出同一个数。**
+        #
+        # ⚠️ join 是**纯等值**, 两边一个函数都没有。数组里装的是
+        #    `dim_product.normalized_name` 的原样值, 规范化(strip+lower)全部
+        #    发生在 Python 那一处。⛔ 别在这儿补 `lower()` 去「顺手更宽松一点」:
+        #    SQL 与 Python 的大小写折叠/空白定义并不一致, 不一致的表现就是
+        #    「有几道菜只在一条路上匹配得上」—— 正是这次要根治的东西。
+        f"LEFT JOIN unnest(${COST_BRIDGE_NAME_PARAM}::text[], "
+        f"${COST_BRIDGE_KEY_PARAM}::text[]) "
+        "AS b(normalized_name, product_source_pk) "
+        "ON b.normalized_name = dp.normalized_name "
         "LEFT JOIN agg_restaurant_product_cost c "
-        "ON c.factory_id = b.factory_id "
+        "ON c.factory_id = i.factory_id "
+        # ⛔ 承重: 成本按 `product_source_pk` 桥接, **绝不按 product_id 直连** ——
+        #    `agg_restaurant_product_cost.product_id` 全库都是 0(2026-08-09 实测),
+        #    直连会静默得到 0 成本 → 毛利率 100%, 一个看起来很棒的错数。
         "AND c.product_source_pk = b.product_source_pk",
         "t",
     ),

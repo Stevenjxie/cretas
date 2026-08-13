@@ -36,6 +36,50 @@ from smartbi.gold.restaurant.restaurant_ops_router import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _cretas_pool_default(monkeypatch):
+    """本模块默认给一个**空的**运营库。
+
+    🔴 为什么需要: 2026-08-13 起 cretas 够不着时毛利路径会**显式失败**
+       (不再静默退回只用 SmartBI 兜底)。本模块里绝大多数用例测的是措辞/路由/
+       渲染, 它们此前是靠「连不上真库 → 吞掉异常 → 继续」跑通的 ——
+       那条路正是这次要堵的。给个空运营库让它们回到自己该测的东西上。
+    ⚠️ 「来源断了要响」由 `smartbi/gold/tests/test_cost_key_source.py` 专门守,
+       ⛔ 不靠本模块「碰巧连不上」来守 —— 那是拿环境故障当断言。
+    """
+    class _EmptyCretasConn:
+        async def fetch(self, _query, *_args):
+            return []
+
+    _patch_cretas_pool(monkeypatch, _EmptyCretasConn())
+
+
+def _patch_cretas_pool(monkeypatch, connection):
+    """把 cretas 那一侧接到夹具上。
+
+    ⚠️ 2026-08-13 起「菜名→成本键」的解析统一走
+       `restaurant_cost_mapping.resolve_cost_keys`, 它复用服务已有的**池**
+       (`smartbi.config.get_cretas_pool`), 不再自己 `asyncpg.connect`。
+       夹具跟着改 —— 原来只 patch `asyncpg.connect` 的话, 解析会去连真库。
+    """
+    class _Ctx:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    async def _get_cretas_pool():
+        return _Pool()
+
+    import smartbi.config as _config
+    monkeypatch.setattr(_config, "get_cretas_pool", _get_cretas_pool)
+
+
 def _dish_metric_entry():
     return {
         "name": "米饭",
@@ -1372,6 +1416,7 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
 
     result = asyncio.run(
         _r.resolve_gross_margin(
@@ -1449,6 +1494,7 @@ def test_gross_margin_uses_smartbi_cost_product_fallback_when_erp_seed_is_gone(
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
 
     result = asyncio.run(_r.resolve_gross_margin(
         _SmartBIPool(),
@@ -1771,6 +1817,7 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
 
     import asyncpg
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    _patch_cretas_pool(monkeypatch, _CretasConnection())
     return _Pool(), connection
 
 
