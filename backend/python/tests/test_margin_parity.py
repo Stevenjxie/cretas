@@ -841,7 +841,53 @@ def test_progress_sentence_never_contradicts_itself():
     p = {"total": 6, "done": 3, "next": None}
     assert "都齐了" not in render(p), "3/6 却说都齐了 —— 自相矛盾"
     assert render({"total": 6, "done": 6, "next": None}).endswith("都齐了。")
-    # 阳性对照: 有 next 时必须给出下一步
-    got = render({"total": 6, "done": 3, "cost_source": "成本卡",
-                  "next": {"source": "税额", "unlocks": 1}})
-    assert "税额" in got and "下一个" in got
+    # 阳性对照: 该说的还在。⚠️ 2026-08-14 去重后进度感**不再说建议**,
+    #    所以这条对照改成盯「没补的那几类要点名」——「下一步」由 T2 那一处说。
+    got = render({"total": 6, "done": 3, "missing": ["税额"]})
+    assert "税额" in got and "完全没有数据" in got
+    assert "下一个" not in got, "进度感又开始说建议了 —— 那句话只有 T2 一处出"
+
+
+def test_the_next_step_sentence_has_exactly_one_home():
+    """🔴 owner 2026-08-14 去重: 「先补这 N 道 → 覆盖率 a% 到 b%」只有一个出处。
+
+    改之前同一屏上说了两遍、措辞还不一样 —— **「两份会漂」漂进了面向用户的正文。**
+    分工: T2 说「做什么」, 进度感说「我在哪」。
+    """
+    from smartbi.gold.restaurant.data_progress import render
+    from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
+
+    gaps = [{"name": "A", "revenue": 300.0}, {"name": "B", "revenue": 200.0},
+            {"name": "C", "revenue": 100.0}]
+    view = render({"total": 6, "done": 2, "missing": ["税额", "损耗盘点"],
+                   "next": {"source": "成本卡"}, "cost_source": "成本卡",
+                   "cost_gaps": gaps, "coverage_ratio": 0.402,
+                   "coverage_denominator": 10000.0})
+    offer = offers_for_cost_gaps(gaps, 0.402, 10000.0)[0]["text"]
+
+    # 阳性对照: 建议那一处**确实**在说这句话(否则下面的阴性断言恒真)
+    assert "先补这" in offer and "提到约" in offer, offer
+    # 进度感那一处**不许**再说一遍
+    for word in ("先补这", "提到约", "最划算"):
+        assert word not in view, f"进度感又把建议说了一遍: {view!r} 命中 {word!r}"
+    # 但进度感该说的还在
+    assert "6 类里的 2 类" in view and "完全没有数据" in view
+
+
+def test_screen_says_each_thing_once():
+    """整屏级别的去重 —— ⛔ 不许两段共享同一组数字。
+
+    ⚠️ 判据是「同一个覆盖率区间出现几次」: 40.2%→47.7% 这对数只该出现一次。
+    """
+    from smartbi.gold.restaurant.data_progress import render
+    from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
+
+    gaps = [{"name": "A", "revenue": 300.0}]
+    body = "\n\n".join([
+        offers_for_cost_gaps(gaps, 0.402, 10000.0)[0]["text"],
+        render({"total": 6, "done": 2, "missing": ["税额"],
+                "next": {"source": "成本卡"}, "cost_source": "成本卡",
+                "cost_gaps": gaps, "coverage_ratio": 0.402,
+                "coverage_denominator": 10000.0}),
+    ])
+    assert body.count("40.2%") == 1, f"同一个覆盖率在一屏上出现多次:\n{body}"

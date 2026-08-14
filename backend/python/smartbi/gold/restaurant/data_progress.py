@@ -192,9 +192,21 @@ async def measure(
 
 
 def render(progress: Dict[str, Any]) -> str:
-    """面向店长的进度视图。**视图本身才是价值, 建议只是附带。**
+    """面向店长的进度**视图**。⛔ 只出视图, **不出建议**。
 
-    ⛔ 不出现列名/表名。⚠️ 没有清晰边际赢家时**不出建议**, 只出视图。
+    🔴 owner 2026-08-14 去重: 「先补这 N 道 → 覆盖率 a% 到 b%」这句话
+       **由 `fill_offers.offers_for_cost_gaps` 一处产出**(它就是 T2)。
+       改之前这里也说了一遍, 于是同一屏上同一件事说了两遍、措辞还不一样:
+
+         T2 那段:   先补这 3 道的成本卡（…）——能算进毛利的营收会从 40.2% 提到约 47.7%
+         进度感那段: …下一个最划算的是【成本卡】——补 3 道菜的成本卡，
+                    能算准的营收就从 40.2% 到约 47.7%
+
+       **「两份会漂」漂进了面向用户的正文。**
+    ⇒ 分工: **T2 说「做什么」, 进度感说「我在哪」。** 一句话只有一个出处。
+
+    ⚠️ `next`(下一个最划算的是哪一类)仍然算、仍然在结构化输出里 ——
+       前端要做进度条时用得上。⛔ 只是**不进正文**, 因为正文里 T2 已经在说它了。
     """
     if not progress or not progress.get("total"):
         return ""
@@ -205,21 +217,6 @@ def render(progress: Dict[str, Any]) -> str:
     missing = progress.get("missing") or []
     if missing:
         parts.append(f"还有 {len(missing)} 类完全没有数据：{('、'.join(missing))}")
-
-    nxt = progress.get("next")
-    if nxt:
-        from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
-        offers = offers_for_cost_gaps(
-            progress.get("cost_gaps") or (),
-            progress.get("coverage_ratio"),
-            progress.get("coverage_denominator"))
-        tail = f"下一个最划算的是【{nxt['source']}】"
-        if offers:
-            o = offers[0]
-            tail += (f"——补 {len(o['dishes'])} 道菜的成本卡，能算准的营收就从 "
-                     f"{o['coverage_before'] * 100:.1f}% 到约 "
-                     f"{o['coverage_after'] * 100:.1f}%")
-        parts.append(tail)
     elif done >= total:
         parts.append("都齐了")
     return "。".join(parts) + "。"
