@@ -62,7 +62,7 @@ async function login(page, context) {
   log(`Login as ${USER} via UI (route intercept handles /api/mobile/**)`);
   await page.goto(`${WEB}/login`);
   await page.waitForLoadState('networkidle');
-  await page.fill('input[placeholder="请输入用户名"]', USER);
+  await page.fill('input[placeholder*="用户名"]', USER);
   await page.fill('input[placeholder="请输入密码"]', PASS);
   const [resp] = await Promise.all([
     page.waitForResponse(r => r.url().includes('/auth/unified-login'), { timeout: 20000 }),

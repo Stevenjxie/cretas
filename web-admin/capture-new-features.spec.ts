@@ -24,7 +24,7 @@ test.describe('新增功能截图', () => {
       await quickBtn.click();
       await page.waitForTimeout(500);
     } else {
-      await page.getByPlaceholder('请输入用户名').fill('factory_admin1');
+      await page.getByPlaceholder(/用户名/).fill('factory_admin1');
       await page.getByPlaceholder('请输入密码').fill('123456');
     }
     await page.getByRole('button', { name: '登 录' }).click();

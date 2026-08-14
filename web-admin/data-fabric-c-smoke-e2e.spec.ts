@@ -412,7 +412,7 @@ test.describe('餐饮 Phase A smoke — A-1/A-2/A-3 new-feature guards', () => {
     await context.clearCookies();
     await page.goto(BASE_URL + '/login', { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(2000);
-    await page.getByPlaceholder('请输入用户名').fill('restaurant_admin1');
+    await page.getByPlaceholder(/用户名/).fill('restaurant_admin1');
     await page.getByPlaceholder('请输入密码').fill('123456');
     await page.waitForTimeout(500);
     await page.getByRole('button', { name: '登 录' }).click();

@@ -12,7 +12,7 @@ const BASE = 'https://admin.cretaceousfuture.com';
   });
 
   await page.goto(BASE);
-  await page.locator('input[placeholder="请输入用户名"]').fill('qhj_prod');
+  await page.locator('input[placeholder*="用户名"]').fill('qhj_prod');
   await page.locator('input[placeholder="请输入密码"]').fill('123456');
   await page.locator('button.login-button').click();
   await page.waitForURL((u) => !new URL(String(u)).pathname.startsWith('/login'), { timeout: 30000 });

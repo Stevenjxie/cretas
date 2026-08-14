@@ -66,10 +66,10 @@ const OK = (msg) => log('OK', msg);
     log('INFO', `URL after goto: ${url}`);
 
     // Find login form — use specific placeholders from login/index.vue
-    await page.locator('input[placeholder="请输入用户名"]').fill(USER);
+    await page.locator('input[placeholder*="用户名"]').fill(USER);
     await page.locator('input[placeholder="请输入密码"]').fill(PASS);
 
-    const userVal = await page.locator('input[placeholder="请输入用户名"]').inputValue();
+    const userVal = await page.locator('input[placeholder*="用户名"]').inputValue();
     const passVal = await page.locator('input[placeholder="请输入密码"]').inputValue();
     log('INFO', `Form filled: username=${userVal} password=${'*'.repeat(passVal.length)}`);
 

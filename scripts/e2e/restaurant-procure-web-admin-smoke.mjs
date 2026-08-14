@@ -59,8 +59,8 @@ function writeEvidence(shotDir) {
 
 async function login(page) {
   await page.goto(`${WEB_BASE}/login`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('input[placeholder="请输入用户名"]', { timeout: 15_000 });
-  await page.fill('input[placeholder="请输入用户名"]', USER);
+  await page.waitForSelector('input[placeholder*="用户名"]', { timeout: 15_000 });
+  await page.fill('input[placeholder*="用户名"]', USER);
   await page.fill('input[placeholder="请输入密码"]', PASS);
 
   const [loginResp] = await Promise.all([

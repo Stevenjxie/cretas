@@ -41,7 +41,7 @@ const OK = (m) => log('OK', m);
   try {
     log('STEP', `Login at ${BASE}`);
     await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.locator('input[placeholder="请输入用户名"]').fill(USER);
+    await page.locator('input[placeholder*="用户名"]').fill(USER);
     await page.locator('input[placeholder="请输入密码"]').fill(PASS);
     await page.locator('button.login-button').click();
     await page.waitForURL((u) => !new URL(String(u)).pathname.startsWith('/login'), { timeout: 30000 });

@@ -221,7 +221,7 @@ export function saveAuditReport(report: AuditReport, filename: string) {
 export async function vueLogin(page: Page, username: string, password: string) {
   await page.goto('/login');
   await page.waitForLoadState('networkidle');
-  const usernameInput = page.locator('input[placeholder="请输入用户名"]').first();
+  const usernameInput = page.locator('input[placeholder*="用户名"]').first();
   const passwordInput = page.locator('input[placeholder="请输入密码"]').first();
   await usernameInput.fill(username);
   await passwordInput.fill(password);

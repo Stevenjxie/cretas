@@ -141,7 +141,7 @@ async function newContext(browser, label) {
 async function uiLogin(page, username, password = PASSWORD) {
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForSelector('input.el-input__inner', { timeout: 30000 });
-  await page.fill('input.el-input__inner[placeholder="请输入用户名"]', username);
+  await page.fill('input.el-input__inner[placeholder*="用户名"]', username);
   await page.fill('input[type="password"]', password);
   await page.click('button.login-button');
   for (let i = 0; i < 30; i++) {

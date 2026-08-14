@@ -42,7 +42,7 @@ async function rnLogin(page: Page, username = 'factory_admin1', password = '1234
     await page.waitForTimeout(500);
     await page.locator('[data-testid="login-submit-btn"]').click();
   } else {
-    const uInput = page.getByPlaceholder('请输入用户名');
+    const uInput = page.getByPlaceholder(/用户名/);
     const pInput = page.getByPlaceholder('请输入密码');
     if (await uInput.isVisible().catch(() => false)) {
       await uInput.fill(username);

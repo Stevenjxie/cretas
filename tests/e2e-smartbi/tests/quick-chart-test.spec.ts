@@ -28,7 +28,7 @@ test('SmartBI upload + chart render', async ({ page }) => {
 
   // 1. Login
   await page.goto(`${BASE_URL}/login`);
-  await page.fill('input[placeholder="请输入用户名"]', 'factory_admin1');
+  await page.fill('input[placeholder*="用户名"]', 'factory_admin1');
   await page.fill('input[placeholder="请输入密码"]', '123456');
   await page.click('button:has-text("登 录")');
   await page.waitForURL('**/dashboard**', { timeout: 10_000 }).catch(() => {});

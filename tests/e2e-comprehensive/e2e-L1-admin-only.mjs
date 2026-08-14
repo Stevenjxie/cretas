@@ -64,7 +64,7 @@ async function run() {
   // Login
   console.log('Logging in as e2e_factory_admin...');
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60000 });
-  await page.fill('input.el-input__inner[placeholder="请输入用户名"]', 'e2e_factory_admin');
+  await page.fill('input.el-input__inner[placeholder*="用户名"]', 'e2e_factory_admin');
   await page.fill('input[type="password"]', '123456');
   await page.click('button.login-button');
   // Wait for SPA to redirect + fully render dashboard
@@ -127,7 +127,7 @@ async function run() {
     if (status === 'REDIRECT_LOGIN') {
       await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('input.el-input__inner', { timeout: 30000 });
-      await page.fill('input.el-input__inner[placeholder="请输入用户名"]', 'e2e_factory_admin');
+      await page.fill('input.el-input__inner[placeholder*="用户名"]', 'e2e_factory_admin');
       await page.fill('input[type="password"]', '123456');
       await page.click('button.login-button');
       for (let j = 0; j < 15; j++) {

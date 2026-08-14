@@ -40,7 +40,7 @@ async function login(page: Page): Promise<void> {
   }
   await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(1000);
-  await page.getByPlaceholder('请输入用户名').fill(user);
+  await page.getByPlaceholder(/用户名/).fill(user);
   await page.getByPlaceholder('请输入密码').fill(pass);
   await page.waitForTimeout(300);
   await page.getByRole('button', { name: '登 录' }).click();

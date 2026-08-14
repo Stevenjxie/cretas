@@ -30,7 +30,7 @@ test.describe.serial('客户问题点 E2E 验证', () => {
     await addBtn.click();
     await page.waitForTimeout(1500);
     await page.getByPlaceholder('请输入姓名').fill(`PW员工${TS}`);
-    await page.getByPlaceholder('请输入用户名').fill(`pw_emp_${TS}`);
+    await page.getByPlaceholder(/用户名/).fill(`pw_emp_${TS}`);
     await page.getByRole('combobox', { name: '角色' }).click();
     await page.waitForTimeout(500);
     await page.getByRole('option', { name: '操作员' }).click();

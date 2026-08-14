@@ -15,7 +15,7 @@ const BASE = 'http://127.0.0.1:5180';
   await page.goto(`${BASE}/login`);
   await page.waitForLoadState('networkidle');
 
-  await page.fill('input[placeholder="请输入用户名"]', 'restaurant_admin1');
+  await page.fill('input[placeholder*="用户名"]', 'restaurant_admin1');
   await page.fill('input[placeholder="请输入密码"]', '123456');
   await page.click('button:has-text("登 录"), button:has-text("登录")');
 
