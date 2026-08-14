@@ -402,7 +402,6 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         String scenario = defaultOwnerActionScenarioForTool();
         result.putIfAbsent("actionAdvice", advice);
         result.putIfAbsent("decisionBridge", decisionBridge(advice, scenario));
-        result.putIfAbsent("suggestedFollowups", decisionFollowups(scenario));
         if (containsActionAdvice(message)) {
             return result;
         }
@@ -454,21 +453,17 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         return bridge;
     }
 
-    private List<Map<String, Object>> decisionFollowups(String scenario) {
-        return List.of(
-                followup("老板今天怎么用这张报表做决定？", "老板今天怎么用这张报表做决定？", scenario),
-                followup("哪些动作今天先不要做？", "哪些动作今天先不要做？", scenario),
-                followup("明天看哪三个数判断有没有效果？", "明天看哪三个数判断有没有效果？", scenario)
-        );
-    }
-
-    private Map<String, Object> followup(String label, String question, String scenario) {
-        Map<String, Object> f = new LinkedHashMap<>();
-        f.put("label", label);
-        f.put("question", question);
-        f.put("ownerActionScenario", scenario);
-        return f;
-    }
+    // 🔴 2026-08-14 owner 裁定: 删掉 decisionFollowups() 那三个硬编码问句
+    //    (「老板今天怎么用这张报表做决定？」/「哪些动作今天先不要做？」/
+    //     「明天看哪三个数判断有没有效果？」)。
+    //
+    //    它们违反「按钮不许说正文没说的话」—— 三句话与这次答案的内容无关,
+    //    换哪个报表都是这三句, 所以它们**不指向正文里的任何东西**。
+    //    真正与内容相关的追问由 Python 侧产出(T2 补数据 / T1 下钻 / 换时间窗
+    //    / 换门店范围), 走 suggested_followups -> suggestedFollowups。
+    //
+    //    ⚠️ 这里不再兜底: 没有内容相关的追问时**就不给按钮**, 比给三句
+    //       放之四海而皆准的话强 —— 后者点下去只会得到一段泛泛而谈。
 
     private String defaultOwnerActionScenarioForTool() {
         String tool = getToolName();

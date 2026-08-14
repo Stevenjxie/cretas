@@ -52,6 +52,23 @@ logger = logging.getLogger(__name__)
 
 # Keyword patterns per ops template. Each entry: (code, [[kw_group_1], [kw_group_2], ...]).
 # Query must contain at least one keyword from each group. First match wins.
+#: 「这句话在问缺成本卡」的**唯一判据** —— 关键词路由表和 resolver 选分支
+#: 共用它。⛔ 两处各写各的 = 路由到了 RECIPE_COST 却走进「成本排行」分支,
+#: 那时按钮点下去给的是**有卡的菜**, 恰好和他要的相反, 而且看起来完全正常。
+#: 形态: 每一组至少命中一个词(与 `_OPS_PATTERNS` 同一套语义)。
+_MISSING_CARD_TOKENS: Tuple[Tuple[str, ...], ...] = (
+    ("成本卡",),
+    ("没有", "缺", "少", "漏", "哪些", "哪道", "列出", "清单", "没录", "未录"),
+)
+
+
+def _asks_missing_cost_card(text: str) -> bool:
+    """问句是不是在问「哪些菜没有成本卡」。判据见 `_MISSING_CARD_TOKENS`。"""
+    query = text or ""
+    return all(any(token in query for token in group)
+               for group in _MISSING_CARD_TOKENS)
+
+
 _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     # Wastage: "损耗/浪费" + "最多/哪/top/类型/占比"
     (
@@ -109,6 +126,13 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["毛利", "毛利率", "净赚", "赚钱", "挣钱", "利润"],
          ["菜品", "菜系", "菜价", "哪道", "哪个", "排行", "排名", "top", "TOP", "最高", "最赚"]],
     ),
+    # 🔴 T2 按钮点下去落在这条上(owner 2026-08-14 裁定 2)。
+    #    ⚠️ 必须排在下面那条 RECIPE_COST **之前** —— 「哪些菜没有成本卡」里
+    #       没有「食材成本/配方成本」, 落不到下面那条; 但把它放后面的话,
+    #       将来任何一条更宽的模式先匹配上就会把它抢走。
+    #    ⛔ 改这里要同时改 `follow_up_actions.T2_FILL_QUESTION` ——
+    #       两处不一致 = 按钮变哑弹(点下去拒答), 而它看起来完全正常。
+    ("RESTAURANT_OPS_RECIPE_COST", [list(g) for g in _MISSING_CARD_TOKENS]),
     # Recipe cost (食材成本 only — 毛利 moved to gross_margin)
     (
         "RESTAURANT_OPS_RECIPE_COST",
@@ -886,16 +910,13 @@ class OpsAnswer:
     charts: List[Dict[str, Any]]
     kpis: List[Dict[str, Any]]
     meta: Dict[str, Any]
-    #: 追问按钮(T2 补数据 / T1 下钻)。**结构化产出**, 与正文共用同一批 offers。
-    #:
-    #: 🔴 2026-08-14 调查实测: 前端 `normalizeFollowUpActions` 早就在了, 而
-    #:    **后端一个 action 都不产出** —— T2 的产出 100% 拼进 `answer_text`。
-    #:    那是形态 B(机制在, 没接上), 缺的正是这个字段。
-    #: ⚠️ 正文里那句**不撤** —— 消息形态(日结推送)没有按钮, 只有正文。
-    #:    两边共用同一批 offers, ⛔ 不为按钮再拼一份文案。
-    #: ⛔ 排序与截断在**后端**(见 `follow_up_actions.build_actions`), 前端只
-    #:    `.slice(0, 4)`; 送一堆让它切等于优先级由另一个仓决定。
-    actions: Tuple[Dict[str, Any], ...] = ()
+    # 🔴 2026-08-14 二次裁定: 这里原来有个 `actions: Tuple[...]` 字段, **已撤**。
+    #    实测三层都断 —— 没有消费者 / `fill_dishes` payload 没有 handler /
+    #    前端读的是 `suggestedFollowups`。新建一份没人读的契约, 不如复用那份。
+    #    ⇒ 按钮现在走 `meta["follow_up_actions"]`, 由
+    #      `restaurant_intent_service._suggested_followups` 合进 `suggested_followups`。
+    #    `meta` 本来就整份透传到 `result_meta`(见 `_execution_receipt` 的
+    #    `receipt = dict(meta)`), **不新开管道**。
 
 
 @dataclass(frozen=True)
@@ -1926,12 +1947,24 @@ _GENERIC_ACTIONS = (
 )
 
 
-def _build_qa_fill_offers(cell) -> List[str]:
+def _build_qa_fill_offers(cell) -> List[Dict[str, Any]]:
     """问答那条路的「建议动作」—— 来自 `build_fill_offers`, ⛔ 不手写。
 
     🔴 owner 2026-08-14: 改之前是三条泛泛之词, 而日结那边早就是
        「先补这 3 道(菜名), 40.2% → 47.7%」。**同一件事一边具体一边空泛。**
-    ⚠️ 具体的排在前面, 泛泛的补在后面 —— 店长先看到能立刻做的那条。
+
+    🔴🔴 2026-08-14 二次订正: 这个函数原来返回 `List[str]`(把 offer 拍平成文案),
+       而 `follow_up_actions.build_actions` 要的是**结构化 offer**(它读
+       `offer["kind"]` / `offer["text"]`)。于是它每次都
+       `AttributeError: 'str' object has no attribute 'get'`,
+       被 `_build_follow_up_actions` 的 `except` 吞掉, 日志写
+       「追问按钮生成失败, 本次不带按钮」——
+       **T1/T2 按钮从上线起一次都没出现过**, 而单测喂的是 dict 所以全绿。
+       ⇒ 判据: **至少一条断言要跑在产品真实入口上**(见
+         `test_the_buttons_are_built_from_the_real_offer_objects`)。
+
+    ⇒ 现在返回**结构化 offer**, 文案由调用方从同一份产出渲染 ——
+      一份来源, 两个消费者(正文 / 按钮)。⛔ 不为按钮再拼一份。
     """
     from smartbi.gold.restaurant.fill_offers import build_fill_offers
 
@@ -1947,8 +1980,14 @@ def _build_qa_fill_offers(cell) -> List[str]:
     except Exception:  # noqa: BLE001 —— 开价拿不到不该让整个答案失败
         logger.warning("[gross_margin] 开价取不到, 退回通用建议", exc_info=True)
         offers = []
-    lines = [str(o.get("text") or "") for o in offers if o.get("text")]
-    return lines + list(_GENERIC_ACTIONS)
+    return [o for o in offers if isinstance(o, dict) and o.get("text")]
+
+
+def _offer_texts(offers: Sequence[Dict[str, Any]]) -> List[str]:
+    """正文里那几行「建议动作」。⚠️ 具体的排在前面, 泛泛的补在后面 ——
+    店长先看到能立刻做的那条。
+    """
+    return [str(o.get("text") or "") for o in offers] + list(_GENERIC_ACTIONS)
 
 
 def _build_margin_entries(
@@ -3411,18 +3450,112 @@ async def _resolve_food_cost_ratio(
     )
 
 
+async def _resolve_missing_cost_cards(
+    smartbi_pool, factory_id: str, *,
+    days: int,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]],
+    window_label: Optional[str],
+) -> OpsAnswer:
+    """**T2 按钮点下去的那个答案**: 当期卖过、但没有成本卡的菜, 按营收从高到低。
+
+    🔴 owner 2026-08-14 裁定 2: 「补」是他去别处做的事, 我们只负责**说清补什么**。
+       ⇒ 按钮发的是一个我们答得出来的问句, 而不是一个没有 handler 的动作
+         (第一版的 `payload.kind = "fill_dishes"` 全仓没有任何消费者)。
+
+    ⛔ **清单来自 `generic_executor._cost_gaps`, 与毛利答案里那句开价同一处定义。**
+       另写一条 SQL 就是「同一件事两个定义」—— 那时「先补这 3 道」列的菜
+       和这里列的菜可以不一样, 而两处都看着挺对。
+
+    ⚠️ 这里**不新建 intent code**: 挂在既有的 `RESTAURANT_OPS_RECIPE_COST` 上
+       (它本来就是「菜 × 成本」那一格), 路由靠关键词表里新增的一条模式。
+    """
+    from smartbi.gold.restaurant.generic_executor import (
+        _cost_gaps, _dish_cost_facts,
+    )
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_bridge_pairs
+
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)",
+                           factory_id)
+        bridge = await cost_bridge_pairs(conn, factory_id)
+        facts = await _dish_cost_facts(
+            conn, factory_id, (window_start, window_end), bridge)
+    gaps = _cost_gaps(facts)
+    total_rev = sum(float(f["revenue"] or 0) for f in facts)
+
+    if not gaps:
+        answer = (
+            f"{window_text}卖过的菜**都有成本卡**，没有需要补的。\n\n"
+            f"（有卡不等于卡是对的 —— 份量录错、只录主料这两种，"
+            f"看毛利那条答案里会单独指出来。）"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_RECIPE_COST", title="缺成本卡的菜",
+            answer_text=answer, charts=[], kpis=[],
+            meta={"missing_cost_card_count": 0,
+                  "window_start": _date_text(window_start) if window_start else None,
+                  "window_end": _date_text(window_end) if window_end else None},
+        )
+
+    lines = []
+    for i, gap in enumerate(gaps[:20], 1):
+        rev = float(gap["revenue"] or 0)
+        share = (rev / total_rev * 100) if total_rev > 0 else 0.0
+        lines.append(f"{i}. {gap['name']} —— {window_text}卖了 ¥{rev:,.2f}"
+                     f"（占营收 {share:.1f}%）")
+    more = (f"\n\n还有 {len(gaps) - 20} 道没列出来。"
+            if len(gaps) > 20 else "")
+    answer = (
+        f"{window_text}有 **{len(gaps)} 道菜卖过但没有成本卡**，"
+        f"按营收从高到低：\n\n" + "\n".join(lines) + more +
+        f"\n\n这些菜的营收算不进毛利 —— 补一道，毛利就多覆盖它那部分营收。"
+        f"\n⚠️ 排在前面的先补最划算，"
+        f"因为覆盖率提升等于它自己的营收占比。"
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_RECIPE_COST", title="缺成本卡的菜",
+        answer_text=answer, charts=[], kpis=[],
+        meta={
+            "missing_cost_card_count": len(gaps),
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
+            # 机器可读版 —— 正文那张清单的同一批数据, ⛔ 不让下游 parse 正文。
+            "rows": [{"dish": g["name"], "revenue": float(g["revenue"] or 0)}
+                     for g in gaps[:_MISSING_CARD_ROWS_LIMIT]],
+        },
+    )
+
+
+#: 结构化行的上限。正文最多列 20 条, 机器可读侧给到 50 —— 两者不同是刻意的:
+#: 正文要人读得完, 机器可读侧要够下游用。⛔ 两边都不许静默截断(正文写「还有 N 道」)。
+_MISSING_CARD_ROWS_LIMIT = 50
+
+
 async def resolve_recipe_cost(
     smartbi_pool, factory_id: str, top_n: int = 10,
     days: int = 30,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     window_label: Optional[str] = None,
     food_cost_ratio: bool = False,
+    query: str = "",
+    **_ignored,
 ) -> OpsAnswer:
     """Top N dishes by food cost (standard_qty × unit_price rollup).
 
     Joins cretas_db.product_types for dish names at query time (no dim_product
     ETL needed yet — see 2026_04_24_recipe_product_source_pk.sql rationale).
+
+    ⚠️ `query` 只用来分「问的是成本排行还是缺卡清单」, 判据在
+       `_asks_missing_cost_card`(与路由表同源)。⛔ 不在这里另写一套词。
     """
+    if _asks_missing_cost_card(query):
+        return await _resolve_missing_cost_cards(
+            smartbi_pool, factory_id,
+            days=days, date_range=date_range, window_label=window_label,
+        )
     if food_cost_ratio:
         return await _resolve_food_cost_ratio(
             smartbi_pool,
@@ -4744,8 +4877,13 @@ async def resolve_gross_margin(
         PROV_ESTIMATED, _headline_basis, coverage_ratio,
         tuple(), tuple(_gaps), float(total_rev_items or 0),
     )
+    # ⚠️ `_offers` 是**结构化**的(按钮读它的 `kind`), 正文那几行由
+    #    `_offer_texts` 从同一份产出渲染 —— 一份来源两个消费者。
+    #    ⛔ 不要把这里改回「拍平成字符串」: 那样按钮侧会静默拿到 str,
+    #       `offer.get(...)` 抛异常被 except 吞掉, 表现是**按钮永远不出现**。
     _offers = _build_qa_fill_offers(_headline_cell)
-    _fill_offer_lines = "".join(f"{i}. {o}\n" for i, o in enumerate(_offers, 1))
+    _fill_offer_lines = "".join(
+        f"{i}. {o}\n" for i, o in enumerate(_offer_texts(_offers), 1))
 
     answer = (
         f"**菜品毛利分析（{window_label}）**\n"
@@ -4959,6 +5097,21 @@ async def resolve_gross_margin(
                             "rawValue": scoped_entry.get("margin_rate"),
                         },
                     ]
+    # 🔴 「还能怎么拆 / 拆完了」写进**正文**, 不只放按钮(owner 2026-08-14 裁定 3)。
+    #    ① 按钮的 label 得先在正文里出现过 —— 按钮是入口不是新内容
+    #    ② **日结推送那种形态没有按钮, 只有正文** —— 只放按钮那条路上的人
+    #       永远不知道还能拆, 也不知道已经拆完了
+    _used_dims = ("all", "product")
+    _drill_note = _drilldown_note("gross_profit", _used_dims,
+                                  "RESTAURANT_OPS_GROSS_MARGIN")
+    if _drill_note:
+        answer = f"{answer}\n\n{_drill_note}"
+    _actions = _build_follow_up_actions(
+        offers=_offers, answer_text=answer,
+        used_dimensions=_used_dims,
+        meta_for_suppression={"rbac_masked": not can_view_prices},
+        resolver_code="RESTAURANT_OPS_GROSS_MARGIN",
+    )
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
         title=response_title,
@@ -5007,22 +5160,30 @@ async def resolve_gross_margin(
                 }
                 if scoped_entry is not None else None
             ),
+            # 🔴 T1/T2 按钮走 `meta` —— `_execution_receipt` 里 `dict(meta)`
+            #    整份透传到 `result_meta`, 再由
+            #    `restaurant_intent_service._suggested_followups` 合进
+            #    `suggested_followups`。⛔ 不新开管道(那正是第一版三层都断的成因)。
+            # ⚠️ `used_dimensions` 是**这次回答实际渲染过的**维度, 登记表不知道 ——
+            #    所以它写在这里, 紧挨着渲染它的代码。候选集合仍然是反查的。
+            #    本答案: 全店合计(all) + 逐菜清单(product)。
+            "follow_up_actions": list(_actions),
         },
-        # 🔴 T1/T2 按钮。⚠️ 与正文**共用同一批 `_offers`** —— ⛔ 不为按钮
-        #    再拼一份文案(那就是同一句话两个来源, 迟早漂)。
-        # ⚠️ `used_dimensions` 是**这次回答实际渲染过的**维度, 登记表不知道 ——
-        #    所以它写在这里, 紧挨着渲染它的代码。候选集合仍然是反查的。
-        #    本答案: 全店合计(all) + 逐菜清单(product)。
-        actions=_build_follow_up_actions(
-            offers=_offers, answer_text=answer,
-            used_dimensions=("all", "product"),
-            meta_for_suppression={"rbac_masked": not can_view_prices},
-        ),
     )
 
 
+def _drilldown_note(metric_key, used_dimensions, resolver_code=None) -> str:
+    """正文里那句「还能怎么拆 / 已经拆完了」。⛔ 逻辑在 `follow_up_actions`。"""
+    from smartbi.gold.restaurant.follow_up_actions import drilldown_note
+    try:
+        return drilldown_note(metric_key, used_dimensions, resolver_code)
+    except Exception:  # noqa: BLE001 —— 多一句话不该让整个答案失败
+        logger.warning("[gross_margin] 下钻提示生成失败", exc_info=True)
+        return ""
+
+
 def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
-                             meta_for_suppression=None):
+                             meta_for_suppression=None, resolver_code=None):
     """毛利问答的追问按钮。⛔ 逻辑在 `follow_up_actions`, 这里只接线。"""
     from smartbi.gold.restaurant.follow_up_actions import build_actions
 
@@ -5033,10 +5194,12 @@ def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
             offers=offers,
             answer_text=answer_text,
             meta=meta_for_suppression,
+            resolver_code=resolver_code,
         )
     except Exception:  # noqa: BLE001 —— 按钮拿不到不该让整个答案失败
         logger.warning("[gross_margin] 追问按钮生成失败, 本次不带按钮",
                        exc_info=True)
+        return ()
         return ()
 
 
