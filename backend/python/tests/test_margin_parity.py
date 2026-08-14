@@ -1121,3 +1121,162 @@ def test_progress_line_stays_out_of_the_qa_body():
     dc_src = inspect.getsource(dc.build_daily_close)
     assert "data_progress" in dc_src, "日结那一屏反倒没有 —— 它才是它该待的地方"
     assert '"progress_line"' in dc_src, "结构化输出里没带出去, 前端做进度条拿不到"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T1/T2 追问按钮（owner 2026-08-14，只做问答那条路）
+# ═══════════════════════════════════════════════════════════════════════════
+def _sample_body_and_offers():
+    body = ("今天全部门店毛利合计 **¥124,071.85**（估算：只算了 40.2% 的营收）。"
+            "\n\n> 先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%")
+    offers = [{"kind": "fill_dishes", "dishes": (),
+               "text": "先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%"}]
+    return body, offers
+
+
+def test_every_button_points_at_something_the_body_already_says():
+    """🔴 边界 1: **按钮不许说正文没说的话** —— 它是入口, 不是新内容。"""
+    from smartbi.gold.restaurant.follow_up_actions import (
+        assert_actions_anchored, build_actions)
+
+    body, offers = _sample_body_and_offers()
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=("all", "product"),
+                            offers=offers, answer_text=body)
+    assert actions, "一个按钮都没有 —— 下面的断言会恒真"
+    assert_actions_anchored(actions, body)
+    # 变异: 塞一个正文里没有的 anchor, 那道核对必须红
+    with pytest.raises(AssertionError):
+        assert_actions_anchored(
+            [{"label": "编的", "anchor": "正文里根本没有这句话"}], body)
+
+
+def test_no_buttons_on_failure_with_a_positive_control():
+    """🔴 边界 2: 故障时不出按钮。
+
+    ⛔ 这条**必须**配阳性对照 —— 「故障时没按钮」在「永远没按钮」时同样成立。
+       本仓踩过这个恒真式(阴性断言没有对照)。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import build_actions
+
+    body, offers = _sample_body_and_offers()
+    kw = dict(metric_key="gross_profit", used_dimensions=("all", "product"),
+              offers=offers, answer_text=body)
+
+    # 阳性对照: 正常时**出得来**
+    assert build_actions(**kw), "正常时就没有按钮 —— 下面那条阴性断言不作数"
+    # 每一种故障信号都要能抑制
+    for bad in ({"no_data": True}, {"rbac_masked": True},
+                {"unavailable": "x"}, {"clarification": True}):
+        assert build_actions(meta=bad, **kw) == (), f"{bad} 时还在出按钮"
+
+
+def test_backend_sorts_by_priority_before_sending():
+    """🔴 边界 3: 上限 4 是前端截的 —— **后端要排好序再送**。
+
+    ⛔ 送一堆让前端 `.slice(0,4)`, 等于优先级由另一个仓的一行代码决定。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import (
+        MAX_ACTIONS, TYPE_PRIORITY, build_actions)
+
+    body, offers = _sample_body_and_offers()
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=("all",), offers=offers,
+                            answer_text=body)
+    assert len(actions) <= MAX_ACTIONS, "后端没截断"
+    ranks = [TYPE_PRIORITY[a["type"]] for a in actions]
+    assert ranks == sorted(ranks), f"没按优先级排: {[a['type'] for a in actions]}"
+    assert actions[0]["type"] == "T2", "T2 补数据不在最前面 —— 卡上是 T2 > T3 > T1"
+
+
+def test_mutating_the_priority_turns_the_order_assertion_red(monkeypatch):
+    """变异对照: 打乱优先级, 上面那条必须红。⚠️ 先证明行为真的变了。"""
+    from smartbi.gold.restaurant import follow_up_actions as fa
+
+    body, offers = _sample_body_and_offers()
+    kw = dict(metric_key="gross_profit", used_dimensions=("all",),
+              offers=offers, answer_text=body)
+    before = [a["type"] for a in fa.build_actions(**kw)]
+    assert before[0] == "T2"
+
+    monkeypatch.setattr(fa, "TYPE_PRIORITY", {"T2": 9, "T3": 1, "T1": 0, "T4": 3})
+    after = [a["type"] for a in fa.build_actions(**kw)]
+    assert after[0] == "T1", "🔴 变异没生效 —— 排序读的不是那张表"
+    assert before != after, "变异前后顺序没变, 这条对照是空转"
+
+
+def test_drillable_dimensions_are_reverse_looked_up_not_hand_written():
+    """判据三: T1 的维度是**反查**出来的。
+
+    ⚠️ 「这次回答已经用了哪些维度」是那段回答代码自己的性质, 登记表不知道 ——
+       由调用方声明; **候选集合**仍然反查, 那一半不许手写。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+    from smartbi.gold.restaurant.follow_up_actions import _drillable_dimensions
+
+    got = set(_drillable_dimensions("gross_profit", ("all", "product")))
+    assert got, "一个可下钻维度都没有 —— 断言会恒真"
+    assert "all" not in got, "`all` 是不分组, 不是可下钻的对象"
+    assert "product" not in got, "已经用过的维度还在推荐"
+    # 反查链: 候选来自登记表, 且派生量取两个输入的**交集**
+    left = set(reg.METRICS["revenue"].dimensions)
+    right = set(reg.METRICS["food_cost"].dimensions)
+    assert got <= (left & right), (
+        "推荐了一个两边不都支持的维度 —— 点下去会拒答")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 100% 覆盖那条分支 —— MOCK_REST 造缺口之后，这里是它**唯一**的实测环境
+# ═══════════════════════════════════════════════════════════════════════════
+def test_full_coverage_drops_the_coverage_clause():
+    """🔴 满覆盖时「只算了 X% 的营收」**必须消失**。
+
+    ⚠️ 这条分支原来靠 MOCK_REST(100% 覆盖)在生产上被走到。2026-08-14 给
+       MOCK_REST 造了缺口(覆盖率 100% → 65.3%)之后, **生产上再没人走它** ——
+       ⛔ 不许留下「改完就没人验 100% 那条路」的状态, 所以在这里接住。
+
+    📌 它当初正是这么发现的: 满覆盖时打出「只算了 100.0% 的营收」, 被一条
+       几轮之前为了防「无条件的废话」写的阴性对照抓到。**一道老闸守住了一个
+       当时还不存在的分支** —— 这条用例就是那件事的固化。
+    """
+    from smartbi.gold.restaurant.generic_answer import render_headline
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, CellResult)
+
+    def _cell(cov):
+        return CellResult(
+            "gross_profit", "毛利", "all", "summary", "money",
+            [{"gross_profit": 475623.83}], (), "", "ESTIMATED",
+            _COST_CARD_BASIS, cov)
+
+    full = render_headline(_cell(1.0), "今天")
+    assert "只算了" not in full, f"满覆盖还在说「只算了 100.0%」: {full}"
+    # ⛔ 其余几条事实**不许**跟着消失 —— 满覆盖不代表它就是账上的数
+    assert "理论用量" in full and "未扣人工" in full and "盘一次库" in full
+
+    # 阳性对照: 不满覆盖时那句**必须**在(否则上面那条阴性断言恒真)
+    partial = render_headline(_cell(0.653), "今天")
+    assert "只算了 65.3% 的营收" in partial, partial
+
+
+def test_mutating_the_full_coverage_threshold_turns_it_red(monkeypatch):
+    """变异对照: 把满覆盖阈值改掉, 上面那条必须红。⚠️ 先证明行为变了。"""
+    from smartbi.gold.restaurant import provenance as prov
+    from smartbi.gold.restaurant.generic_answer import render_headline
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, CellResult)
+
+    cell = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1.0}], (), "", "ESTIMATED", _COST_CARD_BASIS, 1.0)
+    assert "只算了" not in render_headline(cell, "今天")        # 改之前是对的
+
+    # 变异: 阈值抬到 1.5 → 100% 不再算「满」→ 那句话会冒出来
+    # ⛔ 只打 `provenance` 那一处 —— `_inline_qualifier` 是**函数内 import**,
+    #    调用时才从模块取, 所以打得到。
+    #    ⚠️ 第一版还顺手 `setattr(ga, "_FULL_COVERAGE", ..., raising=False)`,
+    #    那会**凭空造一个没人读的属性** —— 变异看起来生效了而其实是另一处起的作用。
+    monkeypatch.setattr(prov, "_FULL_COVERAGE", 1.5)
+    after = render_headline(cell, "今天")
+    assert "只算了 100.0% 的营收" in after, (
+        "🔴 变异没生效 —— 那个阈值不是从 provenance 取的")
