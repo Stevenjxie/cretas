@@ -546,7 +546,16 @@ _DISH_COST_FACTS_SQL = (
     "SELECT dp.normalized_name                    AS name,\n"
     "       SUM(i.qty)                            AS qty,\n"
     "       SUM(i.amount)                         AS revenue,\n"
-    "       max(c.food_cost)                      AS unit_cost\n"
+    # 🔴 方向 A(owner 2026-08-15): 两个消费者**读同一列**。
+    #    改之前这里是裸的 `max(c.food_cost)`, 而 covered 侧已经收敛到
+    #    `has_price_data` —— 于是「这道菜有没有卡」在同一个答案里有两个答案
+    #    (实测: 青花椒差 4.3pp, MOCK_REST 差 25pp)。
+    #    ⛔ 不选 B(两边各读各的字段, 靠 Python 组合保证一致) —— 那正是
+    #       刚刚失败的那个形状。A 让它们读同一列, **结构上不可能分家**。
+    #    ⚠️ 用 `FILTER` 而不是 `CASE ... ELSE 0`: 没有卡时 `unit_cost` 必须是
+    #       **NULL**, 补 0 会让「没有卡」和「成本是 0」变成同一个值。
+    "       max(c.food_cost) FILTER (WHERE " + COST_CARD_PRESENT_SQL + ")"
+    "                        AS unit_cost\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
     # ⚠️ 2026-08-14: **不再**在 SQL 里滤掉「没有卡」的菜 —— 同一份取数要同时
