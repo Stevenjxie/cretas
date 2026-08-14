@@ -586,6 +586,87 @@ COLUMN_LABELS: Dict[str, str] = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 数据来源分类 —— 「你的数据补到 N 类里的 M 类了」的那个 N 和 M
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 🔑 它与覆盖率**不是一回事**, 两个都要有, ⛔ 别互相替代:
+#     · 覆盖率 61.3%          = 技术读数(有多少营收算得准)
+#     · 「5 类补了 3 类」      = 用户视角的**推进感**(我做到哪一步了)
+#
+#: 列 → 这一列的数据**从哪来**。⚠️ 类别由列**推**出来: 有几个不同的值就是几类,
+#: ⛔ 不写「一共有哪五类」的清单, 也⛔不按表名硬猜 —— 同一张
+#:    `fact_pos_transaction` 上, 净额是 POS 自带的, 而税额/折扣要另外接。
+#:
+#: ⚠️⚠️ **这张表是靠人标的** —— 「这一列的数据从哪来」是业务事实, 推不出来。
+#:    与 `IRREDUCIBLE_ESTIMATE_COLUMNS` 同一处境, 一并写在设计卡上。
+#:    闸能守的两件: ①每个被 requires 引用的列都要有来源 ②不许有过期条目。
+#:    新增一列时**必须**同时标来源, 否则 `assert_registry_self_consistent` 当场红。
+COLUMN_SOURCES: Dict[str, str] = {
+    # POS 收银机自带的, 只要接了 POS 就有
+    "fact_pos_transaction.net_amount": "POS 流水",
+    "fact_pos_transaction.gross_amount": "POS 流水",
+    "fact_pos_transaction.actual_receive": "POS 流水",
+    "fact_pos_transaction.id": "POS 流水",
+    "fact_pos_transaction.customer_count": "POS 流水",
+    "fact_pos_item.amount": "POS 流水",
+    "fact_pos_item.qty": "POS 流水",
+    "fact_pos_item.return_qty": "POS 流水",
+    # 折扣: 同在交易表上, 但要 POS 把优惠明细导出来才有 —— 实测两个真租户全空
+    "fact_pos_transaction.discount_amount": "折扣明细",
+    "fact_pos_transaction.has_discount": "折扣明细",
+    # 税额: 要接开票/税控
+    "fact_pos_transaction.tax_amount": "税额",
+    # 平台抽佣: 要接外卖平台账单
+    "fact_pos_transaction.platform_fee_amount": "外卖平台账单",
+    # 成本卡/配方: 商户自己录
+    "agg_restaurant_product_cost.food_cost": "成本卡",
+    # 盘点/报损: 要有盘库或报损流程
+    "fact_restaurant_wastage.quantity": "损耗盘点",
+    "fact_restaurant_wastage.estimated_cost": "损耗盘点",
+}
+
+
+def data_sources() -> Tuple[str, ...]:
+    """一共有几类数据源。**推出来的** —— 有几个不同的值就是几类。
+
+    ⛔ 不要为了凑成「五大数据」去增删条目。这个数是**算**出来的,
+       它是几就是几; 凑数会让下一个人看到一个与登记表对不上的常数。
+    """
+    return tuple(dict.fromkeys(COLUMN_SOURCES[c] for c in sorted(COLUMN_SOURCES)))
+
+
+def columns_of_source(source: str) -> Tuple[str, ...]:
+    """这一类数据源涵盖哪些列。"""
+    return tuple(sorted(c for c, s in COLUMN_SOURCES.items() if s == source))
+
+
+def source_of_column(column: str) -> str:
+    return COLUMN_SOURCES.get(column, "")
+
+
+#: 表 → 它在 `GRAINS` 的 join 里用的别名。
+#: ⛔ 唯一定义 —— 拼「这一列填了多少」这类查询的地方都读它。
+#:    之前普查脚本自己写了一份, 那就是同一个映射两处。别名写错时 SQL 会当场
+#:    报 `missing FROM-clause entry`, 所以它不会静默错 —— 但两份会**各自**错。
+TABLE_ALIASES: Dict[str, str] = {
+    "fact_pos_transaction": "t",
+    "fact_pos_item": "i",
+    "agg_restaurant_product_cost": "c",
+    "fact_restaurant_wastage": "w",
+    "dim_product": "dp",
+}
+
+
+def column_ref(column: str) -> str:
+    """`表.列` → SQL 里带别名的引用。表没登记别名时**当场抛**, ⛔ 不猜。"""
+    table, col = column.split(".", 1)
+    alias = TABLE_ALIASES.get(table)
+    if alias is None:
+        raise KeyError(f"表 {table} 没有登记别名 —— 见 TABLE_ALIASES")
+    return f"{alias}.{col}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ESTIMATED 有两种 —— owner 2026-08-14 裁定
 # ═══════════════════════════════════════════════════════════════════════════
 #
@@ -684,6 +765,20 @@ def assert_registry_self_consistent() -> None:
     #
     # ⛔ 手写名单的坏法是确定的: 新登记一个同类指标不会自动进名单,
     #    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
+    # ── 每个被依赖的列都要有数据来源, 且不许有过期条目 ────────────────────
+    # ⚠️ 这张表靠人标(见 `COLUMN_SOURCES` 顶部)。闸守不住「标得对不对」,
+    #    只能守住「标了没有」和「标了还算不算数」。
+    _required_cols = {c for m in METRICS.values() for c in m.requires}
+    for column in sorted(_required_cols):
+        assert column in COLUMN_SOURCES, (
+            f"列 {column} 被 requires 引用却没标数据来源 —— "
+            f"「补到 N 类里的 M 类」会把它算漏, 而漏了不报错")
+        assert COLUMN_SOURCES[column].strip(), f"列 {column} 的数据来源是空的"
+    for column in sorted(COLUMN_SOURCES):
+        assert column in _required_cols, (
+            f"列 {column} 标了数据来源却没有任何指标依赖它 —— 过期登记, "
+            f"它会让「一共几类」多算一类")
+
     # ── 不可消除估算的列必须真的被人依赖 ──────────────────────────────────
     # ⛔ 过期的标注比没有更糟: 它会让某个指标被判成 (b) 而拿不到「补了就实」
     #    那句开价, 而没有任何东西会报错。

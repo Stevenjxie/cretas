@@ -721,3 +721,69 @@ def test_the_irreducible_annotation_is_the_only_hand_written_bit():
         assert column in required, f"{column} 没有任何指标依赖它 —— 过期标注"
         assert reason.strip(), f"{column} 没写为什么补齐也还是估的"
     assert_registry_self_consistent()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 进度感 —— 「你的数据补到 N 类里的 M 类了」(路线图第 4 项)
+# ═══════════════════════════════════════════════════════════════════════════
+def test_data_sources_are_derived_not_a_hand_written_list():
+    """类别由**列**推出来: 有几个不同的值就是几类。
+
+    ⛔ 本仓不许出现「一共有哪五类」的常数 —— 凑数会让它与登记表对不上。
+    """
+    from smartbi.gold.restaurant.metric_registry import (
+        COLUMN_SOURCES, columns_of_source, data_sources)
+
+    got = data_sources()
+    assert got, "一类都推不出来 —— 下面的断言会恒真"
+    assert len(got) == len(set(COLUMN_SOURCES.values())), "类别数与标注对不上"
+    # 每一类都必须真的挂着列(反向)
+    for source in got:
+        assert columns_of_source(source), f"{source} 是个空类"
+    # 阳性对照: 已知的两类必须在里面, 且不在同一类
+    #   ⚠️ 同一张 fact_pos_transaction 上, 净额是 POS 自带的、税额要另接 ——
+    #      按表名硬猜会把它们并成一类, 那就没有进度可言了。
+    assert COLUMN_SOURCES["fact_pos_transaction.net_amount"] != \
+        COLUMN_SOURCES["fact_pos_transaction.tax_amount"], (
+        "按表名归类了 —— 那是另一种手写")
+
+
+def test_a_new_requires_column_lands_in_a_class_automatically(monkeypatch):
+    """🔴 变异对照: 给某个指标的 requires 加一列 → 类别与计数必须跟着变。
+
+    ⚠️ 先证明**行为变了**再看断言。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    before_n = len(reg.data_sources())
+    before_cols = reg.columns_of_source("损耗盘点")
+
+    # 变异: 新登记一列, 归到已有的一类
+    mutated = dict(reg.COLUMN_SOURCES)
+    mutated["fact_restaurant_wastage.reason"] = "损耗盘点"
+    monkeypatch.setattr(reg, "COLUMN_SOURCES", mutated)
+
+    after_cols = reg.columns_of_source("损耗盘点")
+    assert after_cols != before_cols, "🔴 变异没生效 —— 归类读的不是登记表"
+    assert "fact_restaurant_wastage.reason" in after_cols
+    assert len(reg.data_sources()) == before_n, "归到已有类不该改变类别数"
+
+    # 再变异: 新登记一列且是**新的一类** → 类别数必须 +1
+    mutated2 = dict(mutated)
+    mutated2["fact_pos_transaction.member_id"] = "会员系统"
+    monkeypatch.setattr(reg, "COLUMN_SOURCES", mutated2)
+    assert len(reg.data_sources()) == before_n + 1, (
+        "新来源没有变成新的一类 —— 那这个进度条永远停在同样的分母上")
+
+
+def test_progress_sentence_never_contradicts_itself():
+    """⚠️ `next` 为空而 done < total 是内部不一致, 那时不许说「都齐了」。"""
+    from smartbi.gold.restaurant.data_progress import render
+
+    p = {"total": 6, "done": 3, "next": None}
+    assert "都齐了" not in render(p), "3/6 却说都齐了 —— 自相矛盾"
+    assert render({"total": 6, "done": 6, "next": None}).endswith("都齐了。")
+    # 阳性对照: 有 next 时必须给出下一步
+    got = render({"total": 6, "done": 3, "cost_source": "成本卡",
+                  "next": {"source": "税额", "unlocks": 1}})
+    assert "税额" in got and "下一个" in got
