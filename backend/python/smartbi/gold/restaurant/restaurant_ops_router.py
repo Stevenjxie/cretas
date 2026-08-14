@@ -886,6 +886,16 @@ class OpsAnswer:
     charts: List[Dict[str, Any]]
     kpis: List[Dict[str, Any]]
     meta: Dict[str, Any]
+    #: 追问按钮(T2 补数据 / T1 下钻)。**结构化产出**, 与正文共用同一批 offers。
+    #:
+    #: 🔴 2026-08-14 调查实测: 前端 `normalizeFollowUpActions` 早就在了, 而
+    #:    **后端一个 action 都不产出** —— T2 的产出 100% 拼进 `answer_text`。
+    #:    那是形态 B(机制在, 没接上), 缺的正是这个字段。
+    #: ⚠️ 正文里那句**不撤** —— 消息形态(日结推送)没有按钮, 只有正文。
+    #:    两边共用同一批 offers, ⛔ 不为按钮再拼一份文案。
+    #: ⛔ 排序与截断在**后端**(见 `follow_up_actions.build_actions`), 前端只
+    #:    `.slice(0, 4)`; 送一堆让它切等于优先级由另一个仓决定。
+    actions: Tuple[Dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -4998,7 +5008,36 @@ async def resolve_gross_margin(
                 if scoped_entry is not None else None
             ),
         },
+        # 🔴 T1/T2 按钮。⚠️ 与正文**共用同一批 `_offers`** —— ⛔ 不为按钮
+        #    再拼一份文案(那就是同一句话两个来源, 迟早漂)。
+        # ⚠️ `used_dimensions` 是**这次回答实际渲染过的**维度, 登记表不知道 ——
+        #    所以它写在这里, 紧挨着渲染它的代码。候选集合仍然是反查的。
+        #    本答案: 全店合计(all) + 逐菜清单(product)。
+        actions=_build_follow_up_actions(
+            offers=_offers, answer_text=answer,
+            used_dimensions=("all", "product"),
+            meta_for_suppression={"rbac_masked": not can_view_prices},
+        ),
     )
+
+
+def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
+                             meta_for_suppression=None):
+    """毛利问答的追问按钮。⛔ 逻辑在 `follow_up_actions`, 这里只接线。"""
+    from smartbi.gold.restaurant.follow_up_actions import build_actions
+
+    try:
+        return build_actions(
+            metric_key="gross_profit",
+            used_dimensions=used_dimensions,
+            offers=offers,
+            answer_text=answer_text,
+            meta=meta_for_suppression,
+        )
+    except Exception:  # noqa: BLE001 —— 按钮拿不到不该让整个答案失败
+        logger.warning("[gross_margin] 追问按钮生成失败, 本次不带按钮",
+                       exc_info=True)
+        return ()
 
 
 async def resolve_store_margin(

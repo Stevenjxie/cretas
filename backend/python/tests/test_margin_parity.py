@@ -1121,3 +1121,105 @@ def test_progress_line_stays_out_of_the_qa_body():
     dc_src = inspect.getsource(dc.build_daily_close)
     assert "data_progress" in dc_src, "日结那一屏反倒没有 —— 它才是它该待的地方"
     assert '"progress_line"' in dc_src, "结构化输出里没带出去, 前端做进度条拿不到"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T1/T2 追问按钮（owner 2026-08-14，只做问答那条路）
+# ═══════════════════════════════════════════════════════════════════════════
+def _sample_body_and_offers():
+    body = ("今天全部门店毛利合计 **¥124,071.85**（估算：只算了 40.2% 的营收）。"
+            "\n\n> 先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%")
+    offers = [{"kind": "fill_dishes", "dishes": (),
+               "text": "先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%"}]
+    return body, offers
+
+
+def test_every_button_points_at_something_the_body_already_says():
+    """🔴 边界 1: **按钮不许说正文没说的话** —— 它是入口, 不是新内容。"""
+    from smartbi.gold.restaurant.follow_up_actions import (
+        assert_actions_anchored, build_actions)
+
+    body, offers = _sample_body_and_offers()
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=("all", "product"),
+                            offers=offers, answer_text=body)
+    assert actions, "一个按钮都没有 —— 下面的断言会恒真"
+    assert_actions_anchored(actions, body)
+    # 变异: 塞一个正文里没有的 anchor, 那道核对必须红
+    with pytest.raises(AssertionError):
+        assert_actions_anchored(
+            [{"label": "编的", "anchor": "正文里根本没有这句话"}], body)
+
+
+def test_no_buttons_on_failure_with_a_positive_control():
+    """🔴 边界 2: 故障时不出按钮。
+
+    ⛔ 这条**必须**配阳性对照 —— 「故障时没按钮」在「永远没按钮」时同样成立。
+       本仓踩过这个恒真式(阴性断言没有对照)。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import build_actions
+
+    body, offers = _sample_body_and_offers()
+    kw = dict(metric_key="gross_profit", used_dimensions=("all", "product"),
+              offers=offers, answer_text=body)
+
+    # 阳性对照: 正常时**出得来**
+    assert build_actions(**kw), "正常时就没有按钮 —— 下面那条阴性断言不作数"
+    # 每一种故障信号都要能抑制
+    for bad in ({"no_data": True}, {"rbac_masked": True},
+                {"unavailable": "x"}, {"clarification": True}):
+        assert build_actions(meta=bad, **kw) == (), f"{bad} 时还在出按钮"
+
+
+def test_backend_sorts_by_priority_before_sending():
+    """🔴 边界 3: 上限 4 是前端截的 —— **后端要排好序再送**。
+
+    ⛔ 送一堆让前端 `.slice(0,4)`, 等于优先级由另一个仓的一行代码决定。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import (
+        MAX_ACTIONS, TYPE_PRIORITY, build_actions)
+
+    body, offers = _sample_body_and_offers()
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=("all",), offers=offers,
+                            answer_text=body)
+    assert len(actions) <= MAX_ACTIONS, "后端没截断"
+    ranks = [TYPE_PRIORITY[a["type"]] for a in actions]
+    assert ranks == sorted(ranks), f"没按优先级排: {[a['type'] for a in actions]}"
+    assert actions[0]["type"] == "T2", "T2 补数据不在最前面 —— 卡上是 T2 > T3 > T1"
+
+
+def test_mutating_the_priority_turns_the_order_assertion_red(monkeypatch):
+    """变异对照: 打乱优先级, 上面那条必须红。⚠️ 先证明行为真的变了。"""
+    from smartbi.gold.restaurant import follow_up_actions as fa
+
+    body, offers = _sample_body_and_offers()
+    kw = dict(metric_key="gross_profit", used_dimensions=("all",),
+              offers=offers, answer_text=body)
+    before = [a["type"] for a in fa.build_actions(**kw)]
+    assert before[0] == "T2"
+
+    monkeypatch.setattr(fa, "TYPE_PRIORITY", {"T2": 9, "T3": 1, "T1": 0, "T4": 3})
+    after = [a["type"] for a in fa.build_actions(**kw)]
+    assert after[0] == "T1", "🔴 变异没生效 —— 排序读的不是那张表"
+    assert before != after, "变异前后顺序没变, 这条对照是空转"
+
+
+def test_drillable_dimensions_are_reverse_looked_up_not_hand_written():
+    """判据三: T1 的维度是**反查**出来的。
+
+    ⚠️ 「这次回答已经用了哪些维度」是那段回答代码自己的性质, 登记表不知道 ——
+       由调用方声明; **候选集合**仍然反查, 那一半不许手写。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+    from smartbi.gold.restaurant.follow_up_actions import _drillable_dimensions
+
+    got = set(_drillable_dimensions("gross_profit", ("all", "product")))
+    assert got, "一个可下钻维度都没有 —— 断言会恒真"
+    assert "all" not in got, "`all` 是不分组, 不是可下钻的对象"
+    assert "product" not in got, "已经用过的维度还在推荐"
+    # 反查链: 候选来自登记表, 且派生量取两个输入的**交集**
+    left = set(reg.METRICS["revenue"].dimensions)
+    right = set(reg.METRICS["food_cost"].dimensions)
+    assert got <= (left & right), (
+        "推荐了一个两边不都支持的维度 —— 点下去会拒答")
