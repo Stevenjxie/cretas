@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const BASE = process.env.E2E_BASE_URL || 'http://139.196.165.140:8086';
-const API = process.env.E2E_API_BASE || 'http://47.100.235.168:10010/api/mobile';
+const API = process.env.E2E_API_BASE || resolveApiBase();
 const FACTORY_ID = process.env.E2E_FACTORY_ID || 'F006';
 const USER = process.env.E2E_USER || 'f006_admin';
 const PASS = process.env.E2E_PASS || '123456';

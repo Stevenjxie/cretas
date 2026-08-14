@@ -323,3 +323,7 @@ data/imports/_index.json
 # 时移派生, 含 member-grain / bill-grain 记录, 绝不提交到 public repo (F1, PII 防泄漏).
 # 覆盖 member (卡详情/卡充值) + void (撤单) + billgrain (POS) 等所有 demo ops JSONL.
 backend/python/smartbi/scripts/_demo_rest_*.jsonl
+
+# Playwright E2E 登录态。不能放 test-results/ —— 那是 outputDir, 每轮启动会被清空,
+# 于是登录态无法跨轮复用, --no-deps 跑子集时报 Error reading storage state (2026-08-15 实测)。
+web-admin/.auth/

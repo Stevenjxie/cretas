@@ -69,7 +69,7 @@ export default defineConfig({
       name: 'vue-web-admin',
       testMatch: 'process-mode-e2e.spec.ts',
       dependencies: ['vue-auth'],
-      use: { storageState: 'test-results/.auth/factory-admin.json' },
+      use: { storageState: '.auth/factory-admin.json' },
     },
     // Step 3: RN 测试独立（自己登录）
     {
@@ -86,7 +86,7 @@ export default defineConfig({
       name: 'p0p1p2-verify',
       testMatch: 'p0-p1-p2-verify.spec.ts',
       dependencies: ['vue-auth'],
-      use: { storageState: 'test-results/.auth/factory-admin.json' },
+      use: { storageState: '.auth/factory-admin.json' },
     },
     // Step 6: 新功能截图
     {
@@ -98,14 +98,14 @@ export default defineConfig({
       name: 'phase2-verify',
       testMatch: 'workflow-phase2-e2e.spec.ts',
       dependencies: ['vue-auth'],
-      use: { storageState: 'test-results/.auth/factory-admin.json' },
+      use: { storageState: '.auth/factory-admin.json' },
     },
     // Step 8: 六扇门一期 E2E (Web Admin)
     {
       name: 'liushanmen-e2e',
       testMatch: 'liushanmen-e2e.spec.ts',
       dependencies: ['vue-auth'],
-      use: { storageState: 'test-results/.auth/factory-admin.json' },
+      use: { storageState: '.auth/factory-admin.json' },
     },
     // Step 9: 六扇门一期 E2E (RN Expo Web — 比 Maestro 快)
     {
@@ -161,7 +161,7 @@ export default defineConfig({
       // 串行: test env 单服务器并发受限, 减少 networkidle/timeout flake.
       fullyParallel: false,
       workers: 1,
-      use: { storageState: 'test-results/.auth/factory-admin.json' },
+      use: { storageState: '.auth/factory-admin.json' },
     },
     // Step 15: QHJ revenue report (Phase I, 2026-05-13). Self-injects auth via
     // e2e-auth-helper; doesn't depend on vue-auth (uses qhj_admin not factory_admin1).

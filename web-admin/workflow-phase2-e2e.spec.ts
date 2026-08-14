@@ -6,8 +6,9 @@
  * 运行: npx playwright test workflow-phase2-e2e.spec.ts --project=p0p1p2-verify
  */
 import { test, expect } from '@playwright/test';
+import { resolveApiBase } from './e2e-auth-helper';
 
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10011/api/mobile';
+const API = resolveApiBase();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
 let TOKEN = '';
 let FACTORY_ID = 'F001';
