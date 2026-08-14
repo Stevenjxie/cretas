@@ -4710,8 +4710,18 @@ async def resolve_gross_margin(
     #    写什么, 单独成行就会被读成「这个店的毛利率」。单品毛利率照旧保留
     #    (每一道都有成本卡, 有依据)。挂账「覆盖率下限」仍然挂着。
     from smartbi.gold.restaurant.generic_answer import render_headline
-    from smartbi.gold.restaurant.generic_executor import CellResult, _cost_gaps
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, _DISCOUNT_ALLOC_BASIS, CellResult, _cost_gaps)
     from smartbi.gold.restaurant.metric_registry import DERIVED as _REG_DERIVED
+
+    # 🔴 2026-08-14 订正: 我上一轮说「折扣摊派是日结那条路的估算成分, 问答不是」——
+    #    **读错了**。上面 4249-4251 那三行就是按明细金额比例摊, 与 `_covered_margin`
+    #    逐行相同; 抬头那个数走的是 `covered_net_rev`(已扣折扣的净营收)。
+    #    owner 抓到它的判据: **两条路 diff = 0.0 —— 一边摊了一边没摊, 不可能相等。**
+    #    ⇒ 那是**少了一条事实**, 不是不同的依据。basis 与日结取同两个常量。
+    # ⚠️ 「折扣是整单的, 摊不到单道菜」那句说的是下面**按菜清单**, 不是抬头这个合计。
+    #    我把两件事并成了一个理由。
+    _headline_basis = f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}"
 
     _gaps = _cost_gaps([
         {"name": e["normalized_name"], "qty": e["qty"], "revenue": e["revenue"],
@@ -4721,7 +4731,7 @@ async def resolve_gross_margin(
     _headline_cell = CellResult(
         "gross_profit", _REG_DERIVED["gross_profit"].label, "all", "summary",
         "money", [{"gross_profit": total_profit}], (), "",
-        PROV_ESTIMATED, "成本卡的理论用量", coverage_ratio,
+        PROV_ESTIMATED, _headline_basis, coverage_ratio,
         tuple(), tuple(_gaps), float(total_rev_items or 0),
     )
     _offers = _build_qa_fill_offers(_headline_cell)
