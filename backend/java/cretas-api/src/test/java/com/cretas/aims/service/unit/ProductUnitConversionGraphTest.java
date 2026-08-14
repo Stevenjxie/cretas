@@ -89,10 +89,10 @@ class ProductUnitConversionGraphTest {
 
         assertThat(result.status()).isEqualTo(UnitConversionStatus.CONVERTED);
         assertThat(result.quantity()).isEqualByComparingTo("2400");
-        assertThat(result.path()).containsExactly("case", "pcs", "g");
+        assertThat(result.path()).containsExactly("箱", "件", "g");
         assertThat(result.steps()).containsExactly(
-                new UnitConversionStep("case", "pcs", new BigDecimal("12"), "case-pcs", 3L),
-                new UnitConversionStep("pcs", "g", new BigDecimal("200"), "pcs-g", 7L));
+                new UnitConversionStep("箱", "件", new BigDecimal("12"), "case-pcs", 3L),
+                new UnitConversionStep("件", "g", new BigDecimal("200"), "pcs-g", 7L));
         assertThat(result.conversionRefId()).isNull();
         assertThat(result.conversionVersion()).isNull();
     }

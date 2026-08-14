@@ -901,30 +901,35 @@ public class UnitContractServiceImpl implements UnitContractService {
         add(units, "cm", UnitDimension.LENGTH, "m", "0.01", "厘米", 3);
         add(units, "m", UnitDimension.LENGTH, "m", "1", "米", 3);
         add(units, "km", UnitDimension.LENGTH, "m", "1000", "千米", 6);
-        add(units, "pcs", UnitDimension.COUNT, "pcs", null, "件", 0);
-        add(units, "portion", UnitDimension.COUNT, "portion", null, "份", 0);
-        add(units, "box", UnitDimension.PACKAGE, "box", null, "盒", 0);
-        add(units, "case", UnitDimension.PACKAGE, "case", null, "箱", 0);
-        add(units, "bag", UnitDimension.PACKAGE, "bag", null, "袋", 0);
-        add(units, "pack", UnitDimension.PACKAGE, "pack", null, "包", 0);
-        add(units, "bottle", UnitDimension.PACKAGE, "bottle", null, "瓶", 0);
-        add(units, "can", UnitDimension.PACKAGE, "can", null, "罐", 0);
-        add(units, "crate", UnitDimension.PACKAGE, "crate", null, "框", 0);
-        add(units, "pail", UnitDimension.PACKAGE, "pail", null, "桶", 0);
-        add(units, "roll", UnitDimension.PACKAGE, "roll", null, "卷", 0);
-        add(units, "slice", UnitDimension.COUNT, "slice", null, "片", 0);
-        add(units, "item", UnitDimension.COUNT, "item", null, "项", 0);
-        // 🔴 这三个此前只在 systemAliases() 里有别名, 却从没在这里定义 ——
-        // systemUnitFor() 查到别名 sheet 再查定义得到 null, 整体返回 null。
-        // 后果静默且双向: crossLanguageCode("张") 原样返回「张」(中英写法被当成两个单位,
-        // 有库存也匹配不上), isBuiltInCountingUnit("sheet") 返回 false
-        // (「按件计数的成品必须填标准克重」对它失效)。
-        // prod 实测 raw_material_types 里「张」6 行在用。量纲取值与名录
-        // unit_of_measurements 的同族单位一致 (托盘/板是容器 → PACKAGE)。
-        // 契约: UnitAuthorityConsistencyTest 扫源码钉住「别名承诺的码必须有定义」。
-        add(units, "sheet", UnitDimension.COUNT, "sheet", null, "张", 0);
-        add(units, "tray", UnitDimension.PACKAGE, "tray", null, "托盘", 0);
-        add(units, "plate", UnitDimension.PACKAGE, "plate", null, "板", 0);
+        // ── 计数 / 包装单位: 码就是中文字本身 (2026-08-14 定案) ──────────────────
+        // 这类单位【没有科学换算】(factorToBase = null), 码纯粹是标识符。用英文单词做码
+        // 造成两类真实故障:
+        //   ① 一个码对应多个中文单位: pcs ← 件/个/只, crate ← 框/筐 ——
+        //      「一只鸡不是一件包材」, 却共用一个码, 只能靠 storageUnit 规则 2 打补丁保字面。
+        //   ② 中英两套写法同时落库, 字面比较必然误判 —— 2026-07-31 客户被拦、
+        //      2026-08-14 默认包装的原料压根调不动, 都是这个根。
+        // 用中文字做码后, 不同单位天然是不同的码, 上面两类问题在构造上消失,
+        // 且新单位由用户直接填中文创建, 不必再为它取一个英文名。
+        // ⚠️ 科学单位 (kg/g/ml/l/m…) 不在此列: 它们有恒定换算, 符号是国际通用写法。
+        add(units, "件", UnitDimension.COUNT, "件", null, "件", 0);
+        add(units, "个", UnitDimension.COUNT, "个", null, "个", 0);
+        add(units, "只", UnitDimension.COUNT, "只", null, "只", 0);
+        add(units, "份", UnitDimension.COUNT, "份", null, "份", 0);
+        add(units, "片", UnitDimension.COUNT, "片", null, "片", 0);
+        add(units, "张", UnitDimension.COUNT, "张", null, "张", 0);
+        add(units, "项", UnitDimension.COUNT, "项", null, "项", 0);
+        add(units, "盒", UnitDimension.PACKAGE, "盒", null, "盒", 0);
+        add(units, "箱", UnitDimension.PACKAGE, "箱", null, "箱", 0);
+        add(units, "袋", UnitDimension.PACKAGE, "袋", null, "袋", 0);
+        add(units, "包", UnitDimension.PACKAGE, "包", null, "包", 0);
+        add(units, "瓶", UnitDimension.PACKAGE, "瓶", null, "瓶", 0);
+        add(units, "罐", UnitDimension.PACKAGE, "罐", null, "罐", 0);
+        add(units, "框", UnitDimension.PACKAGE, "框", null, "框", 0);
+        add(units, "筐", UnitDimension.PACKAGE, "筐", null, "筐", 0);
+        add(units, "桶", UnitDimension.PACKAGE, "桶", null, "桶", 0);
+        add(units, "卷", UnitDimension.PACKAGE, "卷", null, "卷", 0);
+        add(units, "托盘", UnitDimension.PACKAGE, "托盘", null, "托盘", 0);
+        add(units, "板", UnitDimension.PACKAGE, "板", null, "板", 0);
         return Map.copyOf(units);
     }
 
@@ -964,22 +969,27 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "km", "km", "千米", "公里", "kilometer", "kilometers", "kilometre", "kilometres");
         // pc / piece / pieces / carton 来自 SkuImportServiceImpl 那张私有别名表 ——
         // 收敛时把知识并进权威表, 而不是随表一起删掉。
-        alias(aliases, "pcs", "pcs", "件", "个", "只", "pc", "piece", "pieces");
-        alias(aliases, "portion", "portion", "份");
-        alias(aliases, "box", "box", "盒");
-        alias(aliases, "case", "case", "箱", "carton");
-        alias(aliases, "bag", "bag", "袋");
-        alias(aliases, "pack", "pack", "包");
-        alias(aliases, "bottle", "bottle", "瓶");
-        alias(aliases, "can", "can", "罐");
-        alias(aliases, "crate", "crate", "框", "筐");
-        alias(aliases, "pail", "pail", "桶");
-        alias(aliases, "roll", "roll", "卷");
-        alias(aliases, "slice", "slice", "片");
-        alias(aliases, "sheet", "sheet", "张");
-        alias(aliases, "tray", "tray", "托盘");
-        alias(aliases, "plate", "plate", "板");
-        alias(aliases, "item", "item", "项");
+        // 码=中文字; 英文单词降级为【别名】—— 存量数据与外部导入里的英文写法仍然认得,
+        // 但归一之后一律得到中文码, 不会再写回英文。
+        alias(aliases, "件", "件", "pcs", "pc", "piece", "pieces");
+        alias(aliases, "个", "个");
+        alias(aliases, "只", "只");
+        alias(aliases, "份", "份", "portion");
+        alias(aliases, "片", "片", "slice");
+        alias(aliases, "张", "张", "sheet");
+        alias(aliases, "项", "项", "item");
+        alias(aliases, "盒", "盒", "box");
+        alias(aliases, "箱", "箱", "case", "carton");
+        alias(aliases, "袋", "袋", "bag");
+        alias(aliases, "包", "包", "pack");
+        alias(aliases, "瓶", "瓶", "bottle");
+        alias(aliases, "罐", "罐", "can");
+        alias(aliases, "框", "框", "crate");
+        alias(aliases, "筐", "筐");
+        alias(aliases, "桶", "桶", "pail");
+        alias(aliases, "卷", "卷", "roll");
+        alias(aliases, "托盘", "托盘", "tray");
+        alias(aliases, "板", "板", "plate");
         return Map.copyOf(aliases);
     }
 
@@ -1015,8 +1025,32 @@ public class UnitContractServiceImpl implements UnitContractService {
         }
         String trimmed = rawUnit.trim();
         CanonicalUnit builtIn = systemUnitFor(key(trimmed));
-        return builtIn != null ? builtIn.code() : trimmed.toLowerCase(Locale.ROOT);
+        String code = builtIn != null ? builtIn.code() : trimmed.toLowerCase(Locale.ROOT);
+        return COUNT_MATCH_FOLD.getOrDefault(code, code);
     }
+
+    /**
+     * <b>匹配用</b>的计数单位折叠 —— 只给「比对/匹配」那一侧, <b>绝不给落库侧</b>。
+     *
+     * <p>🔴 2026-08-14 之前, 这层折叠是<b>码表的副作用</b>: 件/个/只 共用码 {@code pcs},
+     * 框/筐 共用码 {@code crate}, 于是任何按码比较的地方都自动折在一起, 没人明说过。
+     * 本次把非科学单位的码改成中文字本身之后, 它们各自独立 —— 副作用消失,
+     * 折叠必须<b>显式写出来</b>, 否则存量数据里「BOM 写只、工艺写个」会被判成
+     * <b>投入消失</b>({@code BomWorkflowRevisionService#sameUnit}), 槽位也匹配不上。
+     *
+     * <p>⚠️ 这层容忍<b>只作用于匹配</b>。落库侧走 {@link #storageUnit} 保字面 ——
+     * 用户填「只」就存「只」。两侧的不对称是设计: #1976「一只 ≠ 一件」说的是
+     * <b>身份</b>(参与数量换算与成本分摊维度分组时不能混), 而匹配侧要认本地化写法,
+     * 否则同一个投入换个写法就被判成不见了。{@code UnitStorageValueContractTest}
+     * 里那条「槽位匹配侧仍把 只/个/件 认作同一个槽 —— 这是有意的, 别统一」钉的就是这个。
+     *
+     * <p>⛔ 不要把它塞进 {@link #normalize} 或 {@link #storageUnit}: 那会让「只」落库成
+     * 「件」, 正是 LIUSHANMEN 2026-07-30 事故的形状(生产仓 501 只报工时看不见)。
+     */
+    private static final Map<String, String> COUNT_MATCH_FOLD = Map.of(
+            "个", "件",
+            "只", "件",
+            "筐", "框");
 
     /**
      * <b>跨语言</b>归一 —— 只把「同一个单位的英文码与中文名」折成一个,
