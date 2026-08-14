@@ -4,8 +4,9 @@ import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import lombok.Builder;
 import lombok.Data;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -19,10 +20,27 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ToolSimilarityService {
 
-    private final ToolRegistry toolRegistry;
+    /**
+     * 🔴 2026-08-14: 这里原本是 {@code @RequiredArgsConstructor} + {@code private final ToolRegistry}
+     * (构造注入), 而 {@link ToolRegistry} 在**自己的 {@code @PostConstruct} 里**调
+     * {@code runSimilarityGateCheck()}。此刻 ToolRegistry 还在创建中, Spring 无法把它
+     * 构造进本服务 → `Requested bean is currently in creation` → 异常被 registry 那侧的
+     * catch 吞成一行 WARN。
+     *
+     * ⚠️ ToolRegistry 那侧**已经写了 `@Autowired @Lazy`**, 但 `@Lazy` 只延后代理的创建,
+     * 挡不住「代理方法被调用时对端仍在构造」这一步 —— 所以只在一侧加 @Lazy 是无效的,
+     * 必须让**被依赖的那一侧**也别在构造期就要求对方就绪。
+     *
+     * 生产实证: 日志里 354 次全是同一条失败, 成功那行(`no highly similar tool pairs found`
+     * 或 `found N similar tool pairs`)**一次都没出现过** —— 这道治理闸自引入起从未执行。
+     */
+    private final ObjectProvider<ToolRegistry> toolRegistryProvider;
+
+    public ToolSimilarityService(@Lazy ObjectProvider<ToolRegistry> toolRegistryProvider) {
+        this.toolRegistryProvider = toolRegistryProvider;
+    }
 
     private static final double DESCRIPTION_SIMILARITY_THRESHOLD = 0.85;
     private static final double PARAM_OVERLAP_THRESHOLD = 0.70;
@@ -34,7 +52,7 @@ public class ToolSimilarityService {
      * 综合相似度 = 0.6 * descSimilarity + 0.4 * paramOverlap
      */
     public List<SimilarToolPair> detectSimilarTools() {
-        Collection<ToolExecutor> executors = toolRegistry.getAllExecutors();
+        Collection<ToolExecutor> executors = toolRegistryProvider.getObject().getAllExecutors();
         List<ToolExecutor> executorList = new ArrayList<>(executors);
         List<SimilarToolPair> results = new ArrayList<>();
 
@@ -71,13 +89,13 @@ public class ToolSimilarityService {
      * 为指定 Tool 检查相似性（用于新 Tool 注册时的 gate-keeping）
      */
     public List<SimilarToolPair> checkSimilarityForTool(String toolName) {
-        Optional<ToolExecutor> targetOpt = toolRegistry.getExecutor(toolName);
+        Optional<ToolExecutor> targetOpt = toolRegistryProvider.getObject().getExecutor(toolName);
         if (targetOpt.isEmpty()) return Collections.emptyList();
 
         ToolExecutor target = targetOpt.get();
         List<SimilarToolPair> results = new ArrayList<>();
 
-        for (ToolExecutor other : toolRegistry.getAllExecutors()) {
+        for (ToolExecutor other : toolRegistryProvider.getObject().getAllExecutors()) {
             if (other.getToolName().equals(toolName)) continue;
 
             double descSim = jaccardBigram(target.getDescription(), other.getDescription());
@@ -104,8 +122,8 @@ public class ToolSimilarityService {
      * 生成两个 Tool 的合并方案
      */
     public MergeProposal generateMergeProposal(String toolNameA, String toolNameB) {
-        Optional<ToolExecutor> aOpt = toolRegistry.getExecutor(toolNameA);
-        Optional<ToolExecutor> bOpt = toolRegistry.getExecutor(toolNameB);
+        Optional<ToolExecutor> aOpt = toolRegistryProvider.getObject().getExecutor(toolNameA);
+        Optional<ToolExecutor> bOpt = toolRegistryProvider.getObject().getExecutor(toolNameB);
         if (aOpt.isEmpty() || bOpt.isEmpty()) return null;
 
         ToolExecutor a = aOpt.get();
