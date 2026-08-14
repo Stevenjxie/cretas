@@ -773,15 +773,32 @@ async def _covered_margin_grouped(conn, factory_id: str, date_range, bridge,
         logger.warning("[generic-executor] 分组覆盖毛利取数失败", exc_info=True)
         return None
     out = []
+    dropped = 0
     for row in rows or ():
         g_gross = Decimal(str(row["covered_gross"] or 0))
+        g_cost = Decimal(str(row["covered_cost"] or 0))
+        # 🔴 owner 2026-08-14 裁定: **缺成本卡的菜不进毛利排行。**
+        #    它们的覆盖营收和覆盖成本都是 0, 于是显示成「娃娃菜 ¥0.00」——
+        #    同一个数放在两个位置意思完全不同: 排行里读作「这道菜不赚钱」,
+        #    缺卡清单里读作「这道菜还没录成本」。**前者是错话。**
+        # ⚠️ 不影响「Σ组 = 抬头」: 它们本来就贡献 0(抬头就是覆盖口径)。
+        #    ⇒ 这一步让那条判据更干净, 不是削弱它。
+        # ⚠️ 判据是「这一组一分覆盖营收都没有」, ⛔ 不是「毛利为 0」——
+        #    后者会把一道**真的不赚不亏**的菜也删掉。
+        if g_gross == 0 and g_cost == 0:
+            dropped += 1
+            continue
         out.append({
             "dim_key": row["dim_key"],
             "dim_label": row["dim_label"],
             # 🔑 与抬头**同一个** `receipt_ratio` —— 见 `_net_of`。
             "covered_net": _net_of(g_gross, covered.receipt_ratio),
-            "covered_cost": Decimal(str(row["covered_cost"] or 0)),
+            "covered_cost": g_cost,
         })
+    if dropped:
+        # ⛔ 静默剔除 = 清单看起来完整而其实少了几行。缺口本身由 T2 那条开价
+        #    具名说出来(「先补这 N 道的成本卡（…）」), 这里只留痕。
+        logger.info("[generic-executor] 分组毛利剔除 %d 组无覆盖营收的项", dropped)
     return out, sql
 
 
