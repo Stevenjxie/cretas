@@ -1652,3 +1652,28 @@ def test_cost_card_presence_has_exactly_one_definition():
         + f"\n⇒ 用 `metric_registry.COST_CARD_PRESENT_SQL`"
           f"（现为 {COST_CARD_PRESENT_SQL!r}）")
     assert hits, "一处都没扫到 —— 这条闸会恒绿"
+
+
+def test_missing_cost_card_window_is_a_concrete_date_range():
+    """🔴 T2 按钮那条答案的窗口必须落成**具体日期**。
+
+    `_explicit_window(None, None, 30)` 返回 `(None, None, "近 30 天")` ——
+    别的 resolver 把 None 交给 SQL 里的 `COALESCE(...)` 兜, 而
+    `_dish_cost_facts` 要具体日期: `date >= NULL` **一行都不返回**。
+
+    实测长相(2026-08-14, prod): T2 按钮点下去答
+    「近 30 天卖过的菜**都有成本卡**，没有需要补的」，
+    而同一屏的抬头正说着「4 个菜品缺少完整成本」—— **答案自己跟自己打架**。
+    """
+    import inspect
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router._resolve_missing_cost_cards)
+    assert "window_end = date.today()" in src and "timedelta(" in src, (
+        "没有把 None 落成具体日期 —— `_dish_cost_facts` 会拿到 NULL 日期, "
+        "返回 0 行, 于是永远答「都有成本卡」")
+
+    # 行为对照: `_explicit_window` 确实会给出 None(否则上面那条守的是幻觉)
+    ws, we, _t = router._explicit_window(None, None, 30)
+    assert ws is None and we is None, (
+        "`_explicit_window` 不再返回 None 了 —— 上面那条断言失去意义, 该删")
