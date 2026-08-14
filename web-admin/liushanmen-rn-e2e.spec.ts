@@ -13,9 +13,10 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { resolveApiBase } from './e2e-auth-helper';
 
 const RN_BASE_URL = process.env.RN_BASE_URL || 'http://localhost:3010';
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
+const API = process.env.E2E_API_URL || resolveApiBase();
 const FACTORY_ID = 'F001';
 const SD = 'test-results/screenshots/liushanmen-rn';
 

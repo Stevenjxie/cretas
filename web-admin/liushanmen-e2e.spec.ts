@@ -11,10 +11,10 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, LoginResult } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
+const API = process.env.E2E_API_URL || resolveApiBase();
 const FACTORY_ID = 'F001';
 const SD = 'test-results/screenshots/liushanmen';
 

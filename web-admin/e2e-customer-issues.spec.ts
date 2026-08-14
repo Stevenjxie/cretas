@@ -1,8 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase } from './e2e-auth-helper';
 
 const BASE = 'http://139.196.165.140:8086';
-const API = 'http://47.100.235.168:10010/api/mobile';
+const API = resolveApiBase();
 const TS = Date.now().toString().slice(-6);
 
 async function login(page: Page) {
