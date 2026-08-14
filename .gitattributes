@@ -19,3 +19,21 @@ backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductTypeCont
 backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialBatchController.java whitespace=trailing-space,cr-at-eol
 backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java whitespace=trailing-space,cr-at-eol
 frontend/CretasFoodTrace/src/types/navigation.ts whitespace=trailing-space,cr-at-eol
+
+# These 2026-08-15 audit paths still store CRLF blobs. Keep real trailing
+# spaces visible while treating CR as EOL syntax; delete each exact rule after
+# that file is deliberately normalized to LF in a no-behavior-change commit.
+backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/restaurant/gold/GoldBackedRestaurantTool.java whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/context_bleed.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/daily_close.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/follow_up_actions.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/generic_executor.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/metric_registry.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/provenance.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/restaurant_ops_router.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/scripts/seed_mock_rest_coverage_gap.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_context_bleed.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_grouped_margin_allocation.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_margin_parity.py whitespace=trailing-space,cr-at-eol
+docs/decisions/2026-08-15-成本卡录入设计卡.md whitespace=trailing-space,cr-at-eol
+web-admin/capture-new-features.spec.ts whitespace=trailing-space,cr-at-eol
