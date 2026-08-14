@@ -33,9 +33,21 @@ import static org.mockito.Mockito.when;
  * ToolRegistry —— 此刻 registry 还在创建中。registry 那侧虽然写了 {@code @Autowired @Lazy},
  * 但 {@code @Lazy} 只延后代理创建, 挡不住「代理方法被调用时对端仍在构造」。
  *
- * ⚠️ 最关键的一条断言是最后那个: **异常被 catch 吞成一行 WARN**, 所以「闸没跑」
- * 和「闸跑了且没发现问题」在日志上长得几乎一样(都不报错)。守卫必须盯住
- * 「registry 尚未就绪时构造本服务不能抛」, 否则同样的静默失效会再来一次。
+ * ⚠️ 异常被 catch 吞成一行 WARN, 所以「闸没跑」和「闸跑了且没发现问题」在日志上
+ * 长得几乎一样(都不报错) —— 这是这类失效难以自查的根源。
+ *
+ * <h3>🔴 本文件不足以守住那个缺陷(2026-08-14 复盘)</h3>
+ *
+ * 本文件里的 {@code constructionDoesNotRequireTheRegistryToBeReady} 只验了
+ * 「**本服务能否被构造**」。而真正的失效发生在下一步 ——
+ * 「**执行时回头去取 registry**」。差这一格, 于是 #2613 上线后闸**依然一次没跑成**,
+ * 生产报错只是从长变短, 而本文件全绿。
+ *
+ * ⇒ 真正的守卫在 {@code ToolRegistryStartupGateTest}: 它驱动**真实入口 init()**,
+ * 断言直接打在生产症状(那行 {@code Similarity gate-check skipped due to error})上。
+ * 实测把调用改回无参重载: 那个文件 4/4 全红, **本文件 0 失败**。
+ *
+ * 范围澄清: 从未执行的是**启动闸**这条路; {@code ToolHealthMonitor} 的定时扫描一直是通的。
  */
 @DisplayName("Tool 相似度治理闸")
 class ToolSimilarityGateRunsTest {
@@ -68,7 +80,7 @@ class ToolSimilarityGateRunsTest {
     }
 
     @Test
-    @DisplayName("🔒 registry 尚未就绪时【构造本服务】不能抛 —— 这正是它 354 次没跑起来的原因")
+    @DisplayName("registry 尚未就绪时【构造本服务】不能抛（必要但**不充分** —— 执行那步见 ToolRegistryStartupGateTest）")
     void constructionDoesNotRequireTheRegistryToBeReady() {
         AtomicInteger calls = new AtomicInteger();
 

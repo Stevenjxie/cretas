@@ -23,18 +23,35 @@ import java.util.stream.Collectors;
 public class ToolSimilarityService {
 
     /**
-     * 🔴 2026-08-14: 这里原本是 {@code @RequiredArgsConstructor} + {@code private final ToolRegistry}
-     * (构造注入), 而 {@link ToolRegistry} 在**自己的 {@code @PostConstruct} 里**调
-     * {@code runSimilarityGateCheck()}。此刻 ToolRegistry 还在创建中, Spring 无法把它
-     * 构造进本服务 → `Requested bean is currently in creation` → 异常被 registry 那侧的
-     * catch 吞成一行 WARN。
+     * 🔴 2026-08-14: 本服务与 {@link ToolRegistry} 互相依赖, 而 registry 在**自己的
+     * {@code @PostConstruct} 里**调 {@code runSimilarityGateCheck()}。
      *
-     * ⚠️ ToolRegistry 那侧**已经写了 `@Autowired @Lazy`**, 但 `@Lazy` 只延后代理的创建,
-     * 挡不住「代理方法被调用时对端仍在构造」这一步 —— 所以只在一侧加 @Lazy 是无效的,
-     * 必须让**被依赖的那一侧**也别在构造期就要求对方就绪。
+     * 修了两轮才对, 两轮的读数都写在这里, 因为第一轮「看起来对」:
      *
-     * 生产实证: 日志里 354 次全是同一条失败, 成功那行(`no highly similar tool pairs found`
-     * 或 `found N similar tool pairs`)**一次都没出现过** —— 这道治理闸自引入起从未执行。
+     * <ul>
+     *   <li><b>原始</b>: 构造注入 {@code ToolRegistry} → 连本服务都建不出来。
+     *       报错 {@code Error creating bean 'toolSimilarityService' ... 构造参数 0 ...
+     *       'toolRegistry': Requested bean is currently in creation}。</li>
+     *   <li><b>第一轮修(#2613, 无效)</b>: 换成 {@code ObjectProvider}, 本服务能建了 ——
+     *       但 {@code getObject()} 仍在 registry 的 {@code @PostConstruct} 里执行,
+     *       此刻它照样 in-creation。生产实测报错只是**变短**了:
+     *       {@code Error creating bean 'toolRegistry': Requested bean is currently in creation},
+     *       闸依然一次没跑成。</li>
+     *   <li><b>第二轮修(本次)</b>: 启动期**根本不去取 registry** ——
+     *       registry 手里就有 {@code toolMap}, 直接把 executors 传进来
+     *       ({@link #detectSimilarTools(Collection)})。依赖消失, 时序问题随之消失。</li>
+     * </ul>
+     *
+     * ⚠️ registry 那侧本来就写了 {@code @Autowired @Lazy} —— {@code @Lazy} 只延后**代理的创建**,
+     * 挡不住「代理方法被调用时对端仍在构造」。**只在一侧加 @Lazy 是无效的。**
+     *
+     * ⚠️ 第一轮之所以没被拦住: 我的断言只验了「本服务能否构造」, 而失效发生在**执行**那一步。
+     * 守卫必须跑在真实调用点上 —— 见 {@code ToolRegistryStartupGateTest}(驱动真实的 {@code init()},
+     * 断言直接打在生产症状那行 WARN 上)。实测: 把本类的调用改回无参重载, 那个文件 4/4 全红,
+     * 而只验构造的 {@code ToolSimilarityGateRunsTest} 纹丝不动。
+     *
+     * 范围澄清: 从未执行的是**启动闸**这一条路。{@code ToolHealthMonitor} 的定时扫描
+     * (启动完成之后跑)一直是通的, 日志里有 {@code Tool similarity scan complete} 为证。
      */
     private final ObjectProvider<ToolRegistry> toolRegistryProvider;
 
@@ -52,7 +69,18 @@ public class ToolSimilarityService {
      * 综合相似度 = 0.6 * descSimilarity + 0.4 * paramOverlap
      */
     public List<SimilarToolPair> detectSimilarTools() {
-        Collection<ToolExecutor> executors = toolRegistryProvider.getObject().getAllExecutors();
+        return detectSimilarTools(toolRegistryProvider.getObject().getAllExecutors());
+    }
+
+    /**
+     * 同上, 但由调用方直接把 executors 交进来。
+     *
+     * 🔴 启动闸**必须**走这一条: 它在 {@link ToolRegistry} 自己的 {@code @PostConstruct} 里执行,
+     * 那一刻 registry 还是 in-creation, 任何形式的「回头找 registry 这个 bean」
+     * (构造注入 / {@code @Lazy} 代理 / {@code ObjectProvider#getObject})都会失败。
+     * 而 registry 手里本来就有全部 executors —— 传进来即可, 不必再问容器要。
+     */
+    public List<SimilarToolPair> detectSimilarTools(Collection<ToolExecutor> executors) {
         List<ToolExecutor> executorList = new ArrayList<>(executors);
         List<SimilarToolPair> results = new ArrayList<>();
 
