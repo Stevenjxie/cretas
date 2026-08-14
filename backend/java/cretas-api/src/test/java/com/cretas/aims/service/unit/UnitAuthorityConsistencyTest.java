@@ -43,8 +43,8 @@ class UnitAuthorityConsistencyTest {
     private static final Path SOURCE = Path.of(
             "src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java");
 
-    private static final Pattern ALIAS = Pattern.compile("alias\\(aliases,\\s*\"([a-z0-9]+)\"");
-    private static final Pattern UNIT = Pattern.compile("add\\(units,\\s*\"([a-z0-9]+)\"");
+    private static final Pattern ALIAS = Pattern.compile("alias\\(aliases,\\s*\"([a-z0-9\u4e00-\u9fff]+)\"");
+    private static final Pattern UNIT = Pattern.compile("add\\(units,\\s*\"([a-z0-9\u4e00-\u9fff]+)\"");
 
     private static Set<String> codesMatching(Pattern pattern, String source) {
         Set<String> codes = new TreeSet<>();
@@ -97,9 +97,9 @@ class UnitAuthorityConsistencyTest {
     void previouslyMissingUnitsResolve() {
         // 张 / 托盘 / 板 —— 别名表早就承诺了, 单位定义表一直没兑现
         for (List<String> pair : List.of(
-                List.of("张", "sheet"),
-                List.of("托盘", "tray"),
-                List.of("板", "plate"))) {
+                List.of("张", "张"),
+                List.of("托盘", "托盘"),
+                List.of("板", "板"))) {
             String chinese = pair.get(0);
             String code = pair.get(1);
 

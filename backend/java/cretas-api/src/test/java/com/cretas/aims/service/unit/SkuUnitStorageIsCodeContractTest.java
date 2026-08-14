@@ -42,7 +42,7 @@ class SkuUnitStorageIsCodeContractTest {
     private static final Path PRODUCT = Paths.get(
             "src/main/java/com/cretas/aims/service/impl/ProductTypeServiceImpl.java");
     private static final Path MIGRATION = Paths.get(
-            "src/main/resources/db/flyway/V20261029_48__normalize_sku_units_to_codes.sql");
+            "src/main/resources/db/flyway/V20261029_85__normalize_sku_units_to_chinese_codes.sql");
 
     private String read(Path p) throws IOException {
         return Files.readString(p, StandardCharsets.UTF_8);
@@ -53,7 +53,7 @@ class SkuUnitStorageIsCodeContractTest {
     void positiveControl() throws IOException {
         assertThat(read(RAW)).contains("class RawMaterialTypeServiceImpl");
         assertThat(read(PRODUCT)).contains("class ProductTypeServiceImpl");
-        assertThat(read(MIGRATION)).contains("backup_sku_units_20260802");
+        assertThat(read(MIGRATION)).contains("backup_sku_units_zh_20260814");
     }
 
     @Test
@@ -102,9 +102,9 @@ class SkuUnitStorageIsCodeContractTest {
         String sql = read(MIGRATION);
         // 抽查几个跨语言别名, 确认迁移抄的是权威表那份
         for (String pair : new String[] {
-                "('件','pcs')", "('个','pcs')", "('只','pcs')",
-                "('袋','bag')", "('箱','case')", "('盒','box')",
-                "('公斤','kg')", "('筐','crate')", "('框','crate')" }) {
+                "('pcs','件')", "('portion','份')", "('slice','片')",
+                "('bag','袋')", "('case','箱')", "('box','盒')",
+                "('crate','框')", "('sheet','张')", "('tray','托盘')" }) {
             assertThat(sql).as("迁移别名表缺 %s", pair).contains(pair);
         }
     }
@@ -115,10 +115,10 @@ class SkuUnitStorageIsCodeContractTest {
         String sql = read(MIGRATION);
         assertThat(sql)
                 .as("必须 JOIN 别名表(只动能映射的), 不许用 CASE 兜底瞎折")
-                .contains("JOIN _unit_alias a ON a.zh = t.unit");
+                .contains("JOIN _zh_alias a ON a.en = lower(t.unit)");
         assertThat(sql)
                 .as("映射不出的要 RAISE NOTICE 点名, 否则没人知道剩了什么")
                 .contains("未归一(映射不出, 需人工定)");
-        assertThat(sql).as("必须有台账才能回滚").contains("backup_sku_units_20260802");
+        assertThat(sql).as("必须有台账才能回滚").contains("backup_sku_units_zh_20260814");
     }
 }

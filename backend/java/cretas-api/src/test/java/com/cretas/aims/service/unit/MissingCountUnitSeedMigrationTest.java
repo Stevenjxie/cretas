@@ -94,10 +94,10 @@ class MissingCountUnitSeedMigrationTest {
                 "src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java");
         assertThat(Files.readString(aliases, StandardCharsets.UTF_8))
                 .as("权威别名表必须同步补 sheet")
-                .contains("alias(aliases, \"sheet\", \"sheet\", \"张\")");
+                .contains("alias(aliases, \"张\", \"张\", \"sheet\")");
 
         // 展示层那一半
-        assertThat(UnitDisplayNames.display("sheet")).isEqualTo("张");
+        assertThat(UnitDisplayNames.display("张")).isEqualTo("张");
     }
 
     @Test

@@ -67,17 +67,18 @@ class UnitStorageValueContractTest {
     class BuiltInStaysCode {
 
         @Test
-        @DisplayName("「盒」→ box, 「片」→ slice, 「箱」→ case (中文录入归一成存量用的码)")
+        @DisplayName("中文录入原样落码 —— 码就是中文字本身 (盒/片/箱)")
         void chinesePackagingCanonicalizesToCode() {
-            assertEquals("box", service.storageUnit(FACTORY, "盒"));
-            assertEquals("slice", service.storageUnit(FACTORY, "片"));
-            assertEquals("case", service.storageUnit(FACTORY, "箱"));
+            assertEquals("盒", service.storageUnit(FACTORY, "盒"));
+            assertEquals("片", service.storageUnit(FACTORY, "片"));
+            assertEquals("箱", service.storageUnit(FACTORY, "箱"));
         }
 
         @Test
-        @DisplayName("已是英文码时原样 (box → box), 大小写折平 (KG → kg)")
+        @DisplayName("英文码折成中文码 (box → 盒), 大小写折平 (KG → kg)")
         void codesPassThrough() {
-            assertEquals("box", service.storageUnit(FACTORY, "box"));
+            // 非科学单位的码已是中文字本身, 英文降级为别名 —— 进来是 box, 落库是「盒」。
+            assertEquals("盒", service.storageUnit(FACTORY, "box"));
             assertEquals("kg", service.storageUnit(FACTORY, "KG"));
         }
 
@@ -104,7 +105,7 @@ class UnitStorageValueContractTest {
         }
 
         @Test
-        @DisplayName("三者两两不等 —— 它们共用 pcs 码, 归一即塌陷")
+        @DisplayName("三者两两不等 —— 现在各自有码(件/个/只), 从构造上就不会塌陷")
         void countUnitsDoNotCollapse() {
             String zhi = service.storageUnit(FACTORY, "只");
             String ge = service.storageUnit(FACTORY, "个");
@@ -115,16 +116,18 @@ class UnitStorageValueContractTest {
         }
 
         @Test
-        @DisplayName("英文码 pcs 进来仍是 pcs —— 不反向翻成某一个中文写法")
-        void englishCodeStaysCode() {
-            assertEquals("pcs", service.storageUnit(FACTORY, "pcs"));
+        @DisplayName("英文码 pcs 折成「件」—— 它现在只挂这一个中文写法, 不再有歧义")
+        void englishCodeFoldsToItsSingleChineseWriting() {
+            // 旧口径是「不反向翻」, 理由是 pcs 同时挂着 件/个/只, 翻成哪个都是瞎选。
+            // 现在 个/只 各自独立成码, pcs 只是「件」的英文别名 —— 翻译不再任意。
+            assertEquals("件", service.storageUnit(FACTORY, "pcs"));
         }
 
         @Test
         @DisplayName("「盒」不在此列 —— box 只挂一个中文写法, 归一是纯翻译")
         void singleChineseWritingCanonicalizes() {
-            assertEquals("box", service.storageUnit(FACTORY, "盒"));
-            assertEquals("case", service.storageUnit(FACTORY, "箱"));
+            assertEquals("盒", service.storageUnit(FACTORY, "盒"));
+            assertEquals("箱", service.storageUnit(FACTORY, "箱"));
         }
     }
 
@@ -182,9 +185,10 @@ class UnitStorageValueContractTest {
         @Test
         @DisplayName("工厂给内置码改了显示名, 仍存内置码 —— 存量口径不因改名而漂移")
         void factoryRenamedBuiltInStillStoresCode() {
-            registerCustomUnit("box", "小盒", "PACKAGE");
-            assertEquals("box", service.storageUnit(FACTORY, "小盒"));
-            assertEquals("box", service.storageUnit(FACTORY, "box"));
+            // 内置码现在是「盒」; 工厂只是给它改了个显示名。
+            registerCustomUnit("盒", "小盒", "PACKAGE");
+            assertEquals("盒", service.storageUnit(FACTORY, "小盒"));
+            assertEquals("盒", service.storageUnit(FACTORY, "box"));
         }
     }
 
