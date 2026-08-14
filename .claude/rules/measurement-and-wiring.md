@@ -965,3 +965,84 @@ open(F, "wb").write(b.replace(old, new, 1))   # new 是 str，b 是 bytes
 
 ⚠️ 它抓不住 `from x import A as B` 和动态 `getattr`。
 ⇒ **每条变异仍然要先证明「行为真的变了」再看断言。这道闸是兜底，不是免检。**
+
+---
+
+## 形态 A¹²：问活进程要环境，**只 export 你要的那几个前缀**
+
+「问活进程要真相」这条规则说了**问什么**，没说**怎么问**。2026-08-14 实测两次翻车：
+
+```bash
+# 🔴 抓到的是另一条 session 的临时 bash（它的 cmdline 是别人的 python heredoc）
+PID=$(pgrep -f "smartbi|uvicorn" | head -1)
+
+# 🔴 eval 整份 environ → PATH 被冲掉 → `python` 掉回系统旧解释器
+#    第一行 `from __future__ import annotations` 就 SyntaxError
+eval "$(tr '\0' '\n' < /proc/$PID/environ | sed 's/^/export /')"
+```
+
+▎**从监听端口反查 pid**，不要 `pgrep -f <关键词>` —— 那个模式会抓到
+▎**你自己正在跑的探针**，而它长得和服务进程一样像。
+
+```bash
+# ✅ 端口是服务的定义, 关键词不是
+PID=$(ss -lntp | grep :8083 | grep -oP 'pid=\K[0-9]+' | head -1)
+# ✅ 只取你要的那几个前缀
+eval "$(tr '\0' '\n' < /proc/$PID/environ | grep -E '^(POSTGRES_|FOOD_KB_POSTGRES_)' | sed 's/^/export /')"
+```
+
+与「`exe` 会把 symlink 解析掉」同族：**都是「你以为你在问那个东西，其实不是」。**
+
+⚠️ 顺带两条同轮实测的:
+- **拼 DSN 前先想密码里有没有 `@`** —— asyncpg 会把 `@` 后面当 host,
+  报 `invalid literal for int(): 'Zt9q…'`。⇒ 一律分参数传 `user=/password=/host=`。
+- **RLS 表上 0 行 ≠ 表是空的**。`agg_restaurant_product_cost` 不 `set_config`
+  直接查返回 0 行，我差一步就报「表是空的」。
+  ⇒ 探针里钉一句 `SELECT relrowsecurity FROM pg_class WHERE relname = …`，
+    **让读数自己说清「是被 RLS 挡了」还是「真的没有」**。
+
+---
+
+## 形态 C⁸：闸用 **AST**，不用字符串计数
+
+「实收率只许算一处」这条闸，第一版写成
+
+```python
+assert stripped.count("/ all_gross") == 1
+```
+
+它打中了 `share = covered_gross / all_gross` —— 那是**覆盖率**，与折扣无关。
+
+**这是同形第三次**（① 数注解不剥注释 ② grep 数进了 docstring ③ 这次）。
+前两次的修法都是「把正则收窄一点」，于是它第三次又长出来了。
+
+▎**以后这类闸一律走 AST，不再收窄正则。**
+
+```python
+# ✅ 问「这个名字被赋值了几次」, 而不是「这串字符出现了几次」
+tree = ast.parse(inspect.getsource(mod))
+assigned = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name) and t.id == "receipt_ratio"]
+assert len(assigned) == 1
+```
+
+字符串计数量的是**文本**，AST 量的是**结构**。闸要守的从来是结构。
+
+---
+
+## ✅ 正面：读数变了，先分清「我改的」还是「数据动了」
+
+同一轮里，基线树和补丁树跑出来 MOCK_REST 的**抬头**不一样
+（198,856.58 vs 196,383.72）。抬头**不该**被那次改动影响。
+
+我没有假设「大概是今天的数据还在涨」，而是**钉死日期重跑一次**：
+
+```bash
+PROBE_DATE=2026-08-13 …    # 昨天的数据是冻的
+```
+
+三个租户的抬头两侧完全相同 ⇒ 确认差异来自实时数据，不是我的改动。
+
+▎**读数变了先分清两件事：我改的 / 数据动了。**
+▎**用同一棵树、同一个冻结窗口重跑一次就分得开** —— 这一步花 1 分钟，
+▎省下的是一条写进报告的错误归因。
