@@ -176,7 +176,22 @@ async def build_daily_close(
     except Exception:  # noqa: BLE001
         logger.warning("[daily-close] 进度感取数失败, 本次不带这一句", exc_info=True)
 
+    # 🔴 层 1 的全部价值: 「补了 → 数变了」这条因果第一次被人看见。
+    #    ⛔ 阴性对照: **没补的时候这句话不出现** —— 一句无条件冒出来的
+    #       「你补上去了」是废话, 而且是**会撒谎的废话**(他没补, 我们说他补了)。
+    filled_line = ""
+    try:
+        filled_line = await _filled_recently_line(
+            conn, factory_id, date_range, cells)
+    except Exception:  # noqa: BLE001
+        logger.warning("[daily-close] 「你补上去了」取数失败, 本次不带这一句",
+                       exc_info=True)
+
     body = [s["text"] for s in sections]
+    if filled_line:
+        # ⚠️ 排在进度感**之前**: 「你补上去了」是他刚做的事的回音,
+        #    进度感是长期视图。回音先说。
+        body.append(f"> {filled_line}")
     if progress_line:
         body.append(f"> {progress_line}")
 
@@ -186,6 +201,8 @@ async def build_daily_close(
         "factory_id": factory_id,
         "sections": sections,
         "progress_line": progress_line,
+        # 层 1 的回音。空串 = 这一轮他没补(阴性对照守着它不许无条件出现)。
+        "filled_line": filled_line,
         # 4b: 逐日覆盖率。⚠️ 这个数在 `CellResult.coverage_ratio` 上早就算好了,
         #     只是从来没写进台账 —— 于是「你今天补了 2 个百分点」说不出来。
         #     ⛔ 不新建表/台账文件, 只往已有的那行 JSON 加字段。
@@ -275,3 +292,41 @@ async def push_daily_close(
         result.get("notified"), result.get("skipped"), result.get("failed"),
     )
     return {"screen": screen, "notify": result}
+
+
+async def _filled_recently_line(conn, factory_id, date_range, cells) -> str:
+    """「你补上去了，X% → Y%」。⛔ 逻辑在 `filled_recently`，这里只接线。
+
+    ⚠️ 两个覆盖率来自**同一批 facts** —— 现在的覆盖率，和「把他刚补的那几道
+       当作还没补」时的覆盖率。⛔ 不跨天比较：跨天会把「昨天卖得不一样」
+       算成他补出来的增量。
+    """
+    from smartbi.gold.restaurant import filled_recently as _fr
+    from smartbi.gold.restaurant.generic_executor import (
+        _dish_cost_facts, uses_cost_bridge,
+    )
+    from smartbi.gold.restaurant.restaurant_cost_mapping import cost_bridge_pairs
+
+    cost_cell = next((c for c in cells if c.coverage_ratio is not None), None)
+    if cost_cell is None:
+        return ""
+
+    # 运营库: 他最近补的那几道。⚠️ **运营库**, 不是分析库任何一层。
+    import asyncpg as _asyncpg
+    from config import get_settings as _get_settings
+    cretas = await _asyncpg.connect(_get_settings().food_kb_db_url)
+    try:
+        filled = await _fr.recently_filled_dishes(cretas, factory_id)
+    finally:
+        await cretas.close()
+    if not filled:
+        return ""            # ← 阴性对照落在这里
+
+    if not uses_cost_bridge("gross_profit"):
+        return ""
+    bridge = await cost_bridge_pairs(conn, factory_id)
+    facts = await _dish_cost_facts(conn, factory_id, date_range, bridge)
+    names = [str(f.get("name") or "") for f in filled]
+    before = _fr.coverage_without(facts, names)
+    return _fr.render(filled=filled, coverage_now=cost_cell.coverage_ratio,
+                      coverage_before=before)

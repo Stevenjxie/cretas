@@ -3498,6 +3498,9 @@ async def _resolve_missing_cost_cards(
         facts = await _dish_cost_facts(
             conn, factory_id, (window_start, window_end), bridge)
     gaps = _cost_gaps(facts)
+    # 菜名 → 运营库菜品 id。⚠️ 就是 `bridge` 那一对数组, ⛔ 不另取一次数 ——
+    #    另取一次就是两份映射, 而入口指错菜的表现是「预填了别的菜」。
+    name_to_pk = dict(zip(bridge[0], bridge[1]))
     total_rev = sum(float(f["revenue"] or 0) for f in facts)
 
     if not gaps:
@@ -3537,10 +3540,22 @@ async def _resolve_missing_cost_cards(
             "window_start": _date_text(window_start) if window_start else None,
             "window_end": _date_text(window_end) if window_end else None,
             # 机器可读版 —— 正文那张清单的同一批数据, ⛔ 不让下游 parse 正文。
-            "rows": [{"dish": g["name"], "revenue": float(g["revenue"] or 0)}
+            # 🔴 层 1: 每一道后面带**补录入口**(owner 2026-08-15 设计卡)。
+            #    指向**已经存在**的 `RecipeEditScreen`(它本来就收 productTypeId /
+            #    dishName 并有 hasPresetDish) —— ⛔ 不新建屏、不新建菜单项。
+            #    ⛔ 入口里没有单价: 那个表单里根本没有单价字段(源码级已确认)。
+            "rows": [{"dish": g["name"], "revenue": float(g["revenue"] or 0),
+                      "fillEntry": _entry_hint(name_to_pk.get(g["name"], ""),
+                                               g["name"])}
                      for g in gaps[:_MISSING_CARD_ROWS_LIMIT]],
         },
     )
+
+
+def _entry_hint(dish_pk: str, dish_name: str) -> Dict[str, str]:
+    """补录入口。⛔ 逻辑在 `filled_recently`, 这里只接线。"""
+    from smartbi.gold.restaurant.filled_recently import entry_hint
+    return entry_hint(dish_pk, dish_name)
 
 
 #: 结构化行的上限。正文最多列 20 条, 机器可读侧给到 50 —— 两者不同是刻意的:
