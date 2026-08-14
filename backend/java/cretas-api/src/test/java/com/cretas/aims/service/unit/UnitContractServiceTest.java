@@ -59,10 +59,10 @@ class UnitContractServiceTest {
     @ParameterizedTest
     @CsvSource({
             "克,g", "g,g", "公斤,kg", "千克,kg", "KG,kg",
-            "毫升,ml", "mL,ml", "升,l", "件,pcs", "个,pcs", "只,pcs",
+            "毫升,ml", "mL,ml", "升,l", "件,件", "个,个", "只,只",
             "毫米,mm", "公厘,mm", "厘米,cm", "公分,cm", "米,m", "公尺,m", "千米,km", "公里,km",
-            "份,portion", "盒,box", "箱,case", "袋,bag", "包,pack", "瓶,bottle",
-            "罐,can", "框,crate", "筐,crate", "桶,pail", "卷,roll", "片,slice", "项,item"
+            "份,份", "盒,盒", "箱,箱", "袋,袋", "包,包", "瓶,瓶",
+            "罐,罐", "框,框", "筐,筐", "桶,桶", "卷,卷", "片,片", "项,项"
     })
     void normalizeKnownAliases(String raw, String expected) {
         assertThat(service.normalize(FACTORY_ID, raw).code()).isEqualTo(expected);
@@ -97,7 +97,7 @@ class UnitContractServiceTest {
 
         assertThat(service.catalog(FACTORY_ID, UnitUsageScope.INVENTORY_QUANTITY))
                 .extracting(CanonicalUnit::code)
-                .contains("g", "kg", "box", "case", "slice")
+                .contains("g", "kg", "盒", "箱", "片")
                 .doesNotContain("mm", "cm", "m", "km", "minute", "celsius", "percent");
     }
 
@@ -212,7 +212,7 @@ class UnitContractServiceTest {
 
         assertThat(inbound.status()).isEqualTo(UnitConversionStatus.CONVERTED);
         assertThat(inbound.quantity()).isEqualByComparingTo("80");
-        assertThat(inbound.path()).containsExactly("case", "kg");
+        assertThat(inbound.path()).containsExactly("箱", "kg");
         assertThat(reverse.quantity()).isEqualByComparingTo("2.5");
     }
 
@@ -249,7 +249,7 @@ class UnitContractServiceTest {
 
         assertThat(result.status()).isEqualTo(UnitConversionStatus.CONVERTED);
         assertThat(result.quantity()).isEqualByComparingTo("240");
-        assertThat(result.path()).containsExactly("crate", "case", "kg");
+        assertThat(result.path()).containsExactly("框", "箱", "kg");
         assertThat(result.steps()).hasSize(2);
     }
 
@@ -271,18 +271,18 @@ class UnitContractServiceTest {
     void normalizesFactoryCatalogAliasesWithoutTreatingThemAsPackageConversions() {
         UnitOfMeasurement crate = UnitOfMeasurement.builder()
                 .factoryId(FACTORY_ID)
-                .unitCode("crate")
-                .unitName("周转筐")
-                .unitSymbol("筐")
-                .baseUnit("crate")
+                .unitCode("ZZK-01")
+                .unitName("周转筐甲型")
+                .unitSymbol("周转筐甲")
+                .baseUnit("ZZK-01")
                 .category("PACKAGE")
-                .aliasesJson(List.of("筐"))
+                .aliasesJson(List.of("周转筐甲"))
                 .isActive(true)
                 .build();
         when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(crate));
 
-        assertThat(service.normalize(FACTORY_ID, "筐").code()).isEqualTo("crate");
-        assertThat(service.areEquivalent(FACTORY_ID, "筐", "盒")).isFalse();
+        assertThat(service.normalize(FACTORY_ID, "周转筐甲").code()).isEqualTo("zzk-01");
+        assertThat(service.areEquivalent(FACTORY_ID, "周转筐甲", "盒")).isFalse();
     }
 
     @Test
@@ -326,9 +326,9 @@ class UnitContractServiceTest {
                 .build();
         when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(legacyBox));
 
-        assertThat(service.normalize(FACTORY_ID, "盒").code()).isEqualTo("box");
-        assertThat(service.normalize(FACTORY_ID, "箱").code()).isEqualTo("case");
-        assertThat(service.normalize(FACTORY_ID, "box").code()).isEqualTo("box");
+        assertThat(service.normalize(FACTORY_ID, "盒").code()).isEqualTo("盒");
+        assertThat(service.normalize(FACTORY_ID, "箱").code()).isEqualTo("箱");
+        assertThat(service.normalize(FACTORY_ID, "box").code()).isEqualTo("盒");
     }
 
     private UnitOfMeasurement catalogUnit(String code, String category, String alias) {

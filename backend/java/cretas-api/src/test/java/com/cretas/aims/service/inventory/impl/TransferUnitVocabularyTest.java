@@ -90,22 +90,15 @@ class TransferUnitVocabularyTest {
     }
 
     @Test
-    @DisplayName("⚠️ 残留缺口: 有【多个中文写法】的单位(框/筐 → crate)仍然中英不互认")
-    void unitsWithMultipleChineseSpellingsStillDoNotMatchTheirEnglishCode() {
-        // storageUnit 规则 2 是按【码是否被多个中文写法共用】判的, 不看输入是中文还是英文:
-        //   crate 的别名是 {框, 筐} 两个中文 → 命中规则 2 → 框 保留字面「框」, 而 crate 得到码 "crate"。
-        // 于是「库里存 框 + 前端送 crate」这一组合仍会 409。
-        //
-        // 这**不是本次改动的回归**, 而是规则 2 与「中英互认」在多写法单位上的固有冲突:
-        // 要让 框≡crate 成立, 就必须先回答「框和筐是不是同一个单位」——
-        // 而那正是规则 2 拒绝替用户回答的问题(同 只/个/件)。
-        //
-        // 实测影响面(2026-08-14 生产库): 成品包装规格 框 15 条 / crate 1 条。
-        // 只要两侧写法一致就不触发; 混用才会。留此断言是为了让下次有人改这里时**先看见它**,
-        // 而不是以为「中英互认」已经全覆盖。
-        assertThat(same("框", "crate"))
-                .as("框/筐 共用码 crate, 命中规则 2 保留字面 —— 这是已知且刻意的行为, 不是 bug")
-                .isFalse();
+    @DisplayName("✅ 曾经的残留缺口已关闭: 框/筐 各自有码, 与 crate 互认")
+    void unitsWithMultipleChineseSpellingsNowResolveConsistently() {
+        // #2625 当时留了个已知缺口: crate 被 {框, 筐} 两个中文写法共用, 命中 storageUnit 规则 2
+        // 各自保留字面, 于是「库里存 框 + 前端送 crate」仍会 409。
+        // 本次把非科学单位的码改成中文字本身之后, 框 和 筐 各自成为独立单位,
+        // crate 降级为「框」的英文别名 —— 一码多中文的根因消失, 缺口随之关闭。
+        assertThat(same("框", "crate")).as("crate 现在是「框」的别名").isTrue();
+        // 而 框 与 筐 仍然是两个不同的单位(它们本来就是不同的东西)
+        assertThat(same("框", "筐")).as("框和筐是两个单位, 不能因为拼音/英文相同就合并").isFalse();
     }
 
     @Test
