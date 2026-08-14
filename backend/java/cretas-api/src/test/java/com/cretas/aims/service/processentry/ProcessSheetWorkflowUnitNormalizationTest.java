@@ -78,13 +78,17 @@ class ProcessSheetWorkflowUnitNormalizationTest {
 
     private BigDecimal toStorageQuantity(
             BigDecimal reportingQuantity, String reportingUnit, String storageUnit) throws Throwable {
+        // 2026-08-14: 签名多了 factoryId 且改成实例方法 —— 判等改走权威表, 见
+        // ProcessSheetReportingUnitFoldTest。
         Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
                 "convertReportingQuantityToStorage",
-                BigDecimal.class, String.class, String.class, String.class);
+                String.class, BigDecimal.class, String.class, String.class, String.class);
         method.setAccessible(true);
+        // unitContractService 为 null → configuredUnitsEquivalent 退到内置权威表, 正是要钉的口径。
+        ProcessSheetServiceImpl impl = newImpl(null);
         try {
             return (BigDecimal) method.invoke(
-                    null, reportingQuantity, reportingUnit, storageUnit, "原料批次");
+                    impl, FACTORY_ID, reportingQuantity, reportingUnit, storageUnit, "原料批次");
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }
