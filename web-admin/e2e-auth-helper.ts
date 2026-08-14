@@ -30,12 +30,17 @@ export interface LoginResult {
  * 现在按优先级取: E2E_API_BASE > 由 E2E_BASE_URL 推出同源的 /api/mobile > 旧的直连地址。
  * 这样「测试打哪个站点」和「测试问哪个 API」自动一致, 不会再各说各话。
  */
-function resolveApiBase(): string {
-  const explicit = process.env.E2E_API_BASE;
+export function resolveApiBase(): string {
+  // 同一件事仓里有三个变量名在用: E2E_API_BASE / E2E_API_URL / (helper 自己的默认)。
+  // 两个都认, 免得「设了一个没生效」这种只能靠读源码才知道的坑。
+  const explicit = process.env.E2E_API_BASE || process.env.E2E_API_URL;
   if (explicit) return explicit.replace(/\/+$/, '');
   const site = process.env.E2E_BASE_URL;
   if (site) return `${site.replace(/\/+$/, '')}/api/mobile`;
-  return 'http://47.100.235.168:10010/api/mobile';
+  // ⛔ 兜底不再用 47.100.235.168:10010 —— 安全组挡了直连
+  // (ai-workprocess-draft-render.spec.ts:21 早就写下了这条, 但只有那一个文件知道)。
+  // 走 nginx 网关。
+  return 'http://139.196.165.140:8086/api/mobile';
 }
 
 const DEFAULT_API = resolveApiBase();
@@ -43,28 +48,22 @@ const DEFAULT_API = resolveApiBase();
 /**
  * Call the login API and return the token + full login data.
  *
- * <p>若设置了 {@code E2E_ACCESS_TOKEN}, 直接用它, 不再发登录请求 —— 让 CI / 本地可以
- * 复用一个既有会话跑 E2E, 而不必把口令放进环境。{@code E2E_USER_JSON} 可选,
- * 用于同时提供 cretas_user 的内容。
+ * <p>⛔ 试过并撤掉: 加一个 {@code E2E_ACCESS_TOKEN} 分支「直接复用既有会话、不发登录请求」。
+ * 想法成立, 实现有害 —— 同一套 71 条用例, 不注入 <b>68 过 / 3 挂</b>,
+ * 注入(只带 username) <b>34 过 / 37 挂</b>, 注入(从 JWT 解出完整用户) <b>26 过 / 45 挂</b>。
+ * 每改一次更差, 说明问题不在参数而在这条路本身: {@link #injectAuthCookie} 会
+ * {@code goto('/login')} 并重写 localStorage, 与 project 已经带的 storageState 打架。
+ * 而失败信息只说「等不到元素」, 指不到根因。
+ *
+ * <p>要在没有口令的情况下跑, 用 Playwright 自己的机制: 准备好 storageState 文件后
+ * {@code npx playwright test --project <name> --no-deps}(跳过 vue-auth 登录步骤)。
+ * 实测这条路是 68/71。
  */
 export async function fetchLoginToken(
   username = 'factory_admin1',
   password = '123456',
   apiBase = DEFAULT_API,
 ): Promise<LoginResult> {
-  const injected = process.env.E2E_ACCESS_TOKEN;
-  if (injected) {
-    let loginData: Record<string, unknown> = { username };
-    if (process.env.E2E_USER_JSON) {
-      try {
-        const parsed = JSON.parse(process.env.E2E_USER_JSON);
-        loginData = { ...loginData, ...(parsed.factoryUser || {}), userId: parsed.id, username: parsed.username };
-      } catch {
-        // 解析不了就退回最小信息, 不要因为一个可选变量把整轮 E2E 拖垮
-      }
-    }
-    return { token: injected, loginData };
-  }
   const res = await fetch(`${apiBase}/auth/unified-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
