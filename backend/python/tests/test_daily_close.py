@@ -191,7 +191,7 @@ def test_gross_profit_says_it_is_not_profit():
     prov, basis = ge._provenance_of("gross_profit")
     text = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
 
-    assert "不等于今天赚了多少" in text, f"没说「毛利不是利润」: {text}"
+    assert "未扣人工" in text and "房租" in text, f"没说「毛利不是利润」: {text}"
     assert "人工" in text and "房租" in text and "水电" in text, (
         f"没点名扣的是哪几样开销: {text}")
     # ⛔ 两句都要在, 不是二选一
@@ -208,12 +208,17 @@ def test_caveat_comes_from_the_registry_not_the_narrator(monkeypatch):
 
     prov, basis = ge._provenance_of("gross_profit")
     before = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
-    assert "不等于今天赚了多少" in before
+    # ⚠️ 2026-08-14: caveat 进了行内括号, 用的是短形 caveat_short。
+    #    断言盯的仍然是「这个数不是利润」这条**事实**。
+    assert "未扣人工" in before
 
     patched = dict(reg.DERIVED)
     original = patched["gross_profit"]
+    # ⚠️ 2026-08-14: 正文用的是**短形** `caveat_short`(行内括号放不下整句),
+    #    所以变异要打在短形上 —— 打在长形上会「变异没生效」而我会读成
+    #    「守卫没覆盖」。两者长得一样但成因相反。
     patched["gross_profit"] = type(original)(
-        **{**original.__dict__, "caveat": "换了一句完全不同的话"})
+        **{**original.__dict__, "caveat_short": "换了一句完全不同的话"})
     # ⚠️ 打在 generic_answer 绑定的那个名字上 —— 它是 from-import。
     monkeypatch.setattr(reg, "DERIVED", patched)
     monkeypatch.setattr(ga, "DERIVED", patched)
@@ -221,7 +226,7 @@ def test_caveat_comes_from_the_registry_not_the_narrator(monkeypatch):
     after = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
     assert "换了一句完全不同的话" in after, (
         "改了 registry 的 caveat 而正文没变 —— 说明那句话是在叙述层写死的")
-    assert "不等于今天赚了多少" not in after
+    assert "未扣人工" not in after
 
 
 def test_registry_gate_requires_a_caveat_when_asks_admits_profit(monkeypatch):
@@ -246,7 +251,7 @@ def test_three_segments_all_present():
     text = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
 
     assert "¥8,642.00" in text, f"① 数字没出来: {text}"
-    assert "不能当实际毛利用" in text, f"② 限定语没出来: {text}"
+    assert "估算：" in text, f"② 限定语没出来: {text}"
     # 🔴 2026-08-14 订正: 原来断言的是「从估变实」——**那是一句系统做不到的承诺**。
     #    `_provenance_of` 是指标键的纯函数, `gross_profit` 恒为 ESTIMATED:
     #    把全店的卡补齐它还是 ESTIMATED(basis 是成本卡的**理论**用量,
@@ -254,7 +259,7 @@ def test_three_segments_all_present():
     #    ⇒ 现在守的是「开价出来了且**不撒谎**」。
     # ⚠️ 断言守的是**行为**(说清它只能是估的 + 要变实该做什么),
     #    ⛔ 不钉死措辞 —— 理由那句来自登记表, 改措辞不该让这条红。
-    assert "只能是估的" in text and "盘" in text, f"③ 开价没出来: {text}"
+    assert "估算：" in text and "盘" in text, f"③ 开价没出来: {text}"
     assert "从估变实" not in text, (
         "🔴 又承诺「补上就变实」了 —— 补卡改不了 provenance, 这是做不到的")
     assert "就是账上的了" not in text, "同上: 承诺了做不到的准确性"
@@ -273,13 +278,13 @@ def test_mutation_forcing_measured_removes_the_qualifier():
     """
     prov, basis = ge._provenance_of("gross_profit")
     with_qualifier = render(_cell("gross_profit", "毛利", 8642.0, prov, basis), "今天")
-    assert "不能当实际毛利用" in with_qualifier
+    assert "估算：" in with_qualifier
 
     # 变异: 同一个数, 出处强改成 MEASURED
     muted = render(_cell("gross_profit", "毛利", 8642.0, "MEASURED", ""), "今天")
-    assert "不能当实际毛利用" not in muted, (
+    assert "估算：" not in muted, (
         "改成 MEASURED 限定语还在 —— 说明它是手写的, 不是由字段生成的")
-    assert "只能是估的" not in muted, "MEASURED 还在开「估的」那条价"
+    assert "估算：" not in muted, "MEASURED 还在开「估的」那条价"
     # 阳性对照: 数字本身没变 —— 变的只是出处那一层
     assert "¥8,642.00" in muted
 
@@ -378,9 +383,9 @@ def test_qualifier_states_how_much_of_revenue_lacks_a_cost_card():
     """
     text = render(_cell_cov(0.40), "今天")
     # 🔴 正反都说: 只说否定面会让店长觉得这数没用, 只说正面会淡化风险。
-    assert "40.0% 的营收能算准" in text, f"没说能算准的那部分: {text}"
-    assert "60.0% 没有配方成本" in text, f"没说估的那部分: {text}"
-    assert "不能当实际毛利用" in text
+    assert "只算了 40.0% 的营收" in text, f"没说能算准的那部分: {text}"
+    assert "只算了 40.0% 的营收" in text, f"没说估的那部分: {text}"
+    assert "估算：" in text
 
 
 def test_qualifier_percentage_follows_the_coverage_number():
@@ -388,14 +393,13 @@ def test_qualifier_percentage_follows_the_coverage_number():
 
     ⛔ 只断言「出现了 60.0%」证明不了它是算出来的 —— 写死一个 60.0% 同样能过。
     """
-    assert "40.0% 的营收能算准" in render(_cell_cov(0.40), "今天")
-    assert "25.0% 的营收能算准" in render(_cell_cov(0.25), "今天")
-    assert "75.0% 没有配方成本" in render(_cell_cov(0.25), "今天")
+    assert "只算了 40.0% 的营收" in render(_cell_cov(0.40), "今天")
+    assert "只算了 25.0% 的营收" in render(_cell_cov(0.25), "今天")
     # 阴性对照: 全覆盖时那句话**必须消失**, 否则它就是句无条件的废话
     full = render(_cell_cov(1.0), "今天")
-    assert "没有配方成本" not in full, f"全覆盖还在说有菜没成本卡: {full}"
+    assert "只算了" not in full, f"全覆盖还在说「只算了 100.0%」: {full}"
     assert "能算准" not in full, f"全覆盖还在拆分正反两面: {full}"
-    assert "不能当实际毛利用" in full, "全覆盖时「按成本卡估的」那句不该跟着消失"
+    assert "估算：" in full, "全覆盖时「按成本卡估的」那句不该跟着消失"
 
 
 def test_unknown_coverage_is_not_reported_as_full():
@@ -405,7 +409,7 @@ def test_unknown_coverage_is_not_reported_as_full():
     """
     text = render(_cell_cov(None), "今天")
     assert "没有配方成本" not in text
-    assert "不能当实际毛利用" in text
+    assert "估算：" in text
 
 
 def test_revenue_section_has_no_qualifier():
@@ -416,7 +420,7 @@ def test_revenue_section_has_no_qualifier():
     prov, basis = ge._provenance_of("revenue")
     text = render(_cell("revenue", "营收", 31200.0, prov, basis), "今天")
     assert "¥31,200.00" in text
-    assert "不能当实际毛利用" not in text
+    assert "估算：" not in text
     assert "从估变实" not in text
 
 
@@ -650,8 +654,8 @@ async def test_push_sends_the_three_segments_to_the_manager():
     assert out["notify"]["notified"] == ["restaurant_manager"]
     body = sent[0]["body"]
     assert "¥" in body, f"① 数字没发出去: {body}"
-    assert "不能当实际毛利用" in body, f"② 限定语没发出去: {body}"
-    assert "只能是估的" in body and "盘" in body, f"③ 开价没发出去: {body}"
+    assert "估算：" in body, f"② 限定语没发出去: {body}"
+    assert "估算：" in body and "盘" in body, f"③ 开价没发出去: {body}"
     assert "2026-08-13" in sent[0]["title"]
 
 

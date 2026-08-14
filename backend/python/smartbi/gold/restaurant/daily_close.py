@@ -53,9 +53,15 @@ from smartbi.gold.restaurant.generic_executor import execute_cell
 #:    第一版我按直觉写了 `"total"`, 登记表里根本没有这个键, `execute_cell`
 #:    当场 `UnsupportedCell` —— 而那是**对的**: 日结不该有自己的一套聚合名。
 DAILY_CLOSE_CELLS: Tuple[Tuple[str, str, str], ...] = (
+    # 🔴 owner 2026-08-14: **最重要的数排第一。** 这一屏叫「今天怎么样」,
+    #    而店长问的是「今天赚没赚」—— 那就是毛利。
+    # ⚠️ 而毛利恰好是**最不确定**的那个。把它排第三、埋在营收订单数后面,
+    #    本身就是一种回避。⇒ 摆第一, 并且**在同一行说清它有多不确定**
+    #    (见 `generic_answer._inline_qualifier`)。
+    # ⛔ 改这个顺序之前先想清楚: **顺序就是「我们认为什么最重要」的声明。**
+    ("gross_profit", "all", "summary"),
     ("revenue", "all", "summary"),
     ("orders", "all", "summary"),
-    ("gross_profit", "all", "summary"),
 )
 
 #: 打烊那一屏的标题。⛔ 不说「日结」——那是我们的词，店长说「今天怎么样」。

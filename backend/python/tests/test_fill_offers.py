@@ -116,7 +116,8 @@ def test_estimated_offer_says_from_estimate_to_actual():
     #    补卡提高的是**覆盖率**(那句由 `offers_for_cost_gaps` 说, 带数), 不是出处。
     #    ⇒ 这里守的改成「说清它是理论用量、以及要变准该做什么(盘库)」。
     assert "只能是估的" in text, f"没说清它是结构性的估算: {text}"
-    assert "理论" in text, f"没说清这是理论用量: {text}"
+    # ⚠️ 2026-08-14: 「用的是理论用量」这半句移进了行内括号(贴着数字),
+    #    这里只剩**行动**那一半 —— 同一个事实不在两处说。
     assert "盘" in text, f"没说清要变准该做什么: {text}"
     assert "从估变实" not in text, "🔴 又承诺「补上就变实」了 —— 补卡改不了 provenance"
     assert "毛利率" in text

@@ -891,3 +891,92 @@ def test_screen_says_each_thing_once():
                 "coverage_denominator": 10000.0}),
     ])
     assert body.count("40.2%") == 1, f"同一个覆盖率在一屏上出现多次:\n{body}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 整屏排序 + 限定语贴着数字（owner 2026-08-14）
+# 🔴 判据: **合并不许变成删减** —— 三条事实各有一条断言, 一条都不许消失。
+# ═══════════════════════════════════════════════════════════════════════════
+def _profit_cell():
+    from smartbi.gold.restaurant.generic_executor import CellResult
+    return CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 124071.85}], (), "", "ESTIMATED",
+        "成本卡的理论用量", 0.402, (), ({"name": "A", "revenue": 300.0},), 10000.0)
+
+
+def test_the_most_important_number_is_first():
+    """🔴 这一屏叫「今天怎么样」, 店长问的是「今天赚没赚」—— 那就是毛利。
+
+    ⚠️ 而毛利恰好是**最不确定**的那个。把它排第三本身就是一种回避。
+    """
+    from smartbi.gold.restaurant.daily_close import DAILY_CLOSE_CELLS
+
+    assert DAILY_CLOSE_CELLS[0][0] == "gross_profit", (
+        f"第一行不是毛利, 是 {DAILY_CLOSE_CELLS[0][0]} —— 把最重要的数往后排")
+
+
+def test_qualifier_rides_on_the_number_not_a_pile_below():
+    """限定语必须和它限定的那个数**在同一段**。"""
+    from smartbi.gold.restaurant.generic_answer import render
+
+    text = render(_profit_cell(), "今天")
+    first = text.split("\n\n")[0]
+    assert "124,071.85" in first, "第一段不是那个数"
+    assert "（" in first and "）" in first, f"限定语没跟着数字: {first}"
+
+
+def test_merging_did_not_drop_any_of_the_four_facts():
+    """🔴 三条(+行动那条)事实各有一条断言 —— 合并之后一条都不许消失。
+
+    · 这个数是什么      caveat_short        未扣人工、房租、水电
+    · 覆盖多少          coverage_ratio      只算了 40.2% 的营收
+    · 为什么只能是估的  estimation_basis    用的是成本卡的理论用量
+    · 要怎样才变实      irreducible_reason  要更准得盘一次库
+    """
+    from smartbi.gold.restaurant.generic_answer import render
+
+    first = render(_profit_cell(), "今天").split("\n\n")[0]
+    assert "未扣人工" in first, "① 丢了「不等于利润」那条"
+    assert "40.2%" in first, "② 丢了覆盖率那条"
+    assert "理论用量" in first, "③ 丢了「为什么只能是估的」那条"
+    assert "盘一次库" in first, "④ 丢了「要怎样才变实」那条"
+
+
+@pytest.mark.parametrize("victim,expect_gone", [
+    ("caveat_short", "未扣人工"),
+    ("estimation_basis", "理论用量"),
+    ("irreducible", "盘一次库"),
+])
+def test_mutation_removing_one_fact_turns_its_assertion_red(
+        monkeypatch, victim, expect_gone):
+    """🔴 变异对照: 拿掉其中一条事实, 对应断言必须红。
+
+    ⚠️ 先证明**行为变了**(那句话真的从正文里消失了)再看断言。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+    from smartbi.gold.restaurant.generic_answer import render
+
+    before = render(_profit_cell(), "今天").split("\n\n")[0]
+    assert expect_gone in before                      # 阳性对照: 改之前在
+
+    if victim == "caveat_short":
+        import dataclasses
+        mutated = dict(reg.DERIVED)
+        mutated["gross_profit"] = dataclasses.replace(
+            mutated["gross_profit"], caveat_short="")
+        monkeypatch.setattr(reg, "DERIVED", mutated)
+        after = render(_profit_cell(), "今天").split("\n\n")[0]
+    elif victim == "estimation_basis":
+        from smartbi.gold.restaurant.generic_executor import CellResult
+        cell = _profit_cell()
+        after = render(CellResult(
+            cell.metric_key, cell.metric_label, cell.dimension_key,
+            cell.aggregation_key, cell.unit, cell.rows, (), "",
+            "MEASURED", "", cell.coverage_ratio), "今天").split("\n\n")[0]
+    else:
+        monkeypatch.setattr(reg, "IRREDUCIBLE_ESTIMATE_COLUMNS", {})
+        after = render(_profit_cell(), "今天").split("\n\n")[0]
+
+    assert expect_gone not in after, (
+        f"🔴 变异没生效 —— 「{expect_gone}」还在, 说明它不是从那个来源取的")
