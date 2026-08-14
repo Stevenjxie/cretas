@@ -250,6 +250,26 @@ def _caveat_of(metric_key: str) -> str:
     return (getattr(entry, "caveat", "") or "").strip() if entry else ""
 
 
+def render_headline(result, window_label: str) -> str:
+    """**开头那一段** —— 数字 + 贴着它的内联限定。两条路共用这一处。
+
+    🔴 owner 2026-08-14: 日结那一屏重排之后, 问答那条路**一条都没跟着变** ——
+       它在第 3 行给店长看「加权毛利率 82.5%」而屏上没有「这是毛利不是利润」、
+       没有「理论用量」、没有「要盘一次库」。**店长最可能的读法是「这生意真赚钱」。**
+       数对上了、话没对上, 而话才是他读的东西。
+    ⇒ 判据从「两条路给出同一个数」抬成 **「两条路的开头必须一致」**。
+
+    ⛔ 问答那边**不许复制**这段逻辑 —— 复制就是第三份。它构造一个 `CellResult`
+       调这里, 后面再各走各的深度(前 10 名/拖累/低毛利那几张清单是
+       「菜品毛利分析」该有的深度, 保留)。
+    """
+    body = _render_body(result, window_label)
+    if not body or result.missing_columns:
+        return body
+    inline = _inline_qualifier(result)
+    return f"{body.rstrip('。')}（{inline}）。" if inline else body
+
+
 def _inline_qualifier(result) -> str:
     """毛利那一行括号里的话 —— **三条事实合成一段**, 一条都不许丢。
 
@@ -327,9 +347,7 @@ def render(result: CellResult, window_label: str) -> str:
     #      ② 覆盖多少          `coverage_ratio`    只算了 40.2% 的营收
     #      ③ 为什么只能是估的  `estimation_basis`  用的是成本卡的理论用量
     #    闸: `tests/test_margin_parity.py` 里三条断言各守一条, 变异验过。
-    inline = _inline_qualifier(result)
-    if inline:
-        body = f"{body.rstrip('。')}（{inline}）。"
+    body = render_headline(result, window_label)
     parts = [body]
     # ②c 被排除的菜**指名道姓**。
     #
