@@ -898,11 +898,16 @@ def test_screen_says_each_thing_once():
 # 🔴 判据: **合并不许变成删减** —— 三条事实各有一条断言, 一条都不许消失。
 # ═══════════════════════════════════════════════════════════════════════════
 def _profit_cell():
-    from smartbi.gold.restaurant.generic_executor import CellResult
+    """⚠️ basis 用**产品自己的两个常量拼**, ⛔ 不在夹具里写死一个串 ——
+    写死就会像 2026-08-14 那次: 产品补了「折扣摊派」而夹具还是旧的, 于是
+    断言测的是一个生产上不存在的形状(形态 B‴)。"""
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, _DISCOUNT_ALLOC_BASIS, CellResult)
     return CellResult(
         "gross_profit", "毛利", "all", "summary", "money",
         [{"gross_profit": 124071.85}], (), "", "ESTIMATED",
-        "成本卡的理论用量", 0.402, (), ({"name": "A", "revenue": 300.0},), 10000.0)
+        f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}", 0.402, (),
+        ({"name": "A", "revenue": 300.0},), 10000.0)
 
 
 def test_the_most_important_number_is_first():
@@ -926,24 +931,32 @@ def test_qualifier_rides_on_the_number_not_a_pile_below():
     assert "（" in first and "）" in first, f"限定语没跟着数字: {first}"
 
 
-#: 四条事实 -> (人话名, 在正文里怎么认出它)。**唯一一份** ——
-#: ⛔ 两条路各写一份就是「守卫也有两份」, 那正是我们在修的那个病。
-FOUR_FACTS = (
+#: 限定语必须说全的**估算成分**与其它事实 -> (人话名, 在正文里怎么认出它)。
+#: **唯一一份** —— ⛔ 两条路各写一份就是「守卫也有两份」, 那正是我们在修的病。
+#:
+#: 🔴 2026-08-14 订正: 原来叫 REQUIRED_FACTS, **漏了折扣摊派**。
+#:    `理论用量` 管**成本侧**, `折扣摊派` 管**营收侧** —— 两个不同的估算成分,
+#:    而闸只覆盖了一个。owner 靠「两条路 diff=0.0, 一边摊了一边没摊不可能相等」
+#:    读出来的, **不是这组断言自己发现的**。
+#: 📌 由此得到的判据: **一组「必须都在」的断言, 它自己的完备性没有任何东西在守。**
+#:    ⇒ 下面 `test_the_fact_list_covers_every_estimation_component` 补这一条。
+REQUIRED_FACTS = (
     ("这个数不是利润", "未扣人工"),
     ("覆盖多少", "% 的营收"),
-    ("为什么只能是估的", "理论用量"),
+    ("为什么只能是估的(成本侧)", "理论用量"),
+    ("折扣怎么处理的(营收侧)", "摊派的折扣"),
     ("要怎样才变实", "盘一次库"),
 )
 
 
-def assert_four_facts_present(first_segment, where):
+def assert_required_facts_present(first_segment, where):
     """两条路共用这一个断言函数。"""
-    for name, needle in FOUR_FACTS:
+    for name, needle in REQUIRED_FACTS:
         assert needle in first_segment, (
             f"[{where}] 丢了「{name}」那条事实: {first_segment!r}")
 
 
-def test_merging_did_not_drop_any_of_the_four_facts():
+def test_merging_did_not_drop_any_required_fact():
     """🔴 三条(+行动那条)事实各有一条断言 —— 合并之后一条都不许消失。
 
     · 这个数是什么      caveat_short        未扣人工、房租、水电
@@ -954,7 +967,7 @@ def test_merging_did_not_drop_any_of_the_four_facts():
     from smartbi.gold.restaurant.generic_answer import render
 
     first = render(_profit_cell(), "今天").split("\n\n")[0]
-    assert_four_facts_present(first, "日结")
+    assert_required_facts_present(first, "日结")
 
 
 @pytest.mark.parametrize("victim,expect_gone", [
@@ -1015,12 +1028,12 @@ def test_both_paths_share_one_headline_implementation():
         "🔴 合计毛利率又单独成行了 —— 它会被读成「这个店的毛利率」")
 
 
-def test_the_qa_headline_carries_the_same_four_facts():
+def test_the_qa_headline_carries_the_same_required_facts():
     """🔴 判据三: 与日结**共用同一组断言**, ⛔ 不许各写一份。"""
     from smartbi.gold.restaurant.generic_answer import render_headline
 
     first = render_headline(_profit_cell(), "2026-08-12 当天")
-    assert_four_facts_present(first, "问答")
+    assert_required_facts_present(first, "问答")
     # 阳性对照: 数字本身在
     assert "124,071.85" in first
 
@@ -1061,3 +1074,50 @@ def test_qa_actions_come_from_fill_offers_not_hand_written():
         "gross_profit", "毛利", "all", "summary", "money",
         [{"gross_profit": 1.0}], (), "", "MEASURED", ""))
     assert empty, "开价为空时连兜底建议都没有 —— 会留一个空的「建议动作:」"
+
+
+def test_the_fact_list_covers_every_estimation_component():
+    """🔴 判据: **一组「必须都在」的断言, 它自己的完备性没有任何东西在守。**
+
+    2026-08-14 实测: `折扣摊派` 漏了整整一轮 —— 是 owner 靠「两条路 diff=0.0,
+    一边摊了一边没摊不可能相等」读出来的, **不是这组断言自己发现的**。
+
+    ⇒ 这条对照: 限定语里出现的**每一个估算成分**(basis 里用顿号分开的那些),
+      都必须在 `REQUIRED_FACTS` 里有一条认得它。
+    ⚠️ 它只覆盖 basis 那一维; `caveat_short` / 覆盖率 / 不可消除原因三条
+      仍然靠人维护 —— 设计卡上写明了, 与那张列标注同等待遇。
+    """
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, _DISCOUNT_ALLOC_BASIS)
+
+    components = [_COST_CARD_BASIS, _DISCOUNT_ALLOC_BASIS]
+    assert components, "一个估算成分都没有 —— 这条断言会恒绿"
+    needles = [n for _name, n in REQUIRED_FACTS]
+    for comp in components:
+        assert any(n in comp for n in needles), (
+            f"🔴 估算成分「{comp}」在 REQUIRED_FACTS 里没有对应的断言 —— "
+            f"限定语说了它, 而没有任何东西守它在不在")
+
+
+def test_progress_line_stays_out_of_the_qa_body():
+    """🔴 owner 2026-08-14 裁定: 进度感**不进问答正文**。
+
+    「你的数据补到 6 类里的 2 类了」是**全局状态**, 属于「今天整体怎么样」那一屏。
+    问答回答的是他问的那个问题, ⛔ 不该附带全局播报。
+    ⚠️ 但**留在结构化输出里** —— 将来前端做常驻进度条会用到, 那才是它该待的地方。
+
+    📌 判据: **附带信息进不进正文, 看它是不是在改善这一次的回答。**
+       「先补这 3 道」**要**进(它直接改善他刚问的那个答案);
+       「6 类补了 2 类」**不进**(它跟这次问的没关系)。
+    """
+    import inspect
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    assert "data_progress" not in src, (
+        "问答正文里接了进度感 —— 那是全局播报, 不改善这一次的回答")
+    # 阳性对照: 日结那一屏**该**有它, 且结构化字段在
+    from smartbi.gold.restaurant import daily_close as dc
+    dc_src = inspect.getsource(dc.build_daily_close)
+    assert "data_progress" in dc_src, "日结那一屏反倒没有 —— 它才是它该待的地方"
+    assert '"progress_line"' in dc_src, "结构化输出里没带出去, 前端做进度条拿不到"
