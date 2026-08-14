@@ -22,7 +22,7 @@ const UNIT_ALIASES: Record<string, string> = {
   kg: 'kg', '千克': 'kg', '公斤': 'kg',
   g: 'g', '克': 'g',
   box: 'box', '盒': 'box',
-  case: 'case', '箱': 'case',
+  case: 'case', carton: 'case', '箱': 'case',
   slice: 'slice', '片': 'slice',
   bag: 'bag', '袋': 'bag',
   pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs', '个': 'pcs', '只': 'pcs', '件': 'pcs',

@@ -1,4 +1,4 @@
-import { canonicalUnitCode } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount } from '@/utils/unitPricing';
 import { bigCategoryOf } from '@/utils/materialCategory';
 
 export type TransferItemType = 'RAW_MATERIAL' | 'FINISHED_GOODS' | 'PACKAGING_MATERIAL';
@@ -369,7 +369,7 @@ export function toTransferItemPayload(row: TransferCreateRow) {
     ...identity,
     itemName: row.itemName,
     quantity: row.quantity,
-    unit: canonicalUnitCode(row.unit),
+    unit: canonicalUnitCodeKeepingCount(row.unit),
     ...(row.materialPackagingSpecId
       ? { materialPackagingSpecId: row.materialPackagingSpecId }
       : {}),

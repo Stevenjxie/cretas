@@ -23,10 +23,22 @@ on:
     paths:
       - 'web-admin/**'
       - '.github/workflows/web-admin-gate.yml'
+      # 🔴 2026-08-14: unitDisplayContract.spec.ts 直接读**后端**权威表源码比对
+      # (backend/.../UnitContractServiceImpl.java), 它的文档写着「后端加了新单位而前端
+      # 没跟, 这里就会红」—— 而触发条件只有 web-admin/**, 对这个场景恰好是瞎的。
+      # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
+      # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
   pull_request:
     paths:
       - 'web-admin/**'
       - '.github/workflows/web-admin-gate.yml'
+      # 🔴 2026-08-14: unitDisplayContract.spec.ts 直接读**后端**权威表源码比对
+      # (backend/.../UnitContractServiceImpl.java), 它的文档写着「后端加了新单位而前端
+      # 没跟, 这里就会红」—— 而触发条件只有 web-admin/**, 对这个场景恰好是瞎的。
+      # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
+      # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}

@@ -60,11 +60,17 @@ const hasHan = (value: string) => /\p{Script=Han}/u.test(value);
 
 describe('单位展示契约: 计数/包装单位不得以英文码示人', () => {
   it('后端权威表解析成功 (阳性对照 —— 解析失败会让下面所有断言假绿)', () => {
+    // #2628 起, 非科学换算单位改用**中文字本身**做码, 英文降为别名。
     expect(COUNTING.map((u) => u.code)).toEqual(
-      expect.arrayContaining(['box', 'bag', 'pcs', 'case', 'slice', 'pack', 'bottle', 'can']),
+      expect.arrayContaining(['盒', '袋', '件', '箱', '片', '包', '瓶', '罐']),
     );
     expect(SI.map((u) => u.code)).toEqual(expect.arrayContaining(['kg', 'g', 'ml', 'mm']));
-    expect(ALIASES.get('bag')).toContain('袋');
+    expect(ALIASES.get('袋')).toContain('bag');
+    expect(ALIASES.get('件')).toContain('pcs');
+    // 个/只 各自独立且**没有**英文别名 —— 一只鸡不是一件包材 (#1976)。
+    // 这条同时守住前端: 谁把 个 折回 pcs, 落库/回传就会与后端对不上。
+    expect(ALIASES.get('个') ?? []).not.toContain('pcs');
+    expect(ALIASES.get('只') ?? []).not.toContain('pcs');
   });
 
   describe.each([
@@ -73,8 +79,20 @@ describe('单位展示契约: 计数/包装单位不得以英文码示人', () =
   ])('%s', (_name, display) => {
     it.each(COUNTING.map((u) => u.code))('规范码 %s 显示为中文', (code) => {
       const shown = display(code);
-      expect(shown, `${code} 显示成了「${shown}」—— 英文码不该给用户看到`).not.toBe(code);
+      // ⚠️ 这里原本还断言 shown !== code。#2628 之后规范码本身就是中文,
+      // 那条恒红且不再有意义(「盒」显示成「盒」正是想要的)。
+      // 「英文不得示人」的牙齿移到下面那条**英文别名**断言上 —— 那才是真会漏英文的方向。
       expect(hasHan(shown), `${code} 显示成了「${shown}」, 应为中文`).toBe(true);
+    });
+
+    it.each(
+      COUNTING.flatMap((u) => (ALIASES.get(u.code) ?? [])
+        .filter((a) => /^[A-Za-z][A-Za-z0-9]*$/.test(a))
+        .map((a) => [u.code, a])),
+    )('%s 的英文别名「%s」必须翻成中文, 不能原样示人', (_code, alias) => {
+      const shown = display(alias);
+      expect(shown, `英文别名 ${alias} 被原样显示给用户了`).not.toBe(alias);
+      expect(hasHan(shown), `${alias} 显示成了「${shown}」, 应为中文`).toBe(true);
     });
 
     it.each(

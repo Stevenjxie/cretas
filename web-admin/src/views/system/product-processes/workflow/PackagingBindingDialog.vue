@@ -2,7 +2,7 @@
 import { computed, reactive, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { bomRecipeApi, type BomItemSubstituteView, type BomRecipeItemPayload, type BomRecipeItemView } from '@/api/bom';
-import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@/utils/unitPricing';
 
 /**
  * 画布上的包材编辑弹窗 —— Task 1 (2026-08-05 bom-canvas-phase3-2)。
@@ -79,7 +79,7 @@ const selectedMaterial = computed(() => props.materials.find((item) => item.id =
 
 /** 与 index.vue 的 recipeUnitForMaterial(category='PACKAGING') 同规则: 缺档案单位兜底 pcs。 */
 const quantityUnit = computed(() => (
-  canonicalUnitCode(selectedMaterial.value?.quantityUnit || selectedMaterial.value?.unit) || 'pcs'
+  canonicalUnitCodeKeepingCount(selectedMaterial.value?.quantityUnit || selectedMaterial.value?.unit) || 'pcs'
 ));
 const quantityUnitLabel = computed(() => displayUnit(quantityUnit.value));
 const baseUnitLabel = computed(() => displayUnit(props.baseUnit));
@@ -122,7 +122,7 @@ const substituteCandidates = computed<PackagingMaterialOption[]>(() => {
 
 function substituteUnit(materialTypeId: string): string {
   const material = props.materials.find((item) => item.id === materialTypeId);
-  return canonicalUnitCode(material?.quantityUnit || material?.unit);
+  return canonicalUnitCodeKeepingCount(material?.quantityUnit || material?.unit);
 }
 
 function substituteNeedsExplicitFactor(materialTypeId: string): boolean {
