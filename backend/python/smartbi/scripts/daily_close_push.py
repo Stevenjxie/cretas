@@ -82,6 +82,9 @@ async def main() -> int:
                 # ⚠️ 正文长度而不是正文本身 —— 台账不该变成日志(那会把经营数字
                 #    抄一份到日志文件里, 而日志的权限比库松)。
                 "answer_chars": len(screen["answer_text"]),
+                # 4b: 逐日覆盖率。有了它才说得出「你今天补了 2 个百分点」。
+                # ⛔ 只追加字段, 不动既有的任何一个。
+                "coverage_ratio": screen.get("coverage_ratio"),
             })
         except Exception as e:  # noqa: BLE001 — 一个租户炸不该带走其余租户
             rows.append({"factory_id": factory_id, "error": f"{type(e).__name__}: {e}"})

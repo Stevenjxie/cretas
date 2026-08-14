@@ -721,3 +721,127 @@ def test_the_irreducible_annotation_is_the_only_hand_written_bit():
         assert column in required, f"{column} 没有任何指标依赖它 —— 过期标注"
         assert reason.strip(), f"{column} 没写为什么补齐也还是估的"
     assert_registry_self_consistent()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 进度感 —— 「你的数据补到 N 类里的 M 类了」(路线图第 4 项)
+# ═══════════════════════════════════════════════════════════════════════════
+def test_data_sources_are_derived_not_a_hand_written_list():
+    """类别由**列**推出来: 有几个不同的值就是几类。
+
+    ⛔ 本仓不许出现「一共有哪五类」的常数 —— 凑数会让它与登记表对不上。
+    """
+    from smartbi.gold.restaurant.metric_registry import (
+        COLUMN_SOURCES, columns_of_source, data_sources)
+
+    got = data_sources()
+    assert got, "一类都推不出来 —— 下面的断言会恒真"
+    assert len(got) == len(set(COLUMN_SOURCES.values())), "类别数与标注对不上"
+    # 每一类都必须真的挂着列(反向)
+    for source in got:
+        assert columns_of_source(source), f"{source} 是个空类"
+    # 阳性对照: 已知的两类必须在里面, 且不在同一类
+    #   ⚠️ 同一张 fact_pos_transaction 上, 净额是 POS 自带的、税额要另接 ——
+    #      按表名硬猜会把它们并成一类, 那就没有进度可言了。
+    assert COLUMN_SOURCES["fact_pos_transaction.net_amount"] != \
+        COLUMN_SOURCES["fact_pos_transaction.tax_amount"], (
+        "按表名归类了 —— 那是另一种手写")
+
+
+def test_a_new_requires_column_lands_in_a_class_automatically(monkeypatch):
+    """🔴 变异对照: 给某个指标的 requires 加一列 → 类别与计数必须跟着变。
+
+    ⚠️ 先证明**行为变了**再看断言。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    before_n = len(reg.data_sources())
+    before_cols = reg.columns_of_source("损耗盘点")
+
+    # 变异: 新登记一列, 归到已有的一类
+    mutated = dict(reg.COLUMN_SOURCES)
+    mutated["fact_restaurant_wastage.reason"] = "损耗盘点"
+    monkeypatch.setattr(reg, "COLUMN_SOURCES", mutated)
+
+    after_cols = reg.columns_of_source("损耗盘点")
+    assert after_cols != before_cols, "🔴 变异没生效 —— 归类读的不是登记表"
+    assert "fact_restaurant_wastage.reason" in after_cols
+    assert len(reg.data_sources()) == before_n, "归到已有类不该改变类别数"
+
+    # 再变异: 新登记一列且是**新的一类** → 类别数必须 +1
+    mutated2 = dict(mutated)
+    mutated2["fact_pos_transaction.member_id"] = "会员系统"
+    monkeypatch.setattr(reg, "COLUMN_SOURCES", mutated2)
+    assert len(reg.data_sources()) == before_n + 1, (
+        "新来源没有变成新的一类 —— 那这个进度条永远停在同样的分母上")
+
+
+def test_one_off_sources_are_not_measured_by_fill_rate():
+    """🔴 一次性接入的类只问「接了没有」, ⛔ 不算填充率。
+
+    POS 那 13% 不是「没录全」, 是那些单本来就没退菜、没打折。
+    把**合法的空**当成缺失 —— 本仓第四次踩这一族。
+    """
+    from smartbi.gold.restaurant import data_progress as dp
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    assert reg.intake_of_source("POS 流水") == reg.INTAKE_ONE_OFF
+    assert reg.intake_of_source("成本卡") == reg.INTAKE_PER_ITEM, (
+        "成本卡被标成一次性接入了 —— 那它就永远只有有/无两档")
+
+    # 87% 填充(有退菜列大量为空) 仍然应当判「有」, ⛔ 不判「部分」
+    fills = {c: 0.87 for c in reg.columns_of_source("POS 流水")}
+    status, _ = dp._status_binary("POS 流水", fills)
+    assert status == dp.STATUS_HAVE, f"POS 被填充率判成了 {status}"
+    # 阴性对照: 全空才是「没接」
+    zero = {c: 0.0 for c in reg.columns_of_source("税额")}
+    assert dp._status_binary("税额", zero)[0] == dp.STATUS_MISSING
+
+
+def test_ranking_is_marginal_revenue_share_not_metric_count():
+    """🔴 排序键 = 补齐能让**能算准的营收占比**提升多少, 不是解锁几个指标。
+
+    改之前按存量排, 「下一个最划算」永远是 POS(解锁 16 个) —— 而 POS 早就接了,
+    店长照着做无从下手。
+    """
+    from smartbi.gold.restaurant.data_progress import _coverage_lift
+
+    gaps = [{"name": "A", "revenue": 300.0}, {"name": "B", "revenue": 200.0},
+            {"name": "C", "revenue": 100.0}]
+    lift = _coverage_lift((tuple(gaps), 0.402, 10000.0))
+    assert lift == pytest.approx(0.06), f"边际算错了: {lift}"
+    # 阴性对照: 没有缺口就没有边际
+    assert _coverage_lift(((), 0.402, 10000.0)) == 0.0
+
+
+def test_mislabelling_the_cost_card_as_one_off_removes_it_from_ranking(monkeypatch):
+    """🔴 变异对照: 把成本卡误标成「一次性接入」→ 它必须从排序里消失。
+
+    ⚠️ 先证明**行为变了**再看断言。
+    """
+    from smartbi.gold.restaurant import metric_registry as reg
+
+    assert reg.intake_of_source("成本卡") == reg.INTAKE_PER_ITEM   # 阳性对照
+
+    mutated = dict(reg.SOURCE_INTAKE)
+    mutated["成本卡"] = reg.INTAKE_ONE_OFF
+    monkeypatch.setattr(reg, "SOURCE_INTAKE", mutated)
+    assert reg.intake_of_source("成本卡") == reg.INTAKE_ONE_OFF, (
+        "🔴 变异没生效 —— 接入方式读的不是登记表")     # 行为真的变了
+
+    # 误标之后它走 `_status_binary`, 边际恒 0 → 不进 todo → 不会被推荐
+    # (measure 需要打库, 这里断言那条分支的判据本身)
+    assert reg.intake_of_source("成本卡") != reg.INTAKE_PER_ITEM
+
+
+def test_progress_sentence_never_contradicts_itself():
+    """⚠️ `next` 为空而 done < total 是内部不一致, 那时不许说「都齐了」。"""
+    from smartbi.gold.restaurant.data_progress import render
+
+    p = {"total": 6, "done": 3, "next": None}
+    assert "都齐了" not in render(p), "3/6 却说都齐了 —— 自相矛盾"
+    assert render({"total": 6, "done": 6, "next": None}).endswith("都齐了。")
+    # 阳性对照: 有 next 时必须给出下一步
+    got = render({"total": 6, "done": 3, "cost_source": "成本卡",
+                  "next": {"source": "税额", "unlocks": 1}})
+    assert "税额" in got and "下一个" in got
