@@ -11,6 +11,7 @@
  */
 
 import { Page, BrowserContext } from '@playwright/test';
+import { existsSync, readFileSync } from 'fs';
 
 export interface LoginResult {
   token: string;
@@ -44,6 +45,41 @@ export function resolveApiBase(): string {
 }
 
 const DEFAULT_API = resolveApiBase();
+
+/**
+ * 从 storageState 文件里取出 access token。
+ *
+ * <p>为什么需要: 套件里有两套鉴权 —— 多数 project 靠 `storageState`(vue-auth 产出),
+ * 少数用例自己调登录 API 拿 token 去打接口。后者绑定了具体账号口令, 换个环境就跑不了。
+ * 这个函数让「需要 token 打接口」的用例复用前者的产物, 不再各自持有口令。
+ *
+ * <p>⛔ 只用于**直接调 API**。不要拿它去 {@link injectAuthCookie} 覆盖浏览器会话 ——
+ * 2026-08-15 实测那样做会把 project 自带的 storageState 冲掉, 71 条从 68 过跌到 26 过。
+ */
+export function resolveTokenFromStorageState(
+  file = process.env.E2E_STORAGE_STATE || '.auth/factory-admin.json',
+): string {
+  // ⚠️ 用顶层 import 的 fs, 不要 require(): spec 由 Playwright 以 ESM 加载,
+  // require 未定义会抛 ReferenceError, 被 catch 吞掉后本函数恒返回 '' ——
+  // 表现为「fallback 写了但从不生效」, 且一行日志都没有(2026-08-15 实测踩过)。
+  try {
+    if (!existsSync(file)) {
+      console.warn(`[e2e-auth] storageState 不存在: ${file}`);
+      return '';
+    }
+    const state = JSON.parse(readFileSync(file, 'utf-8'));
+    for (const origin of state.origins || []) {
+      for (const item of origin.localStorage || []) {
+        if (item.name === 'cretas_access_token' && item.value) return item.value;
+      }
+    }
+    console.warn(`[e2e-auth] ${file} 里没有 cretas_access_token`);
+  } catch (e) {
+    // 不静默: 读不出来是最需要看见的那类失败
+    console.warn(`[e2e-auth] 读 storageState 失败: ${(e as Error).message}`);
+  }
+  return '';
+}
 
 /**
  * Call the login API and return the token + full login data.

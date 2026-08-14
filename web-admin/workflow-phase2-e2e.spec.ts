@@ -6,7 +6,7 @@
  * 运行: npx playwright test workflow-phase2-e2e.spec.ts --project=p0p1p2-verify
  */
 import { test, expect } from '@playwright/test';
-import { resolveApiBase } from './e2e-auth-helper';
+import { resolveApiBase, resolveTokenFromStorageState } from './e2e-auth-helper';
 
 const API = resolveApiBase();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
@@ -14,14 +14,37 @@ let TOKEN = '';
 let FACTORY_ID = 'F001';
 
 async function login(): Promise<string> {
-  const res = await fetch(`${API}/auth/unified-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'factory_admin1', password: '123456' })
-  });
-  const json = await res.json();
-  TOKEN = json.data?.accessToken || json.data?.token || '';
-  FACTORY_ID = json.data?.factoryId || 'F001';
+  // 🔴 2026-08-15: 本文件的用例要 TOKEN 去**直接打接口**, 所以不能像 web-admin-e2e
+  // 那样降级为空。但只认「口令登录」会把它绑死在某个环境的账号上 ——
+  // 实测生产库里没有 factory_admin1(0 行), 于是 A1 恒红, 而它守的是节点类型注册,
+  // 与账号毫无关系。
+  // 改为: 先试口令登录; 拿不到就复用 vue-auth 产出的 storageState 里的 token。
+  // ⛔ 只把它用于 API 调用, 不注回浏览器 —— 注回去会冲掉 project 自带的 storageState。
+  try {
+    const res = await fetch(`${API}/auth/unified-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'factory_admin1', password: '123456' })
+    });
+    const json = await res.json();
+    TOKEN = json.data?.accessToken || json.data?.token || '';
+    FACTORY_ID = json.data?.factoryId || FACTORY_ID;
+  } catch {
+    TOKEN = '';
+  }
+  if (!TOKEN) {
+    TOKEN = resolveTokenFromStorageState();
+    if (TOKEN) {
+      // 从 JWT 载荷取 factoryId, 免得拿着 A 厂的 token 去问 B 厂的数据。
+      try {
+        const claims = JSON.parse(
+          Buffer.from(TOKEN.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'),
+        );
+        if (claims.factoryId) FACTORY_ID = claims.factoryId;
+      } catch { /* 解不开就沿用默认, 断言会把问题暴露出来 */ }
+      console.warn('[phase2] 口令登录不可用, 改用 storageState 中的 token');
+    }
+  }
   return TOKEN;
 }
 
