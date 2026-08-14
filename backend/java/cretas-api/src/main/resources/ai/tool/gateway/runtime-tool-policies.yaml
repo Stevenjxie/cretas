@@ -31,7 +31,7 @@ policies:
     allowedBusinessTypes: [RESTAURANT, BRANCH]
     domainTags: ["restaurant", "menu", "product-master"]
     version: "2.0.0"
-    supportsPreview: false
+    supportsPreview: true
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
     idempotencyPolicy: REQUIRED_FOR_EXECUTION
