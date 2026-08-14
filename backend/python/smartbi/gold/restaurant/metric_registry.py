@@ -143,6 +143,13 @@ class Metric:
     asks: str = ""
     #: 见 `Derived.caveat` ——「这个数**是什么**」，与 provenance 的「准不准」是两件事。
     caveat: str = ""
+    #: `caveat` 的**短形**（名词短语），给「限定语贴着数字」的行内括号用。
+    #:
+    #: 🔴 owner 2026-08-14: 最重要的数排第一，**限定语贴着它限定的那个数**，
+    #:    不是攒成一堆放在后面。行内括号放不下一整句，所以要短形。
+    #: ⛔ 有 `caveat` 就**必须**有 `caveat_short` —— 由自洽闸当场红。
+    #:    缺了会让那个数**光秃秃地排在第一行**，而它恰恰是最不确定的那个。
+    caveat_short: str = ""
     #: 这一列全空时，这个量**还能不能从别的列算出来**。`(左, 右, 运算)`。
     #:
     #: 🔴 owner 2026-08-14 裁定: 普查此前问的是「这一列有没有填」, 而想知道的是
@@ -324,6 +331,8 @@ class Derived:
     #: ⛔ 不在叙述层手写 —— 手写的话新登记一个同类指标不会自动带上,
     #:    而漏掉**不报错**, 只是那个数从此可以被安全地误读。
     caveat: str = ""
+    #: `caveat` 的短形（名词短语），给行内括号用。见 `Metric.caveat_short`。
+    caveat_short: str = ""
 
 
 #: ⛔ 这 8 个在业务嘴里都是「指标」，数学上没有一个是新的取数 ——
@@ -344,13 +353,15 @@ DERIVED: Dict[str, Derived] = {
                                 category="成本和毛利",
                               asks="毛利/赚了多少(金额)",
                               caveat="这是毛利，只扣了食材成本；人工、房租、水电"
-                                     "都还没扣 —— 不等于今天赚了多少。"),
+                                     "都还没扣 —— 不等于今天赚了多少。",
+                              caveat_short="未扣人工、房租、水电"),
     "gross_margin": Derived("gross_margin", "毛利率", "ratio_of_diff",
                             "gross_profit", "revenue", "pct",
                             category="成本和毛利",
                               asks="毛利率/利润率(百分比)",
                               caveat="这是毛利率，只扣了食材成本；人工、房租、水电"
-                                     "都还没扣 —— 不是利润率。"),
+                                     "都还没扣 —— 不是利润率。",
+                              caveat_short="未扣人工、房租、水电"),
     "discount_rate": Derived("discount_rate", "折扣率", "ratio_pct",
                              "discount_amount", "gross_revenue", "pct",
                              category="营收和折扣",
@@ -720,8 +731,10 @@ def column_ref(column: str) -> str:
 #:    它是业务语义。这一处是本登记表里少数几个**非推导**的地方之一,
 #:    设计卡上写明了。新增一列时必须同时写清楚「为什么补齐也还是估的」。
 IRREDUCIBLE_ESTIMATE_COLUMNS: Dict[str, str] = {
-    "agg_restaurant_product_cost.food_cost":
-        "成本卡记的是**理论**用量(配方上应该用多少), 实际用了多少要盘库才知道",
+    # ⚠️ 只写**行动的那一半**。「用的是成本卡的理论用量」由 `estimation_basis`
+    #    说(那是同一件事的名词形), 两处都写就是同一个事实说两遍 ——
+    #    2026-08-14 实测正文里就是这么重复的。
+    "agg_restaurant_product_cost.food_cost": "要更准得盘一次库",
 }
 
 
@@ -841,6 +854,17 @@ def assert_registry_self_consistent() -> None:
                 f"{key}.derive_from 指向了不存在的指标 {side!r}")
             assert side != key, f"{key}.derive_from 指向了自己"
         assert op in ("diff", "ratio"), f"{key}.derive_from 的运算 {op!r} 未登记"
+
+    # ── 有 caveat 就必须有短形 ────────────────────────────────────────────
+    # ⛔ 缺了短形, 行内括号就拼不出「这个数是什么」那一条, 而那个数会
+    #    **光秃秃地排在第一行** —— 它恰恰是最不确定的那个。
+    for key, entry in list(METRICS.items()) + list(DERIVED.items()):
+        if (getattr(entry, "caveat", "") or "").strip():
+            assert (getattr(entry, "caveat_short", "") or "").strip(), (
+                f"{key} 有 caveat 却没有 caveat_short —— "
+                f"限定语没法贴着数字放, 只能又攒到后面去")
+            assert "。" not in getattr(entry, "caveat_short", ""), (
+                f"{key} 的 caveat_short 是整句 —— 它要进行内括号, 得是名词短语")
 
     _MISREAD_AS_PROFIT = ("利润", "赚了多少")
     for key, entry in list(METRICS.items()) + list(DERIVED.items()):

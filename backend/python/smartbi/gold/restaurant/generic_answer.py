@@ -250,6 +250,55 @@ def _caveat_of(metric_key: str) -> str:
     return (getattr(entry, "caveat", "") or "").strip() if entry else ""
 
 
+def _inline_qualifier(result) -> str:
+    """毛利那一行括号里的话 —— **三条事实合成一段**, 一条都不许丢。
+
+    ⛔ 三条各有来历, 全部从 registry / CellResult 取, 一个字不手写:
+         `caveat_short`      这个数是什么      (registry)
+         `coverage_ratio`    覆盖多少          (算出来的)
+         `estimation_basis`  为什么只能是估的  (registry)
+    ⚠️ 少任何一条都是**回避** —— 把最不确定的数摆第一行却不说它有多不确定,
+       比把它排第三更糟。
+    """
+    from smartbi.gold.restaurant.provenance import (
+        ESTIMATED, _FULL_COVERAGE)
+
+    facts = []
+    if result.provenance == ESTIMATED:
+        cov = result.coverage_ratio
+        # ⚠️ 全覆盖时**不说这一条** —— 「只算了 100.0% 的营收」读起来像坏了,
+        #    而且它是句无条件的废话。⛔ 阈值与 `provenance.qualifier` 同源。
+        if cov is not None and cov < _FULL_COVERAGE:
+            facts.append(f"只算了 {cov * 100:.1f}% 的营收")
+        if (result.estimation_basis or "").strip():
+            facts.append(f"用的是{result.estimation_basis}")
+    short = (_caveat_short_of(result.metric_key) or "").strip()
+    if short:
+        facts.append(short)
+    # ④ 结构性估算「要怎样才变实」—— 也进这一段。
+    #    ⛔ 它原来是单独一行「毛利只能是估的 —— …」, 与上面的「理论用量」
+    #       说的是同一件事的两半, 一屏上出现两次。合进来, 一处说完。
+    from smartbi.gold.restaurant.metric_registry import irreducible_reason
+    reason = (irreducible_reason(result.metric_key) or "").strip()
+    if reason and result.provenance == ESTIMATED:
+        facts.append(reason)
+    if not facts:
+        return ""
+    head = "估算：" if result.provenance == ESTIMATED else ""
+    return head + "，".join(facts)
+
+
+def _caveat_short_of(metric_key: str) -> str:
+    # ⛔ 走**模块引用**而不是文件顶部那两个 from-import ——
+    #    from-import 把名字绑死在本模块上, `monkeypatch.setattr(reg, "DERIVED", …)`
+    #    够不着它。实测: 变异「拿掉 caveat_short」当场不生效, 断言纹丝不动 ——
+    #    那是「变异没生效」而不是「守卫没覆盖」, 两者长得一样但成因相反。
+    #    `fill_offers` 顶部记过同一条, 我在这里又踩了一次。
+    from smartbi.gold.restaurant import metric_registry as _reg
+    entry = _reg.METRICS.get(metric_key) or _reg.DERIVED.get(metric_key)
+    return getattr(entry, "caveat_short", "") if entry is not None else ""
+
+
 def render(result: CellResult, window_label: str) -> str:
     """正文 = 主体 + **出处限定语**。
 
@@ -266,22 +315,22 @@ def render(result: CellResult, window_label: str) -> str:
     if result.missing_columns:
         return body
 
-    parts = [body]
-    # ②a 这个数**是什么** —— 来自 registry 的 `caveat`, 不手写。
+    # ② 限定语**贴着它限定的那个数**, 合成一段行内括号。
     #
-    # 🔴 与 ②b 是两件事, 缺一不可:
-    #      ②a 说「毛利不是利润」(这个数是什么)
-    #      ②b 说「按成本卡估的」  (这个数准不准)
-    #    只有 ②b 时, 店长看到「今天全部门店毛利合计 ¥50 万」最可能的读法是
-    #    「今天赚了 50 万」—— 而扣掉人工/房租/水电之后完全可能是亏的。
-    #    ⛔ 防住了「估算」防不住「把毛利当利润」, 后者的代价更大。
-    caveat = _caveat_of(result.metric_key)
-    if caveat:
-        parts.append(f"> {caveat}")
-    # ②b 限定语 —— 由 provenance 字段生成, 不手写。
-    qualifier = result.qualifier(coverage_ratio=result.coverage_ratio)
-    if qualifier:
-        parts.append(qualifier)
+    # 🔴 owner 2026-08-14: 改之前这三条散在第 4/5/8 行, 中间还隔着别的东西 ——
+    #    而**最重要的数恰好是最不确定的那个**, 把它排第三、限定语攒在后面,
+    #    本身就是一种回避。产品的立身之本是**敢把不确定的数摆在最前面, 并且
+    #    在同一行说清它有多不确定**。
+    #
+    # ⛔ 合并**不是删掉任何一条事实**。三条各有来历, 一条都不许丢:
+    #      ① 这个数是什么      `caveat_short`      未扣人工、房租、水电
+    #      ② 覆盖多少          `coverage_ratio`    只算了 40.2% 的营收
+    #      ③ 为什么只能是估的  `estimation_basis`  用的是成本卡的理论用量
+    #    闸: `tests/test_margin_parity.py` 里三条断言各守一条, 变异验过。
+    inline = _inline_qualifier(result)
+    if inline:
+        body = f"{body.rstrip('。')}（{inline}）。"
+    parts = [body]
     # ②c 被排除的菜**指名道姓**。
     #
     # 🔴 owner 2026-08-13: 这不是一句免责声明, 是一条**可执行的修复指令**。
@@ -305,7 +354,8 @@ def render(result: CellResult, window_label: str) -> str:
     offers = build_fill_offers(
         provenance=result.provenance,
         estimation_basis=result.estimation_basis,
-        estimated_metric_labels=[result.metric_label],
+        # ⛔ (b) 结构性估算那句已经进了行内括号, 不再单出一行。
+        estimated_metric_labels=[],
         # (a)/(b) 由 key 推出来 —— ⛔ 不传 key 就只能按 (b) 走(安全的一侧)
         estimated_metric_keys=[result.metric_key],
         # T2 前两层的原料。⚠️ 与 `coverage_ratio` 同源(同一次 `_covered_margin`),
