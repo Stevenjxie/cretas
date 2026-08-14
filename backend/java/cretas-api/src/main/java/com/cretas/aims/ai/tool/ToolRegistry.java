@@ -383,9 +383,14 @@ public class ToolRegistry {
      * Startup similarity scan — runs after all tools are registered.
      * Logs warnings for any highly similar tool pairs.
      */
-    private void runSimilarityGateCheck() {
+    void runSimilarityGateCheck() {
         try {
-            List<ToolSimilarityService.SimilarToolPair> pairs = toolSimilarityService.detectSimilarTools();
+            // 🔴 必须传 getAllExecutors(), 不能调无参重载。
+            // 本方法在自己的 @PostConstruct 里跑, 此刻 toolRegistry 这个 bean 仍是 in-creation,
+            // 无参重载会去容器里取它 → `Requested bean is currently in creation` → 闸被 catch 吞掉。
+            // 2026-08-14 实测: 这条路自引入起从未跑成过, #2613 换 ObjectProvider 也没修好(只是报错变短)。
+            List<ToolSimilarityService.SimilarToolPair> pairs =
+                    toolSimilarityService.detectSimilarTools(getAllExecutors());
             if (!pairs.isEmpty()) {
                 log.warn("🔍 Similarity gate-check found {} similar tool pairs:", pairs.size());
                 for (ToolSimilarityService.SimilarToolPair pair : pairs) {
