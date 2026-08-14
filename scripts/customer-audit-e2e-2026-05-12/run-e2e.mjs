@@ -58,7 +58,7 @@ async function login(page, account) {
   console.log(`\n--- Login as ${account.user} (factory=${account.factory}) ---`);
   await page.goto(`${PROD_URL}/login`, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForSelector('input', { timeout: 10000 });
-  await page.locator('input[placeholder="请输入用户名"]').fill(account.user);
+  await page.locator('input[placeholder*="用户名"]').fill(account.user);
   await page.locator('input[placeholder="请输入密码"]').fill(account.pass);
   await shot(page, `login-${account.user}.png`);
   await page.locator('button.login-button').first().click();

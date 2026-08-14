@@ -23,7 +23,7 @@ test('Take all SmartBI screenshots', async ({ page }) => {
   await page.waitForLoadState('networkidle');
 
   // Fill login form
-  const usernameInput = page.locator('input[placeholder="请输入用户名"]');
+  const usernameInput = page.locator('input[placeholder*="用户名"]');
   const passwordInput = page.locator('input[placeholder="请输入密码"]');
 
   if (await usernameInput.isVisible({ timeout: 5000 }).catch(() => false)) {

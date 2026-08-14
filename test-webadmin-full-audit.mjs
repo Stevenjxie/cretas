@@ -69,7 +69,7 @@ const MULTI_ROUTES = [
 async function login(page, username) {
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('input.el-input__inner', { timeout: 15000 });
-  await page.fill('input.el-input__inner[placeholder="请输入用户名"]', username);
+  await page.fill('input.el-input__inner[placeholder*="用户名"]', username);
   await page.fill('input[type="password"]', '123456');
   await page.click('button.login-button');
   for (let i = 0; i < 12; i++) {

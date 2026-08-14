@@ -86,7 +86,7 @@ export async function setupAuthOnce(browser, username) {
 
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForSelector('input.el-input__inner', { timeout: 30000 });
-  await page.fill('input.el-input__inner[placeholder="请输入用户名"]', username);
+  await page.fill('input.el-input__inner[placeholder*="用户名"]', username);
   await page.fill('input[type="password"]', PASSWORD);
 
   // Register waitForResponse BEFORE click

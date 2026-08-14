@@ -31,7 +31,7 @@ setup('登录 web-admin', async ({ page }) => {
   } else {
     // 方式2: 手动填写表单
     console.log(`📝 手动填写登录表单: ${username}`);
-    await page.fill('input[placeholder="请输入用户名"]', username);
+    await page.fill('input[placeholder*="用户名"]', username);
     await page.fill('input[placeholder="请输入密码"]', password);
     await page.click('.login-button');
   }

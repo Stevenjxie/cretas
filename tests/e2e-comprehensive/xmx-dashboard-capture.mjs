@@ -18,7 +18,7 @@ fs.mkdirSync(OUT, { recursive: true });
   // For demo: navigate as qhj_prod to confirm Plan C pages render;
   // then we'll prove xmx data via API curl separately.
   await page.goto(BASE);
-  await page.locator('input[placeholder="请输入用户名"]').fill('xmx_admin');
+  await page.locator('input[placeholder*="用户名"]').fill('xmx_admin');
   await page.locator('input[placeholder="请输入密码"]').fill('123456');
   await page.locator('button.login-button').click();
   await page.waitForURL((u) => !new URL(String(u)).pathname.startsWith('/login'), { timeout: 30000 });
