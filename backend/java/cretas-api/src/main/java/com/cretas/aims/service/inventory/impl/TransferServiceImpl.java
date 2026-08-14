@@ -1383,14 +1383,35 @@ public class TransferServiceImpl implements TransferService {
             List<MaterialBatch> batches = reorderMaterialBatchesForPreselection(
                     fefoBatches, preselectedBatchId, factoryId, sourceWarehouseId, item);
 
+            // 🔴 2026-08-15: 扣减判据从「账面可用」改成「货架实物」= 账面 − 未小结报工消耗。
+            //
+            // 延迟扣减设计下 (ProductionPlanServiceImpl 注释「报工写未结消耗、暂不扣 usedQuantity,
+            // 直到小结才逐笔扣」), 报工已经把料投进工序、物理上不在货架上了, 但 usedQuantity 还没动。
+            // 只看账面就会放行一笔搬不动的调拨。
+            //
+            // 真机实测 (F006, 2026-08-15): 生产仓冻猪蹄批次 TRF-MT-20260814-7992 入库 15kg,
+            // 报工消耗 10kg 写了流水但未小结 → 报工页显示「生产仓可用 5kg」, 而调拨新建页显示
+            // 「可用 15kg」, 且本处与预选校验都会放行 15kg。同一批次同一时刻两个数。
+            //
+            // 2026-07-05 那次把 physicalShelf 引进来时明确写了「⛔ 不改任何 gate/校验」, 只做提示;
+            // 本次经 owner 拍板扩到闸上 —— 提示看得见但拦不住, 等于把责任推给操作员。
+            // 复用同一组 helper (loadUnsettledForBatches / physicalShelf), 口径与盘点、
+            // 与批次选择器的「货架实物」完全一致, 不另起一套。
+            Map<String, BigDecimal> unsettledByBatch = loadUnsettledForBatches(factoryId, batches);
+            boolean unsettledBlocked = false;
+
             BigDecimal remaining = item.getQuantity();
             String firstConsumedBatchId = null;
             for (MaterialBatch batch : batches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
                 // 使用乐观锁思路: 读取→计算→保存，@Transactional 保证原子性
-                BigDecimal available = batch.getReceiptQuantity()
+                BigDecimal bookAvailable = batch.getReceiptQuantity()
                         .subtract(batch.getUsedQuantity())
                         .subtract(batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO);
+                BigDecimal available = physicalShelf(bookAvailable, unsettledByBatch.get(batch.getId()));
+                if (available.compareTo(bookAvailable) < 0) {
+                    unsettledBlocked = true;
+                }
                 if (available.compareTo(BigDecimal.ZERO) <= 0) continue;
                 BigDecimal deduct = remaining.min(available);
                 batch.setUsedQuantity(batch.getUsedQuantity().add(deduct));
@@ -1411,10 +1432,14 @@ public class TransferServiceImpl implements TransferService {
                         batch.getId(), deduct, remaining, preselectedBatchId != null);
             }
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                // 原因不同, 出路就不同 —— 账面为 0 才该去采购; 被未结报工占住时去采购是白跑一趟,
+                // 正确动作是先做生产小结把消耗落账 (或改调较小的量)。不分清楚就是让人做他做不到的事。
                 throw new BusinessException(409, String.format(
                     "原料库存不足: %s, 需要 %s, 缺少 %s",
                     item.getMaterialTypeId(), item.getQuantity(), remaining))
-                        .withHint("请先采购或从其他工厂调入该原料");
+                        .withHint(unsettledBlocked
+                                ? "该批次已有报工消耗但尚未做生产小结，货架实物少于账面。请先完成生产小结，或按货架实物量调整调拨数量"
+                                : "请先采购或从其他工厂调入该原料");
             }
             // B1: 记录实际首个消耗的批次 (用户指定的 = preselected; 否则 FEFO 选中的).
             if (preselectedBatchId == null && firstConsumedBatchId != null) {
@@ -1704,14 +1729,22 @@ public class TransferServiceImpl implements TransferService {
                 throw new BusinessException(409, "批次物料类型不匹配")
                         .withHint("请重新选择批次");
             }
-            BigDecimal available = b.getReceiptQuantity()
+            // 与 FEFO 扣减同口径: 判据是「货架实物」不是账面 —— 见那里的 2026-08-15 注释。
+            // 用户在选择器里看到的就是 physicalAvailable, 这里必须按同一个数拦, 否则
+            // 「看到 5、却能提交 15」——提示与闸各说各话比没有提示更糟。
+            BigDecimal bookAvailable = b.getReceiptQuantity()
                     .subtract(b.getUsedQuantity())
                     .subtract(b.getReservedQuantity() != null ? b.getReservedQuantity() : BigDecimal.ZERO);
+            BigDecimal available = physicalShelf(
+                    bookAvailable, loadUnsettledForBatches(sourceFactoryId, List.of(b)).get(b.getId()));
             if (available.compareTo(item.getQuantity()) < 0) {
+                boolean heldByUnsettled = available.compareTo(bookAvailable) < 0;
                 throw new BusinessException(409, String.format(
                         "批次可用量不足: 需要 %s, 仅 %s",
                         item.getQuantity(), available))
-                        .withHint("请选择其他批次或留空走 FEFO");
+                        .withHint(heldByUnsettled
+                                ? "该批次已有报工消耗但尚未做生产小结，货架实物少于账面。请先完成生产小结，或选择其他批次"
+                                : "请选择其他批次或留空走 FEFO");
             }
         } else {
             FinishedGoodsBatch b = finishedGoodsBatchRepository.findById(batchId).orElse(null);
