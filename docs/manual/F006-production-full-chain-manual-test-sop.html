@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-<span class="stamp code">origin/main · SOP sync 2026-08-13</span>
+<span class="stamp code">origin/main · SOP sync 2026-08-14</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -462,7 +462,7 @@
         <div class="path">仓储管理 <b>›</b> 原料类型字典 <b>›</b> 新增</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-1"><span></span></span><span><h4>建立本轮测试投入物料</h4><p>创建 4 个可供批次选择的原料 A/B/C/D；另建“黄油调味料、香辛料”作为按工序辅料，以及“成品盒、封膜、外箱”作为包材。名称都加同一测试前缀，避免选错历史数据。</p><span class="expect">各名称在对应类别列表只出现一条；短料号由用户填写或采用系统建议值；辅料和包材之后能在 BOM 的对应页签被筛选到。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、基本类型；基本类型是必填业务属性。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>L1 → L2 → L3 分类为可选辅助信息；选择时必须是有效链路，并与基本类型一致。</li></ul><span class="expect">单位显示为 kg，未选分类也能保存；选择分类时链路有效且基本类型一致。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、基本类型；基本类型是必填业务属性。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>L1 → L2 → L3 分类为可选辅助信息；选择时必须是有效链路，并与基本类型一致。</li><li>新建包材必须填写大于 0 的采购参考价；普通原料/辅料未知价格可以留空，不能当成 0 元。</li></ul><span class="expect">单位显示为 kg，未选分类也能保存；选择分类时链路有效且基本类型一致。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。包材页面明确标记采购参考价必填，留空时在提交前说明 BOM 包装成本无法形成。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-code-governance"><span></span></span><span><h4>使用短料号并保持不可复用</h4><p>新建物料时填写简短、可读的料号，或采用页面按基本类型给出的建议前缀（如 <code>YL</code>/<code>WL</code>/<code>BC</code>）后再确认。系统不再生成或要求 16 位分类业务编码；分类与料号彼此独立。</p><span class="expect">保存后的料号不可修改；与现存或已删除记录冲突时明确阻止，已删除料号也不回收复用。列表继续回显历史类别，但系统不替用户改写既有类型、分类或料号。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-packaging"><span></span></span><span><h4>原料多包装与基本单位库存</h4><p>在同一原料类型、紧邻库存基本单位维护有效包装规格，例如 <code>1箱=10kg</code>、<code>1袋=2.5kg</code>。它表达“采购包装单位 → 库存基本单位”，不在成品 SKU 管理里配置。采购、收货和跨仓调拨可按箱/袋录入，系统保存包装身份、数量、系数与折合基本量快照。</p><span class="expect">多规格必须显式选择；收货确认后的库存批次、余额、BOM 可用量和生产领料仍只使用 kg。超收按折合基本量比较；抄码/称重原料按现场实际称重，不套固定箱重。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-byproduct"><span></span></span><span><h4>建立可盘点副产 SKU</h4><p>肥油、碎骨等可回收或可再投入副产也在原料类型字典建档，并打开“副产”标记。副产是物料标记，不是新的材质大类；名称、库存单位和真实原料/其它材质分类仍分别维护。</p><span class="expect">采购和普通 BOM 投入选择器排除副产标记项；BOM“副产”页签只列出已标记物料。同一副产只有一个库存身份，之后可被另一条工艺当原料投入。</span></span></label>
@@ -498,8 +498,8 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>在 Workflow 画布配置并激活 BOM / 配方</h3><p>辅料、包材和副产是画布派生的配置叠层，不是新的 Workflow 拓扑节点</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择目标 SKU</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役，不得作为新计划的替代路径。旧“BOM/配方维护”菜单已退出日常入口；保留的深链接只用于诊断或历史兼容。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
-        <div class="callout blue"><strong>当前画布维护行为</strong>单位显示用户可读中文标签，保存和提交仍使用规范单位码；没有辅料时辅料 Cell 可折叠成窄条，需要新增或编辑时再展开。没有 ACTIVE BOM 基线时，首版草稿按当前画布的唯一终端产出投影创建，不要求修复不存在的版本状态。旧投入已不在新画布时，页面逐行列出并让用户确认移除；确认后清除旧数量/成本绑定并重试，取消则保持原样，不能静默删除。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役，不得作为新计划的替代路径。电脑 Web 的“产品-工序配置”Workflow 画布是 BOM 唯一写入口；RN 手机端 BOM 主子表页面和 9 个旧式 AI BOM 写工具已经退役，AI 只能解释路径与门禁，不能直接改 BOM。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
+        <div class="callout blue"><strong>当前画布维护行为</strong>单位显示用户可读中文标签，例如 <code>1盒=200g</code>，保存和提交仍使用规范单位码，不能显示成 <code>1box</code>；没有辅料时辅料 Cell 可折叠成窄条，需要新增或编辑时再展开。没有 ACTIVE BOM 基线时，首版草稿按当前画布的唯一终端产出投影创建，不要求修复不存在的版本状态。旧投入已不在新画布时，页面逐行列出并让用户确认移除；确认后由服务端删除对应旧投入行及数量/成本绑定并重试，取消则保持原样，不能静默删除。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>当前画布中目标 SKU 的 Workflow 草稿修订</td><td>无；画布只读展示</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
@@ -715,6 +715,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。默认发起人不得自批；只有当前 OA 节点明确授权 <code>factory_super_admin</code>、且发起人本人是本厂启用状态的该角色时，才允许自审批解除单总监死锁并留审计日志。</p><span class="expect">节点授权仓管或其他角色时超级管理员仍不得越权；其余步骤不能越级。源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-5"><span></span></span><span><h4>报工前做生产仓双边复核</h4><p>仓管在分仓库存查询记录生产仓批次；生产人员在逐道录入下拉中核对同一批次和可用量。</p><span class="expect">仓库账、需求/调拨单、报工选择器三处的物料、批次、单位和可用量一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-6"><span></span></span><span><h4>核对 RN 物料需求单只读回读</h4><p>在生产工作台打开“物料需求单”，进入列表和详情，核对需求单号、计划、状态及各物料的需求、已备料、已签收、已消耗、损耗和退料。</p><span class="expect">页面没有生成、备料、调拨、签收、关单或取消按钮；写操作继续由对应管理后台和岗位完成。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-audit"><span></span></span><span><h4>核对批次领用与消耗审计</h4><p>逐条回读批次消耗记录中的生产计划、用途和备注。计划关联使用 <code>productionPlanId</code>；<code>processId</code> 只作为旧名兼容，不能传加工批次 ID 冒充生产计划。</p><span class="expect">消耗记录能追到正确生产计划；用途与备注进入审计而不是接收后丢失。缺少计划时保持未关联，不猜一个计划。</span></span></label>
         </div>
       </section>
 
@@ -879,6 +880,7 @@
         <div class="path">仓储管理 <b>›</b> 分仓库存查询 / 库存批次查询 <b>›</b> 盘点与期初库存</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="count-1"><span></span></span><span><h4>记录生产后的系统库存</h4><p>搜索 A/B/C/D、处理后半成品、成品 800g，记录仓库、批次、系统数量和单位。半成品若启用独立盘点模块，按“半成品盘点”处理。</p><span class="expect">原料扣减、成品增加与实际报工和小结/结单可计算吻合。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-adjust"><span></span></span><span><h4>需要直接调整批次时先核对调后数量</h4><p>Web 弹窗里的“调整数量”是增减量：正数增加、负数减少；页面同时展示“当前数量”和“调整后数量”。服务端实际接收的是调整后应剩多少的绝对值，旧 <code>adjustmentType</code> 增减方向参数已拒绝。</p><span class="expect">调后数量不得为负；原因必填，具体备注并入审计且不截断。调整历史的类型、增减量、调前、调后、原因和操作人互相一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="count-2"><span></span></span><span><h4>发起盘点任务</h4><p>选择仓库、盘点月份和备注。非月末测试按页面允许的临时/专项盘点方式发起，不要为了测试伪造月末日期。</p><span class="expect">状态为“已发起”，列表出现“录入”和“提交审批”。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="count-3"><span></span></span><span><h4>录入实盘数量并保存暂存</h4><p>只录入实际盘过的行；无差异时填系统数量，有差异时填真实数量并写备注。点“保存暂存”。</p><span class="expect">提示“盘点数量已保存（暂存，批准后生效）”；库存此时不变。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="count-4"><span></span></span><span><h4>提交审批并完成审批</h4><p>列表点“提交审批”，审批人查看系统库存、实盘数量、差异和备注，再点“确认审批通过”。</p><span class="expect">状态为“已审批”，出现“应用差异”；库存仍未调整。</span></span></label>
