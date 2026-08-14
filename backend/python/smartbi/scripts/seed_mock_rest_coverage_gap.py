@@ -1,82 +1,31 @@
-"""给 MOCK_REST 造成本卡缺口 —— **种在源头、可重放、可反向**。
+"""剪掉 MOCK_REST 那几行**陈旧的**成本卡 —— v3 的 47 侧半件。
 
-## 为什么（owner 2026-08-14 二次裁定：**我上一版种错了层**）
+⚠️⚠️ **种子本身已经不在这里了。** 真源头是 139 上的模拟平台
+      (`seed_mock_platform_gap.py`, 跑在 139)。本脚本只剩**一次性剪除**这一件。
 
-MOCK_REST 100% 覆盖、无坏卡，于是我们建的东西**在它上面全都不显示**：
+## 为什么还需要它（三层 upsert 都不删）
 
-    「只算了 X% 的营收」   100% 时按设计消失
-    「米饭成本卡记错单位」  没有坏卡
-    「先补这 3 道」        没有缺口
+    139 seed.py          UPSERT, 无 DELETE  → 已由 139 那个脚本一次性删过
+    menu_writer          UPSERT + 剪除本次菜集合内的陈旧行 → 它删的是 recipe_line
+    ETL Stage 3d         UPSERT, **无 DELETE** → agg 行会原样留着 ← 本脚本管这个
 
-演示出来只有三个数字，看不出和通用 AI 的区别 —— 而差异化全在**处理缺数据**上。
+实测: 菜单同步之后 `product_cost` 只 upsert 了 6 条(有配方的那 6 道),
+而 `agg_restaurant_product_cost` 仍是 10 行 —— 那 4 行是**陈旧残留**,
+覆盖率纹丝不动, 长得像同步没生效。
 
-## 🔴 v1 种在 `agg_restaurant_product_cost` 上，被 ETL 冲掉了
-
-Stage 3d 每轮从 `fact_restaurant_recipe_line` 重算 `food_cost`
-（实测 `version=1640`，`computed_at` 一直在更新）。直接改 agg 表 = 改派生值，
-下一轮就没了。**判据只验了可逆性，没验持久性。**
-
-## ⚠️ MOCK_REST 的「源头」在**分析库**，不在运营库
-
-    factory         recipes  product_types  recipe_line  agg_cost
-    MOCK_REST             0             10           72        10
-    DEMO_REST           383            136          383       136
-    RES_3101_009        383            136          460       136
-
-MOCK_REST 在**运营库 `cretas_prod_db.recipes` 里一行都没有**。那 72 行
-`fact_restaurant_recipe_line` 是**孤儿** —— Stage 3b 从运营库拿不到源行，
-而它也是 upsert-无删除，所以永远刷不掉。逐菜 `line_cost` 合计与 `food_cost`
-精确相等（49.4300 / 3.1950 / 0.8100 / 2.7900 / 3.3460），证实 Stage 3d
-就是从这 72 行算出来的。
-
-## 🔴🔴 这个种子的持久性依赖一个前提，写死在这里
-
-  ▎**前提：运营库里 MOCK_REST 的 `recipes` 行数 = 0。**
-  ▎哪天有人往那儿种了 recipes，Stage 3b 就会把这 72 行孤儿刷掉，
-  ▎种子**无声消失** —— 和 v1 被冲掉一模一样，只是触发条件换了。
-
-⇒ 冒烟脚本必须**同时**检查这个前提（`smoke` 模式），⛔ 不能只检查覆盖率还是
-   65% 档。否则下次它消失时，我们又会先去怀疑 ETL。
-
-## 两件事各自为什么这么做
-
-| | 做法 | 为什么扛得过 ETL |
-|---|---|---|
-| 坏卡 | `standard_qty` **和** `line_cost` 都 ×100 | Stage 3d 每轮重算 `food_cost = SUM(line_cost)`；而 `line_cost` 本身对 MOCK_REST **不会被重算**（见下） |
-| 缺口 | `is_active = FALSE` **+ 一次性删 agg 行** | Stage 3d 有 `WHERE is_active = TRUE`，那几道不再进 GROUP BY；而它是 upsert-**无删除**，所以旧 agg 行必须手动删一次，之后永不重建 |
-
-### 🔴 为什么坏卡要**直接写 `line_cost`**，只改 `standard_qty` 是惰性的
-
-第一版只改了 `standard_qty`，跑完一轮 ETL 冒烟报
-`③ 坏卡: 米饭 food_cost = 0.8100（应为 81.0000）🔴`。
-
-原因: `sync_fact_recipe`(Stage 3b) 的**第一件事**就是
-
-```python
-    if not rows:          # restaurant_ops_etl.py:481
-        return 0
-```
-
-MOCK_REST 在运营库里 0 行 recipes ⇒ 它**在算 `line_cost` 之前就返回了**。
-那段 `line_cost = ROUND(standard_qty × unit_price)` 对这个租户从来不执行。
-
-⇒ 对 MOCK_REST 而言，`line_cost` **就是**最深的活输入（Stage 3d 每轮读它）。
-⚠️ 两个字段一起写是为了**内部自洽**: 只写 `line_cost` 会让
-   `standard_qty × unit_price ≠ line_cost`，下一个来查的人会以为数据坏了。
-
-⛔ 只关 `is_active` 不删 agg 行 = **空转，而且是静默的**：脚本会打印
-   「已关闭 4 道菜」，跑完 ETL 那一屏还是 100%，长得像 ETL 没跑。
-
-## 📌 缺口为什么是「删行」不是「置 NULL」
-
-三个租户 `food_cost IS NULL` 都是 **0** 行，而覆盖率只有 42.2% / 61.3% ——
-真实缺口全部来自「agg 表里**没有这一行**」（POS 卖的菜 join 不上）。
-v1 用 NULL 是权宜之计，删行才是真实形状。
+⇒ 剪一次之后**永不重建**: 源头没有配方 ⇒ GROUP BY 不产出 ⇒ upsert 无事可做。
 
 ## 记账
 
-正向改了什么、原值是多少，**全部写死在下面这两张表里** —— 反向脚本读同一份。
-⛔ 不去库里「查当前值再改回去」：那在跑过两次正向之后会把坏值当成原值。
+| 剪什么 | 原 food_cost（反向要用） |
+|---|---|
+| 罗氏虾 mp_dish_005 | 49.4300 |
+| 娃娃菜 mp_dish_006 | 3.1950 |
+| 凉拌木耳 mp_dish_010 | 3.3460 |
+| 酸梅汤 mp_dish_008 | 2.7900 |
+
+⚠️ 反向只把 agg 行按原值插回去。**要真正恢复得先在 139 上 revert** ——
+   否则下一次菜单同步又把配方剪掉, 这里插回去的行会与源头不一致。
 """
 from __future__ import annotations
 
@@ -134,65 +83,37 @@ def _x100(value: str) -> str:
 
 
 async def _apply(conn) -> None:
-    for src_pk, (qty, cost) in BAD_CARD_LINES.items():
-        # ⛔ 用 Decimal 不用 float: `float("0.8060") * 100` 会写进
-        #    `80.60000000000001` —— 一个眼就看得出是脚本造的脏值。
-        new_qty, new_cost = _x100(qty), _x100(cost)
-        await conn.execute(
-            "UPDATE fact_restaurant_recipe_line"
-            "   SET standard_qty = $3::numeric, line_cost = $4::numeric"
-            " WHERE factory_id = $1 AND source_pk = $2",
-            FACTORY, src_pk, new_qty, new_cost)
-        print(f"  坏卡 {BAD_CARD_NAME} {src_pk} "
-              f"qty {qty}->{new_qty}  line_cost {cost}->{new_cost}")
-    n = await conn.execute(
-        "UPDATE fact_restaurant_recipe_line SET is_active = FALSE"
-        " WHERE factory_id = $1 AND product_source_pk = ANY($2)",
-        FACTORY, list(GAPS))
-    print(f"  缺口 关闭配方行: {n}")
-    # ⛔ 这一步不能省: Stage 3d 是 upsert-**无删除**, 不删的话旧 agg 行原样活着,
-    #    覆盖率纹丝不动 —— 长得像 ETL 没跑。
+    """只做一件事: **剪掉那 4 行陈旧的 agg**。
+
+    ⛔ 不再改 `fact_restaurant_recipe_line` —— 那一层由 139 的源头 + 菜单同步
+       负责(v2 在那里种, 被平台同步抹掉了)。这里动手 = 与同步抢同一批行。
+    """
     n = await conn.execute(
         "DELETE FROM agg_restaurant_product_cost"
         " WHERE factory_id = $1 AND product_source_pk = ANY($2)",
         FACTORY, list(GAPS))
-    print(f"  缺口 删除 agg 行: {n}   ({', '.join(v[0] for v in GAPS.values())})")
-    print("\n⚠️ 现在还看不到效果 —— `line_cost` 要等 Stage 3b 重算。"
-          "跑一轮 ETL 之后再看 `smoke`。")
+    print(f"  剪除陈旧 agg 行: {n}   ({', '.join(v[0] for v in GAPS.values())})")
+    print("  ⇒ 源头没有配方 ⇒ Stage 3d 的 GROUP BY 不产出它们 ⇒ 永不重建。")
 
 
 async def _revert(conn) -> None:
-    for src_pk, (qty, cost) in BAD_CARD_LINES.items():
-        await conn.execute(
-            "UPDATE fact_restaurant_recipe_line"
-            "   SET standard_qty = $3::numeric, line_cost = $4::numeric"
-            " WHERE factory_id = $1 AND source_pk = $2",
-            FACTORY, src_pk, qty, cost)
-        print(f"  恢复 {BAD_CARD_NAME} {src_pk} qty -> {qty}  line_cost -> {cost}")
-    n = await conn.execute(
-        "UPDATE fact_restaurant_recipe_line SET is_active = TRUE"
-        " WHERE factory_id = $1 AND product_source_pk = ANY($2)",
-        FACTORY, list(GAPS))
-    print(f"  恢复 配方行启用: {n}")
-    # agg 行按**原值**插回去 —— ⛔ 不等 ETL: 「跑一轮就回来了」在 ETL 恰好
-    #    坏掉的那天会让人以为是反向脚本没生效。
+    """把那 4 行 agg 按原值插回去。
+
+    ⚠️ 这只恢复**派生层**。要真正回到改动前, **先在 139 上 revert**
+       (`seed_mock_platform_gap.py revert`) 再扳一次菜单同步 ——
+       否则下一次同步又把配方剪掉, 这里插回去的行与源头不一致。
+    """
     for pk, (name, cost) in GAPS.items():
         await conn.execute(
-            # ⚠️ `$1::varchar` 的 cast 不能省: 同一个 $1 既进 INSERT 的
-            #    varchar 列, 又在 WHERE 里跟 varchar 比 —— 不 cast 时
-            #    Postgres 会报 `inconsistent types deduced for parameter $1`。
+            # ⚠️ `$1::varchar` 的 cast 不能省: 同一个 $1 既进 INSERT 的 varchar 列,
+            #    又在 WHERE 里比较 —— 不 cast 会报
+            #    `inconsistent types deduced for parameter $1`(实测踩过)。
             "INSERT INTO agg_restaurant_product_cost"
             " (factory_id, product_id, product_source_pk, food_cost,"
             "  ingredient_count, has_price_data, version, computed_at)"
-            " SELECT $1::varchar, 0, $2::text, $3::numeric, count(*),"
-            "        bool_and(line_cost IS NOT NULL), 1, NOW()"
-            "   FROM fact_restaurant_recipe_line"
-            "  WHERE factory_id = $1::varchar AND product_source_pk = $2::text"
-            "    AND is_active"
+            " VALUES ($1::varchar, 0, $2::text, $3::numeric, 0, TRUE, 1, NOW())"
             " ON CONFLICT (factory_id, product_source_pk) DO UPDATE SET"
             "    food_cost = EXCLUDED.food_cost,"
-            "    ingredient_count = EXCLUDED.ingredient_count,"
-            "    has_price_data = EXCLUDED.has_price_data,"
             "    version = agg_restaurant_product_cost.version + 1,"
             "    computed_at = NOW()",
             FACTORY, pk, cost)
@@ -224,41 +145,57 @@ async def _status(conn) -> None:
 
 
 async def _smoke(conn, cretas_conn) -> int:
-    """种子还在不在 —— **两件都查**。
+    """种子还在不在 —— **连这一层的前提一起查**。
 
-    🔴 只查覆盖率不够: 种子消失有两种成因, 读数长得一样 ——
-       ① agg 被 ETL 重建（缺口那一步没删干净）
-       ② **运营库长出了 recipes**, Stage 3b 把 72 行孤儿刷掉了
-    查不出 ② 的话, 下次它消失我们又会先去怀疑 ETL。
+    🔴 上一版这里只查了「运营库 recipes = 0」, 而那个前提是我们**挑的一个**,
+       不是全部。真正抹掉 v2 的写者(平台同步 `menu_writer`)从来没进过名单。
+       ⇒ 判据改成: **先列全「谁写这张表」, 再把每个写者的前提都查一遍。**
+
+    这一层的写者与前提:
+
+      · 139 `seed.py`     → 前提: 那 4 道菜的跳过集合还在（139 侧脚本 smoke 查）
+      · `menu_writer`     → 前提: 平台 recipe 端点不再报这 4 道菜  ← ② 查它
+      · ETL Stage 3d      → upsert-无删除, 剪过一次就不再重建     ← ③ 查它
+      · 运营库 `recipes`  → 对 MOCK_REST 恒 0(Stage 3b 早退)      ← ① 查它
     """
     bad = 0
+
     n_recipes = await cretas_conn.fetchval(
         "SELECT count(*) FROM recipes WHERE factory_id = $1", FACTORY)
     ok = n_recipes == 0
     print(f"① 前提: 运营库 {FACTORY} 的 recipes 行数 = {n_recipes} "
-          f"（必须为 0）{'✅' if ok else '🔴 前提破了 —— 种子随时会被 Stage 3b 刷掉'}")
-    if not ok:
-        bad += 1
+          f"（必须为 0，否则 Stage 3b 会开始写这张表）{'✅' if ok else '🔴'}")
+    bad += 0 if ok else 1
+
+    # 🔑 这一条是新的: 直接问**平台同步落下来的那一层**还有没有这几道菜的配方。
+    #    它比「agg 有没有行」更靠近源头 —— agg 是派生的, recipe_line 是同步的产物。
+    live = {r["pk"] for r in await conn.fetch(
+        "SELECT DISTINCT product_source_pk AS pk FROM fact_restaurant_recipe_line"
+        "  WHERE factory_id = $1 AND is_active", FACTORY)}
+    back = [GAPS[p][0] for p in GAPS if p in live]
+    ok = not back
+    print(f"② 前提: 平台同步没有把这 4 道菜的配方搬回来 "
+          f"{'✅' if ok else '🔴 又有了: ' + ', '.join(back)}"
+          f"（这条红 = 139 上的缺口没了）")
+    bad += 0 if ok else 1
 
     present = {r["pk"] for r in await conn.fetch(
         "SELECT product_source_pk AS pk FROM agg_restaurant_product_cost"
         " WHERE factory_id = $1", FACTORY)}
-    still_there = [GAPS[p][0] for p in GAPS if p in present]
-    ok = not still_there
-    print(f"② 缺口: {len(GAPS) - len(still_there)}/{len(GAPS)} 道仍无 agg 行 "
-          f"{'✅' if ok else '🔴 又回来了: ' + ', '.join(still_there)}")
-    if not ok:
-        bad += 1
+    still = [GAPS[p][0] for p in GAPS if p in present]
+    ok = not still
+    print(f"③ 缺口: {len(GAPS) - len(still)}/{len(GAPS)} 道仍无 agg 行 "
+          f"{'✅' if ok else '🔴 又回来了: ' + ', '.join(still)}")
+    bad += 0 if ok else 1
 
     cost = await conn.fetchval(
         "SELECT food_cost FROM agg_restaurant_product_cost"
         " WHERE factory_id = $1 AND product_source_pk = $2",
         FACTORY, BAD_CARD_PK)
     ok = cost is not None and abs(float(cost) - float(BAD_CARD_SEEDED_COST)) < 0.01
-    print(f"③ 坏卡: {BAD_CARD_NAME} food_cost = {cost} "
+    print(f"④ 坏卡: {BAD_CARD_NAME} food_cost = {cost} "
           f"（应为 {BAD_CARD_SEEDED_COST}）{'✅' if ok else '🔴'}")
-    if not ok:
-        bad += 1
+    bad += 0 if ok else 1
 
     print(f"\n=== 不满足的项: {bad} ===")
     return 1 if bad else 0

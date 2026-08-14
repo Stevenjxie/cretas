@@ -1966,20 +1966,22 @@ def _build_qa_fill_offers(cell) -> List[Dict[str, Any]]:
     ⇒ 现在返回**结构化 offer**, 文案由调用方从同一份产出渲染 ——
       一份来源, 两个消费者(正文 / 按钮)。⛔ 不为按钮再拼一份。
     """
+    from smartbi.gold.restaurant.degrade_guard import degrade_on_error
     from smartbi.gold.restaurant.fill_offers import build_fill_offers
 
-    try:
-        offers = build_fill_offers(
+    # 🔴 降级留着, 静默去掉(owner 2026-08-14)。编程错误打 ERROR + 计数,
+    #    ⛔ 不再和「数据缺」一起写成一句 WARNING。见 `degrade_guard` 顶部。
+    offers = degrade_on_error(
+        DEGRADE_QA_OFFERS, [],
+        lambda: build_fill_offers(
             provenance=cell.provenance,
             estimation_basis=cell.estimation_basis,
             estimated_metric_labels=[],
             cost_gaps=cell.cost_gaps,
             coverage_ratio=cell.coverage_ratio,
             coverage_denominator=cell.coverage_denominator,
-        )
-    except Exception:  # noqa: BLE001 —— 开价拿不到不该让整个答案失败
-        logger.warning("[gross_margin] 开价取不到, 退回通用建议", exc_info=True)
-        offers = []
+        ),
+        what="开价")
     return [o for o in offers if isinstance(o, dict) and o.get("text")]
 
 
@@ -5174,33 +5176,39 @@ async def resolve_gross_margin(
 
 def _drilldown_note(metric_key, used_dimensions, resolver_code=None) -> str:
     """正文里那句「还能怎么拆 / 已经拆完了」。⛔ 逻辑在 `follow_up_actions`。"""
+    from smartbi.gold.restaurant.degrade_guard import degrade_on_error
     from smartbi.gold.restaurant.follow_up_actions import drilldown_note
-    try:
-        return drilldown_note(metric_key, used_dimensions, resolver_code)
-    except Exception:  # noqa: BLE001 —— 多一句话不该让整个答案失败
-        logger.warning("[gross_margin] 下钻提示生成失败", exc_info=True)
-        return ""
+
+    return degrade_on_error(
+        DEGRADE_DRILL_NOTE, "",
+        lambda: drilldown_note(metric_key, used_dimensions, resolver_code),
+        what="下钻提示")
 
 
 def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
                              meta_for_suppression=None, resolver_code=None):
     """毛利问答的追问按钮。⛔ 逻辑在 `follow_up_actions`, 这里只接线。"""
+    from smartbi.gold.restaurant.degrade_guard import degrade_on_error
     from smartbi.gold.restaurant.follow_up_actions import build_actions
 
-    try:
-        return build_actions(
+    return degrade_on_error(
+        DEGRADE_FOLLOWUP_ACTIONS, (),
+        lambda: build_actions(
             metric_key="gross_profit",
             used_dimensions=used_dimensions,
             offers=offers,
             answer_text=answer_text,
             meta=meta_for_suppression,
             resolver_code=resolver_code,
-        )
-    except Exception:  # noqa: BLE001 —— 按钮拿不到不该让整个答案失败
-        logger.warning("[gross_margin] 追问按钮生成失败, 本次不带按钮",
-                       exc_info=True)
-        return ()
-        return ()
+        ),
+        what="追问按钮")
+
+
+#: 三个降级点的名字。⚠️ 常量而不是字面量 —— 断言按名字查计数器,
+#: 拼错了断言会静默变成「查一个不存在的点」, 恒绿。
+DEGRADE_QA_OFFERS = "gross_margin.qa_offers"
+DEGRADE_DRILL_NOTE = "gross_margin.drilldown_note"
+DEGRADE_FOLLOWUP_ACTIONS = "gross_margin.follow_up_actions"
 
 
 async def resolve_store_margin(

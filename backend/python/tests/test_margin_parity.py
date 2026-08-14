@@ -1505,3 +1505,95 @@ def test_t1_only_offers_dimensions_the_resolver_can_actually_answer():
     wide = set(_drillable_dimensions("gross_profit", ("all",), None))
     assert wide - answerable, (
         "不收窄时也没有多余维度 —— 那这条断言守不住任何东西")
+
+
+# ── 降级不是问题, 静默才是 (owner 2026-08-14) ──────────────────────────────
+def test_programming_errors_are_counted_not_silently_degraded():
+    """🔴 编程错误被吞掉时**计数器要动**, 而且打 ERROR 不是 WARNING。
+
+    ## 这条断言是一整轮缺陷的产物
+
+    `except Exception` + `logger.warning("本次不带按钮")` 把一个
+    `AttributeError` 写成了「这里没有内容」——
+    **T1/T2 按钮从上线起一次都没出现过, 而没有人知道。**
+
+    ⚠️ 降级本身是对的(按钮出不来不该让答案挂掉), 所以这条断言查的**不是**
+       「它还降不降级」, 而是「它降级时留没留痕」。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+
+    dg.reset_counters()
+
+    def _boom():
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    got = dg.degrade_on_error("t.probe", "FALLBACK", _boom, what="按钮")
+    assert got == "FALLBACK", "降级没发生 —— 那会让整个答案挂掉"
+    assert dg.counter("t.probe") == 1, (
+        f"编程错误被吞掉了却没计数: {dg.counters()} —— 这就是静默")
+
+    # 阳性对照 1: **预期内**的失败不计数 —— 否则计数器永远不为 0, 断言失效
+    class _Expected(Exception):
+        pass
+
+    dg.degrade_on_error("t.probe2", "F", lambda: (_ for _ in ()).throw(_Expected()),
+                        expected=(_Expected,), what="外部不可达")
+    assert dg.counter("t.probe2") == 0, (
+        "预期内的失败也计数了 —— 计数器会永远不为 0, 那条断言就失效了")
+
+    # 阳性对照 2: 正常路径不计数
+    assert dg.degrade_on_error("t.probe3", "F", lambda: "OK") == "OK"
+    assert dg.counter("t.probe3") == 0
+    dg.reset_counters()
+
+
+def test_the_real_button_path_swallows_no_programming_error():
+    """🔴 正常路径跑完, 三个降级点**一个编程错误都没吞**。
+
+    ⛔ 这条要跑在**产品那侧的函数**上 —— 上一轮的教训正是「单测自己喂 dict
+       所以一直全绿, 而生产上每次都 AttributeError」。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    dg.reset_counters()
+    cell = _profit_cell()
+    offers = router._build_qa_fill_offers(cell)          # 真的产出
+    body = "\n\n".join(router._offer_texts(offers)[:1])
+    note = router._drilldown_note("gross_profit", _SAMPLE_USED_DIMS,
+                                  "RESTAURANT_OPS_GROSS_MARGIN")
+    actions = router._build_follow_up_actions(
+        offers=offers, answer_text=f"{body}\n\n{note}",
+        used_dimensions=_SAMPLE_USED_DIMS,
+        resolver_code="RESTAURANT_OPS_GROSS_MARGIN")
+
+    assert offers and note and actions, (
+        f"正常路径没产出东西, 下面那条断言会恒真: "
+        f"offers={len(offers)} note={note!r} actions={len(actions)}")
+    dg.assert_no_silent_programming_errors(
+        router.DEGRADE_QA_OFFERS, router.DEGRADE_DRILL_NOTE,
+        router.DEGRADE_FOLLOWUP_ACTIONS)
+
+
+def test_mutating_the_offer_shape_makes_the_counter_fire(monkeypatch):
+    """🔴 变异: 把 offer 拍回字符串(**上一轮真实的缺陷形态**), 计数器必须动。
+
+    ⚠️ 打的是 `_build_qa_fill_offers` 的**返回形状**, ⛔ 不是直接 raise ——
+       后者只证明 guard 会计数, 证明不了它守着**这个**缺陷。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    dg.reset_counters()
+    cell = _profit_cell()
+    real = router._build_qa_fill_offers(cell)
+    flattened = [str(o.get("text") or "") for o in real]   # ← 上一轮就是这样
+    actions = router._build_follow_up_actions(
+        offers=flattened, answer_text="正文", used_dimensions=_SAMPLE_USED_DIMS,
+        resolver_code="RESTAURANT_OPS_GROSS_MARGIN")
+    assert actions == (), "变异没生效 —— 它本该抛 AttributeError"
+    assert dg.counter(router.DEGRADE_FOLLOWUP_ACTIONS) == 1, (
+        f"按钮那个降级点吞了 AttributeError 却没计数: {dg.counters()}")
+    with pytest.raises(AssertionError):
+        dg.assert_no_silent_programming_errors(router.DEGRADE_FOLLOWUP_ACTIONS)
+    dg.reset_counters()
