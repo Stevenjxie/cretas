@@ -11,7 +11,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, resolveApiBase, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = process.env.E2E_API_URL || resolveApiBase();
@@ -66,7 +66,20 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
   test.setTimeout(120000);
 
   test.beforeAll(async () => {
-    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
+    try {
+      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    } catch (e) {
+      const tk = resolveTokenFromStorageState();
+      if (!tk) throw e;
+      const c = JSON.parse(Buffer.from(
+        tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+      if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+      authResult = { token: tk, loginData: {
+        userId: c.userId, username: c.username, role: c.role,
+        factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'] } };
+      console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
+    }
     TOKEN = authResult.token;
     expect(TOKEN).toBeTruthy();
   });
@@ -435,7 +448,20 @@ test.describe.serial('六扇门一期 新功能页面 E2E', () => {
   test.setTimeout(120000);
 
   test.beforeAll(async () => {
-    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
+    try {
+      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    } catch (e) {
+      const tk = resolveTokenFromStorageState();
+      if (!tk) throw e;
+      const c = JSON.parse(Buffer.from(
+        tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+      if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+      authResult = { token: tk, loginData: {
+        userId: c.userId, username: c.username, role: c.role,
+        factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'] } };
+      console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
+    }
     TOKEN = authResult.token;
     expect(TOKEN).toBeTruthy();
   });

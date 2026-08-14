@@ -28,7 +28,7 @@
  *   ./scripts/test/cleanup-sprint-10-test-data.sh loop-2
  */
 import { test, expect, Page, BrowserContext } from '@playwright/test';
-import { setupAuth } from '../../e2e-auth-helper';
+import { resolveApiBase, setupAuth } from '../../e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API_BASE = process.env.E2E_API_BASE || resolveApiBase();

@@ -16,7 +16,7 @@
  * Factory: F006 六腾门卤味店
  */
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie } from './e2e-auth-helper';
+import { resolveApiBase, fetchLoginToken, injectAuthCookie } from './e2e-auth-helper';
 import * as fs from 'fs';
 import * as path from 'path';
 

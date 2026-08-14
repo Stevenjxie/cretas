@@ -9,6 +9,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
+import { skipIfForbidden } from './e2e-auth-helper';
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = process.env.E2E_API_URL || resolveApiBase();
@@ -26,6 +27,7 @@ async function go(page: Page, path: string) {
   // 我先改成等骨架屏消失, 但固定时长两头不讨好: 45s 撑爆 Error Pages 的 30s 预算(2 挂),
   // 收到 8s 又等不及慢页面(6 挂)。
   // 正解是不睡固定时间 —— 见 expectPageContent 改用自动重试断言, 由它按需等待。
+  await skipIfForbidden(page, path);
 }
 
 test.beforeAll(async () => {

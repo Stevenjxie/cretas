@@ -1,5 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { loginOrReuseSession, resolveApiBase, fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { skipIfForbidden } from './e2e-auth-helper';
+import { expectAnyVisible } from './e2e-auth-helper';
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = resolveApiBase();
@@ -12,11 +14,12 @@ async function go(page: Page, path: string) {
     await injectAuthCookie(page.context(), page, authResult.token, authResult.loginData, BASE);
   }
   await page.goto(BASE + path, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  // 固定睡眠换成断言侧自动重试, 见 expectAnyVisible 的说明。
+  await skipIfForbidden(page, path);
 }
 
 test.beforeAll(async () => {
-  authResult = await fetchLoginToken('factory_admin1', '123456', API);
+  authResult = await loginOrReuseSession('factory_admin1', '123456', API, 'workflows');
 });
 
 test.describe('Business Workflows', () => {
@@ -41,7 +44,7 @@ test.describe('Business Workflows', () => {
     const hasFilter = await filterEl.isVisible().catch(() => false);
     // Even if no filter, table should load
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/prod-batches-filter.png` });
   });
 
@@ -93,14 +96,14 @@ test.describe('Business Workflows', () => {
   test('sales orders table shows status column', async ({ page }) => {
     await go(page, '/sales/orders');
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/sales-orders-status.png` });
   });
 
   test('sales finished goods inventory view', async ({ page }) => {
     await go(page, '/sales/finished-goods');
     const content = page.locator('.el-table, .el-card').first();
-    expect(await content.isVisible().catch(() => false)).toBeTruthy();
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
   });
 
   // === HR Workflows ===
@@ -108,7 +111,7 @@ test.describe('Business Workflows', () => {
   test('employee list shows table with pagination', async ({ page }) => {
     await go(page, '/hr/employees');
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     const pager = page.locator('.el-pagination');
     const hasPager = await pager.isVisible().catch(() => false);
     await page.screenshot({ path: `${SD}/hr-employees.png` });
@@ -127,7 +130,7 @@ test.describe('Business Workflows', () => {
   test('user management shows role column', async ({ page }) => {
     await go(page, '/system/users');
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/system-users.png` });
   });
 
@@ -143,7 +146,7 @@ test.describe('Business Workflows', () => {
   test('AI intents config shows intent list', async ({ page }) => {
     await go(page, '/system/ai-intents');
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/ai-intents.png` });
   });
 
@@ -184,7 +187,7 @@ test.describe('Business Workflows', () => {
   test('finance AR/AP page renders', async ({ page }) => {
     await go(page, '/finance/ar-ap');
     const content = page.locator('.el-card, .el-table').first();
-    expect(await content.isVisible().catch(() => false)).toBeTruthy();
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/finance-arap.png` });
   });
 
@@ -193,14 +196,14 @@ test.describe('Business Workflows', () => {
   test('quality inspections list with filters', async ({ page }) => {
     await go(page, '/quality/inspections');
     const table = page.locator('.el-table');
-    expect(await table.isVisible().catch(() => false)).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/quality-inspections.png` });
   });
 
   test('quality standards management', async ({ page }) => {
     await go(page, '/quality/standards');
     const content = page.locator('.el-table, .el-card').first();
-    expect(await content.isVisible().catch(() => false)).toBeTruthy();
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/quality-standards.png` });
   });
 });

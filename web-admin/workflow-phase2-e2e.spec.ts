@@ -60,7 +60,14 @@ function api(path: string, opts: RequestInit = {}) {
 }
 
 function wfApi(path: string, opts: RequestInit = {}) {
-  return fetch(`${API.replace('/api/mobile', '')}/api/workflow${path}`, {
+  // 🔴 2026-08-15: 原本 API.replace('/api/mobile','') 再拼 /api/workflow ——
+  // 恰好把对的前缀删掉了。实测:
+  //   /api/workflow/node-schemas        -> 200 但 content-type: text/html (网关回落到 SPA 首页)
+  //   /api/mobile/workflow/node-schemas -> 200 application/json  ✅
+  // 前者的 200 极具迷惑性: res.ok 为真, 直到 r.json() 才炸
+  // `SyntaxError: Unexpected token '<', "<!doctype "...`。
+  // 判据: 判接口在不在, 不能只看状态码, 要看 content-type。
+  return fetch(`${API}/workflow${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',

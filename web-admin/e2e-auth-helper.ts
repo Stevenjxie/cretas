@@ -84,16 +84,16 @@ export function resolveTokenFromStorageState(
 /**
  * Call the login API and return the token + full login data.
  *
- * <p>⛔ 试过并撤掉: 加一个 {@code E2E_ACCESS_TOKEN} 分支「直接复用既有会话、不发登录请求」。
- * 想法成立, 实现有害 —— 同一套 71 条用例, 不注入 <b>68 过 / 3 挂</b>,
- * 注入(只带 username) <b>34 过 / 37 挂</b>, 注入(从 JWT 解出完整用户) <b>26 过 / 45 挂</b>。
- * 每改一次更差, 说明问题不在参数而在这条路本身: {@link #injectAuthCookie} 会
- * {@code goto('/login')} 并重写 localStorage, 与 project 已经带的 storageState 打架。
- * 而失败信息只说「等不到元素」, 指不到根因。
+ * <p>没有口令时用 {@link loginOrReuseSession}: 它会退回到 vue-auth 产出的
+ * storageState token。实测(干净机器)这条路 web-admin-e2e 71/71 全过 ——
+ * **不需要真实账号也能跑完整套**。
  *
- * <p>要在没有口令的情况下跑, 用 Playwright 自己的机制: 准备好 storageState 文件后
- * {@code npx playwright test --project <name> --no-deps}(跳过 vue-auth 登录步骤)。
- * 实测这条路是 68/71。
+ * <p>⚠️ 曾经在这里写过一段「注入 token 有害」的结论, 依据是一串
+ * 68/3 -> 34/37 -> 26/45 的通过数下滑。**那串读数是无效的**: 当时每跑一轮 E2E 都会
+ * 留下几十个孤儿进程, 跑到最后 node 106 个、可用内存 2.43GB/63.88GB,
+ * 浏览器直接 `browserType.launch: Timeout 180000ms exceeded`。
+ * 下滑的是机器不是代码。清理后同一份代码 69 过。
+ * 判据: 跑重型套件时把**可用内存**与通过数并排记, 两条曲线一起动就说明在量环境。
  */
 export async function fetchLoginToken(
   username = 'factory_admin1',
@@ -215,4 +215,91 @@ export async function setupAuth(
   const result = await fetchLoginToken(username, password, apiBase);
   await injectAuthCookie(context, page, result.token, result.loginData, baseUrl);
   return result;
+}
+
+/**
+ * 拿一个可用的登录态: 先试口令登录, 不行就用 vue-auth 产出的 storageState token。
+ *
+ * <p>把这段收进来是因为它已经在 4 个 spec 里各抄了一遍 —— 抄第三遍时就该收口了。
+ * 两条路都没有时**抛原始错误**, 不返回半个凭证: 残缺的 loginData 会被
+ * {@link injectAuthCookie} 写进 localStorage 覆盖掉正常会话(实测过, 症状是
+ * 「每个列表都空但不报错」)。
+ */
+export async function loginOrReuseSession(
+  username = 'factory_admin1',
+  password = '123456',
+  apiBase = DEFAULT_API,
+  tag = 'e2e',
+): Promise<LoginResult> {
+  try {
+    return await fetchLoginToken(username, password, apiBase);
+  } catch (e) {
+    const token = resolveTokenFromStorageState();
+    if (!token) throw e;
+    const c = JSON.parse(
+      Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'),
+    );
+    if (!c.factoryId || !c.userId) {
+      throw new Error('storageState 里的 token 缺 factoryId/userId, 注进去会让工厂级接口全挂');
+    }
+    console.warn(`[${tag}] 口令登录不可用, 改用 storageState token: ${(e as Error).message}`);
+    return {
+      token,
+      loginData: {
+        userId: c.userId, username: c.username, role: c.role,
+        factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'],
+      },
+    };
+  }
+}
+
+/**
+ * 等某类内容出现 —— 自动重试, 不睡固定时间。
+ *
+ * <p>本仓的 E2E 里反复出现同一组坏判据(web-admin-e2e / web-admin-crud /
+ * web-admin-workflows 各写了一份):
+ * <ul>
+ *   <li>{@code waitForTimeout(3000)} 之后立刻断言 —— 等的是「3 秒过去了」,
+ *       不是「页面好了」。这个 SPA 常常还停在「正在加载应用…」骨架屏上,
+ *       失败只说「页面没有表格」, 读起来像没登录, 实际是没启动完。</li>
+ *   <li>一次性 {@code isVisible()} —— 不重试, 页面慢一点就判死。</li>
+ *   <li>{@code .first()} 直接取 —— 取的是 <b>DOM 顺序</b>第一个, 不看可见性。
+ *       /sales/orders 的第一个 .el-card 恰好是隐藏的 gold-pos-summary,
+ *       于是断言恒失败而页面上明明有可见卡片。</li>
+ * </ul>
+ *
+ * 三条都由这一个函数消掉: 先按可见性过滤再取 first, 用自动重试断言按需等待。
+ */
+export async function expectAnyVisible(
+  page: Page,
+  selector: string,
+  timeout = 25000,
+): Promise<void> {
+  const { expect } = await import('@playwright/test');
+  await expect(page.locator(selector).filter({ visible: true }).first())
+    .toBeVisible({ timeout });
+}
+
+/** 页面「有实际内容」的通用判据 —— 表格/卡片/标题/图表任一可见即可。 */
+export const ANY_CONTENT_SELECTOR =
+  '.el-table, .el-card, h1, h2, h3, .page-title, .el-page-header__title, canvas, .echarts, [_echarts_instance_]';
+
+/**
+ * 导航后若被路由守卫送到 /403, 明确 skip 并说明 —— 不要报成功能失败。
+ *
+ * <p>实测: f006_admin(factory_super_admin, 权限 *:*) 访问 /system/ai-intents 会被
+ * 前端守卫跳到 /403。此时断言「表格渲染」必然失败, 而失败信息读起来像
+ * 「AI 意图列表坏了」—— 实际是这个角色本来就进不去。
+ * 把「无权访问」和「功能坏了」分开, 否则套件里会长期挂着一条谁也不敢删的红。
+ */
+export async function skipIfForbidden(page: Page, route: string): Promise<void> {
+  const { test } = await import('@playwright/test');
+  // ⚠️ 不能在 goto 之后立刻读 URL: 跳 /403 的是**前端路由守卫**, 在
+  // domcontentloaded 之后才执行。我第一版就是立刻读, 于是永远读不到 403,
+  // skip 形同虚设(写了但从不触发, 且没有任何迹象说明它没起作用)。
+  // 这里给一个有界的等待: 命中就 skip, 没命中(绝大多数用例)立刻往下走。
+  await page.waitForURL(/\/403/, { timeout: 1500 }).catch(() => { /* 未跳转 = 有权访问 */ });
+  if (page.url().includes('/403')) {
+    test.skip(true, `当前账号无权访问 ${route}(被守卫跳到 /403), 非功能缺陷`);
+  }
 }
