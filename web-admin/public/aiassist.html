@@ -1130,6 +1130,7 @@
 	<button class="suggestion" type="button" data-question="Workflow 维护时单位怎样显示、辅料 Cell 何时折叠、旧投入失效或没有 ACTIVE BOM 时怎样处理？"><span class="suggestion-index">20</span><span>Workflow 维护与旧投入修复</span></button>
 	<button class="suggestion" type="button" data-question="原料、辅料和包材怎样直接加入销售订单并发货？物料批次、计件单位和小数数量分别怎样处理？"><span class="suggestion-index">21</span><span>物料销售、发货与单位</span></button>
 	<button class="suggestion" type="button" data-question="AI 表单助手什么时候才可以报告操作成功？模型说成功但服务端没有写入时应该怎样提示？"><span class="suggestion-index">22</span><span>表单助手的真实成功边界</span></button>
+	<button class="suggestion" type="button" data-question="BOM 现在只能在哪里维护，手机和 AI 还能不能直接改？旧投入怎样移除，库存批次调整为什么要区分增减量和最终剩余量？"><span class="suggestion-index">23</span><span>BOM 单一入口与批次调整审计</span></button>
               </div>
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
@@ -1162,6 +1163,7 @@
 	<button class="suggestion" type="button" data-question="“这个菜要不要下架”为什么保持只读分析，真正下架与读写歧义时分别怎样处理？"><span class="suggestion-index">20</span><span>征询分析与写操作安全门</span></button>
 	<button class="suggestion" type="button" data-question="只缺时间时为什么默认最近30天？数字怎样标实测或估算，缺数据时怎样告诉我补什么能算什么？"><span class="suggestion-index">21</span><span>默认时间、数字出处与补数提示</span></button>
 	<button class="suggestion" type="button" data-question="打烊后问“今天怎么样”会汇总什么？无业务、无数据、金额权限与主动推送分别怎样处理？"><span class="suggestion-index">22</span><span>打烊经营摘要与推送边界</span></button>
+	<button class="suggestion" type="button" data-question="毛利回答为什么既展示实收，又只计算有可用成本卡的菜品？覆盖率、单菜折扣、异常成本卡和补卡后的估算边界分别怎么读？"><span class="suggestion-index">23</span><span>毛利实收、覆盖率与估算边界</span></button>
               </div>
 
               <button class="learn-launch" id="learn-launch" type="button">
@@ -1318,6 +1320,7 @@
             '<p><strong>标准表格与门店确认：</strong>排行、对比、构成和预警类真实结果统一使用 GFM Markdown 表格，保留表格前后空行，数字列右对齐，缺失值显示「—」而不是 0；没有金额权限时省略金额列。完整写出有效门店全名才直接使用；简称或片段唯一匹配时也先显示真实门店确认按钮，匹配多家时返回最多 3 个候选，点击完整店名后不重复确认。澄清只说业务对象和下一步，不向店长展示问题对象、分析范围、语义规划、查询计划或计划版本等内部概念。</p>' +
             '<p><strong>读写安全门：</strong>「要不要 / 该不该 / 是否要 / 建议 / 如果 / 假如」属于征询或假设，即使句子出现下架、调整等写动词也保持只读分析。真正写操作必须明确对象与动作，并继续先预览、再精确确认；若写判定与只读意图矛盾，系统就地 fail closed，明确告诉用户怎样改成“看数据”或“改对象”，本次不执行操作也不猜答案。</p>' +
             '<p><strong>指标与实体裁决：</strong>问损耗金额时按食材损耗成本排序并同时展示数量，金额轴尚未生成时明确说不可排名，不用数量冒充；问采购/领料花费走领料成本，不误路由到菜品成本；问「盘点亏了多少」优先走盘点差异金额，数量只作分物料明细，不能把 kg 与 L 相加成总量。费用分类使用统一词表：食材类只认食材、原材料、食品、饮料、酒水、菜品，人工类只认人工、工资、薪、员工、劳务；其它泛词不静默猜分类。堂食/外卖兼容中文和 POS 的 order_type 码。菜名、门店名先与当前租户目录核对，后厨业务词和「哪个/多少」等疑问片段不能被当成菜名。</p>' +
+            '<p><strong>毛利三层口径：</strong>财务第一口径是期间总毛利率，食材成本按「期初库存 + 本期采购 − 期末库存」倒算。SmartBI 成本卡运营汇总展示实收营收，但毛利额/率的分子、分母只使用有可用成本卡的菜品营收，并披露同口径覆盖率；毛利只扣食材成本，不是利润。单菜/分组仍按菜品标价，整单折扣无法确定性摊到每道菜，所以单菜合计可能对不上汇总。成本卡用理论用量，补卡只提高覆盖率，不能说「补上就从估变实」；异常卡会点名、暂时排除，修正后自动纳入。</p>' +
             '<p><strong>五部门驾驶舱：</strong>运营看损耗金额、领料成本、盘亏与趋势；市场看营收、订单、客流和渠道，并从「营销员提成」按营销员和月份查看复购阶梯提成；财务在配方成本覆盖足够时看毛利，否则显示「—」而不是 0；人事缺在岗人数和目标人效时只显示缺项空态；采购处理报货、供应商与采购协同，并只读领料和盘点依据。餐饮老板为全局读写角色；店长管运营并只读人事，市场经理、财务经理、人事管理员和餐饮采购分别管理自己的部门，厨师长系统角色已退役。菜单、路由、写操作和金额读取继续受中央角色/模块/金额权限闸控制。</p>' +
             '<p><strong>AI 工作台：</strong>左侧顶层「AI 工作台」进入 <code>/dashboard/ai-value</code> 查看 AI 价值汇总。当前菜单与路由均已接通；入口可达不代表权限放宽，页面数据和动作仍受中央权限闸控制。</p>' +
             '<p><strong>营销员提成：</strong>餐饮运营 → 市场 → 营销员提成（<code>/restaurant/commission</code>）。按营销员与月份查看月度累计复购业绩、当前档位、计业绩到访和逐笔明细；金额无价权时显示「—」，待发放记录确认后才能标记。菜单和路由均归属市场部门。</p>' +

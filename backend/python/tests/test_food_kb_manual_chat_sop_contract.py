@@ -9,6 +9,7 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+    _FACTORY_BATCH_ADJUSTMENT_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
@@ -50,6 +51,7 @@ from food_kb.api.manual_chat import (
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
+    _needs_factory_batch_adjustment_guard,
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
     _needs_factory_form_assistant_result_guard,
@@ -199,6 +201,25 @@ def test_20260813_factory_contracts_are_deterministic_and_isolated():
     assert not _needs_factory_material_sales_guard("餐饮今天怎么样？")
 
 
+def test_20260814_factory_bom_and_batch_contracts_are_deterministic_and_isolated():
+    assert _needs_factory_bom_canvas_cost_guard(
+        "BOM 现在只能在哪里维护，手机和 AI 还能不能直接改？"
+    )
+    assert "唯一写入口" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "RN 手机端" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "AI 只能解释路径与门禁" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "服务端删除对应旧投入行" in _FACTORY_BOM_CANVAS_COST_ANSWER
+
+    assert _needs_factory_batch_adjustment_guard(
+        "库存批次调整数量为什么要区分增减量和剩余数量？"
+    )
+    assert "页面里的“调整数量”是增减量" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    assert "调整后应剩多少" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    assert "adjustmentType=INCREASE/DECREASE" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    assert "productionPlanId" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    assert not _needs_factory_batch_adjustment_guard("餐饮成本卡覆盖率怎么读？")
+
+
 def test_20260813_restaurant_contracts_are_deterministic_and_isolated():
     assert _needs_restaurant_default_time_provenance_guard(
         "只缺时间时为什么默认最近30天，数字出处和补数据怎么说？"
@@ -209,6 +230,18 @@ def test_20260813_restaurant_contracts_are_deterministic_and_isolated():
     assert "营收、订单与毛利" in _RESTAURANT_DAILY_CLOSE_ANSWER
     assert "不是逐食材" in _RESTAURANT_DAILY_CLOSE_ANSWER
     assert not _needs_restaurant_daily_close_guard("Workflow 怎么发布？")
+
+
+def test_20260814_restaurant_margin_contract_keeps_finance_and_ops_scopes_separate():
+    answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "单菜精确毛利算不准" in answer
+    assert "期初库存 + 本期采购 − 期末库存" in answer
+    assert "汇总层展示实收营收" in answer
+    assert "分子、分母都只使用“有可用成本卡”的菜品营收" in answer
+    assert "整单折扣无法确定性摊到每一道菜" in answer
+    assert "不能称为利润或利润率" in answer
+    assert "不能承诺“补上就从估变实”" in answer
+    assert "导览助手只说明以上口径" in answer
 
 
 def test_only_production_chain_questions_force_the_current_sop_source():
@@ -670,7 +703,12 @@ def test_restaurant_single_dish_margin_uses_the_fixed_capability_boundary():
     assert "理论参考" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     assert "配方覆盖率与采购价新鲜度" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     assert "只汇总配方中已经登记的食材" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
-    assert "不超过 3 项时提示覆盖不足" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "分子、分母都只使用“有可用成本卡”的菜品营收" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    )
+    assert "补齐缺卡菜品能提高“可算进毛利的营收覆盖率”" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    )
     assert "可信第一口径是期间总毛利率" in (
         _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     )
@@ -1030,6 +1068,11 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "RN 仓库角色入口与 Web 业务边界" in current_sop
     assert "一个来源一行" in current_sop
     assert "可用库存和短缺数量以服务端校验为准" in current_sop
+    assert "Workflow 画布是 BOM 唯一写入口" in current_sop
+    assert "9 个旧式 AI BOM 写工具已退役" in current_sop
+    assert "由服务端删除对应旧投入行" in current_sop
+    assert "服务端 `/adjust` 的 `quantity` 是调整后应剩多少的绝对值" in current_sop
+    assert "用途与备注必须进入消耗审计" in current_sop
     assert "供应商可维护简称，以及多联系人、多地址和银行账户" in current_sop
     assert "单据追踪" in current_sop
     assert "BOM_PRODUCT_MISSING" in current_sop
@@ -1058,7 +1101,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-13" in html
+    assert "origin/main · SOP sync 2026-08-14" in html
+    assert "Workflow 画布是 BOM 唯一写入口" in html
+    assert "批次领用与消耗审计" in html
+    assert "调整后应剩多少的绝对值" in html
     assert "存放位置不等于“本图产出”" in html
     assert "中间 WIP 批次沿用同一生产计划身份" in html
     assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
@@ -1086,7 +1132,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "需多少、可用多少、缺多少" in html
     assert "RN 查看今日/历史盘点并续录" in html
     assert "BOM_PRODUCT_MISSING" in html
-    assert "旧“BOM/配方维护”菜单已退出日常入口" in html
+    assert "RN 手机端 BOM 主子表页面和 9 个旧式 AI BOM 写工具已经退役" in html
     assert "当前只汇总包材" in html
     assert "实际完整成本仍从正式报工与结算形成" in html
     assert "配置格是 BOM 叠层，不是新的 Workflow 拓扑节点" in current_sop
@@ -1201,6 +1247,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "只写简称或片段且唯一推断到一家时",
             "把新门店范围拼回原问题后再规划",
             "征询不是写操作",
+            "SmartBI 成本卡运营口径",
+            "整单折扣无法确定性分摊到某一道菜",
+            "补卡提高覆盖率",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -1221,7 +1270,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "当前指标与实体合同",
             "达到卡死阈值的永久坏单据进入租户隔离死信",
             "不是门店管理员在页面自助填写密钥",
-            "不超过 3 项时提示覆盖不足",
+            "分子分母都只使用有可用成本卡的菜品营收",
+            "补齐缺卡菜只能提高覆盖率",
+            "整单折扣无法确定性分摊到某一道菜",
             "默认每 6 小时刷新",
             "餐饮预测排班与调整边界",
             "主动发现与行动建议",
@@ -1260,6 +1311,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "简称或片段唯一推断到一家时也先给真实门店确认按钮",
             "读写意图边界",
             "本次 fail closed，不执行操作、不猜答案",
+            "成本卡运营毛利额",
+            "整单折扣无法确定性摊到每道菜",
+            "补齐缺卡只能提高覆盖率",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -1300,6 +1354,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "预测排班的范围与调整边界" in ai_assist
     assert "默认每 6 小时刷新" in ai_assist
     assert "画布 BOM 与成本边界" in ai_assist
+    assert "BOM 单一入口与批次调整审计" in ai_assist
+    assert "毛利实收、覆盖率与估算边界" in ai_assist
+    assert "<strong>毛利三层口径：</strong>" in ai_assist
     assert "五部门与角色权限边界" in ai_assist
     assert "主动发现与接地行动建议" in ai_assist
     assert "<strong>五部门驾驶舱：</strong>" in ai_assist
@@ -1711,6 +1768,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "Workflow 没有 ACTIVE BOM 时首版草稿怎么建，旧投入怎么确认移除？",
             "factory",
             _FACTORY_WORKFLOW_MAINTENANCE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "库存批次调整数量为什么要区分增减量和剩余数量？",
+            "factory",
+            _FACTORY_BATCH_ADJUSTMENT_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
