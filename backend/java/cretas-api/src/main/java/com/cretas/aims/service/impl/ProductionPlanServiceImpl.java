@@ -837,14 +837,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     anchor.getId(), anchor.getVersion()));
         }
         if (matches.size() != 1) {
+            // 用户看得见的文案一律中文 —— 这里原本整段英文, 中文界面上直接甩给工厂总监。
+            // hint 也从「Activate exactly one…」改成能照着做的一句: 说清去哪、做什么。
             throw new BusinessException(409,
                     matches.isEmpty()
-                            ? "No active BOM family covers the exact Workflow revision and terminal set"
-                            : "Multiple active BOM families cover the exact Workflow revision and terminal set")
+                            ? "该工艺版本还没有生效的 BOM 配方"
+                            : "该工艺版本对应了多个生效的 BOM 配方, 无法确定用哪一个")
                     .withCode(matches.isEmpty()
                             ? "ACTIVE_BOM_FAMILY_REQUIRED"
                             : "ACTIVE_BOM_FAMILY_AMBIGUOUS")
-                    .withHint("Activate exactly one complete BOM family for this published Workflow revision");
+                    .withHint(matches.isEmpty()
+                            ? "请到「产品-工序配置」画布上为当前已发布的工艺版本建好 BOM 并启用, 再回来建计划"
+                            : "请到「产品-工序配置」画布上停用多余的 BOM, 同一个工艺版本只保留一个生效配方");
         }
         return matches.getFirst();
     }
