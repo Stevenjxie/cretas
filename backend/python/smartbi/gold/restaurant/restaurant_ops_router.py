@@ -3480,6 +3480,17 @@ async def _resolve_missing_cost_cards(
     window_start, window_end, window_text = _explicit_window(
         date_range, window_label, days,
     )
+    # 🔴 `_explicit_window` 在没给显式区间时返回 **(None, None, "近 30 天")** ——
+    #    别的 resolver 把 None 交给 SQL 里的
+    #    `COALESCE($3::date, CURRENT_DATE - ($2::int - 1))` 去兜, 而
+    #    `_dish_cost_facts` 要的是**具体日期**: `date >= NULL` 一行都不返回。
+    #    ⚠️ 实测长相: T2 按钮点下去答「都有成本卡，没有需要补的」, 而同一屏的
+    #       抬头正说着「4 个菜品缺少完整成本」—— **答案自己跟自己打架**。
+    #    ⇒ 这里把窗口落成具体日期, ⛔ 不把 None 往下传。
+    if window_end is None:
+        window_end = date.today()
+    if window_start is None:
+        window_start = window_end - timedelta(days=max(1, days) - 1)
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)",
                            factory_id)
