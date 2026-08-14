@@ -1,0 +1,82 @@
+name: Tool descriptor inventory gate (post-merge)
+
+# ⚠️ 这是【合并后告警】, 不是【合并前门禁】—— 名字和行为必须对得上。
+# 同 jpa-gate-main.yml 的取舍(2026-07-29 Steve 拍板): 这个模块单次 CI 要付 ~3 分钟
+# javac(5229 个源文件全量重编), 与被跑的测试本身多快无关。压不下单次成本就砍触发频率,
+# 从「拦住」退成「立刻发现」。
+#
+# ── 为什么需要它(2026-08-14 实测) ───────────────────────────────────────────────
+#
+# ToolDescriptorInventoryDriftTest 早就存在, 写得也完整(源码扫描 ↔ tool-descriptors.yaml
+# 逐字段比对)。问题是它【从来没有机会执行】:
+#
+#   - ci.yml 的全量 `mvn -B verify` 挂在 `if: inputs.full_audit` 后面, 只有手动全量审计才跑
+#   - PR 路径 TARGET_TESTS 为空 → `-Dmaven.test.skip=true`, Java 测试一个都不跑
+#   - push 到 main 只跑 3 个模式: *RepositoryQueryValidationTest / *StartupGuardTest /
+#     FlywayVersionUniquenessTest
+#
+# 后果(实测, 三种漂移同时存在且都无人知晓):
+#
+#   1. 4 个工具在清册之外 —— restaurant_peak_hours_gold / system_ai_value_summary /
+#      system_finding_action_plan / workdesk_role_capabilities, 分别于 8-05 / 8-06 / 8-12
+#      加入源码, 清册最后一次重生成停在 7-20。闸【当天就红了】, 只是没人看得见。
+#   2. restaurant_dish_delete(APPROVED, HIGH 风险的删除工具)的 supportsPreview
+#      在 PR #1884 变成 true, 审计记录仍写着 false —— 已审过的条目也会失真。
+#   3. 8 个 overrideFlags 计数基线 + actionType/riskLevel 分布基线全部过期。
+#
+# ⇒ 判据: 一道从不执行的闸, 和没有这道闸是同一件事。本 workflow 就是给它接上电。
+#
+# ── paths 收窄依据 ─────────────────────────────────────────────────────────────
+#
+# 这道闸保护的是「源码里的 ToolExecutor 实现」与「清册 yaml」的一一对应, 所以只在
+# 两者之一变动时触发。改 controller / service / repository 不该让人等它。
+# 测试类自身也纳入 —— 基线数字写在它里面, 改基线必须重跑。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/**'
+      - 'backend/java/cretas-api/src/main/resources/ai/tool/gateway/*.yaml'
+      - 'backend/java/cretas-api/src/test/java/**/ToolDescriptorInventoryDriftTest.java'
+      - 'backend/java/cretas-api/pom.xml'
+  workflow_dispatch:
+
+concurrency:
+  group: tool-inventory-gate-${{ github.ref }}
+  # 同 jpa-gate-main.yml: 合并后触发不做 cancel-in-progress —— 每个进 main 的 commit
+  # 都该被验一次, 否则连续合并时中间那些 commit 等于没验。
+  cancel-in-progress: false
+
+jobs:
+  tool-inventory-gate:
+    name: Tool descriptor inventory drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 不起任何服务容器: 这道闸【不构造也不启动任何 Spring tool bean】, 它把 .java 当文本
+    # 扫描并解析 yaml。测试执行本身约 4 秒, 其余耗时全部是 javac。
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
+
+      - name: Tool descriptor inventory drift gate
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 15
+        run: >-
+          mvn -B test
+          -Dtest='ToolDescriptorInventoryDriftTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool-inventory-gate-surefire-reports
+          path: backend/java/cretas-api/target/surefire-reports/
+          retention-days: 7

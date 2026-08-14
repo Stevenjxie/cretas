@@ -51,8 +51,8 @@ class ToolDescriptorInventoryDriftTest {
                         },
                         LinkedHashMap::new));
 
-        assertThat(sourceTools).hasSize(588);
-        assertThat(inventory.expectedToolCount()).isEqualTo(588);
+        assertThat(sourceTools).hasSize(583);
+        assertThat(inventory.expectedToolCount()).isEqualTo(583);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -64,15 +64,33 @@ class ToolDescriptorInventoryDriftTest {
         for (SourceTool source : sourceTools.values()) {
             ToolDescriptorInventoryEntry entry = inventoryByClass.get(source.implementationClass());
             assertThat(entry).as(source.sourcePath().toString()).isNotNull();
-            assertThat(entry.toolName()).isEqualTo(source.toolName());
-            assertThat(entry.actionType()).isEqualTo(source.actionType());
-            assertThat(entry.riskLevel()).isEqualTo(source.riskLevel());
-            assertThat(entry.supportsPreview()).isEqualTo(source.supportsPreview());
-            assertThat(entry.requiresPermission()).isEqualTo(source.requiresPermission());
-            assertThat(entry.requiredPermissions()).isEqualTo(source.requiredPermissions());
-            assertThat(entry.version()).isEqualTo(source.version());
-            assertThat(entry.domainTags()).isEqualTo(source.domainTags());
-            assertThat(entry.overrideFlags()).isEqualTo(source.overrideFlags());
+            assertThat(entry.toolName())
+                    .as("toolName of " + source.toolName())
+                    .isEqualTo(source.toolName());
+            assertThat(entry.actionType())
+                    .as("actionType of " + source.toolName())
+                    .isEqualTo(source.actionType());
+            assertThat(entry.riskLevel())
+                    .as("riskLevel of " + source.toolName())
+                    .isEqualTo(source.riskLevel());
+            assertThat(entry.supportsPreview())
+                    .as("supportsPreview of " + source.toolName())
+                    .isEqualTo(source.supportsPreview());
+            assertThat(entry.requiresPermission())
+                    .as("requiresPermission of " + source.toolName())
+                    .isEqualTo(source.requiresPermission());
+            assertThat(entry.requiredPermissions())
+                    .as("requiredPermissions of " + source.toolName())
+                    .isEqualTo(source.requiredPermissions());
+            assertThat(entry.version())
+                    .as("version of " + source.toolName())
+                    .isEqualTo(source.version());
+            assertThat(entry.domainTags())
+                    .as("domainTags of " + source.toolName())
+                    .isEqualTo(source.domainTags());
+            assertThat(entry.overrideFlags())
+                    .as("overrideFlags of " + source.toolName())
+                    .isEqualTo(source.overrideFlags());
         }
     }
 
@@ -129,32 +147,32 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(587);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(582);
         assertThat(constantNames).singleElement().satisfies(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
             assertThat(tool.toolName()).isEqualTo("canvas_product_process_workflow_config");
         });
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(56);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(39);
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(50);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(39);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(10);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(10);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(58);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(41);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(49);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(9);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(9);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 447L,
-                ToolExecutor.ActionType.WRITE, 62L,
-                ToolExecutor.ActionType.UPDATE, 27L,
+                ToolExecutor.ActionType.READ, 445L,
+                ToolExecutor.ActionType.WRITE, 59L,
+                ToolExecutor.ActionType.UPDATE, 26L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
-                ToolExecutor.ActionType.GENERATE, 15L,
+                ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 511L,
-                ToolExecutor.RiskLevel.MEDIUM, 72L,
+                ToolExecutor.RiskLevel.LOW, 510L,
+                ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }
