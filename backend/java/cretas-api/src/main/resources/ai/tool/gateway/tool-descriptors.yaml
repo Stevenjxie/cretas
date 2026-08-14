@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 579
+expectedToolCount: 583
 expectedLegacyCount: 569
 descriptors:
   - toolName: "restaurant_calibration_history"
@@ -2430,7 +2430,7 @@ descriptors:
     provenance: EXPLICIT
     actionType: UPDATE
     riskLevel: HIGH
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: true
     requiredPermissions: ["restaurant:read_write"]
     allowedRoles: []
@@ -11588,6 +11588,90 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "restaurant_peak_hours_gold"
+    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantPeakHoursGoldTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["restaurant"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "system_ai_value_summary"
+    implementationClass: "com.cretas.aims.ai.tool.impl.system.AiValueSummaryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["system"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "system_finding_action_plan"
+    implementationClass: "com.cretas.aims.ai.tool.impl.system.FindingActionPlanTool"
+    provenance: EXPLICIT
+    actionType: GENERATE
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["system"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "workdesk_role_capabilities"
+    implementationClass: "com.cretas.aims.ai.tool.impl.workdesk.WorkdeskRoleCapabilitiesTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["workdesk"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
