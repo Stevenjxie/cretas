@@ -104,11 +104,14 @@ class _FakeConn:
             return list(by_dish.values())
         if "AS dim_key" in sql:                       # 分组覆盖
             excluded = set(args[5] or ())
+            # ⚠️ 按 SQL 里真实的 group_expr 分组, ⛔ 不管请求的是什么维度都按品牌
+            #    分 —— 那样「截断」那条判据永远造不出 >5 组, 断言就空转了。
+            idx = 1 if "s.brand" in sql else 0        # 1=品牌 0=菜名
             out = []
-            for brand in dict.fromkeys(b for _d, b, *_ in lines):
-                grp = [ln for ln in lines if ln[1] == brand]
+            for key in dict.fromkeys(ln[idx] for ln in lines):
+                grp = [ln for ln in lines if ln[idx] == key]
                 cg, ag, cc = self._agg(grp, excluded)
-                out.append({"dim_key": brand, "dim_label": brand,
+                out.append({"dim_key": key, "dim_label": key,
                             "covered_gross": cg, "all_gross": ag,
                             "covered_cost": cc})
             return out
@@ -269,6 +272,47 @@ def test_mutation_grouped_layer_uses_its_own_discount_rate(monkeypatch):
     cell = _groups()
     total = _cents(sum(Decimal(str(r["gross_profit"])) for r in cell.rows))
     assert total != head, "组内自摊也应当让「和 = 抬头」红"
+
+
+# ── 判据五: 截断形态本来就不该加得起来 ────────────────────────────────────
+def test_truncating_aggregations_are_not_supposed_to_add_up():
+    """🔴 `rank`/`bottom` 登记了 `limit=5`, 只给前 5 名 —— Σ ≠ 抬头 是**设计**。
+
+    ⛔ 只写注释不够(owner 2026-08-14): 下一个人看到「截断形态加不起来」会去
+       「修」它, 而那个修法(把 limit 去掉 / 把差额补进最后一组)都是错的。
+    ⇒ 写成断言, 让「这里本来就不该相等」变成一条会红的东西。
+
+    ⚠️ 断言的不只是「不相等」—— 还断言**差额恰好等于被截掉的那几组**。
+       只断不相等的话, 分组层再长出第二个口径缺陷它照样绿。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS
+
+    head = _headline()
+    full = _groups("product", "compare")          # 无 limit, 全集
+    assert _cents(sum(Decimal(str(r["gross_profit"])) for r in full.rows)) == head
+
+    for agg_key in ("rank", "bottom"):
+        limit = AGGREGATIONS[agg_key].limit
+        assert limit, f"{agg_key} 没有 limit —— 这条判据挑错了形态"
+        assert len(full.rows) > limit, (
+            f"夹具只有 {len(full.rows)} 组 ≤ limit {limit}, "
+            f"截断不会发生 —— 这条断言会空转")
+
+        cell = _groups("product", agg_key)
+        assert len(cell.rows) == limit, (
+            f"{agg_key} 返回 {len(cell.rows)} 组, 登记的 limit 是 {limit}")
+        total = _cents(sum(Decimal(str(r["gross_profit"])) for r in cell.rows))
+        assert total != head, (
+            f"{agg_key} 截断了却还等于抬头 —— 要么没真截断, "
+            f"要么差额被谁补进去了(那是错的修法)")
+
+        # 🔑 差额必须**恰好**是被截掉的那几组, 一分不多一分不少。
+        kept = {r["dim_key"] for r in cell.rows}
+        dropped = _cents(sum(Decimal(str(r["gross_profit"]))
+                             for r in full.rows if r["dim_key"] not in kept))
+        assert head - total == dropped, (
+            f"{agg_key} 的差额 {head - total} ≠ 被截掉的那几组合计 {dropped} —— "
+            f"截断之外还有第二个口径问题")
 
 
 # ── 顺带: 分组层不许自己算折扣 ────────────────────────────────────────────
