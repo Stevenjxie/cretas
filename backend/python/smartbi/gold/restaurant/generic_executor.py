@@ -35,6 +35,7 @@ from smartbi.gold.restaurant.provenance import (
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
     COST_BRIDGE_KEY_PARAM,
+    COST_CARD_PRESENT_SQL,
     dish_cost_is_implausible,
     effective_requires as _reg_effective_requires,
     DERIVED,
@@ -509,7 +510,7 @@ def _scalar(cell: "CellResult", key: str):
 #: ⛔ 分组层不许另抄一份: 抄一份就是同一个词两个定义, 而两层的数会不一致
 #:    (2026-08-14 实测过 ¥31,125.59 的分叉, 见 `_net_of`)。
 _COVERED_SELECT = (
-    "COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL"
+    "COALESCE(SUM(i.amount) FILTER (WHERE " + COST_CARD_PRESENT_SQL +
     "                                 AND NOT ({excluded})), 0)"
     "         AS covered_gross,\n"
     "       COALESCE(SUM(i.amount), 0)                    AS all_gross,\n"
@@ -528,6 +529,10 @@ _COVERED_MARGIN_SQL = (
 #:    「各组加起来 = 抬头」就不成立了, 而那正是这一版要守的判据。
 _COVERED_MARGIN_GROUPED_SQL = (
     "SELECT {group_expr} AS dim_key, {label_expr} AS dim_label,\n"
+    # 🔴 样本量(owner 2026-08-14): **披露, 不设阈值**。
+    #    「这组只有 3 单」该由店长自己判断值不值得看, ⛔ 不由我们替他截断 ——
+    #    阈值那条挂账, 而且任何一个拍出来的阈值都会在某个租户上误伤。
+    "       COUNT(DISTINCT {alias}.id) AS bills, COALESCE(SUM(i.qty), 0) AS qty,\n"
     "       " + _COVERED_SELECT + "\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
@@ -773,15 +778,35 @@ async def _covered_margin_grouped(conn, factory_id: str, date_range, bridge,
         logger.warning("[generic-executor] 分组覆盖毛利取数失败", exc_info=True)
         return None
     out = []
+    dropped = 0
     for row in rows or ():
         g_gross = Decimal(str(row["covered_gross"] or 0))
+        g_cost = Decimal(str(row["covered_cost"] or 0))
+        # 🔴 owner 2026-08-14 裁定: **缺成本卡的菜不进毛利排行。**
+        #    它们的覆盖营收和覆盖成本都是 0, 于是显示成「娃娃菜 ¥0.00」——
+        #    同一个数放在两个位置意思完全不同: 排行里读作「这道菜不赚钱」,
+        #    缺卡清单里读作「这道菜还没录成本」。**前者是错话。**
+        # ⚠️ 不影响「Σ组 = 抬头」: 它们本来就贡献 0(抬头就是覆盖口径)。
+        #    ⇒ 这一步让那条判据更干净, 不是削弱它。
+        # ⚠️ 判据是「这一组一分覆盖营收都没有」, ⛔ 不是「毛利为 0」——
+        #    后者会把一道**真的不赚不亏**的菜也删掉。
+        if g_gross == 0 and g_cost == 0:
+            dropped += 1
+            continue
         out.append({
             "dim_key": row["dim_key"],
             "dim_label": row["dim_label"],
             # 🔑 与抬头**同一个** `receipt_ratio` —— 见 `_net_of`。
             "covered_net": _net_of(g_gross, covered.receipt_ratio),
-            "covered_cost": Decimal(str(row["covered_cost"] or 0)),
+            "covered_cost": g_cost,
+            # 样本量: 披露给店长自己判断, ⛔ 不做阈值截断。
+            "bills": int(row["bills"] or 0),
+            "qty": float(row["qty"] or 0),
         })
+    if dropped:
+        # ⛔ 静默剔除 = 清单看起来完整而其实少了几行。缺口本身由 T2 那条开价
+        #    具名说出来(「先补这 N 道的成本卡（…）」), 这里只留痕。
+        logger.info("[generic-executor] 分组毛利剔除 %d 组无覆盖营收的项", dropped)
     return out, sql
 
 
@@ -829,7 +854,8 @@ async def _execute_derived_split(
             rows, gsql = grouped
             agg = AGGREGATIONS[aggregation_key]
             shaped = [{"dim_key": r["dim_key"], "dim_label": r["dim_label"],
-                       item.key: _value_of(r["covered_net"], r["covered_cost"])}
+                       item.key: _value_of(r["covered_net"], r["covered_cost"]),
+                       "bills": r["bills"], "qty": r["qty"]}
                       for r in rows]
             # ⚠️ 先排序再 `_post_process` —— 「两端」「累计到 80%」依赖顺序,
             #    而这条路自己拼 SQL, 没有经过 `build_sql` 的 ORDER BY。
@@ -1005,7 +1031,8 @@ _effective_requires = _reg_effective_requires
 #: 抄一份就是同一条 join 有两个定义, 而漂的表现是「覆盖率和毛利算的不是同一批菜」。
 _COVERAGE_SQL_TEMPLATE = (
     "SELECT COALESCE(SUM(i.amount), 0) AS total,\n"
-    "       COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL), 0) AS covered\n"
+    "       COALESCE(SUM(i.amount) FILTER (WHERE " + COST_CARD_PRESENT_SQL +
+    "), 0) AS covered\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
 )

@@ -738,6 +738,15 @@ def _structured_context(
             if isinstance(result_meta.get("excluded_entities"), list)
             else list(spec.excluded_entities)
         ),
+        # 🔴 T2 补数据 / T1 下钻按钮 —— resolver 放在 `meta` 里, 搭
+        #    `result_meta` 的车到这儿(见 `_execution_receipt` 的 `dict(meta)`)。
+        # ⛔ 不新开管道: 第一版新建了 `OpsAnswer.actions`, 实测**三层都断**
+        #    (没有消费者 / payload 没有 handler / 前端读的是 suggestedFollowups)。
+        # ⚠️ 空列表 = 这次没有按钮, 与「resolver 不产按钮」在下游同义。
+        "follow_up_actions": (
+            result_meta.get("follow_up_actions")
+            if isinstance(result_meta.get("follow_up_actions"), list) else []
+        ),
         # 换范围按钮要按它查 resolver 支不支持 store 粒度
         # (见 _store_scope_switch_followups)。
         "intent": spec.intent,
@@ -977,8 +986,29 @@ def _topic_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     ][:2]
 
 
+def _resolver_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    """resolver 产的 T2/T1 按钮 —— **排在最前**。
+
+    🔴 owner 2026-08-14: 产品优先级是 `T2 > T3 > T1 > T4`, 而这里合并之后
+       整体还要被前端 `.slice(0, 4)` 截 —— 排在后面等于**被静默切掉**。
+       「补数据」比「换个时间窗看看」重要得多, 它必须活下来。
+    ⚠️ 排序已经在 `follow_up_actions.build_actions` 里做过了, 这里**不再排** ——
+       再排一次就是同一个优先级两处定义。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import to_followups
+
+    raw = context.get("follow_up_actions")
+    if not isinstance(raw, list) or not raw:
+        return []
+    try:
+        return to_followups(raw)
+    except Exception:  # noqa: BLE001 —— 按钮拿不到不该让整个答案失败
+        logger.warning("[restaurant-intent] resolver 按钮转换失败", exc_info=True)
+        return []
+
+
 def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
-    """答案末尾的按钮 = 话题相关的追问 + 换门店范围。
+    """答案末尾的按钮 = resolver 的 T2/T1 + 话题相关的追问 + 换门店范围。
 
     换范围排在后面: 用户多数时候是想接着往下问, 换范围是少数动作 —— 但它必须
     **存在**, 因为门店范围现在会隐式串钩上一轮(见 restaurant_intent
@@ -988,6 +1018,7 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     combined: List[Dict[str, str]] = []
     seen = set()
     for item in (
+        *_resolver_followups(context),
         *_topic_followups(context),
         *_time_window_switch_followups(context),
         *_store_scope_switch_followups(context),

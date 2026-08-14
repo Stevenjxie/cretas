@@ -1065,14 +1065,18 @@ def test_qa_actions_come_from_fill_offers_not_hand_written():
         "gross_profit", "毛利", "all", "summary", "money",
         [{"gross_profit": 1.0}], (), "", "ESTIMATED", "成本卡的理论用量", 0.4,
         (), ({"name": "顺德干蒸鲜排骨", "revenue": 500.0},), 1000.0)
-    lines = router._build_qa_fill_offers(cell)
+    # ⚠️ `_build_qa_fill_offers` 返回**结构化 offer**(按钮读它的 `kind`),
+    #    正文那几行由 `_offer_texts` 从同一份产出渲染。
+    #    ⛔ 别把它改回「直接返回字符串」—— 那正是按钮从上线起一次都没出现过
+    #      的原因(`offer.get(...)` 抛异常, 被 resolver 的 except 吞掉)。
+    lines = router._offer_texts(router._build_qa_fill_offers(cell))
     assert any("顺德干蒸鲜排骨" in ln for ln in lines), (
         "建议动作里没有具体菜名 —— 又退回泛泛之词")
     assert any("提到约" in ln for ln in lines), "没给覆盖率增量"
     # ⛔ 拿不到开价时**不留空标题**: 通用那三条仍在兜底
-    empty = router._build_qa_fill_offers(CellResult(
+    empty = router._offer_texts(router._build_qa_fill_offers(CellResult(
         "gross_profit", "毛利", "all", "summary", "money",
-        [{"gross_profit": 1.0}], (), "", "MEASURED", ""))
+        [{"gross_profit": 1.0}], (), "", "MEASURED", "")))
     assert empty, "开价为空时连兜底建议都没有 —— 会留一个空的「建议动作:」"
 
 
@@ -1126,11 +1130,26 @@ def test_progress_line_stays_out_of_the_qa_body():
 # ═══════════════════════════════════════════════════════════════════════════
 # T1/T2 追问按钮（owner 2026-08-14，只做问答那条路）
 # ═══════════════════════════════════════════════════════════════════════════
+_SAMPLE_USED_DIMS = ("all", "product")
+
+
 def _sample_body_and_offers():
+    """正文按**生产那条路的顺序**拼: 主体 + 开价 + 「还能怎么拆」。
+
+    🔴 最后那一句不是装饰: 按钮的 label(「按品牌」)要**逐字在正文里**,
+       而它是由 `drilldown_note()` 写进正文的。夹具漏掉它 = 夹具和生产两种拼法,
+       那时这条断言测的是一个生产上不存在的正文。
+       (2026-08-14 实测: 加严 label 那条判据后, 这个夹具当场红。)
+    """
+    from smartbi.gold.restaurant.follow_up_actions import drilldown_note
+
     body = ("今天全部门店毛利合计 **¥124,071.85**（估算：只算了 40.2% 的营收）。"
             "\n\n> 先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%")
     offers = [{"kind": "fill_dishes", "dishes": (),
                "text": "先补这 3 道的成本卡（A、B、C）——能算进毛利的营收会从 40.2% 提到约 47.7%"}]
+    note = drilldown_note("gross_profit", _SAMPLE_USED_DIMS)
+    if note:
+        body = f"{body}\n\n{note}"
     return body, offers
 
 
@@ -1280,3 +1299,356 @@ def test_mutating_the_full_coverage_threshold_turns_it_red(monkeypatch):
     after = render_headline(cell, "今天")
     assert "只算了 100.0% 的营收" in after, (
         "🔴 变异没生效 —— 那个阈值不是从 provenance 取的")
+
+
+# ── T1 接通 (owner 2026-08-14 三条裁定) ────────────────────────────────────
+def test_buttons_land_on_the_existing_suggested_followups_contract():
+    """🔴 判据一: 按钮走既有的 `{label, question}`, **前端一行不改**就能读到。
+
+    第一版新建了 `OpsAnswer.actions`(带 `payload`), 实测**三层都断**:
+    没有消费者 / `fill_dishes` 没有 handler / 前端读的是 `suggestedFollowups`。
+    ⇒ owner: 复用=1 份, 新增=2 份(其中一份没人读)。撤掉新建的那份。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import (
+        build_actions, to_followups)
+
+    body, offers = _sample_body_and_offers()
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=_SAMPLE_USED_DIMS,
+                            offers=offers, answer_text=body)
+    followups = to_followups(actions)
+    assert followups, "一个都没有 —— 下面的断言会恒真"
+    for item in followups:
+        # 前端 `normalizeFollowUpActions` 读 `item.question ?? item.text ?? item.label`
+        assert set(item) == {"label", "question", "type"}, (
+            f"多了或少了键: {item} —— 前端只认 label/question, "
+            f"`anchor` 那种内部字段不许送出去")
+        assert item["label"] and item["question"], item
+    assert followups[0]["type"] == "T2", (
+        f"T2 没排第一: {followups} —— 整体还要被前端 .slice(0,4) 截, "
+        f"排后面等于被静默切掉")
+
+
+def test_opsanswer_no_longer_carries_its_own_actions_contract():
+    """🔴 判据一的另一半: 那个没人读的字段**真的删了**。
+
+    ⛔ 只加新路径不删旧字段 = 契约从 2 份变成 3 份。
+    """
+    import dataclasses
+    from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
+
+    names = {f.name for f in dataclasses.fields(OpsAnswer)}
+    assert "actions" not in names, (
+        f"`OpsAnswer.actions` 还在: {sorted(names)} —— 它没有任何消费者")
+
+
+def test_the_three_hardcoded_java_followups_are_gone():
+    """🔴 判据一: 三个硬编码问句已删(Java 两处实现)。
+
+    「老板今天怎么用这张报表做决定？」这类话**换哪个报表都一样**, 所以它们
+    不指向正文里的任何东西 —— 正是「按钮不许说正文没说的话」要挡的。
+    ⚠️ 只数**代码**: 注释里会提到这几句话(说明为什么删), 不剥注释的话
+       这条闸会把自己的说明也测进去(本仓记过这个形态)。
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "java"
+    hits = []
+    for path in root.rglob("*.java"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        # 剥行注释与块注释
+        code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        code = re.sub(r"//[^\n]*", "", code)
+        for phrase in ("老板今天怎么用这张报表做决定",
+                       "哪些动作今天先不要做",
+                       "明天看哪三个数判断有没有效果"):
+            if phrase in code:
+                hits.append(f"{path.name}: {phrase}")
+    assert not hits, "硬编码问句还在代码里:\n  " + "\n  ".join(hits)
+
+
+def test_drilldown_note_says_something_in_both_states():
+    """🔴 判据四: 维度耗尽时**明说一句**; 没耗尽时说还能怎么拆。
+
+    ⚠️ 两种状态都要说话 —— 只在耗尽时说的话, 「还能拆」那条路上的人
+       读不到任何提示, 而**日结推送那种形态没有按钮只有正文**。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import (
+        drilldown_note, is_exhausted, _drillable_dimensions)
+
+    still = drilldown_note("gross_profit", ("all", "product"))
+    assert still and "还能" in still, f"还能下钻时没说话: {still!r}"
+    assert not is_exhausted("gross_profit", ("all", "product"))
+
+    every = ("all", *_drillable_dimensions("gross_profit", ()))
+    assert is_exhausted("gross_profit", every), "把所有维度都用掉了却说还能拆"
+    done = drilldown_note("gross_profit", every)
+    assert done and "都看过了" in done, f"耗尽时没说话: {done!r}"
+    assert "还能" not in done, f"耗尽了还在说「还能」: {done!r}"
+
+
+def test_mutating_the_exhaustion_check_turns_the_note_red(monkeypatch):
+    """🔴 判据四的变异: 让「耗尽」永远为假, 上面那条必须红。
+
+    ⚠️ 打的是 `_drillable_dimensions`(判据的来源), ⛔ 不是直接改那句话 ——
+       改字符串只能证明断言在读那个字符串, 证明不了它在守「拆完了」这个行为。
+    """
+    from smartbi.gold.restaurant import follow_up_actions as fa
+
+    monkeypatch.setattr(fa, "_drillable_dimensions", lambda *a, **k: ("store",))
+    every = ("all", "store", "product", "channel", "staff", "meal_period",
+             "table", "date", "weekday", "hour", "city", "brand", "category")
+    assert not fa.is_exhausted("gross_profit", every), "变异没生效"
+    with pytest.raises(AssertionError):
+        done = fa.drilldown_note("gross_profit", every)
+        assert "都看过了" in done, f"耗尽时没说话: {done!r}"
+
+
+def test_t2_button_question_matches_what_the_router_can_answer():
+    """🔴 判据三的前置: T2 按钮发的问句, 路由**接得住**。
+
+    ⛔ 两处不一致 = 按钮变哑弹(点下去拒答), 而它看起来完全正常 ——
+       这正是这一轮在修的形态。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import T2_FILL_QUESTION
+    from smartbi.gold.restaurant.restaurant_ops_router import (
+        _asks_missing_cost_card)
+
+    assert _asks_missing_cost_card(T2_FILL_QUESTION), (
+        f"T2 按钮发 {T2_FILL_QUESTION!r}, 而 router 的判据认不出它")
+    # 阴性对照: 成本**排行**那种问法不许落进缺卡分支
+    for other in ("食材成本最高的菜是哪些", "配方成本前 10 名", "这个月毛利多少"):
+        assert not _asks_missing_cost_card(other), (
+            f"{other!r} 被误判成「问缺卡」—— 它会拿到一份缺卡清单, 答非所问")
+
+
+def test_the_buttons_are_built_from_the_real_offer_objects():
+    """🔴🔴 按钮的输入必须是 **resolver 真的会传进去的那个对象**。
+
+    ## 这条断言是一整轮缺陷的产物
+
+    `_build_qa_fill_offers` 原来返回 `List[str]`(把 offer 拍平成文案), 而
+    `build_actions` 读 `offer["kind"]` / `offer["text"]` —— 于是它每次都
+    `AttributeError: 'str' object has no attribute 'get'`, 被 resolver 的
+    `except` 吞掉, 日志写「追问按钮生成失败, 本次不带按钮」。
+    **T1/T2 按钮从上线起一次都没出现在生产上**, 而单测因为**自己喂 dict** 全绿。
+
+    ⇒ 判据: 一组按钮断言里, 至少一条的输入要**由产品那侧的函数产出**,
+      ⛔ 不许全部自己捏。自己捏的夹具只能证明「形状对上时它工作」。
+    """
+    from smartbi.gold.restaurant.follow_up_actions import build_actions
+    from smartbi.gold.restaurant.restaurant_ops_router import (
+        _build_qa_fill_offers, _offer_texts)
+
+    cell = _profit_cell()                      # 真的 CellResult
+    offers = _build_qa_fill_offers(cell)       # 真的产出, ⛔ 不是我捏的
+    assert offers, "开价一条都没有 —— 下面的断言会恒真"
+    for offer in offers:
+        assert isinstance(offer, dict), (
+            f"resolver 传给按钮的是 {type(offer).__name__} 而不是 dict —— "
+            f"`build_actions` 会 AttributeError, 而它被 except 吞掉, "
+            f"表现是**按钮永远不出现**")
+        assert offer.get("kind"), f"offer 没有 kind, 按钮认不出类型: {offer}"
+
+    # 正文那几行仍然渲染得出来(同一份产出, 两个消费者)
+    texts = _offer_texts(offers)
+    assert texts and all(isinstance(t, str) and t for t in texts), texts
+
+    body = "\n\n".join([texts[0]])
+    actions = build_actions(metric_key="gross_profit",
+                            used_dimensions=_SAMPLE_USED_DIMS,
+                            offers=offers, answer_text=body)
+    assert any(a["type"] == "T2" for a in actions), (
+        f"用真实 offer 建不出 T2 按钮: {actions}")
+
+
+def test_t1_only_offers_dimensions_the_resolver_can_actually_answer():
+    """🔴🔴 判据: 按钮给的每个维度, resolver **声明得出来**。
+
+    ## 这条是 4 颗哑弹换来的
+
+    只按 `Metric.dimensions` 反查, MOCK_REST 上给出了
+    「按品牌」「按菜品类别」「按渠道」「按城市」四颗按钮 —— **点下去全是拒答**:
+    「这次是想看某道菜、某家门店，还是全店汇总？」。
+    因为 `RESTAURANT_OPS_GROSS_MARGIN` 声明的能力只有 `{dish, time}`。
+
+    ⚠️ 登记表说「毛利能按品牌分组」是**对的**(通用执行器真算得出来),
+       但**问句路由不到那一层** —— 能算 ≠ 问得到。
+    ⛔ `follow_up_actions` 文件里早写着「取并集会给出一个算不出来的组合
+       (点下去就是拒答)」, 却只用在派生量的两个输入上。**同一条判据漏了一处。**
+    """
+    from smartbi.gold.restaurant.follow_up_actions import (
+        _answerable_dimensions, _drillable_dimensions)
+    from smartbi.gold.restaurant.metric_registry import (
+        DIMENSIONS, canonical_dimensions)
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _RESOLVER_DIMENSIONS)
+
+    code = "RESTAURANT_OPS_GROSS_MARGIN"
+    # ⚠️ 方向: `canonical_dimensions` 是**登记表 key → 管线名**(product→dish),
+    #    而 `_RESOLVER_DIMENSIONS` 写的是管线名。拿它去归一 declared 是空操作,
+    #    会把这条断言变成「候选必须是空集」—— 实测踩过。
+    declared = _RESOLVER_DIMENSIONS[code]
+    answerable = {k for k in DIMENSIONS
+                  if canonical_dimensions((k,))[0] in declared}
+    assert answerable == set(_answerable_dimensions(code)), (
+        "断言和实现算出来的「能答的维度」不一样 —— 其中一个是错的")
+    offered = set(_drillable_dimensions("gross_profit", ("all",), code))
+    assert offered, "一个可下钻维度都没有 —— 下面的断言会恒真"
+    assert offered <= answerable, (
+        f"按钮给了 resolver 答不出的维度: {sorted(offered - answerable)}\n"
+        f"resolver 声明能答: {sorted(answerable)}\n"
+        f"⇒ 这些按钮点下去是拒答")
+
+    # 阳性对照: 不收窄时**确实**会多给出维度 —— 否则这条断言测不到收窄
+    wide = set(_drillable_dimensions("gross_profit", ("all",), None))
+    assert wide - answerable, (
+        "不收窄时也没有多余维度 —— 那这条断言守不住任何东西")
+
+
+# ── 降级不是问题, 静默才是 (owner 2026-08-14) ──────────────────────────────
+def test_programming_errors_are_counted_not_silently_degraded():
+    """🔴 编程错误被吞掉时**计数器要动**, 而且打 ERROR 不是 WARNING。
+
+    ## 这条断言是一整轮缺陷的产物
+
+    `except Exception` + `logger.warning("本次不带按钮")` 把一个
+    `AttributeError` 写成了「这里没有内容」——
+    **T1/T2 按钮从上线起一次都没出现过, 而没有人知道。**
+
+    ⚠️ 降级本身是对的(按钮出不来不该让答案挂掉), 所以这条断言查的**不是**
+       「它还降不降级」, 而是「它降级时留没留痕」。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+
+    dg.reset_counters()
+
+    def _boom():
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    got = dg.degrade_on_error("t.probe", "FALLBACK", _boom, what="按钮")
+    assert got == "FALLBACK", "降级没发生 —— 那会让整个答案挂掉"
+    assert dg.counter("t.probe") == 1, (
+        f"编程错误被吞掉了却没计数: {dg.counters()} —— 这就是静默")
+
+    # 阳性对照 1: **预期内**的失败不计数 —— 否则计数器永远不为 0, 断言失效
+    class _Expected(Exception):
+        pass
+
+    dg.degrade_on_error("t.probe2", "F", lambda: (_ for _ in ()).throw(_Expected()),
+                        expected=(_Expected,), what="外部不可达")
+    assert dg.counter("t.probe2") == 0, (
+        "预期内的失败也计数了 —— 计数器会永远不为 0, 那条断言就失效了")
+
+    # 阳性对照 2: 正常路径不计数
+    assert dg.degrade_on_error("t.probe3", "F", lambda: "OK") == "OK"
+    assert dg.counter("t.probe3") == 0
+    dg.reset_counters()
+
+
+def test_the_real_button_path_swallows_no_programming_error():
+    """🔴 正常路径跑完, 三个降级点**一个编程错误都没吞**。
+
+    ⛔ 这条要跑在**产品那侧的函数**上 —— 上一轮的教训正是「单测自己喂 dict
+       所以一直全绿, 而生产上每次都 AttributeError」。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    dg.reset_counters()
+    cell = _profit_cell()
+    offers = router._build_qa_fill_offers(cell)          # 真的产出
+    body = "\n\n".join(router._offer_texts(offers)[:1])
+    note = router._drilldown_note("gross_profit", _SAMPLE_USED_DIMS,
+                                  "RESTAURANT_OPS_GROSS_MARGIN")
+    actions = router._build_follow_up_actions(
+        offers=offers, answer_text=f"{body}\n\n{note}",
+        used_dimensions=_SAMPLE_USED_DIMS,
+        resolver_code="RESTAURANT_OPS_GROSS_MARGIN")
+
+    assert offers and note and actions, (
+        f"正常路径没产出东西, 下面那条断言会恒真: "
+        f"offers={len(offers)} note={note!r} actions={len(actions)}")
+    dg.assert_no_silent_programming_errors(
+        router.DEGRADE_QA_OFFERS, router.DEGRADE_DRILL_NOTE,
+        router.DEGRADE_FOLLOWUP_ACTIONS)
+
+
+def test_mutating_the_offer_shape_makes_the_counter_fire(monkeypatch):
+    """🔴 变异: 把 offer 拍回字符串(**上一轮真实的缺陷形态**), 计数器必须动。
+
+    ⚠️ 打的是 `_build_qa_fill_offers` 的**返回形状**, ⛔ 不是直接 raise ——
+       后者只证明 guard 会计数, 证明不了它守着**这个**缺陷。
+    """
+    from smartbi.gold.restaurant import degrade_guard as dg
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    dg.reset_counters()
+    cell = _profit_cell()
+    real = router._build_qa_fill_offers(cell)
+    flattened = [str(o.get("text") or "") for o in real]   # ← 上一轮就是这样
+    actions = router._build_follow_up_actions(
+        offers=flattened, answer_text="正文", used_dimensions=_SAMPLE_USED_DIMS,
+        resolver_code="RESTAURANT_OPS_GROSS_MARGIN")
+    assert actions == (), "变异没生效 —— 它本该抛 AttributeError"
+    assert dg.counter(router.DEGRADE_FOLLOWUP_ACTIONS) == 1, (
+        f"按钮那个降级点吞了 AttributeError 却没计数: {dg.counters()}")
+    with pytest.raises(AssertionError):
+        dg.assert_no_silent_programming_errors(router.DEGRADE_FOLLOWUP_ACTIONS)
+    dg.reset_counters()
+
+
+def test_cost_card_presence_has_exactly_one_definition():
+    """🔴 「这道菜有没有成本卡」全仓**只许有一处定义**。
+
+    改之前是两份:
+        日结/通用执行器   `c.food_cost IS NOT NULL`
+        问答 resolver     `has_price_data = TRUE`
+
+    三个租户实测 0 例分叉, 所以今天两边同义 —— **但它们本来就不同义**:
+    ETL 写 `food_cost` 时套着 `COALESCE(SUM(line_cost), 0)`, **永远产不出 NULL**。
+    一道菜配料全无价时 ETL 给 `food_cost = 0 / has_price_data = FALSE`,
+    那时前者判「有卡」(成本 0 ⇒ 毛利率 100%), 后者判「没卡」——
+    **两边会给出相反的答案。**
+
+    ⚠️ 用 AST + 剥注释, ⛔ 不数字符串: 注释里会引用这两个条件(说明为什么收敛),
+       不剥的话这条闸会把自己的说明也测进去(本仓记过这个形态)。
+    """
+    import ast
+    import io
+    import pathlib
+    import tokenize
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "smartbi" / "gold"
+    hits = []
+    for path in root.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline)
+                    if t.type != tokenize.COMMENT]
+            code = tokenize.untokenize(toks)
+            tree = ast.parse(code)
+        except (SyntaxError, tokenize.TokenError, ValueError):
+            continue
+        for node in ast.walk(tree):          # 剥 docstring
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
+                    and isinstance(node.value.value, str):
+                node.value.value = ""
+        stripped = ast.unparse(tree)
+        for needle in ("food_cost IS NOT NULL", "has_price_data = TRUE",
+                       "has_price_data IS TRUE"):
+            if needle in stripped:
+                hits.append((path.name, needle))
+
+    from smartbi.gold.restaurant.metric_registry import COST_CARD_PRESENT_SQL
+    allowed = {("metric_registry.py", "has_price_data IS TRUE")}
+    stray = [h for h in hits if h not in allowed]
+    assert not stray, (
+        "「有没有成本卡」出现了第二份定义:\n  "
+        + "\n  ".join(f"{f}: {n}" for f, n in stray)
+        + f"\n⇒ 用 `metric_registry.COST_CARD_PRESENT_SQL`"
+          f"（现为 {COST_CARD_PRESENT_SQL!r}）")
+    assert hits, "一处都没扫到 —— 这条闸会恒绿"

@@ -166,7 +166,6 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         result.put("processingTimeMs", response.getOrDefault("processing_time_ms", 0));
         String scenario = ownerActionScenario(question, asString(params.get("intentCode")));
         result.put("decisionBridge", decisionBridge(scenario));
-        result.put("suggestedFollowups", decisionFollowups(scenario));
         return result;
     }
 
@@ -185,7 +184,6 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         result.put("processingTimeMs", 0);
         String scenario = ownerActionScenario(question, intentCode);
         result.put("decisionBridge", decisionBridge(scenario));
-        result.put("suggestedFollowups", decisionFollowups(scenario));
         return result;
     }
 
@@ -312,21 +310,9 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         return bridge;
     }
 
-    private static List<Map<String, Object>> decisionFollowups(String scenario) {
-        return List.of(
-                followup("老板今天怎么做？", "老板今天怎么用这张报表做决定？", scenario),
-                followup("先别做什么？", "哪些动作今天先不要做？", scenario),
-                followup("明天看什么数？", "明天看哪三个数判断有没有效果？", scenario)
-        );
-    }
-
-    private static Map<String, Object> followup(String label, String question, String scenario) {
-        Map<String, Object> f = new LinkedHashMap<>();
-        f.put("label", label);
-        f.put("question", question);
-        f.put("ownerActionScenario", scenario);
-        return f;
-    }
+    // 🔴 2026-08-14 owner 裁定: 删掉 decisionFollowups() 那三个硬编码问句。
+    // 它们换哪个报表都是这三句, 所以**不指向正文里的任何东西**。
+    // 内容相关的追问由 Python 侧产出(T2 补数据 / T1 下钻), 走 suggested_followups。
 
     private static String asString(Object value) {
         return value == null ? null : value.toString();

@@ -54,11 +54,17 @@ _LINES = [
     ("米饭",      "模拟餐饮", "  4050.00", "5000",  "81.00"),   # ③ 单位错 ×100
     ("干锅牛蛙",  "青花椒",   "160000.00", "2000",  "37.10"),
     ("凉拌木耳",  "青花椒",   " 26244.00", " 900",  None),      # ② 没卡
+    # ⚠️ 下面三道是为了让**有卡的菜 > limit(5)** —— 缺卡的菜退出排行后
+    #    只剩 3 组, 「截断形态不该加起来」那条断言会空转(它自带守卫,
+    #    2026-08-14 实测当场红)。
+    ("鲈鱼",      "模拟餐饮", "120000.00", "2000",  "22.50"),
+    ("藤椒鸡",    "青花椒",   " 90000.00", "1500",  "18.00"),
+    ("红糖糍粑",  "青花椒",   " 60000.00", "3000",  " 4.20"),
 ]
 
 #: 交易实收。**小于**明细原价合计 ⇒ 确实有折扣可摊(否则这一版改的东西不生效,
 #: 断言在「根本没有折扣」时两边天然相等 —— 那就是个恒真式)。
-_PAID = Decimal("591873.41")
+_PAID = Decimal("848340.50")
 
 
 def _rows():
@@ -113,7 +119,10 @@ class _FakeConn:
                 cg, ag, cc = self._agg(grp, excluded)
                 out.append({"dim_key": key, "dim_label": key,
                             "covered_gross": cg, "all_gross": ag,
-                            "covered_cost": cc})
+                            "covered_cost": cc,
+                            # 样本量: 披露用, 见 `_covered_margin_grouped`
+                            "bills": len(grp),
+                            "qty": sum(q for _d, _b, _a, q, _c in grp)})
             return out
         raise AssertionError(f"夹具没预料到的 SQL:\n{sql}")
 
@@ -341,3 +350,89 @@ def test_the_receipt_ratio_has_exactly_one_home():
     assert len(calls) >= 2, (
         f"`_net_of` 只被调了 {len(calls)} 次 —— 两层都该走它, "
         f"少于 2 处说明有一层自己乘了比率")
+
+
+# ── owner 2026-08-14 裁定: 缺卡的菜退出毛利排行 ───────────────────────────
+def test_dishes_without_a_cost_card_stay_out_of_the_margin_ranking():
+    """🔴 缺成本卡的菜**不进毛利排行**, 但 Σ组 = 抬头 仍然成立。
+
+    同一个数放在两个位置意思完全不同:
+      排行里的 `娃娃菜 ¥0.00`      → 读作「这道菜不赚钱」  ← **错话**
+      缺卡清单里的 `娃娃菜`         → 读作「这道菜还没录成本」
+
+    ⚠️ 它们本来就贡献 0(抬头就是覆盖口径), 所以剔除**不会**破坏 Σ = 抬头 ——
+       这一步让那条判据更干净, 不是削弱它。
+    """
+    head = _headline()
+    cell = _groups("product", "compare")
+    names = {str(r["dim_label"]) for r in cell.rows}
+
+    uncovered = {d for d, _b, _a, _q, c in _rows() if c is None}
+    assert uncovered, "夹具里没有缺卡的菜 —— 这条断言会恒真"
+    assert not (names & uncovered), (
+        f"缺卡的菜还在排行里: {sorted(names & uncovered)}")
+
+    # 有卡的菜一个都不许少
+    covered = {d for d, _b, _a, _q, c in _rows() if c is not None}
+    excluded = {o["name"] for o in cell.cost_outliers}   # 单位错的卡另算
+    assert (covered - excluded) <= names, (
+        f"有卡的菜被误删: {sorted((covered - excluded) - names)}")
+
+    # 🔑 Σ 仍然等于抬头(到分)
+    total = _cents(sum(Decimal(str(r["gross_profit"])) for r in cell.rows))
+    assert total == head, f"剔除之后 Σ {total} != 抬头 {head}"
+
+
+def test_the_drop_rule_keeps_a_genuinely_break_even_dish(monkeypatch):
+    """🔴 判据是「一分覆盖营收都没有」, ⛔ 不是「毛利为 0」。
+
+    后者会把一道**真的不赚不亏**(成本恰好等于净营收)的菜也删掉 ——
+    那道菜有卡、有销售, 它属于排行。
+    """
+    import smartbi.gold.restaurant.generic_executor as ge_mod
+
+    # 造一道「有营收、有成本、毛利恰好 0」的组
+    class _Row(dict):
+        pass
+    rows = [_Row({"dim_key": "打平菜", "dim_label": "打平菜",
+                  "covered_gross": Decimal("100"), "all_gross": Decimal("100"),
+                  "covered_cost": Decimal("100"), "bills": 5, "qty": 5}),
+            _Row({"dim_key": "没卡菜", "dim_label": "没卡菜",
+                  "covered_gross": Decimal("0"), "all_gross": Decimal("500"),
+                  "covered_cost": Decimal("0"), "bills": 9, "qty": 9})]
+
+    class _C:
+        async def fetch(self, sql, *a):
+            return rows
+    from smartbi.gold.restaurant.metric_registry import DIMENSIONS
+    cov = ge_mod._Covered(Decimal("100"), Decimal("100"), Decimal("1"), (), (),
+                          600.0, Decimal("1"), ())
+    got = _run(ge_mod._covered_margin_grouped(
+        _C(), "T", fx_day(), (["x"], ["y"]), DIMENSIONS["product"], cov))
+    assert got is not None
+    kept = {r["dim_label"] for r in got[0]}
+    assert "打平菜" in kept, "把真的打平的菜也删了 —— 判据用错成「毛利为 0」"
+    assert "没卡菜" not in kept, "没卡的菜还在"
+
+
+def fx_day():
+    return _DAY
+
+
+def test_grouped_rows_disclose_sample_size_without_thresholding():
+    """🔴 分组结果**带样本量**(订单数/份数) —— 披露, ⛔ 不设阈值。
+
+    owner 2026-08-14: 「这组只有 3 单」该由店长自己判断值不值得看,
+    不由我们替他截断。任何一个拍出来的阈值都会在某个租户上误伤。
+    """
+    cell = _groups("product", "compare")
+    assert cell.rows, "没有分组行 —— 这条断言会恒真"
+    for r in cell.rows:
+        assert "bills" in r and "qty" in r, f"这一行没带样本量: {r}"
+        assert r["bills"] > 0 and r["qty"] > 0, r
+
+    # 阴性对照: **没有**任何一行因为样本量小被删掉
+    covered = {d for d, _b, _a, _q, c in _rows() if c is not None}
+    excluded = {o["name"] for o in cell.cost_outliers}
+    assert (covered - excluded) == {str(r["dim_label"]) for r in cell.rows}, (
+        "有行被截掉了 —— 样本量是**披露**不是过滤器")
