@@ -17,6 +17,7 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -43,6 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -673,6 +675,46 @@ public class TransferServiceImpl implements TransferService {
         return getTransferById(factoryId, transferId);
     }
 
+    /** 调拨出库的消耗流水来源标识。列宽 varchar(20), 这里 12 字符。 */
+    private static final String SOURCE_TRANSFER_OUT = "TRANSFER_OUT";
+
+    /**
+     * 为调拨出库扣减的**每一个**批次写一条消耗流水。
+     *
+     * <p>🔴 2026-08-14 生产实测: 调拨扣减此前完全不写流水。三张流水表(material_consumptions /
+     * material_batch_adjustments / production_settlement_consumptions)对这些扣减一无所知,
+     * 100 个活跃批次因此"库存少了但说不出去哪了", 且本周仍在新增。
+     *
+     * <p>⚠️ 必须逐批次写: FEFO 一次可能扣 3 个批次, 而 {@code item.sourceBatchId} 是单值列,
+     * 只留得住第一个。流水是唯一能表达多批次扣减的载体。
+     *
+     * <p>⚠️ {@code materialConsumptionRepository} 声明为 {@code @Autowired(required = false)}
+     * (为兼容既有 7 参数构造器单测)。为 null 时**必须留下 WARN** —— 静默跳过就等于把这个洞
+     * 原样保留, 而且下次没人看得出来。
+     */
+    private void recordTransferConsumption(String factoryId, MaterialBatch batch, BigDecimal deduct,
+                                           InternalTransferItem item, Long recordedBy, String transferNumber) {
+        if (materialConsumptionRepository == null) {
+            log.warn("调拨出库未写消耗流水(materialConsumptionRepository 未注入): batchId={}, deduct={}, transfer={}",
+                    batch.getId(), deduct, transferNumber);
+            return;
+        }
+        BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+        MaterialConsumption consumption = new MaterialConsumption();
+        consumption.setFactoryId(factoryId);
+        consumption.setBatchId(batch.getId());
+        consumption.setMaterialTypeId(item.getMaterialTypeId());
+        consumption.setQuantity(deduct);
+        consumption.setUnitPrice(unitPrice);
+        consumption.setTotalCost(deduct.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP));
+        consumption.setConsumptionTime(LocalDateTime.now());
+        consumption.setConsumedAt(LocalDateTime.now());
+        consumption.setRecordedBy(recordedBy != null ? recordedBy : 0L);
+        consumption.setSourceType(SOURCE_TRANSFER_OUT);
+        consumption.setNotes("调拨出库 " + (transferNumber != null ? transferNumber : ""));
+        materialConsumptionRepository.save(consumption);
+    }
+
     @Override
     @Transactional(readOnly = true)
     public PageResponse<InternalTransfer> getTransfers(String factoryId, int page, int size) {
@@ -947,7 +989,8 @@ public class TransferServiceImpl implements TransferService {
         boolean intraFactory = Objects.equals(
                 transfer.getSourceFactoryId(), transfer.getTargetFactoryId());
         for (InternalTransferItem item : transfer.getItems()) {
-            deductSourceInventory(transfer.getSourceFactoryId(), sourceWarehouseId, item, intraFactory);
+            deductSourceInventory(transfer.getSourceFactoryId(), sourceWarehouseId, item, intraFactory,
+                    userId, transfer.getTransferNumber());
         }
 
         transfer.setStatus(TransferStatus.SHIPPED);
@@ -1033,7 +1076,8 @@ public class TransferServiceImpl implements TransferService {
             // not manufacture a sales-like ship/receive lifecycle: confirmation
             // atomically moves the source quantity and creates the target batch.
             for (InternalTransferItem item : transfer.getItems()) {
-                deductSourceInventory(transfer.getSourceFactoryId(), transfer.getSourceWarehouseId(), item, true);
+                deductSourceInventory(transfer.getSourceFactoryId(), transfer.getSourceWarehouseId(), item, true,
+                        userId, transfer.getTransferNumber());
                 item.setReceivedQuantity(item.getQuantity());
             }
             if (!transfer.getItems().isEmpty()) {
@@ -1272,7 +1316,7 @@ public class TransferServiceImpl implements TransferService {
      * 优先消耗该批次, 不足部分再 FEFO 兜底. 未指定时 = 默认全 FEFO (原行为).
      */
     private void deductSourceInventory(String factoryId, String sourceWarehouseId, InternalTransferItem item,
-                                       boolean intraFactory) {
+                                       boolean intraFactory, Long recordedBy, String transferNumber) {
         // B1: 检查用户是否预选批次 (status=APPROVED 阶段写入). 若 SHIPPED+ 后被回填则也允许走 preselected 分支.
         String preselectedBatchId = item.getSourceBatchId();
 
@@ -1302,6 +1346,12 @@ public class TransferServiceImpl implements TransferService {
                     batch.setStatus(MaterialBatchStatus.DEPLETED);
                 }
                 materialBatchRepository.saveAndFlush(batch); // flush 立即写入，减少并发窗口
+                // 🔴 2026-08-14: 这里原本只扣库存不留流水。后果实测于生产: 100 个活跃批次
+                // used_quantity > 0 而 material_consumptions / 调整流水 / 结算消耗三张表都查无痕迹,
+                // 本周仍在新增 —— 对溯源系统就是"答不出这批料去哪了"。
+                // ⚠️ 尤其是这个 FEFO 循环会扣【多个】批次, 而下面的 item.setSourceBatchId 只记得住
+                // 第一个 —— 第二个以后的批次在全库任何地方都没有记录。逐批次写流水是唯一的补法。
+                recordTransferConsumption(factoryId, batch, deduct, item, recordedBy, transferNumber);
                 if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
                 inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "TRANSFER_OUT");
                 remaining = remaining.subtract(deduct);
