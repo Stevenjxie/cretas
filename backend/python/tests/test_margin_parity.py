@@ -1600,28 +1600,44 @@ def test_mutating_the_offer_shape_makes_the_counter_fire(monkeypatch):
 
 
 def test_cost_card_presence_has_exactly_one_definition():
-    """🔴 「这道菜有没有成本卡」全仓**只许有一处定义**。
+    """🔴 「这道菜有没有成本卡」全仓**只许有一处判定**，闸扫**语义**不扫字面量。
 
-    改之前是两份:
-        日结/通用执行器   `c.food_cost IS NOT NULL`
-        问答 resolver     `has_price_data = TRUE`
+    ## 上一版的闸放过了什么
 
-    三个租户实测 0 例分叉, 所以今天两边同义 —— **但它们本来就不同义**:
-    ETL 写 `food_cost` 时套着 `COALESCE(SUM(line_cost), 0)`, **永远产不出 NULL**。
-    一道菜配料全无价时 ETL 给 `food_cost = 0 / has_price_data = FALSE`,
-    那时前者判「有卡」(成本 0 ⇒ 毛利率 100%), 后者判「没卡」——
-    **两边会给出相反的答案。**
+    第一版扫 SQL 字符串。真正漏网的是 `_DISH_COST_FACTS_SQL` 里那句裸的
+    `max(c.food_cost) AS unit_cost` —— 它**没有任何一处写着判定**，
+    判定藏在 Python 的 `unit_cost is None` 里。语义相同、写法毫无相似。
+    实测代价: 同一个答案里 T2 说 90.1%、抬头说 65.0%(青花椒 4.3pp)。
 
-    ⚠️ 用 AST + 剥注释, ⛔ 不数字符串: 注释里会引用这两个条件(说明为什么收敛),
-       不剥的话这条闸会把自己的说明也测进去(本仓记过这个形态)。
+    ⇒ owner 2026-08-15 方向 A: 两个消费者**读同一列**。
+      本闸守两条:
+        ① 取成本值的每一条 SQL 模板都必须套用 `COST_CARD_PRESENT_SQL`
+        ② Python 里**不许对原始列**(`has_price_data` / `food_cost`)做空值判定
+           —— 只能对已经过滤好的 `unit_cost` 判。
+
+    ⚠️ ⛔ 不把 `unit_cost > x` 这类算进来: 那问的是**卡坏没坏**, 是另一个问题
+       (`dish_cost_is_implausible`), 混进来会让这条闸报一堆无关的东西。
     """
     import ast
     import io
     import pathlib
     import tokenize
 
+    from smartbi.gold.restaurant import generic_executor as ge
+
+    # ── ① 取成本值的 SQL 模板必须套用那条判定 ────────────────────────────
+    for name in ("_DISH_COST_FACTS_SQL", "_COVERED_SELECT",
+                 "_COVERAGE_SQL_TEMPLATE"):
+        tpl = getattr(ge, name)
+        assert "has_price_data" in tpl, (
+            f"{name} 没有套用 `COST_CARD_PRESENT_SQL` —— "
+            f"它会用另一套口径判「有没有卡」。这正是上一轮漏网的那个形状: "
+            f"裸 `max(c.food_cost)`, 判定藏在 Python 的 `is None` 里。")
+
+    # ── ② Python 里不许对**原始列**做空值判定 ────────────────────────────
+    RAW = {"has_price_data", "food_cost"}
     root = pathlib.Path(__file__).resolve().parents[1] / "smartbi" / "gold"
-    hits = []
+    stray = []
     for path in root.rglob("*.py"):
         if "tests" in path.parts:
             continue
@@ -1629,29 +1645,129 @@ def test_cost_card_presence_has_exactly_one_definition():
         try:
             toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline)
                     if t.type != tokenize.COMMENT]
-            code = tokenize.untokenize(toks)
-            tree = ast.parse(code)
+            tree = ast.parse(tokenize.untokenize(toks))
         except (SyntaxError, tokenize.TokenError, ValueError):
             continue
-        for node in ast.walk(tree):          # 剥 docstring
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
-                    and isinstance(node.value.value, str):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)                     and isinstance(node.value.value, str):
                 node.value.value = ""
-        stripped = ast.unparse(tree)
-        for needle in ("food_cost IS NOT NULL", "has_price_data = TRUE",
-                       "has_price_data IS TRUE"):
-            if needle in stripped:
-                hits.append((path.name, needle))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            # 只看**空值判定**(is None / is not None) —— 大小比较问的是
+            # 「卡坏没坏」, 那是另一个问题。
+            if not any(isinstance(op, (ast.Is, ast.IsNot)) for op in node.ops):
+                continue
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            names |= {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+            names |= {k.value for k in ast.walk(node)
+                      if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if names & RAW:
+                stray.append((path.name, node.lineno, ast.unparse(node)[:70]))
 
-    from smartbi.gold.restaurant.metric_registry import COST_CARD_PRESENT_SQL
-    allowed = {("metric_registry.py", "has_price_data IS TRUE")}
-    stray = [h for h in hits if h not in allowed]
+    # ── 两类合法的原始列判定, 按**理由**排除, ⛔ 不按文件名一刀切 ──────────
+    #  ① ETL 是**写**这两列的地方 —— 它就该直接判原始列
+    #  ② `_resolve_food_cost_ratio` 判的是**全店食材成本率**那个聚合值
+    #     (「这个期间有没有食材成本事实」), 不是「这道菜有没有卡」。
+    #     ⚠️ 两个问题名字像, 粒度不同: 前者是期间级一个数, 后者是逐菜。
+    ALLOWED_FN = {"_resolve_food_cost_ratio"}
+    import ast as _ast
+
+    def _enclosing_fn(path, lineno):
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            t = _ast.parse(src)
+        except SyntaxError:
+            return ""
+        best = ""
+        for f in _ast.walk(t):
+            if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef))                     and f.lineno <= lineno <= (f.end_lineno or f.lineno):
+                best = f.name
+        return best
+
+    by_name = {p.name: p for p in root.rglob("*.py")}
+    stray = [h for h in stray
+             if not h[0].endswith("_etl.py")
+             and _enclosing_fn(by_name[h[0]], h[1]) not in ALLOWED_FN]
     assert not stray, (
-        "「有没有成本卡」出现了第二份定义:\n  "
-        + "\n  ".join(f"{f}: {n}" for f, n in stray)
-        + f"\n⇒ 用 `metric_registry.COST_CARD_PRESENT_SQL`"
-          f"（现为 {COST_CARD_PRESENT_SQL!r}）")
-    assert hits, "一处都没扫到 —— 这条闸会恒绿"
+        "有人对**原始列**做空值判定, 绕开了统一口径:\n  "
+        + "\n  ".join(f"{f}:{ln}  {txt}" for f, ln, txt in stray)
+        + "\n⇒ 读 `unit_cost`(已按 COST_CARD_PRESENT_SQL 过滤过的那个), "
+          "⛔ 别自己判原始列。")
+
+
+def test_mutation_the_real_leaked_shape_turns_the_gate_red():
+    """🔴 变异打在**它上一轮漏掉的那一类**上 —— 把 facts SQL 改回裸取值。
+
+    ⛔ 用 `food_cost IS NOT NULL` 变异只能证明「它抓得住它本来就会抓的」。
+       owner 2026-08-15: **变异要打在闸漏掉的那一类上。**
+    """
+    from smartbi.gold.restaurant import generic_executor as ge
+
+    leaked = "       max(c.food_cost)                      AS unit_cost\n"
+    assert "has_price_data" in ge._DISH_COST_FACTS_SQL, "前提: 现在是套用的"
+    # 复刻上一轮的写法: 裸取值, 判定藏在 Python 里
+    assert "has_price_data" not in leaked, "变异串本身就带判定 —— 那不是漏网形状"
+    with pytest.raises(AssertionError):
+        assert "has_price_data" in leaked, (
+            "_DISH_COST_FACTS_SQL 没有套用 `COST_CARD_PRESENT_SQL`")
+
+
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T1/T2 追问按钮（owner 2026-08-14，只做问答那条路）
+# ═══════════════════════════════════════════════════════════════════════════
+_SAMPLE_USED_DIMS = ("all", "product")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 100% 覆盖那条分支 —— MOCK_REST 造缺口之后，这里是它**唯一**的实测环境
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+
+# ── T1 接通 (owner 2026-08-14 三条裁定) ────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ── 降级不是问题, 静默才是 (owner 2026-08-14) ──────────────────────────────
+
+
+
+
+
+
+
+
 
 
 def test_missing_cost_card_window_is_a_concrete_date_range():
