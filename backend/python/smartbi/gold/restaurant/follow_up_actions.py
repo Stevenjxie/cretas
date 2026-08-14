@@ -204,6 +204,7 @@ def build_actions(
     answer_text: str,
     meta: Optional[Dict[str, Any]] = None,
     resolver_code: Optional[str] = None,
+    trace_subject: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, Any], ...]:
     """这次回答该给哪些按钮。**排好序、截好断**再送。
 
@@ -249,6 +250,22 @@ def build_actions(
             "question": f"{phrase}看{metric_label}",
             "anchor": head,
         })
+
+    # T3 —— 标事件。**只在归因走到无痕层时出**(候选下钻维度为空)。
+    #   ⚠️ 它与 T1/T2 根本不同: T1/T2 点下去是**我们**再算一次,
+    #      T3 点下去是**他**说一句。产出是主观数据, 有自己的 provenance。
+    #   ⛔ 触发判据只有「候选为空」—— ⛔ 不掺样本量(那条挂账), 掺进来的话
+    #      T3 会在**还能继续往下查**的时候冒出来, 等于用问句顶替一次查询。
+    if trace_subject and is_exhausted(metric_key, used_dimensions, resolver_code):
+        try:
+            from smartbi.gold.restaurant.event_annotation import build_action
+            actions.append(build_action(
+                when=trace_subject.get("when", ""),
+                subject=trace_subject.get("subject", ""),
+                phenomenon=trace_subject.get("phenomenon", ""),
+                anchor=head))
+        except Exception:  # noqa: BLE001 —— 少一颗按钮不该让答案挂掉
+            logger.warning("[follow-up] T3 按钮生成失败", exc_info=True)
 
     # ⛔ 排序在后端。前端只截断 —— 送一堆让它 slice, 等于优先级由别的仓决定。
     actions.sort(key=lambda a: TYPE_PRIORITY.get(a["type"], 99))

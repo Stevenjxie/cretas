@@ -43,6 +43,20 @@ MEASURED = "MEASURED"
 #: ⛔ 用它就必须同时给 `estimation_basis`，否则店长看到的是一个没有出处的数。
 ESTIMATED = "ESTIMATED"
 
+#: 🔴 **店长说的**, 不是我们算的 —— T3「标事件」的产出(owner 2026-08-14)。
+#:
+#: ⛔⛔ 它**永远不进任何数值计算**。归因走到无痕层时我们问「这天有没有做活动」,
+#:    他答的那句话是当时唯一存在的解释 —— 但它是**主观数据**。
+#:    把它当事实去推, 下一次归因就会把「老板说那天做了活动」当成实测。
+#:
+#: ⇒ 它不在 `VALID_PROVENANCE` 里, 所以 `CellResult.__post_init__` 的
+#:    `validate()` 会**当场炸** —— 任何人想拿它标一个数值格子都走不通。
+#:    这是结构性的, 不是靠自觉。闸见
+#:    `tests/test_event_annotation.py::test_annotations_never_enter_measured_computation`。
+REPORTED_BY_USER = "REPORTED_BY_USER"
+
+#: ⚠️ **`REPORTED_BY_USER` 不在这里**, 这是刻意的 —— 见它自己的注释。
+#:    数值格子只能是「账上的」或「估的」; 「他说的」不是一个数, 是一段话。
 VALID_PROVENANCE = (MEASURED, ESTIMATED)
 
 #: 覆盖率低于这个值才需要说明。1.0 == 全覆盖，说了反而是噪音。
