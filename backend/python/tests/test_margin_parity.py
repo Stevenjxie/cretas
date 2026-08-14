@@ -1223,3 +1223,60 @@ def test_drillable_dimensions_are_reverse_looked_up_not_hand_written():
     right = set(reg.METRICS["food_cost"].dimensions)
     assert got <= (left & right), (
         "推荐了一个两边不都支持的维度 —— 点下去会拒答")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 100% 覆盖那条分支 —— MOCK_REST 造缺口之后，这里是它**唯一**的实测环境
+# ═══════════════════════════════════════════════════════════════════════════
+def test_full_coverage_drops_the_coverage_clause():
+    """🔴 满覆盖时「只算了 X% 的营收」**必须消失**。
+
+    ⚠️ 这条分支原来靠 MOCK_REST(100% 覆盖)在生产上被走到。2026-08-14 给
+       MOCK_REST 造了缺口(覆盖率 100% → 65.3%)之后, **生产上再没人走它** ——
+       ⛔ 不许留下「改完就没人验 100% 那条路」的状态, 所以在这里接住。
+
+    📌 它当初正是这么发现的: 满覆盖时打出「只算了 100.0% 的营收」, 被一条
+       几轮之前为了防「无条件的废话」写的阴性对照抓到。**一道老闸守住了一个
+       当时还不存在的分支** —— 这条用例就是那件事的固化。
+    """
+    from smartbi.gold.restaurant.generic_answer import render_headline
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, CellResult)
+
+    def _cell(cov):
+        return CellResult(
+            "gross_profit", "毛利", "all", "summary", "money",
+            [{"gross_profit": 475623.83}], (), "", "ESTIMATED",
+            _COST_CARD_BASIS, cov)
+
+    full = render_headline(_cell(1.0), "今天")
+    assert "只算了" not in full, f"满覆盖还在说「只算了 100.0%」: {full}"
+    # ⛔ 其余几条事实**不许**跟着消失 —— 满覆盖不代表它就是账上的数
+    assert "理论用量" in full and "未扣人工" in full and "盘一次库" in full
+
+    # 阳性对照: 不满覆盖时那句**必须**在(否则上面那条阴性断言恒真)
+    partial = render_headline(_cell(0.653), "今天")
+    assert "只算了 65.3% 的营收" in partial, partial
+
+
+def test_mutating_the_full_coverage_threshold_turns_it_red(monkeypatch):
+    """变异对照: 把满覆盖阈值改掉, 上面那条必须红。⚠️ 先证明行为变了。"""
+    from smartbi.gold.restaurant import provenance as prov
+    from smartbi.gold.restaurant.generic_answer import render_headline
+    from smartbi.gold.restaurant.generic_executor import (
+        _COST_CARD_BASIS, CellResult)
+
+    cell = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1.0}], (), "", "ESTIMATED", _COST_CARD_BASIS, 1.0)
+    assert "只算了" not in render_headline(cell, "今天")        # 改之前是对的
+
+    # 变异: 阈值抬到 1.5 → 100% 不再算「满」→ 那句话会冒出来
+    # ⛔ 只打 `provenance` 那一处 —— `_inline_qualifier` 是**函数内 import**,
+    #    调用时才从模块取, 所以打得到。
+    #    ⚠️ 第一版还顺手 `setattr(ga, "_FULL_COVERAGE", ..., raising=False)`,
+    #    那会**凭空造一个没人读的属性** —— 变异看起来生效了而其实是另一处起的作用。
+    monkeypatch.setattr(prov, "_FULL_COVERAGE", 1.5)
+    after = render_headline(cell, "今天")
+    assert "只算了 100.0% 的营收" in after, (
+        "🔴 变异没生效 —— 那个阈值不是从 provenance 取的")
