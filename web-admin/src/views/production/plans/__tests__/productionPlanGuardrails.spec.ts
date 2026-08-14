@@ -31,8 +31,17 @@ describe('production plan operator guardrails', () => {
   });
 
   it('keeps warehouse receipt units canonical in payload while localizing BY_STOCK receipt truth', () => {
-    expect(source).toContain("import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing'");
-    expect(source).toContain('canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit)');
+    // 2026-08-14: payload 仍然必须是**规范码**(不能是展示标签), 但换成保留 只/个 的那一支。
+    // canonicalUnitCode 把 件/个/只 全折成 pcs, 而后端 #2628 起把它们拆成三个独立单位
+    // (个/只 没有英文别名)。继续用它, 档案单位是「个」的物料回传 pcs, 后端判不等价直接拒 ——
+    // 「包材单位必须继承物料档案」那条 409 就是这么来的。
+    // canonicalUnitCodeKeepingCount 是本仓指定的落库归一(销售订单一直用它), 依然是规范码。
+    expect(source).toContain(
+      "import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@/utils/unitPricing'");
+    expect(source).toContain(
+      'canonicalUnitCodeKeepingCount(res.data.quantityUnit || row.unit || row.quantityUnit)');
+    // 展示侧仍走 displayUnit —— 规范码不得直接示人。
+    expect(source).not.toContain('{{ receiptUnit }}');
     expect(source).toContain('const receiptDisplayUnit = computed(() => displayUnit(receiptUnit.value))');
     expect(source).toContain('{{ receiptReportedQuantity }} {{ receiptDisplayUnit }}');
     expect(source).toContain('本步骤仅确认仓库实收，不会重复创建成品批次');

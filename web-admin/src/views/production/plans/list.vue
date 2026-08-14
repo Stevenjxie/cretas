@@ -86,7 +86,7 @@ import {
 } from './documentTrace';
 import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/productionDocumentTrace';
 import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryGuards';
-import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@/utils/unitPricing';
 import { enumLabel, traceStatusLabel } from '@/utils/enumDisplay';
 import {
   cancellationAudit,
@@ -2638,7 +2638,7 @@ async function handleWarehouseReceipt(row: TableRow) {
       // while rendering a localized label in the dialog.
       quantityUnit: outputLines.length
         ? ''
-        : canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit),
+        : canonicalUnitCodeKeepingCount(res.data.quantityUnit || row.unit || row.quantityUnit),
       outputLines,
       varianceReason: '',
       otherVarianceReason: '',
@@ -2673,7 +2673,7 @@ async function submitWarehouseReceipt() {
             productTypeId: line.productTypeId,
             batchNumber: line.reportedBatchNumber,
             receivedQuantity: Number(line.receivedQuantity),
-            quantityUnit: canonicalUnitCode(line.quantityUnit),
+            quantityUnit: canonicalUnitCodeKeepingCount(line.quantityUnit),
           }))
         : undefined,
       varianceReason: receiptHasOutputLines.value ? null : varianceReason || null,
@@ -3685,7 +3685,7 @@ function handleAiFill(params: TableRow) {
   planForm.value = {
     productTypeId: matched ? String(matched.id) : '',
     plannedQuantity: Number(params.plannedQuantity || 0),
-    aiRequestedUnit: canonicalUnitCode(params.quantityUnit || params.plannedUnit || params.unit),
+    aiRequestedUnit: canonicalUnitCodeKeepingCount(params.quantityUnit || params.plannedUnit || params.unit),
     plannedDate: String(params.plannedDate || today),
     notes: String(params.notes || ''),
     estimatedWorkers: undefined,

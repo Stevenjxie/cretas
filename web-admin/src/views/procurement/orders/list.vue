@@ -44,7 +44,7 @@ import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
-import { canonicalUnitCode, displayUnit, pricingAmountPreview } from '@/utils/unitPricing';
+import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit, pricingAmountPreview } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
 import { canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
 import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
@@ -700,9 +700,9 @@ async function handleCreate() {
         materialPackagingSpecId: i.purchasePackagingSpecId?.startsWith('material:')
           ? i.purchasePackagingSpecId.slice('material:'.length)
           : i.materialPackagingSpecId || null,
-        unit: canonicalUnitCode(i.quantityUnit || i.unit),
-        quantityUnit: canonicalUnitCode(i.quantityUnit || i.unit),
-        priceUnit: canonicalUnitCode(i.priceUnit),
+        unit: canonicalUnitCodeKeepingCount(i.quantityUnit || i.unit),
+        quantityUnit: canonicalUnitCodeKeepingCount(i.quantityUnit || i.unit),
+        priceUnit: canonicalUnitCodeKeepingCount(i.priceUnit),
         taxRate: normalizeTaxRateForPayload(i.taxRate),
       })),
       remark,
@@ -851,7 +851,7 @@ async function openEditDialog(orderId: string) {
         unit: quantityUnit,
         quantityUnit,
         unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
-        priceUnit: canonicalUnitCode(item.priceUnit || item.unit),
+        priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit),
         priceSource: String(item.priceSource || 'ORDER_SNAPSHOT'),
         lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
         convertedPricingQuantity: item.convertedPricingQuantity == null ? null : Number(item.convertedPricingQuantity),
@@ -980,10 +980,10 @@ function handleAiFill(params: TableRow) {
       return {
         materialTypeId: materialResolution.id,
         quantity: Number(item.quantity || 0),
-        unit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
-        quantityUnit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
+        unit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
+        quantityUnit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
         unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
-        priceUnit: canonicalUnitCode(item.priceUnit || item.unit || 'kg'),
+        priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit || 'kg'),
         priceSource: item.unitPrice == null ? 'MISSING' : 'MANUAL',
         taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
