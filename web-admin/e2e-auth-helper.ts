@@ -173,18 +173,30 @@ export async function injectAuthCookie(
     },
   ]);
 
-  // 2. Navigate to the base URL so localStorage is on the right origin
-  await page.goto(baseUrl + '/login', { waitUntil: 'domcontentloaded', timeout: 15000 });
-
-  // 3. Set cretas_user + cretas_access_token in localStorage.
-  // 🔴 原来只写 cretas_user。但前端发 API 时取的是 localStorage 里的
+  // 2+3. 用 addInitScript 在**页面脚本执行之前**写入 localStorage。
+  //
+  // 🔴 2026-08-15: 原实现是 `goto('/login')` 之后再 page.evaluate 写 localStorage。
+  // 两个问题:
+  //   · 每调用一次就多一次到登录页的往返(本文件的 go() 每个用例都调, 71 条 = 142 次导航);
+  //   · 更要命的是登录页会清会话 —— 写完 localStorage 再跳目标页, 目标页却是未登录态,
+  //     表现为「每个列表都空」而不报任何错。实测 71 条里 58 条挂在
+  //     expectPageContent(页面上没有任何表格/卡片/标题), 根因全在这里。
+  //
+  // addInitScript 是 Playwright 为这件事提供的机制: 注册后对该 context 的**每一次**
+  // 导航都会在应用代码之前执行, 应用一启动就已经是登录态, 不需要先去 /login。
+  //
+  // ⚠️ 同时写 cookie 与 localStorage: 前端发 API 取的是 localStorage 里的
   // cretas_access_token(Authorization: Bearer), 只给 cookie 时页面能进、接口会 401 ——
-  // 表现为「列表全空但没有报错」这种最难查的假象。两处都写。
+  // 表现为「列表全空但没有报错」这种最难查的假象。
   const userJson = buildUserJson(loginData);
-  await page.evaluate(([user, tok]) => {
-    localStorage.setItem('cretas_user', user);
-    localStorage.setItem('cretas_access_token', tok);
+  await context.addInitScript(([user, tok]: string[]) => {
+    try {
+      localStorage.setItem('cretas_user', user);
+      localStorage.setItem('cretas_access_token', tok);
+    } catch { /* 某些页面禁用 storage 时不要把导航整个打断 */ }
   }, [userJson, token]);
+  // page 参数保留是为了兼容既有调用方签名; 这里不再需要它做导航。
+  void page;
 }
 
 /**

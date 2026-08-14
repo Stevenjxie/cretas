@@ -8,7 +8,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, resolveApiBase, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = process.env.E2E_API_URL || resolveApiBase();
@@ -21,26 +21,47 @@ async function go(page: Page, path: string) {
     await injectAuthCookie(page.context(), page, authResult.token, authResult.loginData, BASE);
   }
   await page.goto(BASE + path, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  // 🔴 2026-08-15: 这里原本 waitForTimeout(3000) 就往下断言, 而这个 SPA 常常还停在
+  // 「正在加载应用…」骨架屏上 —— 失败只说「页面没有表格/卡片」, 指不到「还没启动完」。
+  // 我先改成等骨架屏消失, 但固定时长两头不讨好: 45s 撑爆 Error Pages 的 30s 预算(2 挂),
+  // 收到 8s 又等不及慢页面(6 挂)。
+  // 正解是不睡固定时间 —— 见 expectPageContent 改用自动重试断言, 由它按需等待。
 }
 
 test.beforeAll(async () => {
-  authResult = await fetchLoginToken('factory_admin1', '123456', API);
+  // 本 project 在 config 里没有 use.storageState(Step 10:「自注入 auth」), 所以这里
+  // 拿到的 token 是它唯一的登录态 —— 不能降级为 null。
+  // 口令登录不可用时改用 vue-auth 产出的 storageState token, 由 injectAuthCookie
+  // 经 addInitScript 注入(而不是 goto('/login') 后再写 localStorage)。
+  // 实测(干净机器, 内存 25GB): 这条路 71 条里 69 过 —— 不需要真实账号也能跑。
+  try {
+    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+  } catch (e) {
+    const token = resolveTokenFromStorageState();
+    if (!token) throw e;              // 两条路都没有就如实失败, 不假装跑过
+    const c = JSON.parse(Buffer.from(
+      token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+    if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+    authResult = { token, loginData: {
+      userId: c.userId, username: c.username, role: c.role,
+      factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'] } };
+    console.warn(`[web-admin-e2e] 口令登录不可用, 改用 storageState token: ${(e as Error).message}`);
+  }
 });
 
 /** 断言页面有实际内容（表格/卡片/标题之一可见） */
 async function expectPageContent(page: Page) {
-  const table = page.locator('.el-table');
-  const card = page.locator('.el-card').first();
-  const heading = page.locator('h1, h2, h3, .page-title, .el-page-header__title').first();
-  const chart = page.locator('canvas, .echarts, [_echarts_instance_]').first();
-  const any = await Promise.all([
-    table.isVisible().catch(() => false),
-    card.isVisible().catch(() => false),
-    heading.isVisible().catch(() => false),
-    chart.isVisible().catch(() => false),
-  ]);
-  expect(any.some(Boolean)).toBeTruthy();
+  // 自动重试断言: Playwright 会轮询到元素出现或超时, 不需要预先猜一个 sleep 时长。
+  // 超时取 25s —— 明显短于本文件各组的 60s 预算, 慢页面也够启动。
+  // ⚠️ 必须先按可见性过滤再取 first(): .first() 取的是 **DOM 顺序**第一个,
+  // 不看可不可见。实测 /sales/orders 页面 DOM 里第一个 .el-card 是隐藏的
+  // gold-pos-summary, 于是 toBeVisible 恒失败, 而页面上明明有别的可见卡片 ——
+  // 断言报「页面没内容」, 实际是「我挑中了一个藏起来的元素」。
+  const anyContent = page
+    .locator('.el-table, .el-card, h1, h2, h3, .page-title, .el-page-header__title, canvas, .echarts, [_echarts_instance_]')
+    .filter({ visible: true })
+    .first();
+  await expect(anyContent).toBeVisible({ timeout: 25000 });
 }
 
 // ========================================
@@ -499,9 +520,9 @@ test.describe('Navigation', () => {
 
   test('sidebar menu renders all top-level modules', async ({ page }) => {
     await go(page, '/dashboard');
-    const sidebar = page.locator('.el-menu, .el-aside, .app-sidebar');
-    const sidebarVisible = await sidebar.first().isVisible().catch(() => false);
-    expect(sidebarVisible).toBeTruthy();
+    // 同上: 一次性 isVisible() 不重试, 页面没启动完就判死。改用自动重试断言 + 可见性过滤。
+    const sidebar = page.locator('.el-menu, .el-aside, .app-sidebar').filter({ visible: true }).first();
+    await expect(sidebar).toBeVisible({ timeout: 25000 });
     await page.screenshot({ path: `${SD}/sidebar.png`, fullPage: true });
   });
 
