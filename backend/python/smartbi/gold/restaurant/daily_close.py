@@ -151,11 +151,39 @@ async def build_daily_close(
             "missing_columns": list(cell.missing_columns),
         })
 
+    # 🔴 进度感(路线图第 4 项) —— T2 闭合的那一环。
+    #    T2 说了「先补这 3 道」, 他补了之后**要有下文**, 否则那是一次性建议。
+    # 🔑 **视图本身才是价值**, 建议只是附带 —— 没有清晰边际赢家时只出视图。
+    # ⛔ 取不到不影响主体: 这一句是附加的推进感, 不是那三个数的一部分。
+    progress_line, coverage_ratio = "", None
+    try:
+        from smartbi.gold.restaurant import data_progress
+        cost_cell = next((c for c in cells if c.coverage_ratio is not None), None)
+        if cost_cell is not None:
+            coverage_ratio = cost_cell.coverage_ratio
+            progress = await data_progress.measure(
+                conn, factory_id, date_range,
+                coverage_ratio=cost_cell.coverage_ratio,
+                cost_gaps=cost_cell.cost_gaps,
+                coverage_denominator=cost_cell.coverage_denominator)
+            progress_line = data_progress.render(progress)
+    except Exception:  # noqa: BLE001
+        logger.warning("[daily-close] 进度感取数失败, 本次不带这一句", exc_info=True)
+
+    body = [s["text"] for s in sections]
+    if progress_line:
+        body.append(f"> {progress_line}")
+
     return {
         "title": DAILY_CLOSE_TITLE,
         "date": date_range[0].isoformat(),
         "factory_id": factory_id,
         "sections": sections,
+        "progress_line": progress_line,
+        # 4b: 逐日覆盖率。⚠️ 这个数在 `CellResult.coverage_ratio` 上早就算好了,
+        #     只是从来没写进台账 —— 于是「你今天补了 2 个百分点」说不出来。
+        #     ⛔ 不新建表/台账文件, 只往已有的那行 JSON 加字段。
+        "coverage_ratio": coverage_ratio,
         # 三态, 刻意分开 —— 它们的处置完全不同, 混成一个布尔就分不出来了:
         #   no_data    : 连订单数都算不出来 → **执行链没跑通**, 是仪器问题
         #   no_business: 订单数是 0 → 今天没营业, 正常, 但没什么可推的
@@ -163,7 +191,7 @@ async def build_daily_close(
         # ⛔ 第一版把这两种都当成「推」, 于是没营业的那天店长收到
         #    「营收 — / 订单数 0 / 毛利 —」—— 噪音, 而且看起来像系统坏了。
         "status": _screen_status(sections),
-        "answer_text": "\n\n".join(s["text"] for s in sections),
+        "answer_text": "\n\n".join(body),
         # 整屏的出处 = 只要有一段是估的, 这一屏就不能被当成账上的数。
         # ⛔ 取「最保守」的那个, 不取多数 —— 一段估的就足以让店长误判。
         "provenance": ("ESTIMATED"

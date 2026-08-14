@@ -87,38 +87,49 @@ async def _fill_rates(conn, factory_id: str, date_range,
     return out
 
 
-def _status_of(source: str, fills: Dict[str, Optional[float]]) -> Tuple[str, str]:
-    """一类数据的状态 + 一句人话。"""
+def _status_binary(source: str, fills: Dict[str, Optional[float]]) -> Tuple[str, str]:
+    """一次性接入的类：只问**接了没有**，⛔ 不算填充率。
+
+    🔴 owner 2026-08-14: 对一次性接入的类算填充率**本身就是错的仪器** ——
+       POS 那 13% 不是「没录全」，是那些单本来就没退菜、没打折。
+       把**合法的空**当成缺失，本仓这是第四次(0 行三种含义 / 行数不是找缺口的
+       仪器 / 普查第四类 / 这次)。
+    ⇒ 判据: 这一类**有没有任何数据**。有 = 接了; 全空 = 没接。
+    """
     columns = _reg.columns_of_source(source)
     known = [v for v in (fills.get(c) for c in columns) if v is not None]
     if not known:
         return STATUS_MISSING, "这段时间没有可以参与计算的行"
-    worst = min(known)
-    if worst >= _HAVE_THRESHOLD:
+    if max(known) > 0:
         return STATUS_HAVE, ""
-    if worst <= 0:
-        # 全空 —— 但也许能从别的列导出来。⛔ 那种情况不是「缺数据」，是没接线，
-        #    拿它去补 ETL 补不出东西来。
-        for key, metric in _reg.METRICS.items():
-            spec = getattr(metric, "derive_from", None)
-            if spec and set(metric.requires) & set(columns):
-                left, right, _op = spec
-                return STATUS_NOT_WIRED, f"这一列没填，但可由「{left} − {right}」算出来"
-        return STATUS_MISSING, "这一类还没有数据"
-    return STATUS_PARTIAL, f"填了 {worst * 100:.0f}%"
+    # 全空 —— 但也许能从别的列导出来。⛔ 那不是「缺数据」，是没接线，
+    #    拿它去补 ETL 补不出东西来。
+    for metric in _reg.METRICS.values():
+        spec = getattr(metric, "derive_from", None)
+        if spec and set(metric.requires) & set(columns):
+            left, right, _op = spec
+            return STATUS_NOT_WIRED, f"这一列没填，但可由「{left} − {right}」算出来"
+    return STATUS_MISSING, "这一类还没有数据"
 
 
-def _unlock_count(source: str) -> int:
-    """补齐这一类能解锁多少个指标 —— 排「下一个最划算」用。
+def _coverage_lift(progress_inputs) -> float:
+    """补齐这一类, **能算准的营收占比**能提升多少。这是排序键。
 
-    ⛔ 不手写优先级。谁解锁得多谁排前面，这是**算**出来的。
+    🔴 owner 2026-08-14: 排序键换成**边际**, 不是存量。
+       「解锁多少指标」是存量(这一类总共支撑什么), 要的是边际(补了能多算什么)。
+       实测那一版按存量排, 「下一个最划算」永远是 POS 流水(解锁 16 个) ——
+       而 POS 早就接了, 那条建议店长照着做无从下手。
+    ⚠️ 今天只有成本卡算得出边际(它是唯一的连续类)。其余类补了**不改变**
+       能算准的营收占比 → 边际 0 → 永远不会被推荐。**这是对的, 不是退化。**
     """
-    from smartbi.gold.restaurant.fill_offers import unlocked_by_column
-    reverse = unlocked_by_column()
-    unlocked: set = set()
-    for column in _reg.columns_of_source(source):
-        unlocked.update(reverse.get(column, ()))
-    return len(unlocked)
+    cost_gaps, coverage_ratio, denom = progress_inputs
+    if not cost_gaps or coverage_ratio is None or not denom:
+        return 0.0
+    from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
+    offers = offers_for_cost_gaps(cost_gaps, coverage_ratio, denom)
+    if not offers:
+        return 0.0
+    return float(offers[0]["coverage_after"]) - float(offers[0]["coverage_before"])
 
 
 async def measure(
@@ -130,37 +141,48 @@ async def measure(
     cost_gaps: Sequence[Dict[str, Any]] = (),
     coverage_denominator: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """每一类数据补到哪了 + 下一个最划算的是哪一类。
+    """每一类补到哪了 + 下一个最划算的是哪一类(没有清晰赢家时是 None)。
 
-    ⚠️ 成本卡那一类**用产品自己的 `coverage_ratio`**，⛔ 不用列填充率 ——
-       填充率问的是「这一列有没有值」，覆盖率问的是「多少营收算得准」，
-       后者才是店长关心的那个，而且它已经算好了。两个数放一起会打架。
+    ⚠️ 成本卡那一类**用产品自己的 `coverage_ratio`**, ⛔ 不用列填充率 ——
+       填充率问「这一列有没有值」, 覆盖率问「多少营收算得准」, 后者才是
+       店长关心的那个, 而且它已经算好了。两个数放一起会打架。
     """
     sources = _reg.data_sources()
     fills = await _fill_rates(
         conn, factory_id, date_range, sorted(_reg.COLUMN_SOURCES))
-
     cost_source = _reg.source_of_column("agg_restaurant_product_cost.food_cost")
+    inputs = (tuple(cost_gaps), coverage_ratio, coverage_denominator)
+
     rows: List[Dict[str, Any]] = []
     for source in sources:
-        if source == cost_source and coverage_ratio is not None:
+        intake = _reg.intake_of_source(source)
+        if intake == _reg.INTAKE_PER_ITEM and source == cost_source                 and coverage_ratio is not None:
             status = (STATUS_HAVE if coverage_ratio >= _HAVE_THRESHOLD
                       else STATUS_PARTIAL if coverage_ratio > 0
                       else STATUS_MISSING)
             detail = f"能算准 {coverage_ratio * 100:.1f}% 的营收"
+            lift = _coverage_lift(inputs)
         else:
-            status, detail = _status_of(source, fills)
-        rows.append({"source": source, "status": status, "detail": detail,
-                     "unlocks": _unlock_count(source)})
+            # 一次性接入 → 只问接了没有, ⛔ 不算填充率
+            status, detail = _status_binary(source, fills)
+            # 补它**不改变**能算准的营收占比 → 边际 0 → 不参与排序
+            lift = 0.0
+        rows.append({"source": source, "intake": intake, "status": status,
+                     "detail": detail, "coverage_lift": lift})
 
     done = [r for r in rows if r["status"] == STATUS_HAVE]
-    todo = [r for r in rows if r["status"] != STATUS_HAVE]
-    # 下一个最划算 = 解锁指标最多的那一类; 同分时按名字定序(⛔ 不许随机)
-    todo.sort(key=lambda r: (-r["unlocks"], r["source"]))
+    missing = [r for r in rows if r["status"] == STATUS_MISSING]
+    # 🔴 「有」的一次性接入类**不参与排序** —— 它已经接了, 没什么可补的。
+    #    ⛔ 边际为 0 的也不参与: 没有清晰赢家时**那句建议就不出**,
+    #       只出进度视图(owner 2026-08-14)。
+    todo = [r for r in rows
+            if r["status"] != STATUS_HAVE and r["coverage_lift"] > 0]
+    todo.sort(key=lambda r: (-r["coverage_lift"], r["source"]))
     return {
         "sources": rows,
         "total": len(rows),
         "done": len(done),
+        "missing": [r["source"] for r in missing],
         "next": todo[0] if todo else None,
         "cost_source": cost_source,
         "cost_gaps": tuple(cost_gaps),
@@ -170,33 +192,34 @@ async def measure(
 
 
 def render(progress: Dict[str, Any]) -> str:
-    """一句话，面向店长。⛔ 不是技术读数 —— 不出现列名、表名、百分比以外的术语。"""
+    """面向店长的进度视图。**视图本身才是价值, 建议只是附带。**
+
+    ⛔ 不出现列名/表名。⚠️ 没有清晰边际赢家时**不出建议**, 只出视图。
+    """
     if not progress or not progress.get("total"):
         return ""
     total, done = progress["total"], progress["done"]
-    head = f"你的数据补到 {total} 类里的 {done} 类了"
-    nxt = progress.get("next")
-    if not nxt:
-        # ⚠️ 只有在**真的**全齐时才说「都齐了」。`next` 为空而 done < total
-        #    是内部不一致(有没齐的类却选不出下一个), 那时宁可不说后半句 ——
-        #    「补到 6 类里的 3 类了 —— 都齐了」是自相矛盾, 比不说更糟。
-        return f"{head} —— 都齐了。" if done >= total else f"{head}。"
+    parts = [f"你的数据补到 {total} 类里的 {done} 类了"]
 
-    tail = f"下一个最划算的是【{nxt['source']}】"
-    # 成本卡那一类能给出**具体数**: 补几道 → 覆盖率到几成。其余类目前只能说
-    # 「补上能多算 N 个指标」—— ⛔ 不编一个覆盖率增量出来。
-    if nxt["source"] == progress.get("cost_source"):
+    # 🔑 即使暂时不建议他去补, 这也是店长该知道的一句话。
+    missing = progress.get("missing") or []
+    if missing:
+        parts.append(f"还有 {len(missing)} 类完全没有数据：{('、'.join(missing))}")
+
+    nxt = progress.get("next")
+    if nxt:
         from smartbi.gold.restaurant.fill_offers import offers_for_cost_gaps
         offers = offers_for_cost_gaps(
             progress.get("cost_gaps") or (),
             progress.get("coverage_ratio"),
             progress.get("coverage_denominator"))
+        tail = f"下一个最划算的是【{nxt['source']}】"
         if offers:
-            after = offers[0]["coverage_after"]
-            before = offers[0]["coverage_before"]
-            n = len(offers[0]["dishes"])
-            tail += (f" —— 补 {n} 道菜的成本卡，"
-                     f"能算准的营收就从 {before * 100:.1f}% 到约 {after * 100:.1f}%")
-    elif nxt.get("unlocks"):
-        tail += f" —— 补上能多算 {nxt['unlocks']} 个指标"
-    return f"{head}。{tail}。"
+            o = offers[0]
+            tail += (f"——补 {len(o['dishes'])} 道菜的成本卡，能算准的营收就从 "
+                     f"{o['coverage_before'] * 100:.1f}% 到约 "
+                     f"{o['coverage_after'] * 100:.1f}%")
+        parts.append(tail)
+    elif done >= total:
+        parts.append("都齐了")
+    return "。".join(parts) + "。"

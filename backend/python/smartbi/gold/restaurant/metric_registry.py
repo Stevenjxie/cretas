@@ -626,6 +626,34 @@ COLUMN_SOURCES: Dict[str, str] = {
 }
 
 
+#: 这一类数据是**怎么进来的**。⚠️ 6 个值，一处人标，是真实的产品事实。
+#:
+#: 🔴 owner 2026-08-14: 根子在「所有类都用填充率量」。大部分类的状态是**二元**的
+#:    (接了 / 没接), 只有成本卡是**逐条录入**的。
+#:    对一次性接入的类算填充率**本身就是错的仪器** —— POS 那 13% 不是「没录全」,
+#:    是那些单本来就没退菜、没打折。
+#: ⇒ 一处标注同时消解两个问题:
+#:      排序: 一次性接入的类只有「有/无」,「有」的**不参与排序**
+#:      NULL: POS 不再算填充率, 那个问题在它身上根本不出现
+#: ⛔ 不做「每列标 NULL 是否合法」—— 几十列 × 人标, 范围大一个量级,
+#:    而且解决的是同一个问题。
+INTAKE_ONE_OFF = "一次性接入"
+INTAKE_PER_ITEM = "逐条录入"
+
+SOURCE_INTAKE: Dict[str, str] = {
+    "POS 流水": INTAKE_ONE_OFF,        # 接了收银机就全有
+    "折扣明细": INTAKE_ONE_OFF,        # 让 POS 把优惠明细一起导出来
+    "税额": INTAKE_ONE_OFF,            # 接开票/税控
+    "外卖平台账单": INTAKE_ONE_OFF,    # 接平台账单
+    "损耗盘点": INTAKE_ONE_OFF,        # 有没有盘库/报损流程
+    "成本卡": INTAKE_PER_ITEM,         # 🔑 唯一一个逐道菜录的
+}
+
+
+def intake_of_source(source: str) -> str:
+    return SOURCE_INTAKE.get(source, INTAKE_ONE_OFF)
+
+
 def data_sources() -> Tuple[str, ...]:
     """一共有几类数据源。**推出来的** —— 有几个不同的值就是几类。
 
@@ -778,6 +806,14 @@ def assert_registry_self_consistent() -> None:
         assert column in _required_cols, (
             f"列 {column} 标了数据来源却没有任何指标依赖它 —— 过期登记, "
             f"它会让「一共几类」多算一类")
+    # 每一类都要说清它是怎么进来的 —— 决定了用哪把尺子量它
+    for source in data_sources():
+        assert source in SOURCE_INTAKE, (
+            f"数据来源「{source}」没标接入方式 —— 会被默认当成一次性接入, "
+            f"而如果它其实是逐条录入的, 进度就永远停在「有/无」两档")
+    for source in sorted(SOURCE_INTAKE):
+        assert source in data_sources(), (
+            f"「{source}」标了接入方式却不是任何列的来源 —— 过期登记")
 
     # ── 不可消除估算的列必须真的被人依赖 ──────────────────────────────────
     # ⛔ 过期的标注比没有更糟: 它会让某个指标被判成 (b) 而拿不到「补了就实」
