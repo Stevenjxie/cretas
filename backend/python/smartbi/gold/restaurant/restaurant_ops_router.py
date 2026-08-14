@@ -1908,6 +1908,39 @@ def _is_plausible_dish_unit_cost(
     return not _dish_cost_is_implausible(unit_cost, qty, revenue)
 
 
+#: 拿不到开价时的退路。⛔ 不留一个空的「建议动作:」标题 —— 那比泛泛之词更糟。
+_GENERIC_ACTIONS = (
+    "对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。",
+    "对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。",
+    "对缺成本菜品补齐配方和最近进价，否则利润判断会失真。",
+)
+
+
+def _build_qa_fill_offers(cell) -> List[str]:
+    """问答那条路的「建议动作」—— 来自 `build_fill_offers`, ⛔ 不手写。
+
+    🔴 owner 2026-08-14: 改之前是三条泛泛之词, 而日结那边早就是
+       「先补这 3 道(菜名), 40.2% → 47.7%」。**同一件事一边具体一边空泛。**
+    ⚠️ 具体的排在前面, 泛泛的补在后面 —— 店长先看到能立刻做的那条。
+    """
+    from smartbi.gold.restaurant.fill_offers import build_fill_offers
+
+    try:
+        offers = build_fill_offers(
+            provenance=cell.provenance,
+            estimation_basis=cell.estimation_basis,
+            estimated_metric_labels=[],
+            cost_gaps=cell.cost_gaps,
+            coverage_ratio=cell.coverage_ratio,
+            coverage_denominator=cell.coverage_denominator,
+        )
+    except Exception:  # noqa: BLE001 —— 开价拿不到不该让整个答案失败
+        logger.warning("[gross_margin] 开价取不到, 退回通用建议", exc_info=True)
+        offers = []
+    lines = [str(o.get("text") or "") for o in offers if o.get("text")]
+    return lines + list(_GENERIC_ACTIONS)
+
+
 def _build_margin_entries(
     pos_rows: List[Any],
     cretas_map: Dict[str, str],
@@ -4667,13 +4700,39 @@ async def resolve_gross_margin(
         ).rstrip() + (
             "（折扣是整单的，摊不到单道菜；所以下面按菜加起来会比上面的合计高。）\n")
 
+    # 🔴 owner 2026-08-14: **两条路的开头必须一致。**
+    #    改之前这里第 3 行是「已覆盖部分毛利 ¥124,071.85，加权毛利率 82.5%」——
+    #    **零限定**。而 82.5% 是在那 40.2% 上算的, 店长最可能的读法是
+    #    「这生意真赚钱」。日结上逐条修掉的四条事实, 问答一条都没有。
+    # ⛔ **不复制**日结的拼装 —— 复制就是第三份。构造一个 `CellResult` 调
+    #    `generic_answer.render_headline`, 那是唯一的一处。
+    # ⚠️ **合计毛利率不单独成行**: 一个在 40.2% 营收上算出来的比率, 无论旁边
+    #    写什么, 单独成行就会被读成「这个店的毛利率」。单品毛利率照旧保留
+    #    (每一道都有成本卡, 有依据)。挂账「覆盖率下限」仍然挂着。
+    from smartbi.gold.restaurant.generic_answer import render_headline
+    from smartbi.gold.restaurant.generic_executor import CellResult, _cost_gaps
+    from smartbi.gold.restaurant.metric_registry import DERIVED as _REG_DERIVED
+
+    _gaps = _cost_gaps([
+        {"name": e["normalized_name"], "qty": e["qty"], "revenue": e["revenue"],
+         "unit_cost": e["food_cost_unit"] if e["has_cost"] else None}
+        for e in enriched
+    ])
+    _headline_cell = CellResult(
+        "gross_profit", _REG_DERIVED["gross_profit"].label, "all", "summary",
+        "money", [{"gross_profit": total_profit}], (), "",
+        PROV_ESTIMATED, "成本卡的理论用量", coverage_ratio,
+        tuple(), tuple(_gaps), float(total_rev_items or 0),
+    )
+    _offers = _build_qa_fill_offers(_headline_cell)
+    _fill_offer_lines = "".join(f"{i}. {o}\n" for i, o in enumerate(_offers, 1))
+
     answer = (
         f"**菜品毛利分析（{window_label}）**\n"
+        + render_headline(_headline_cell, window_label) + "\n"
         # ⚠️ 只报覆盖率百分比, ⛔ 不再把 item 口径的「可计算毛利的营收」金额摆出来:
         #    它是 749,009 而上面的实收是 717,883 —— 并排放会读成「其中」比「全部」还大。
-        #    覆盖率本身仍是 item 口径算的(分子分母同源), 那个百分比是对的。
-        f"- 实收营收 **¥{total_rev:,.2f}**，其中 {coverage_ratio * 100:.1f}% 的销售有成本卡、能算毛利\n"
-        f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
+        f"- 实收营收 **¥{total_rev:,.2f}**\n\n"
         # 🔴 2026-08-14: 这里原来印的是**全额实收** ¥373,832.93, 而结果是
         #    **覆盖部分**的毛利 —— 店长照着减一遍得 347,578.81, 与上面那行
         #    124,071.85 对不上。**答案自己跟自己打架**, 比不给过程更糟。
@@ -4688,10 +4747,11 @@ async def resolve_gross_margin(
         f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
         f"需要关注的低毛利菜品:\n\n{low_margin_text}{joint_priority_text}{prohibited_actions_text}\n\n"
-        f"建议动作:\n"
-        f"1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
-        f"2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
-        f"3. 对缺成本菜品补齐配方和最近进价，否则利润判断会失真。{missing_note}"
+        # 🔴 owner 2026-08-14: 「建议动作」换成 `build_fill_offers` 的产出。
+        #    改之前是「对缺成本菜品补齐配方和最近进价」这种泛泛之词, 而日结那边
+        #    早就是「先补这 3 道(菜名), 40.2% → 47.7%」—— 同一件事一边具体一边空泛。
+        # ⛔ 拿不到开价时**退回原来那三条**, 不留一个空的「建议动作:」标题。
+        f"建议动作:\n{_fill_offer_lines}{missing_note}"
     )
 
     if prohibited_actions_requested:
@@ -4699,10 +4759,11 @@ async def resolve_gross_margin(
             low_margin[0]["name"]
             if low_margin else "暂无可确认对象"
         )
+        # ⚠️ 这一支同样不许让**合计毛利率**单独成行 —— 判断依据里给出毛利与
+        #    覆盖率就够了。单品毛利率在下面各条里照旧保留(有成本卡, 有依据)。
         answer = (
-            f"**{window_label}先不要做三件事。**判断依据：全部销售营收 ¥{total_rev:,.2f}，"
-            f"可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，覆盖率 {coverage_ratio * 100:.1f}%；"
-            f"已覆盖毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**。\n\n"
+            f"**{window_label}先不要做三件事。**判断依据："
+            + render_headline(_headline_cell, window_label) + "\n\n"
             "1. 不要按单一毛利率批量下架。"
             f"适用前提：同时核对销量、绝对毛利和门店差异；当前低毛利候选是{low_margin_name}。"
             "风险：可能误删引流款或套餐关键菜。最小验证：选一家店、一个菜、观察一周再决定。\n"

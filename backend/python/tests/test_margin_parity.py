@@ -926,6 +926,23 @@ def test_qualifier_rides_on_the_number_not_a_pile_below():
     assert "（" in first and "）" in first, f"限定语没跟着数字: {first}"
 
 
+#: 四条事实 -> (人话名, 在正文里怎么认出它)。**唯一一份** ——
+#: ⛔ 两条路各写一份就是「守卫也有两份」, 那正是我们在修的那个病。
+FOUR_FACTS = (
+    ("这个数不是利润", "未扣人工"),
+    ("覆盖多少", "% 的营收"),
+    ("为什么只能是估的", "理论用量"),
+    ("要怎样才变实", "盘一次库"),
+)
+
+
+def assert_four_facts_present(first_segment, where):
+    """两条路共用这一个断言函数。"""
+    for name, needle in FOUR_FACTS:
+        assert needle in first_segment, (
+            f"[{where}] 丢了「{name}」那条事实: {first_segment!r}")
+
+
 def test_merging_did_not_drop_any_of_the_four_facts():
     """🔴 三条(+行动那条)事实各有一条断言 —— 合并之后一条都不许消失。
 
@@ -937,10 +954,7 @@ def test_merging_did_not_drop_any_of_the_four_facts():
     from smartbi.gold.restaurant.generic_answer import render
 
     first = render(_profit_cell(), "今天").split("\n\n")[0]
-    assert "未扣人工" in first, "① 丢了「不等于利润」那条"
-    assert "40.2%" in first, "② 丢了覆盖率那条"
-    assert "理论用量" in first, "③ 丢了「为什么只能是估的」那条"
-    assert "盘一次库" in first, "④ 丢了「要怎样才变实」那条"
+    assert_four_facts_present(first, "日结")
 
 
 @pytest.mark.parametrize("victim,expect_gone", [
@@ -980,3 +994,70 @@ def test_mutation_removing_one_fact_turns_its_assertion_red(
 
     assert expect_gone not in after, (
         f"🔴 变异没生效 —— 「{expect_gone}」还在, 说明它不是从那个来源取的")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 两条路的**开头必须一致**（owner 2026-08-14，前置三退回后的新判据）
+# ═══════════════════════════════════════════════════════════════════════════
+def test_both_paths_share_one_headline_implementation():
+    """⛔ 问答不许复制日结的拼装 —— 复制就是第三份。
+
+    改之前问答第 3 行是「已覆盖部分毛利 …，加权毛利率 82.5%」**零限定**，
+    而 82.5% 是在 40.2% 上算的 —— 店长最可能的读法是「这生意真赚钱」。
+    """
+    import inspect
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    assert "render_headline" in src, "问答没调共用的那一处 —— 又长出一份"
+    # 阴性: 旧的零限定那一行不许回来
+    assert "加权毛利率 **{margin_text}**" not in src, (
+        "🔴 合计毛利率又单独成行了 —— 它会被读成「这个店的毛利率」")
+
+
+def test_the_qa_headline_carries_the_same_four_facts():
+    """🔴 判据三: 与日结**共用同一组断言**, ⛔ 不许各写一份。"""
+    from smartbi.gold.restaurant.generic_answer import render_headline
+
+    first = render_headline(_profit_cell(), "2026-08-12 当天")
+    assert_four_facts_present(first, "问答")
+    # 阳性对照: 数字本身在
+    assert "124,071.85" in first
+
+
+def test_aggregate_margin_rate_never_gets_its_own_line():
+    """🔴 合计毛利率**不单独成行**。
+
+    ⚠️ 单品毛利率保留(每道菜都有成本卡, 有依据); 这里禁的是**合计**那个 ——
+       一个在 40.2% 营收上算出来的比率, 单独成行就会被读成「这个店的毛利率」。
+    """
+    import inspect
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+
+    src = inspect.getsource(router.resolve_gross_margin)
+    for line in src.splitlines():
+        s = line.strip()
+        if not s.startswith('f"') or "#" in s.split('f"')[0]:
+            continue
+        if "毛利率" in s and "margin_text" in s:
+            assert False, f"🔴 合计毛利率又单独成行: {s}"
+
+
+def test_qa_actions_come_from_fill_offers_not_hand_written():
+    """判据五: 「建议动作」来自 `build_fill_offers`。"""
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+    from smartbi.gold.restaurant.generic_executor import CellResult
+
+    cell = CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1.0}], (), "", "ESTIMATED", "成本卡的理论用量", 0.4,
+        (), ({"name": "顺德干蒸鲜排骨", "revenue": 500.0},), 1000.0)
+    lines = router._build_qa_fill_offers(cell)
+    assert any("顺德干蒸鲜排骨" in ln for ln in lines), (
+        "建议动作里没有具体菜名 —— 又退回泛泛之词")
+    assert any("提到约" in ln for ln in lines), "没给覆盖率增量"
+    # ⛔ 拿不到开价时**不留空标题**: 通用那三条仍在兜底
+    empty = router._build_qa_fill_offers(CellResult(
+        "gross_profit", "毛利", "all", "summary", "money",
+        [{"gross_profit": 1.0}], (), "", "MEASURED", ""))
+    assert empty, "开价为空时连兜底建议都没有 —— 会留一个空的「建议动作:」"
