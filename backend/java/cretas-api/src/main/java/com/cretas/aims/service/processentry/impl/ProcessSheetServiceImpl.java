@@ -3399,6 +3399,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
                 BigDecimal storageQuantity = convertReportingQuantityToStorage(
+                        factoryId,
                         nz(ri.getQuantity()),
                         firstNonBlank(ri.getUnit(), requestInputUnit(req)),
                         rawMb.getQuantityUnit(),
@@ -3467,7 +3468,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
                 BigDecimal storageQuantity = convertReportingQuantityToStorage(
-                        nz(ur.getFeedQuantityKg()), requestInputUnit(req), srcMb.getQuantityUnit(), "上游批次");
+                        factoryId, nz(ur.getFeedQuantityKg()), requestInputUnit(req),
+                        srcMb.getQuantityUnit(), "上游批次");
                 BigDecimal resolvedUnitPrice = srcMb.getUnitPrice();
                 if (resolvedUnitPrice == null
                         && pb.getTotalCost() != null && pb.getTotalCost().compareTo(BigDecimal.ZERO) > 0
@@ -3974,8 +3976,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     /**
      * g 与 kg 在库存扣减边界显式换算；其他单位不能猜测，否则会把“只/袋”当 kg，
      * 直接污染库存与成本。SFI/FG 来源沿用各自既有的严格换算/校验路径。
+     *
+     * <p>🔴 2026-08-14: 上面这句「其他单位不能猜测」曾被本方法自己的 helper 破掉 ——
+     * 判等原本用 {@code massUnitCode(a).equals(massUnitCode(b))}, 而那张私有表把
+     * {@code 片/slice/piece/pcs/个} 全折成一个桶, 于是<b>报工填「个」、批次存储单位是「片」
+     * 会判成同一个单位, 数量原样扣库存</b>。实测这不是理论风险: 库里 56 种原料用「个」、
+     * 7 种用「片」, 成品侧 8/4, 且有活批次。同一个洞隔壁的 {@code canonicalBomUnit}
+     * 早有注释点名(「漏拦」), 但那条警告没跟着抄到这份拷贝上来。
+     *
+     * <p>现在: <b>kg⇄g 之外一律交给权威判等</b> {@link #configuredUnitsEquivalent}
+     * (内走 {@code UnitContractService#areEquivalent}, 计数单位按字面比较 —— #1976)。
+     * 这样本类不再持有第三份单位词汇表。
      */
-    private static BigDecimal convertReportingQuantityToStorage(
+    private BigDecimal convertReportingQuantityToStorage(
+            String factoryId,
             BigDecimal reportingQuantity,
             String reportingUnit,
             String storageUnit,
@@ -3987,16 +4001,17 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 || storageUnit == null || storageUnit.isBlank()) {
             throw sourceUnitMismatch(reportingUnit, storageUnit, sourceLabel);
         }
+        // 这里唯一允许的“换算”是质量的 kg⇄g; 其余一律只判「是不是同一个单位」。
         String reportingCode = massUnitCode(reportingUnit);
         String storageCode = massUnitCode(storageUnit);
-        if (reportingCode.equals(storageCode)) {
-            return reportingQuantity;
-        }
         if ("kg".equals(reportingCode) && "g".equals(storageCode)) {
             return reportingQuantity.movePointRight(3);
         }
         if ("g".equals(reportingCode) && "kg".equals(storageCode)) {
             return reportingQuantity.movePointLeft(3);
+        }
+        if (configuredUnitsEquivalent(factoryId, reportingUnit, storageUnit)) {
+            return reportingQuantity;
         }
         throw sourceUnitMismatch(reportingUnit, storageUnit, sourceLabel);
     }
@@ -4006,11 +4021,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return new BusinessException(409, sourceLabel + "存储单位为“" + storageUnit + "”，不能按报工单位“"
                 + reportingUnit + "”扣减")
                 .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
-                .withHint("当前支持 g/kg 质量换算，以及盒/箱/片等同口径计数单位；其他单位请先配置确定的单位换算")
+                .withHint("当前只做 g/kg 质量换算；计数单位必须与批次存储单位一致（个 与 片 不是同一个单位），"
+                        + "请改用批次的存储单位报工，或先为这两个单位配置确定的换算")
                 .withSeverity("BLOCKING")
                 .withHintTarget("inputUnit");
     }
 
+    /**
+     * ⛔ 只认质量: 判断 kg⇄g 用。<b>不要往里加计数/包装单位</b> ——
+     * 那正是 2026-08-14 修掉的洞: 原来这里把 {@code 片/slice/piece/pcs/个} 折成一个桶,
+     * 上游拿它做判等, 「个」就能冒充「片」把数量原样扣进库存。
+     * 计数单位是不是同一个, 一律问权威 {@link #configuredUnitsEquivalent}。
+     */
     private static String massUnitCode(String unit) {
         String normalized = unit.trim().toLowerCase(java.util.Locale.ROOT);
         if ("kg".equals(normalized) || "千克".equals(normalized) || "公斤".equals(normalized)) {
@@ -4018,17 +4040,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         if ("g".equals(normalized) || "克".equals(normalized)) {
             return "g";
-        }
-        if ("box".equals(normalized) || "盒".equals(normalized)) {
-            return "box";
-        }
-        if ("case".equals(normalized) || "箱".equals(normalized)) {
-            return "case";
-        }
-        if ("slice".equals(normalized) || "piece".equals(normalized)
-                || "pcs".equals(normalized) || "片".equals(normalized)
-                || "个".equals(normalized)) {
-            return "slice";
         }
         return normalized;
     }

@@ -90,17 +90,23 @@ class ProcessSheetConfiguredUnitsTest {
 
     @Test
     void treatsCanonicalPackagingAliasesAsTheSameNativeStockUnit() throws Exception {
+        // 2026-08-14: 该方法由 static 改成实例方法并多收一个 factoryId ——
+        // 判等从私有折叠表换成权威表 (configuredUnitsEquivalent)。这三条断的是
+        // 「同一个单位的中英两种写法」, 换表之后必须照旧放行, 否则就是把 2026-07-31
+        // 那条误拦引回来了。
         Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
                 "convertReportingQuantityToStorage",
-                BigDecimal.class, String.class, String.class, String.class);
+                String.class, BigDecimal.class, String.class, String.class, String.class);
         method.setAccessible(true);
+        ProcessSheetServiceImpl impl = org.mockito.Mockito.mock(
+                ProcessSheetServiceImpl.class, org.mockito.Mockito.CALLS_REAL_METHODS);
 
         assertEquals(new BigDecimal("10"), method.invoke(
-                null, new BigDecimal("10"), "box", "盒", "成品盒"));
+                impl, "F006", new BigDecimal("10"), "box", "盒", "成品盒"));
         assertEquals(new BigDecimal("10"), method.invoke(
-                null, new BigDecimal("10"), "slice", "片", "封膜"));
+                impl, "F006", new BigDecimal("10"), "slice", "片", "封膜"));
         assertEquals(new BigDecimal("1.25"), method.invoke(
-                null, new BigDecimal("1.25"), "case", "箱", "外箱"));
+                impl, "F006", new BigDecimal("1.25"), "case", "箱", "外箱"));
     }
 
     private static Method configuredUnitsMethod() throws Exception {
