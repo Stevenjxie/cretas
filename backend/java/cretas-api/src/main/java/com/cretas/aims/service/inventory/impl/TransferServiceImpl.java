@@ -496,6 +496,46 @@ public class TransferServiceImpl implements TransferService {
      * <p>P0-1 的真根因在<b>存储</b>: 同一物料档案存 {@code box} 而批次存「盒」。该修的是写入路径 +
      * 一次性数据归一, 且依赖 Steve 尚未拍板的「单位存以码还是以中文」口径 —— 定了再动。
      */
+    /**
+     * 两个单位写法是不是**同一个单位** —— 只用于比较, 绝不用于落库。
+     *
+     * <p>🔴 2026-08-14 生产实测: 清空后的 F006 上走真实流程, 调拨 15kg 冻猪蹄被
+     * {@code 409 调拨包装规格与原料基本单位不一致} 挡死。抓到的真实 payload
+     * {@code {"unit":"case","materialPackagingSpecId":"745b1332-…"}}, 而库里该规格
+     * {@code package_unit = 箱} —— 前端 {@code toTransferItemPayload} 会把 {@code row.unit}
+     * 过一遍 {@code canonicalUnitCode}(箱 → case)再提交, 后端却拿它跟「箱」字面比。
+     * 库里两种写法**同时存在**(活跃原料包装规格实测 {@code case} 29 条 / {@code 箱} 7 条,
+     * 后者全是默认包装), 所以这不是脏数据, 是两套词汇表。
+     *
+     * <p>⚠️ 这不是新问题: {@code web-admin/src/utils/unitPricing.ts} 注释写着
+     * 「2026-07-31 客户就是这么被拦住的」—— 当时只在前端补了 {@code sameUnit()},
+     * 后端这侧的字面比较原样留着。
+     *
+     * <h3>⛔ 为什么不能直接放开 {@link #canonicalTransferUnit}</h3>
+     *
+     * 那个方法的结果**会被写进库**({@code setPackageUnitSnapshot} / 目标批次单位)。
+     * 放开它 = 把「只」写成 {@code pcs} 存进批次, 正是
+     * {@code TransferUnitCanonicalizationTest} 钉住的 LIUSHANMEN 2026-07-30 事故:
+     * 生产仓批次成了 {@code pcs}、物料主档是「只」, 报工按字面比较跳过整批 501 只,
+     * 页面还本地化显示成「501 只」, 肉眼看不出异常。#1976 据此确立
+     * 「等价码只对科学单位成立, 计数/包装单位按字面比较」。
+     *
+     * ⇒ 所以拆成两件事: **比较**用本方法(认中英同义), **落库**仍走
+     * {@code canonicalTransferUnit} 的字面值, 且命中规格后一律改用**主数据的写法**。
+     *
+     * <p>语义来自既有的 {@code storageUnit} 规则: {@code 箱 ≡ case}(单一中文写法 → 归一到码),
+     * 而 {@code 只 / 个 / 件} 命中「同码多中文写法」规则 2 各自保留字面 → 仍判不等
+     * (一只鸡不是一件包材)。⛔ 不要改用 {@code areEquivalent}, 它只比
+     * {@code normalize().code()}, 会把这三个合并。
+     */
+    private boolean sameTransferUnit(String factoryId, String left, String right) {
+        if (java.util.Objects.equals(left, right)) return true;
+        if (left == null || right == null || unitContractService == null) return false;
+        String l = unitContractService.storageUnit(factoryId, left);
+        String r = unitContractService.storageUnit(factoryId, right);
+        return l != null && !l.isBlank() && l.equals(r);
+    }
+
     private String canonicalTransferUnit(String factoryId, String unit) {
         String value = trimToNull(unit);
         if (value == null) return "";
@@ -536,21 +576,31 @@ public class TransferServiceImpl implements TransferService {
                             .withHintTarget("materialPackagingSpecId"));
             String specUnit = canonicalTransferUnit(factoryId, spec.getPackageUnit());
             String specBase = canonicalTransferUnit(factoryId, spec.getBaseUnit());
-            if (!transactionUnit.equals(specUnit) || !baseUnit.equals(specBase)) {
+            if (!sameTransferUnit(factoryId, transactionUnit, specUnit)
+                    || !sameTransferUnit(factoryId, baseUnit, specBase)) {
                 throw new BusinessException(409, "调拨包装规格与原料基本单位不一致")
                         .withHint("请返回原料类型修正包装换算");
             }
+            // 🔴 比较认中英同义, 但**落库一律采用主数据里的写法**。
+            // 客户端送来的可能是英文码(前端 canonicalUnitCode 会把「箱」转成 case),
+            // 直接存它会让快照与主档写法不一致 —— 那正是 LIUSHANMEN 2026-07-30 事故的形状
+            // (调拨把「只」存成 pcs, 报工按字面比较跳过整批 501 只)。
+            transactionUnit = specUnit;
+            baseUnit = specBase;
             factor = spec.getConversionFactor();
         } else if (!transactionUnit.equals(baseUnit)) {
             if (materialPackagingSpecRepository == null) {
                 throw new BusinessException(422, "调拨包装单位必须选择具体规格")
                         .withHintTarget("materialPackagingSpecId");
             }
+            // transactionUnit 在本方法里会被重新绑定成主数据写法, 已非 effectively-final,
+            // lambda 里必须用一个当下的快照。
+            final String requestedUnit = transactionUnit;
             List<com.cretas.aims.entity.material.MaterialPackagingSpec> matches =
                     materialPackagingSpecRepository
                             .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
                                     factoryId, materialTypeId).stream()
-                            .filter(spec -> transactionUnit.equals(
+                            .filter(spec -> sameTransferUnit(factoryId, requestedUnit,
                                     canonicalTransferUnit(factoryId, spec.getPackageUnit())))
                             .toList();
             if (matches.size() != 1) {
@@ -560,6 +610,8 @@ public class TransferServiceImpl implements TransferService {
             }
             var matched = matches.get(0);
             specId = matched.getId();
+            // 同上: 命中规格后, 快照采用主数据的写法, 不采用客户端送来的写法。
+            transactionUnit = canonicalTransferUnit(factoryId, matched.getPackageUnit());
             factor = matched.getConversionFactor();
         }
         if (factor == null || factor.signum() <= 0) {
