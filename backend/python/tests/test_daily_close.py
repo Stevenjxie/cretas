@@ -305,22 +305,53 @@ def test_gross_profit_uses_paid_revenue_not_list_price():
                                      AGGREGATIONS["summary"]) is True
 
 
-def test_split_execution_is_scoped_to_the_aggregate_level():
-    """⛔ 分组层**不拆** —— 那一层拿不到交易级折扣的归属, 已挂账。
+def test_cost_card_metrics_split_at_every_level_including_grouped():
+    """🔴 靠成本卡的派生量在**分组层也拆** —— owner 2026-08-14 裁定一。
 
-    阴性对照: 没有这条, 上面那条可能只是「所有情况都拆」。
+    ## 这条断言原来是反的
+
+    原文: 「⛔ 分组层**不拆** —— 那一层拿不到交易级折扣的归属, 已挂账」。
+    owner 当场推翻: 「按品牌看毛利」是用户打一句话就能到的问题, 不需要按钮,
+    而分组层不摊折扣会让同一租户、同一范围出现两个数(prod 实测 MOCK_REST
+    单品牌那一格比抬头高 ¥31,794.79, DEMO_REST 按品牌高 ¥200,791.30,
+    青花椒按菜甚至翻成负毛利 −¥5,242.55)。
+
+    ⚠️ 「拿不到折扣归属」当时被当成不能做的理由, 其实只需要**按各组的明细
+       金额比例**摊 —— 见 `generic_executor._net_of`。逐菜的定向折扣归属
+       是另一件事, 仍然挂账。
+
+    阴性对照在下一条: 不靠成本卡的派生量在分组层**仍然不拆**。
     """
     from smartbi.gold.restaurant.metric_registry import AGGREGATIONS, DERIVED, METRICS
 
     grouped = [a for a in AGGREGATIONS.values() if getattr(a, "needs_dimension", True)]
     assert grouped, "没有需要分组的聚合形态 —— 这条对照失去意义"
     for agg in grouped:
-        assert ge._needs_split_execution(DERIVED["gross_profit"], agg) is False, (
-            f"{agg} 这种分组形态也被拆了 —— 分组层没有折扣归属, 拆了算不对")
+        assert ge._needs_split_execution(DERIVED["gross_profit"], agg) is True, (
+            f"{agg} 这种分组形态没走覆盖口径 —— 那一层会用明细原价当营收, "
+            f"与抬头差一个折扣额")
 
     # 基础指标永远不拆
     assert ge._needs_split_execution(METRICS["revenue"],
                                      AGGREGATIONS["summary"]) is False
+
+
+def test_non_cost_card_derived_still_does_not_split_when_grouped():
+    """阴性对照: 不靠成本卡的派生量, 分组层**不拆**。
+
+    ⛔ 没有这条, 上面那条在「所有派生量都拆」时同样成立 —— 而那会把
+       `_execute_derived_split` 的通用分支(它只取 `rows[0]`, 是合计层专用的)
+       喂上分组请求, 悄悄只返回第一组。
+    """
+    from smartbi.gold.restaurant.metric_registry import AGGREGATIONS, DERIVED
+
+    plain = [k for k in DERIVED if not ge.uses_cost_bridge(k)]
+    assert plain, "所有派生量都靠成本卡 —— 这条对照失去意义"
+    for key in plain:
+        for agg_key in ("rank", "compare"):
+            assert ge._needs_split_execution(
+                DERIVED[key], AGGREGATIONS[agg_key]) is False, (
+                f"{key} 不靠成本卡, 却在 {agg_key} 分组形态上被拆了")
 
 
 def test_split_only_when_bases_do_not_share_the_txn_grain():

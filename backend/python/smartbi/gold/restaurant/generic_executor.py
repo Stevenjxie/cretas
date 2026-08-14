@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from smartbi.gold.restaurant.provenance import (
     ESTIMATED as PROV_ESTIMATED,
@@ -282,19 +282,58 @@ def build_sql(metric_key: str, dimension_key: str, aggregation_key: str,
         sql += f"   AND {dim.label_expr} = ${entity_param}\n"
     if group_cols:
         sql += f" GROUP BY {', '.join(group_cols)}\n"
-    if agg.order:
-        # 🔴 「趋势」按**维度自身**排(1 号→31 号), 其余按**值**排(最高的在前)。
-        #    用值排序做趋势会把时间序列打乱成排行榜 —— 图还是画得出来, 但它
-        #    表达的东西完全不是用户问的那个。
-        target = "dim_key" if agg.order_by == "dim" else order_target
-        sql += f" ORDER BY {target} {agg.order.upper()} NULLS LAST\n"
-    # 用户说了要几条就给几条；没说才用登记的默认值。
-    # ⛔ 只对**本来就有 limit** 的形态生效 —— 给「对比」「趋势」加 limit 会
-    #    悄悄截断结果，而截断过的清单和完整清单长得一模一样。
-    effective_limit = limit_override if (agg.limit and limit_override) else agg.limit
+    target, desc, effective_limit = _order_spec(agg, order_target, limit_override)
+    if target:
+        sql += f" ORDER BY {target} {'DESC' if desc else 'ASC'} NULLS LAST\n"
     if effective_limit:
         sql += f" LIMIT {int(effective_limit)}\n"
     return sql, tuple(dict.fromkeys(requires)), base_keys
+
+
+def _order_spec(agg, value_key: str, limit_override: Optional[int] = None):
+    """排序与截断的**唯一定义**, 返回 `(排序列, 是否降序, limit)`。
+
+    🔴 「趋势」按**维度自身**排(1 号→31 号), 其余按**值**排(最高的在前)。
+       用值排序做趋势会把时间序列打乱成排行榜 —— 图还是画得出来, 但它
+       表达的东西完全不是用户问的那个。
+
+    ⛔ 这一处同时被两条路读: `build_sql` 拼 ORDER BY / LIMIT, 分组覆盖那条路
+       在 Python 里排(它自己拼 SQL, 不经过 `build_sql`)。
+       **两处各写各的 = 同一个「第几名」两个答案**, 而 `_post_process` 的
+       「两端」「累计到 80%」全都依赖顺序。
+
+    ⚠️ limit 只对**本来就有 limit** 的形态生效 —— 给「对比」「趋势」加 limit 会
+       悄悄截断结果, 而截断过的清单和完整清单长得一模一样。
+    """
+    effective_limit = limit_override if (agg.limit and limit_override) else agg.limit
+    if not agg.order:
+        return None, False, effective_limit
+    target = "dim_key" if agg.order_by == "dim" else value_key
+    return target, agg.order.lower() == "desc", effective_limit
+
+
+def _sorted_rows(rows: List[Dict[str, Any]], agg, value_key: str,
+                 limit_override: Optional[int] = None) -> List[Dict[str, Any]]:
+    """`_order_spec` 的 Python 实现 —— 与 SQL 那条 ORDER BY 同一套规则。
+
+    ⚠️ `NULLS LAST` 在 Python 里要显式做: `None` 参与比较会 TypeError,
+       而 `sorted(key=lambda …: x or 0)` 会把 None 当成 0 排进中间 ——
+       那和 SQL 的行为不一样, 于是两条路的「第一名」可能不同。
+    """
+    target, desc, limit = _order_spec(agg, value_key, limit_override)
+    if target:
+        def _key(row):
+            v = row.get(target)
+            if target != "dim_key":
+                v = _as_float(v)
+            # (是不是 None, 值) —— None 一律排最后, 与 NULLS LAST 一致。
+            return (v is None, v if v is not None else 0)
+        rows = sorted(rows, key=_key, reverse=desc)
+        if desc:
+            # reverse=True 会把 `(True, 0)` 也翻到前面 —— NULL 就跑到最前了。
+            rows = [r for r in rows if r.get(target) is not None] + \
+                   [r for r in rows if r.get(target) is None]
+    return rows[:int(limit)] if limit else rows
 
 
 def _as_float(value) -> Optional[float]:
@@ -416,11 +455,23 @@ def _needs_split_execution(item, agg) -> bool:
     将来的处置是 `provenance=ESTIMATED` + basis「折扣是整单的，没法摊到单道菜」,
     与成本卡那条同一个机制, 不用新建。
 
-    判据: `agg.needs_dimension is False` —— 用登记表**已有的声明**判「这是合计层」,
-    ⛔ 不新造假设。
+    ## 🔴 2026-08-14 裁定一: 分组层也要走(原来只在合计层)
+
+    上面那段「分组层保持原样并已挂账」**被 owner 当场推翻**:
+    「按品牌看毛利」是用户打一句话就能到的问题, 不需要按钮。同一租户、
+    同一范围, 抬头一个数分组一个数, 差 6.5%(实测 ¥31,125.59 = 折扣额)。
+    ⇒ 分组层套抬头那**同一个实收率**摊派, 见 `_net_of`。
+
+    判据: 合计层看 `agg.needs_dimension is False` + 混口径;
+          任何层只要**靠成本卡**就走覆盖口径(那条路自带摊派)。
+    ⛔ 两个条件都用登记表**已有的声明**, 不新造假设。
     """
     if item.__class__.__name__ != "Derived":
         return False
+    # 靠成本卡的派生量: 分组层也必须走 —— 普通 SQL 那条路用 `SUM(i.amount)`
+    # (明细原价)当营收, 且把没卡的菜也算进营收, 两个口径都与抬头不同。
+    if _COST_CARD_COLUMN in _effective_requires(item.key):
+        return True
     if getattr(agg, "needs_dimension", True):
         return False
     return _mixes_grains(item.key)
@@ -454,15 +505,34 @@ def _scalar(cell: "CellResult", key: str):
 #: 🔴 2026-08-14: 排除条件从「行级 SQL 判据」改成「**菜名数组**」——
 #:    判定在 Python 一处 (`dish_cost_is_implausible`), SQL 只负责照名单剔除。
 #:    行级判会让同一张卡的判决取决于那天这道菜恰好怎么卖的, 实测差 19,131.37。
-_COVERED_MARGIN_SQL = (
-    "SELECT COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL"
-    "                                       AND NOT ({excluded})), 0)"
+#: 「覆盖」这件事的**唯一定义** —— 抬头和分组层套同一段 select。
+#: ⛔ 分组层不许另抄一份: 抄一份就是同一个词两个定义, 而两层的数会不一致
+#:    (2026-08-14 实测过 ¥31,125.59 的分叉, 见 `_net_of`)。
+_COVERED_SELECT = (
+    "COALESCE(SUM(i.amount) FILTER (WHERE c.food_cost IS NOT NULL"
+    "                                 AND NOT ({excluded})), 0)"
     "         AS covered_gross,\n"
     "       COALESCE(SUM(i.amount), 0)                    AS all_gross,\n"
     "       COALESCE(SUM(i.qty * c.food_cost) FILTER (WHERE NOT ({excluded})), 0)"
-    "         AS covered_cost\n"
+    "         AS covered_cost"
+)
+
+_COVERED_MARGIN_SQL = (
+    "SELECT " + _COVERED_SELECT + "\n"
     "  FROM {frm}\n  {join}\n"
     " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+)
+
+#: 分组层。⚠️ `dim_join` 可能与 `join` 重复 —— 由调用方去重后传进来。
+#: ⛔ 不过滤 `dim_key IS NULL`: 归不到组的行照样在抬头里, 滤掉它们
+#:    「各组加起来 = 抬头」就不成立了, 而那正是这一版要守的判据。
+_COVERED_MARGIN_GROUPED_SQL = (
+    "SELECT {group_expr} AS dim_key, {label_expr} AS dim_label,\n"
+    "       " + _COVERED_SELECT + "\n"
+    "  FROM {frm}\n  {join}\n"
+    " WHERE {alias}.factory_id = $1 AND {alias}.date >= $2 AND {alias}.date <= $3\n"
+    "{entity}"
+    " GROUP BY {group_expr}, {label_expr}\n"
 )
 
 #: 「这道菜今天卖了多少、卡上写多少」—— 判定的**输入**, 不含判定本身。
@@ -562,6 +632,51 @@ def _cost_gaps(facts):
 _DISCOUNT_ALLOC_BASIS = "按明细金额摊派的折扣"
 
 
+class _Covered(NamedTuple):
+    """一次取数的全部产出。⚠️ 分组层要复用 `receipt_ratio` / `excluded`,
+    ⛔ 不许自己再算一遍 —— 再算一遍就是同一个摊派两个来源。
+    """
+    covered_net: Decimal          # 覆盖部分的**实收**营收
+    covered_cost: Decimal
+    share: Decimal                # 覆盖率 = covered_gross / all_gross
+    outliers: Tuple[Any, ...]
+    gaps: Tuple[Any, ...]
+    denominator: float            # all_gross, T2 开价的分母
+    receipt_ratio: Decimal        # 🔑 实收率, 见 `_net_of`
+    excluded: Tuple[str, ...]     # 判为单位错的菜名
+
+
+def _net_of(gross: Decimal, receipt_ratio: Decimal) -> Decimal:
+    """把**明细原价**换算成**实收** —— 全仓唯一一处折扣摊派。
+
+    ## 🔴 为什么必须是这个形状(owner 2026-08-14 裁定一)
+
+    折扣是**交易级**的(满减打在整单上), 而毛利的成本项是 item 级的。
+    抬头那条路一直是对的:
+
+        discount = all_gross − paid          # 实测, 不是估的
+        covered_net = covered_gross − discount × (covered_gross / all_gross)
+
+    把它约一下就是 `covered_gross × (paid / all_gross)` —— **每一元明细原价
+    实际收到 `paid/all_gross` 元**。分组层套同一个比率, 于是
+
+        Σ_组 covered_net_g = (Σ_组 covered_gross_g) × r = covered_gross × r = 抬头
+
+    **「各组加起来 = 抬头」由构造成立, 不是巧合。** ⇒ 判据不恒真: 它在
+    「分组层不摊」「分组层用组内自己的折扣率」「两层排除名单不同」
+    「分组层把没卡的菜也算进营收」四种写法下都会红。
+
+    ⚠️ 这**不解冻**挂账里那条「精确折扣摊派规则」—— 那条争的是定向折扣该归给
+       哪**道菜**(逐菜, 只改分配不改总额)。按金额比例是分配问题的默认解。
+
+    ## 实测(2026-08-14, MOCK_REST 单品牌 ⇒ 那一格必须等于抬头)
+
+        抬头(摊了折扣)      ¥475,623.83
+        按品牌(改之前, 没摊) ¥506,749.42     差 ¥31,125.59 = 折扣额, 高估 6.5%
+    """
+    return gross * receipt_ratio
+
+
 async def _covered_margin(conn, factory_id: str, date_range, bridge):
     """覆盖部分的 (净营收, 成本, 覆盖率)。算不出来返回 None。
 
@@ -608,10 +723,12 @@ async def _covered_margin(conn, factory_id: str, date_range, bridge):
     covered_cost = Decimal(str(row["covered_cost"] or 0))
     if not all_gross:
         return None
-    # 折扣总额 = 明细原价合计 − 交易实收。⛔ 它是**实测的**, 不是估的。
-    discount = all_gross - Decimal(str(paid or 0))
+    # 🔑 实收率 = 交易实收 ÷ 明细原价合计。⛔ 它是**实测的**, 不是估的
+    #    (`paid` 来自 `fact_pos_transaction.net_amount`)。
+    #    ⚠️ 分组层拿走的就是这个数 —— 见 `_net_of` 的推导。
+    receipt_ratio = Decimal(str(paid or 0)) / all_gross
     share = covered_gross / all_gross
-    covered_net = covered_gross - discount * share
+    covered_net = _net_of(covered_gross, receipt_ratio)
 
     # 被排除的菜**指名带出去** —— owner: 那不是一句免责声明, 是一条
     # **可执行的修复指令**(「米饭成本卡 167.20 而它卖 16.80, 请核对单位」)。
@@ -620,12 +737,58 @@ async def _covered_margin(conn, factory_id: str, date_range, bridge):
     #
     # `gaps` / `all_gross` 是 T2 前两层的原料: 补某几道之后覆盖率能到多少,
     # 分母**必须是这里的 all_gross** —— 另取一次数就是第二个定义。
-    return covered_net, covered_cost, share, outliers, gaps, float(all_gross)
+    return _Covered(covered_net, covered_cost, share, tuple(outliers),
+                    tuple(gaps), float(all_gross), receipt_ratio,
+                    tuple(excluded))
+
+
+async def _covered_margin_grouped(conn, factory_id: str, date_range, bridge,
+                                  dim, covered: "_Covered",
+                                  entity_filter: Optional[str] = None):
+    """按维度分组的 (组, 覆盖实收, 覆盖成本)。算不出来返回 None。
+
+    ⛔ **不自己算实收率、不自己判排除名单** —— 两样都从 `covered` 里拿。
+       自己再算一遍 = 同一个摊派两个来源, 而两个来源迟早分叉(这一版修的正是它)。
+    """
+    frm, join, alias = GRAINS["item_cost"]
+    names, keys = bridge
+    joins = join
+    # ⚠️ 维度自己的 join 可能已经在 item_cost 的 join 里(如 dim_product)。
+    #    重复 join 同一张表会报 "table name specified more than once"。
+    if dim.join and dim.join not in join:
+        joins = f"{join}\n  {dim.join}"
+    entity = ""
+    args = [factory_id, date_range[0], date_range[1], names, keys,
+            list(covered.excluded)]
+    if entity_filter is not None:
+        # ⛔ 走占位符, 绝不拼接 —— 菜名是用户原话摘抄的。
+        args.append(entity_filter)
+        entity = f"   AND {dim.label_expr} = ${len(args)}\n"
+    sql = _COVERED_MARGIN_GROUPED_SQL.format(
+        frm=frm, join=joins, alias=alias, excluded=_EXCLUDED_EXPR,
+        group_expr=dim.group_expr, label_expr=dim.label_expr, entity=entity)
+    try:
+        rows = await conn.fetch(sql, *args)
+    except Exception:  # noqa: BLE001
+        logger.warning("[generic-executor] 分组覆盖毛利取数失败", exc_info=True)
+        return None
+    out = []
+    for row in rows or ():
+        g_gross = Decimal(str(row["covered_gross"] or 0))
+        out.append({
+            "dim_key": row["dim_key"],
+            "dim_label": row["dim_label"],
+            # 🔑 与抬头**同一个** `receipt_ratio` —— 见 `_net_of`。
+            "covered_net": _net_of(g_gross, covered.receipt_ratio),
+            "covered_cost": Decimal(str(row["covered_cost"] or 0)),
+        })
+    return out, sql
 
 
 async def _execute_derived_split(
     conn, item, *, dimension_key: str, aggregation_key: str,
     factory_id: str, date_range, available_columns, bridge,
+    entity_filter: Optional[str] = None,
 ) -> "CellResult":
     """把派生量拆成两个基础指标**各按自己的粒度**独立执行, 再在 Python 里合。
 
@@ -635,32 +798,62 @@ async def _execute_derived_split(
     label = getattr(item, "label", item.key)
     unit = getattr(item, "unit", "count")
 
+    def _value_of(net: Decimal, cost: Decimal):
+        """毛利 / 毛利率 —— **抬头和分组层同一个函数**, ⛔ 不许各写各的。"""
+        profit = net - cost
+        if item.op == "diff":                 # 毛利
+            return profit
+        if item.op == "ratio_of_diff":        # 毛利率 = 覆盖毛利 ÷ **覆盖净营收**
+            return (profit / net * 100) if net else None
+        raise UnsupportedCell(f"覆盖口径不支持的派生运算: {item.op}")
+
     # 🔴 靠成本卡的派生量走**覆盖口径**: 分子分母都只算有成本卡的那部分,
     #    且折扣按明细金额比例摊到覆盖部分。⛔ 不再「全额分子 vs 覆盖额分母」。
     if _COST_CARD_COLUMN in _effective_requires(item.key):
-        got = await _covered_margin(conn, factory_id, date_range, bridge)
-        if got is None:
+        cov = await _covered_margin(conn, factory_id, date_range, bridge)
+        if cov is None:
             return CellResult(item.key, label, dimension_key, aggregation_key,
                               unit, [], (), "-- covered-margin: 取数失败 --")
-        covered_net, covered_cost, share, cost_outliers, cost_gaps, denom = got
-        profit = covered_net - covered_cost
-        if item.op == "diff":                 # 毛利
-            value = profit
-        elif item.op == "ratio_of_diff":      # 毛利率 = 覆盖毛利 ÷ **覆盖净营收**
-            value = (profit / covered_net * 100) if covered_net else None
-        else:
-            raise UnsupportedCell(f"覆盖口径不支持的派生运算: {item.op}")
+
+        dim = DIMENSIONS[dimension_key]
+        if dim.group_expr:
+            # 🔴 分组层 —— owner 2026-08-14 裁定一。折扣用**抬头那一个**实收率摊,
+            #    ⇒ 各组加起来 = 抬头(到分)。见 `_net_of`。
+            grouped = await _covered_margin_grouped(
+                conn, factory_id, date_range, bridge, dim, cov,
+                entity_filter=entity_filter)
+            if grouped is None:
+                return CellResult(item.key, label, dimension_key,
+                                  aggregation_key, unit, [], (),
+                                  "-- covered-margin(分组): 取数失败 --")
+            rows, gsql = grouped
+            agg = AGGREGATIONS[aggregation_key]
+            shaped = [{"dim_key": r["dim_key"], "dim_label": r["dim_label"],
+                       item.key: _value_of(r["covered_net"], r["covered_cost"])}
+                      for r in rows]
+            # ⚠️ 先排序再 `_post_process` —— 「两端」「累计到 80%」依赖顺序,
+            #    而这条路自己拼 SQL, 没有经过 `build_sql` 的 ORDER BY。
+            processed = _post_process(_sorted_rows(shaped, agg, item.key),
+                                      agg, item.key)
+            return CellResult(
+                item.key, label, dimension_key, aggregation_key, unit,
+                processed, (), gsql, PROV_ESTIMATED,
+                f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}",
+                float(cov.share), cov.outliers, cov.gaps, cov.denominator,
+            )
+
         return CellResult(
             item.key, label, dimension_key, aggregation_key, unit,
-            [{item.key: value}], (), _COVERED_MARGIN_SQL,
+            [{item.key: _value_of(cov.covered_net, cov.covered_cost)}], (),
+            _COVERED_MARGIN_SQL,
             PROV_ESTIMATED,
             # ⚠️ 用顿号不用分号: 分号在 `_BASIS_FORBIDDEN` 里(它是句子的标志),
             #    而 basis 必须是名词短语 —— 我自己上一轮立的那条约束。
             f"{_COST_CARD_BASIS}、{_DISCOUNT_ALLOC_BASIS}",
-            float(share),
-            tuple(cost_outliers),
-            tuple(cost_gaps),
-            denom,
+            float(cov.share),
+            cov.outliers,
+            cov.gaps,
+            cov.denominator,
         )
 
     async def _one(key: str) -> "CellResult":
@@ -740,7 +933,10 @@ async def execute_cell(
         return await _execute_derived_split(
             conn, item, dimension_key=dimension_key, aggregation_key=aggregation_key,
             factory_id=factory_id, date_range=date_range,
-            available_columns=available_columns, bridge=bridge)
+            available_columns=available_columns, bridge=bridge,
+            # ⛔ 必须透传: 用户点名了某道菜/某家店而这条路忽略它 = 答非所问,
+            #    而且**静默** —— 数字看着完全正常, 只是答的是全店。
+            entity_filter=entity_filter)
 
     sql, requires, _base = build_sql(metric_key, dimension_key, aggregation_key,
                                      limit_override=limit_override,
