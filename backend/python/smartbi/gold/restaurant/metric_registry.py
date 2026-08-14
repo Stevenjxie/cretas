@@ -1146,6 +1146,34 @@ COST_UNIT_ERROR_RATIO = 5.0
 MAX_SANE_DISH_UNIT_COST = 99999.0
 
 
+#: 「这道菜有没有成本卡」的**唯一定义**（SQL 片段, `c` 是
+#: `agg_restaurant_product_cost` 的别名）。
+#:
+#: 🔴 owner 2026-08-14 裁定: 收敛成一处。改之前是**两份定义**——
+#:
+#:     日结/通用执行器   `c.food_cost IS NOT NULL`
+#:     问答 resolver     `has_price_data = TRUE`
+#:
+#: 实测三个租户 0 例分叉（`food_cost IS NULL` 全是 0 行），所以今天两边同义。
+#: ⚠️ **但它们本来就不同义**: ETL 写 `food_cost` 时套着
+#:    `COALESCE(SUM(line_cost), 0)` —— **它永远产不出 NULL**。
+#:    一道菜配料全无价时 ETL 给出的是 `food_cost = 0 / has_price_data = FALSE`,
+#:    那时 `food_cost IS NOT NULL` 判「有卡」(成本 0 ⇒ 毛利率 100%),
+#:    而 `has_price_data` 判「没卡」。**两边会给出相反的答案。**
+#: ⇒ 取 `has_price_data` 那一份: 它是 ETL **显式算出来**的
+#:    (`bool_and(line_cost IS NOT NULL)`), 而 `food_cost IS NOT NULL`
+#:    是在问一个被 COALESCE 保证过的东西 —— 恒真。
+#:
+#: ⛔ 谁都不许在别处再写一遍这两个条件之一。闸见
+#:    `tests/test_margin_parity.py::test_cost_card_presence_has_exactly_one_definition`。
+COST_CARD_PRESENT_SQL = "c.has_price_data IS TRUE"
+
+
+def cost_card_present_sql(alias: str = "c") -> str:
+    """把上面那条判据套到指定别名上。⛔ 不要手拼。"""
+    return COST_CARD_PRESENT_SQL.replace("c.", f"{alias}.")
+
+
 def dish_cost_is_implausible(unit_cost, qty, revenue) -> bool:
     """这道菜的成本卡是不是单位错了。**全仓唯一的一处判定。**
 

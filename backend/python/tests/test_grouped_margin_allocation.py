@@ -119,7 +119,10 @@ class _FakeConn:
                 cg, ag, cc = self._agg(grp, excluded)
                 out.append({"dim_key": key, "dim_label": key,
                             "covered_gross": cg, "all_gross": ag,
-                            "covered_cost": cc})
+                            "covered_cost": cc,
+                            # 样本量: 披露用, 见 `_covered_margin_grouped`
+                            "bills": len(grp),
+                            "qty": sum(q for _d, _b, _a, q, _c in grp)})
             return out
         raise AssertionError(f"夹具没预料到的 SQL:\n{sql}")
 
@@ -393,10 +396,10 @@ def test_the_drop_rule_keeps_a_genuinely_break_even_dish(monkeypatch):
         pass
     rows = [_Row({"dim_key": "打平菜", "dim_label": "打平菜",
                   "covered_gross": Decimal("100"), "all_gross": Decimal("100"),
-                  "covered_cost": Decimal("100")}),
+                  "covered_cost": Decimal("100"), "bills": 5, "qty": 5}),
             _Row({"dim_key": "没卡菜", "dim_label": "没卡菜",
                   "covered_gross": Decimal("0"), "all_gross": Decimal("500"),
-                  "covered_cost": Decimal("0")})]
+                  "covered_cost": Decimal("0"), "bills": 9, "qty": 9})]
 
     class _C:
         async def fetch(self, sql, *a):
@@ -414,3 +417,22 @@ def test_the_drop_rule_keeps_a_genuinely_break_even_dish(monkeypatch):
 
 def fx_day():
     return _DAY
+
+
+def test_grouped_rows_disclose_sample_size_without_thresholding():
+    """🔴 分组结果**带样本量**(订单数/份数) —— 披露, ⛔ 不设阈值。
+
+    owner 2026-08-14: 「这组只有 3 单」该由店长自己判断值不值得看,
+    不由我们替他截断。任何一个拍出来的阈值都会在某个租户上误伤。
+    """
+    cell = _groups("product", "compare")
+    assert cell.rows, "没有分组行 —— 这条断言会恒真"
+    for r in cell.rows:
+        assert "bills" in r and "qty" in r, f"这一行没带样本量: {r}"
+        assert r["bills"] > 0 and r["qty"] > 0, r
+
+    # 阴性对照: **没有**任何一行因为样本量小被删掉
+    covered = {d for d, _b, _a, _q, c in _rows() if c is not None}
+    excluded = {o["name"] for o in cell.cost_outliers}
+    assert (covered - excluded) == {str(r["dim_label"]) for r in cell.rows}, (
+        "有行被截掉了 —— 样本量是**披露**不是过滤器")

@@ -21,7 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>当前状态 (stub)</b>: Python 重算的内部 HTTP 调用尚未接线 (需复用 PythonSmartBIClient
  * + 内部鉴权头 X-Internal-Secret / X-Factory-Id, 见 restaurant_cost_card.py + cron ETL)。
  * 本 listener 先落地 event-publish + 监听骨架 + fail-soft 边界, 记 TODO。重算暂由
- * 既有 weekly materializer / 手动 ETL 端点
+ * 既有的手动 ETL 端点
  * (POST /api/smartbi/restaurant-ops/etl) 覆盖, 缓存最长滞后一周; staleness 列
  * (last_recipe_updated_at) 已就位供未来精确判过期。
  *
@@ -55,10 +55,13 @@ public class RecipeSavedEventListener {
      * <p>TODO(#57 follow-up): 接线 PythonSmartBIClient 调
      * {@code POST /api/smartbi/restaurant-ops/etl} (或新增窄 recompute 端点) 带
      * 内部鉴权头, 把 last_recipe_updated_at 写为 event.savedAt。当前仅 log,
-     * 缓存由 weekly materializer 兜底刷新。
+     * ⚠️ 2026-08-14 订正: 原文写「缓存由 weekly materializer 兜底刷新」——
+     * **全仓没有 weekly materializer**（已 grep，只有 restaurant_cost_card.py
+     * 读 last_recipe_updated_at 判陈旧）。真正在刷的是 Python 侧那个进程内
+     * ETL 常驻循环（restaurant_ops_etl Stage 3d，每轮重算 food_cost）。
      */
     private void recomputeProductCost(String factoryId, String productTypeId) {
-        log.info("[配方成本重算 — STUB] 暂未接线 Python 重算 (由 weekly materializer 兜底): "
+        log.info("[配方成本重算 — STUB] 暂未接线 Python 重算 (由 Python 侧 ETL 常驻循环兜底): "
                 + "factoryId={}, productTypeId={}", factoryId, productTypeId);
         // 实接线示例 (待 follow-up):
         //   pythonSmartBIClient.recomputeProductCost(factoryId, productTypeId, event.getSavedAt());

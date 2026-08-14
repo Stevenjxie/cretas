@@ -1597,3 +1597,58 @@ def test_mutating_the_offer_shape_makes_the_counter_fire(monkeypatch):
     with pytest.raises(AssertionError):
         dg.assert_no_silent_programming_errors(router.DEGRADE_FOLLOWUP_ACTIONS)
     dg.reset_counters()
+
+
+def test_cost_card_presence_has_exactly_one_definition():
+    """🔴 「这道菜有没有成本卡」全仓**只许有一处定义**。
+
+    改之前是两份:
+        日结/通用执行器   `c.food_cost IS NOT NULL`
+        问答 resolver     `has_price_data = TRUE`
+
+    三个租户实测 0 例分叉, 所以今天两边同义 —— **但它们本来就不同义**:
+    ETL 写 `food_cost` 时套着 `COALESCE(SUM(line_cost), 0)`, **永远产不出 NULL**。
+    一道菜配料全无价时 ETL 给 `food_cost = 0 / has_price_data = FALSE`,
+    那时前者判「有卡」(成本 0 ⇒ 毛利率 100%), 后者判「没卡」——
+    **两边会给出相反的答案。**
+
+    ⚠️ 用 AST + 剥注释, ⛔ 不数字符串: 注释里会引用这两个条件(说明为什么收敛),
+       不剥的话这条闸会把自己的说明也测进去(本仓记过这个形态)。
+    """
+    import ast
+    import io
+    import pathlib
+    import tokenize
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "smartbi" / "gold"
+    hits = []
+    for path in root.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline)
+                    if t.type != tokenize.COMMENT]
+            code = tokenize.untokenize(toks)
+            tree = ast.parse(code)
+        except (SyntaxError, tokenize.TokenError, ValueError):
+            continue
+        for node in ast.walk(tree):          # 剥 docstring
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
+                    and isinstance(node.value.value, str):
+                node.value.value = ""
+        stripped = ast.unparse(tree)
+        for needle in ("food_cost IS NOT NULL", "has_price_data = TRUE",
+                       "has_price_data IS TRUE"):
+            if needle in stripped:
+                hits.append((path.name, needle))
+
+    from smartbi.gold.restaurant.metric_registry import COST_CARD_PRESENT_SQL
+    allowed = {("metric_registry.py", "has_price_data IS TRUE")}
+    stray = [h for h in hits if h not in allowed]
+    assert not stray, (
+        "「有没有成本卡」出现了第二份定义:\n  "
+        + "\n  ".join(f"{f}: {n}" for f, n in stray)
+        + f"\n⇒ 用 `metric_registry.COST_CARD_PRESENT_SQL`"
+          f"（现为 {COST_CARD_PRESENT_SQL!r}）")
+    assert hits, "一处都没扫到 —— 这条闸会恒绿"

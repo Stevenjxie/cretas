@@ -33,6 +33,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.metric_registry import (
+    COST_CARD_PRESENT_SQL as _COST_CARD_PRESENT_SQL,
     MAX_SANE_DISH_UNIT_COST as _REG_MAX_SANE_DISH_UNIT_COST,
     dish_cost_is_implausible as _dish_cost_is_implausible,
 )
@@ -3536,6 +3537,12 @@ async def _resolve_missing_cost_cards(
 _MISSING_CARD_ROWS_LIMIT = 50
 
 
+#: 「有没有成本卡」的判据 —— **从登记表那一处派生**, ⛔ 不在这里重写条件。
+#: 两种别名各一个: `c.` 前缀的和裸列名的(那几段 SQL 的写法不同)。
+_CARD_PRESENT = _COST_CARD_PRESENT_SQL
+_CARD_PRESENT_BARE = _COST_CARD_PRESENT_SQL.replace("c.", "")
+
+
 async def resolve_recipe_cost(
     smartbi_pool, factory_id: str, top_n: int = 10,
     days: int = 30,
@@ -3575,7 +3582,7 @@ async def resolve_recipe_cost(
              WHERE c.factory_id = $1
                AND c.food_cost > 0
                AND c.food_cost < $3
-               AND c.has_price_data = TRUE
+               AND """ + _CARD_PRESENT + """
              ORDER BY c.food_cost DESC NULLS LAST
              LIMIT $2
             """,
@@ -4344,7 +4351,7 @@ async def resolve_gross_margin(
                   FROM agg_restaurant_product_cost
                  WHERE factory_id = $1
                    AND product_source_pk = ANY($2::text[])
-                   AND has_price_data = TRUE
+                   AND """ + _CARD_PRESENT_BARE + """
                 """,
                 factory_id, list(cretas_map.values()),
             )
@@ -6147,7 +6154,7 @@ async def resolve_store_margin(
                   FROM agg_restaurant_product_cost
                  WHERE factory_id = $1
                    AND product_source_pk = ANY($2::text[])
-                   AND has_price_data = TRUE
+                   AND """ + _CARD_PRESENT_BARE + """
                 """,
                 factory_id, list(name_to_pk.values()),
             )
