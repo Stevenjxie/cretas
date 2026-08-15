@@ -100,6 +100,15 @@ def test_non_aliyun_registry_matches_frozen_probe_result():
         ("aistore", "DeepSeek-V4-Flash-A"): datetime.date(2026, 9, 13),
         ("aistore", "Qwen3-235B-A22B"): datetime.date(2026, 9, 13),
         ("aistore", "Qwen3-32B"): datetime.date(2026, 9, 13),
+        # 🔒 DeepSeek 官方 (2026-08-15, T7) —— **等 Steve 对白名单的明确 yes**,
+        #    在那之前 ⛔ 不许合并。
+        # 🔴 这两条的日期**不是**额度到期, 是我们自己设的**强制复审点**
+        #    (按量付费本身没有到期日)。与上面 aistore 那三条语义不同。
+        # 加它的理由是 aistore 三条 2026-09-13 硬到期, 而它们是五个槽的链首;
+        # 同日实测 _MINIMAL_SAFE_SET 8 条里 2 死 3 超预算, 扣掉 aistore 后
+        # 既活着又在 6.0s 内的只剩 zhipu 一条。
+        ("deepseek", "deepseek-v4-flash"): datetime.date(2026, 11, 15),
+        ("deepseek", "deepseek-v4-pro"): datetime.date(2026, 11, 15),
         # tencent: owner 2026-08-13 控制台 14 个服务 ID ∩ 探针产出正文(len≥8)= 9 个。
         # ⚠️ GET /models 返回 **102** 个而控制台只有 14 个 —— **接口目录 ≠ 账号权益**,
         #    清单只认控制台。

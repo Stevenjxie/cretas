@@ -49,6 +49,10 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from common.llm_client import get_llm_http_client
+# ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
+#    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
+#    llm_budget 不 import llm_router, 无循环依赖。
+from common.llm_budget import record_local
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +143,20 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aistore", "DeepSeek-V4-Flash-A"): _d(2026, 9, 13),
     ("aistore", "Qwen3-235B-A22B"): _d(2026, 9, 13),
     ("aistore", "Qwen3-32B"): _d(2026, 9, 13),
+
+    # ── DeepSeek 官方 (2026-08-15 加, 接 aistore 9-13 到期的悬崖) ──────
+    # 🔴 这两条的日期语义与上面 aistore 那三条**完全不同**, 不要照着读:
+    #
+    #   aistore 的 2026-09-13 = **真的额度到期**, 那天之后再调就是越界。
+    #   下面的 2026-11-15     = **我们自己设的强制复审点**。按量付费本身
+    #                           没有到期日, 这个日期的作用是「到那天回来看
+    #                           一眼实际花了多少、还要不要留」。
+    #
+    # ⚠️ 不写清这一条, 下一个人会以为 DeepSeek 也会在那天断掉, 于是要么提前
+    #    做一次不必要的迁移, 要么在它「过期」时以为线上出了故障。
+    # 从 2026-08-15 起算三个月 —— 早一点复审比晚一点安全。
+    ("deepseek", "deepseek-v4-flash"): _d(2026, 11, 15),
+    ("deepseek", "deepseek-v4-pro"): _d(2026, 11, 15),
 
     # ══ 2026-08-13 全量重审 ════════════════════════════════════════
     # 判据不变: 控制台显示有余量 ∩ 生产探针非空 content。单边证据一律不收 ——
@@ -277,6 +295,27 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     ("aistore", "DeepSeek-V4-Flash-A"),
     ("aistore", "Qwen3-235B-A22B"),
     ("aistore", "Qwen3-32B"),
+    # ── DeepSeek 官方 (2026-08-15) ────────────────────────────────────
+    # 🔴 只加进 `_SAFE_MODELS` 是**不够的**, 这一条是实测出来的:
+    #
+    #   `_REGISTRY_AUDIT_DATE(2026-08-13) + _REGISTRY_MAX_AGE_DAYS(21)`
+    #   ⇒ **2026-09-04** 起 registry 超龄, `_refuse_reason` 把不在本集合里的
+    #     一律判 "registry_stale"。实测:
+    #        只加 _SAFE_MODELS  -> _refuse_reason(...) == 'registry_stale'
+    #        同时加入本集合      -> _refuse_reason(...) is None
+    #   ⇒ 不加进来的话, 它在 **09-04** 就死了 —— 比它要接的 9-13 悬崖**早 9 天**,
+    #     恰好在最需要它的那天是不可用的。
+    #
+    # ⛔ 否决过的替代方案: 「复审时 bump _REGISTRY_AUDIT_DATE」。那是 21 天一次
+    #    的手工续期, 而本集合的注释白纸黑字写着「它只在 registry 超龄时才被用到,
+    #    所以它坏了不会有任何日常信号报出来」。**依赖「有人记得」的兜底不是兜底。**
+    #
+    # ⚠️ 本集合当前健康度已单独立项(见 smartbi/scripts/minimal_safe_set_liveness.py):
+    #    2026-08-15 实测 8 条里 2 条死于配额、3 条中位超单跳预算; 扣掉 9-13 过期的
+    #    aistore 三条后, 既活着又在 6.0s 内的只剩 zhipu 一条。加这两条正是补上
+    #    这个集合眼下最缺的东西: 一条**快的、跑道长的**。
+    ("deepseek", "deepseek-v4-flash"),
+    ("deepseek", "deepseek-v4-pro"),
     # 2026-08-13 重建。上一版(08-09 建)的9 个条目今天实测 **6 个已死** ——
     # 包括它自己的三根支柱 qwen3.8-max(三账号各 100 万、到期 11/01)。
     #
@@ -555,9 +594,15 @@ def _refuse_reason(account: str, model: str,
 
 
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
-    """Parse usage from a successful response: log cache-hit ratio. Mirrors
-    the streaming path's [cache] log line so observability is uniform across
-    both paths.
+    """Parse usage from a successful response: log cache-hit ratio **and record
+    month-to-date DeepSeek spend**. Mirrors the streaming path's [cache] log
+    line so observability is uniform across both paths.
+
+    ⚠️ 2026-08-15 之前这个名字是**在说谎**: 它叫 `..._and_record_budget`, 而
+    函数体里只有 log —— `llm_budget.record_local` 一个生产调用点都没有。
+    docstring 当时是诚实的(只说 log), 于是**只有名字是假的**, 而名字正是下一个
+    人最先读到的东西。现在记账接上了, 名字才变真。
+    ⇒ 判据: 名字与函数体不一致时, **改哪一个都行, 但不许留着**。
 
     DashScope emits `prompt_tokens_details.cached_tokens`; we read it
     defensively along with the legacy `prompt_cache_hit_tokens` field that
@@ -579,6 +624,21 @@ def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body
                 f"[cache] slot={slot_value} via {account}/{model}: "
                 f"prompt={prompt_total} cached={cached} ({pct}%) completion={completion}"
             )
+        # ── 记账(2026-08-15 接上) ──────────────────────────────────────
+        # 🔴 在此之前, 这个函数的**名字**写着 record_budget, 而函数体里只有 log:
+        #    `common/llm_budget.record_local` 与 `deepseek_over_budget` **零生产
+        #    调用点**, 整个模块是死代码 —— 而它正是 $19.49/12 天那次事故之后建的。
+        #    上面已经把三个 token 数解析出来了, 记账只差这一行。
+        #
+        # ⛔ 只接 `record_local`(纯观测, 零行为改变), **不接 `deepseek_over_budget`**
+        #    (它会**拒绝调用**): 9-13 之后 deepseek 是五个槽的主力, 拒绝它 =
+        #    五个槽全黑。将来要做也必须是**告警而不是拒绝**, 或者带一个
+        #    「它是唯一活着的候选时永不拒绝」的逃生门。单独立项。
+        #
+        # ⚠️ `record_local` 内部只对 DeepSeek 计价(别的模型返回 0), 所以这里
+        #    无条件调用是安全的, ⛔ 不要在这里再写一遍「是不是 deepseek」的判断
+        #    —— 那就是第二份价格知识(形态 D)。
+        record_local(model, prompt_total, completion, cached)
     except Exception as e:
         logger.debug(f"[cache] parse failed (non-fatal): {e}")
 
@@ -1115,6 +1175,10 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     #    干活)。它仍在 _SAFE_MODELS(owner 控制台确认 + 计费安全), 只是进不了链。
     ("tencent", "deepseek-v4-flash-202605"),          # 6/6  1.9s
     ("ark", "doubao-seed-2-0-code-preview-260215"),   # 6/6  4.4s
+    # DeepSeek 官方 (2026-08-15): 6/6 契约, 中位 1.06s —— 关思考、≤4s、通用文本,
+    # 三条都满足。它是 aistore/DeepSeek-V4-Flash-A 9-13 到期后的**对位替代**。
+    # ⛔ 顺序不表示链序: 跨到期日的先后由 _build_chain 按到期日升序算。
+    ("deepseek", "deepseek-v4-flash"),                # 6/6  1.06s
 ]
 
 # 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
@@ -1130,6 +1194,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.CHAT: [
         ("aistore", "DeepSeek-V4-Flash-A"),
         ("tencent", "deepseek-v4-flash-202605"),   # 1.7s len=51
+        ("deepseek", "deepseek-v4-flash"),         # 1.06s 关思考后
     ],
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.  Keeping
     # Qwen3-32B in a separate slot prevents it from silently receiving semantic
@@ -1142,6 +1207,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aistore", "DeepSeek-V4-Flash-A"),
         ("aistore", "Qwen3-235B-A22B"),
         ("tencent", "deepseek-v4-flash-202605"),
+        ("deepseek", "deepseek-v4-flash"),
     ],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
@@ -1159,6 +1225,10 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.MAPPER: [
         ("aistore", "DeepSeek-V4-Flash-A"),
         ("tencent", "deepseek-v4-flash-202605"),
+        # 契约是「短 JSON, 快而有界」: deepseek-v4-flash 关思考后 1.06s,
+        # 非 _THINKING_ONLY / 非 _SLOW_MODELS / 非 Max 档 —— 三条硬约束都过,
+        # 由 test_mapper_uses_bounded_fast_models_without_max_or_reasoners 守。
+        ("deepseek", "deepseek-v4-flash"),
     ],
     # INSIGHTS / REVIEW — 共用质量档池, 见上方 _QUALITY_TIER_POOL 定义。
     SLOT.INSIGHTS: list(_QUALITY_TIER_POOL),
@@ -1391,6 +1461,22 @@ _AISTORE_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
     "Qwen3-32B",
 })
 
+# DeepSeek 官方端点同样默认开 thinking, 必须显式关。
+# 2026-08-15 实测(生产 prompt, with/without 对照):
+#     不带该字段: 7.26s / 17.58s, completion=800 reasoning=800 content=0
+#                 finish_reason=length  ← 把整个 max_tokens 烧在思考上, 返回空
+#     带该字段  : 0.97s / 1.37s
+# ⇒ 没有这个开关它**会**撞穿 6.0s 单跳预算并返回空 content。
+#
+# ⚠️ 这个注入并不是新东西: `_normalize_payload_for_provider` 的 docstring 记着
+#    「The earlier DeepSeek-official `thinking.type=disabled` injection was
+#    removed when deepseek-official was dropped from the chain (#580 Option 2)」
+#    —— 随账号一起删的, 现在随账号一起回来。
+_DEEPSEEK_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+})
+
 
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1431,6 +1517,12 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
     if (
         account == "aistore"
         and model in _AISTORE_THINKING_OBJECT_MODELS
+        and prof.get("enable_thinking") is False
+    ):
+        p["thinking"] = {"type": "disabled"}
+    if (
+        account == "deepseek"
+        and model in _DEEPSEEK_THINKING_OBJECT_MODELS
         and prof.get("enable_thinking") is False
     ):
         p["thinking"] = {"type": "disabled"}
@@ -1546,6 +1638,38 @@ def _provider_config(account: str) -> Tuple[str, str]:
         "aistore": (
             os.getenv("LLM_AISTORE_BASE_URL", "https://ai.api.coregpu.cn/v1"),
             os.getenv("LLM_AISTORE_API_KEY", ""),
+        ),
+        # DeepSeek official (2026-08-15, re-added). #580 Option 2 曾经删掉它
+        # ("top up DeepSeek balance + re-add `deepseek` chain entry —
+        # entire removal was 1 file"), 现在按那条路径加回来。
+        #
+        # 🔴 为什么现在加: aistore 三条 2026-09-13 硬到期, 而它们是
+        #    CHAT/INSIGHTS/CHART/MAPPER/REVIEW **五个槽的链首**。
+        #    2026-08-15 实测 `_MINIMAL_SAFE_SET` 8 条里已有 2 条死于配额、
+        #    3 条中位超单跳预算 —— 扣掉 aistore 三条后, 既活着又在 6.0s 内的
+        #    只剩 zhipu 一条, 而它被 08-09 事故钉在 `_TEXT_TAIL` 末位。
+        #
+        # ⛔ 与 aistore 同一条纪律: **不 fallback 到 LLM_API_KEY 或任何别的
+        #    key**。写成 `os.getenv(..., "")` 而不是 `or os.getenv("LLM_API_KEY")`
+        #    —— 把一个不相干的凭证发给这个 provider 是计费事故, 不是便利。
+        #    由 test_deepseek_key_never_falls_back_to_an_unrelated_secret 钉住。
+        #
+        # ⚠️ 这是**按量付费**账号(仓里有 $19.49/12 天的成本前科, 见本文件
+        #    History 段 May 9 2026)。
+        #
+        # 🔴 它**不在**链尾, 而是在**第 2 位** —— 这一条必须写清, 因为它与
+        #    「付费的排最后」这个直觉相反, 而直觉在这里是错的:
+        #    `_build_chain` 按**到期日升序**排, 而本条目带一个 2026-11-15 的
+        #    **复审日**, 免费的 tencent/ark/zhipu 没有到期日(_FAR_FUTURE)
+        #    ⇒ 复审日把它排到了那三个免费候选**前面**。实测派生链:
+        #        aistore → **deepseek** → tencent → ark → minimax → zhipu
+        #    ⇒ 合并当天起, aistore 每失败一次(实测约 9% 超时)就会立刻走一次
+        #      **付费**调用, 不必等 9-13。
+        #    ⇒ 这是 owner 的成本裁定, 不是实现细节。⛔ 不许靠手工重排改它
+        #      (那违反「人不要在这里排」); 要改只能改到期日语义。
+        "deepseek": (
+            os.getenv("LLM_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            os.getenv("LLM_DEEPSEEK_API_KEY", ""),
         ),
         # tencent (TokenHub, June 1 2026): 腾讯云 TokenHub 90-day free trial,
         # OpenAI-compatible. "用完即停" like aliyun (no silent paid billing), so
