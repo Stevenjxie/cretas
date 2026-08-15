@@ -181,19 +181,10 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     #    不靠「截图完不完整」—— 靠逐条打过。仪器是探针, 截图只是准入的另一半。
 
     # ── aliyun_a (控制台 4 个有额度, 全部通过探针) ──
-    ("aliyun_a", "qwen3.5-ocr"): _d(2026, 9, 14),              # 999,522/100万
-    ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),           # 580,047/100万
-    ("aliyun_a", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),   # 605,592/100万
-    ("aliyun_a", "qwen3.7-max-preview"): _d(2026, 8, 24),      # 506,137/100万
 
     # ── aliyun_b (控制台 2 个有额度, 全部通过探针) ──
-    ("aliyun_b", "qwen3.5-ocr"): _d(2026, 9, 14),              # 999,622/100万
-    ("aliyun_b", "kimi-k2.7-code"): _d(2026, 9, 14),           # 874,931/100万
 
     # ── aliyun_c (控制台 4 个有额度, 3 个通过探针) ──
-    ("aliyun_c", "qwen3.5-ocr"): _d(2026, 9, 14),              # 999,618/100万
-    ("aliyun_c", "kimi-k2.7-code"): _d(2026, 9, 14),           # 377,603/100万
-    ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),      # 702,349/100万
     # ⛔ ("aliyun_c", "deepseek-v4-flash-0731") **不收**: 控制台写着剩 479,703、
     #    到期 10/31, 而探针两种写法(-0731 / 不带日期)都是 403 FreeTierOnly。
     #    控制台与运行时打架时按**单边证据不收**处理 —— 这正是判据要求双证的
@@ -208,20 +199,11 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     #   14 个里 9 个产出正文(len≥8), 5 个(kimi-k3 / glm-5 / glm-5-turbo /
     #   kimi-k2.6 / glm-5v-turbo)在 max_tokens=200 下 content 恒空 —— 推理 token
     #   把预算吃光, 走到生产的 outcome validation(_MIN_TEXT_LEN=8)一样会被判失败。
-    ("tencent", "deepseek-v4-flash-202605"): None,    # 1.7s len=51 ← 跨轮稳定的快地板
-    ("tencent", "kimi-k2.7-code-highspeed"): None,    # 1.2s len=53
-    ("tencent", "kimi-k2.7-code"): None,              # 2.8s len=45
-    ("tencent", "minimax-m2.7"): None,                # 4.9s, 既有条目
-    ("tencent", "mimo-v2.5-pro"): None,               # 10.2s len=63, 慢, 不进交互池
     # 下面 4 个是**特化 SKU**(hy-mt2=机器翻译, hy-role/hunyuan-role=角色扮演),
     # 只因为它们是目前**仅有**的亚秒级活口才收进白名单。
     # ⛔ 收进白名单 ≠ 放进池: 它们不进任何 _SLOT_POOLS。要进得先跑
     #    llm_capability_rank 拿到契约通过率 —— 「一个模型在 A 槽表现好不构成把它
     #    放进 B 槽的理由」(本文件 _SLOT_POOLS.MAPPER 处的旧判据), 何况这里连 A 槽都没测过。
-    ("tencent", "hunyuan-role-latest"): None,         # 0.68s len=30
-    ("tencent", "hy-mt2-lite"): None,                 # 0.73s len=39
-    ("tencent", "hy-role"): None,                     # 0.80s len=29
-    ("tencent", "hy-mt2-plus"): None,                 # 0.81s len=41
     # ⛔ ("tencent", "hy3") 删除 08-13: **402 gateway_error**。402 是 Payment
     #    Required —— 在一个「用完即停」的账号上出现付费类状态码, 比 403 更该警觉。
 
@@ -233,7 +215,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     #   📌 官方 id 逐条实打的结果: 18 条里**只有 3 条可调**。其中两条的错误码是
     #      `ModelNotOpen`(本账号未开通), 其余 404 的原文是 "does not exist **or you
     #      do not have access to it**" —— 对一个已知有效的 id, 404 = 无权益不是 id 写错。
-    ("ark", "doubao-seed-2-0-code-preview-260215"): None,  # 6/6  4.4s
     # ⛔ 另外两个可调的 ark 模型都**不收**:
     #    doubao-seed-2-0-pro-260215      —— 已在 _ARK_CONTRACT_REJECTED(前人实测:
     #      AOV 计划返 intent=null/confidence=0.3), 且本轮 llm_capability_rank
@@ -324,10 +305,7 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     #    最长 + 当天探针通过的」—— 而「跑道最长」恰恰是今天全部死掉的那批。
     #    判据: **fail-safe 集合的存活性要和主池一起量, 每轮都要**。它只在
     #    registry 超龄时才被用到, 所以它坏了不会有任何日常信号报出来。
-    ("tencent", "deepseek-v4-flash-202605"),    # 1.7s, 跨多轮稳定
-    ("ark", "doubao-seed-2-0-code-preview-260215"),  # 3.5s
-    ("tencent", "minimax-m2.7"), ("zhipu", "glm-4.5-air"),   # 既有文本地板
-    ("aliyun_c", "kimi-k2.7-code"),             # 1.8s, aliyun 侧仅存的通用文本模型
+    ("zhipu", "glm-4.5-air"),   # 既有文本地板(2026-08-15: tencent/minimax 同行已删)
 })
 
 
@@ -1112,9 +1090,6 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     # 上一版的三条快地板里有**两条今天死了**: ark/deepseek-v4-flash-ga-260731 (429)
     # 与 tencent/hy3 (402)。它们是 08-12 刚以「0.8s / 1.0s」加进来的。
     # 现在这三条均为 2026-08-13 实测(len≥8 且跨轮一致):
-    ("tencent", "deepseek-v4-flash-202605"),          # 1.7s len=51
-    ("ark", "doubao-seed-2-0-code-preview-260215"),   # 3.5s len=46
-    ("tencent", "minimax-m2.7"),                      # 4.9s 慢地板
     ("zhipu", "glm-4.5-air"),                         # 钉死在最后一位, 见上
 ]
 
@@ -1173,8 +1148,6 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
     # ⛔ tencent/kimi-k2.7-code-highspeed 一度进过本池, 同日移出:
     #    llm_capability_rank 实测 **0/6 全 http400**(0.5s —— 快是因为它根本没在
     #    干活)。它仍在 _SAFE_MODELS(owner 控制台确认 + 计费安全), 只是进不了链。
-    ("tencent", "deepseek-v4-flash-202605"),          # 6/6  1.9s
-    ("ark", "doubao-seed-2-0-code-preview-260215"),   # 6/6  4.4s
     # DeepSeek 官方 (2026-08-15): 6/6 契约, 中位 1.06s —— 关思考、≤4s、通用文本,
     # 三条都满足。它是 aistore/DeepSeek-V4-Flash-A 9-13 到期后的**对位替代**。
     # ⛔ 顺序不表示链序: 跨到期日的先后由 _build_chain 按到期日升序算。
@@ -1193,7 +1166,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
     SLOT.CHAT: [
         ("aistore", "DeepSeek-V4-Flash-A"),
-        ("tencent", "deepseek-v4-flash-202605"),   # 1.7s len=51
         ("deepseek", "deepseek-v4-flash"),         # 1.06s 关思考后
     ],
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.  Keeping
@@ -1206,7 +1178,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.CHART: [
         ("aistore", "DeepSeek-V4-Flash-A"),
         ("aistore", "Qwen3-235B-A22B"),
-        ("tencent", "deepseek-v4-flash-202605"),
         ("deepseek", "deepseek-v4-flash"),
     ],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
@@ -1224,7 +1195,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #    都没跑过, "快"不是"会输出合契约的 JSON"的证据。要用先测。
     SLOT.MAPPER: [
         ("aistore", "DeepSeek-V4-Flash-A"),
-        ("tencent", "deepseek-v4-flash-202605"),
         # 契约是「短 JSON, 快而有界」: deepseek-v4-flash 关思考后 1.06s,
         # 非 _THINKING_ONLY / 非 _SLOW_MODELS / 非 Max 档 —— 三条硬约束都过,
         # 由 test_mapper_uses_bounded_fast_models_without_max_or_reasoners 守。
@@ -1236,12 +1206,6 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # REASONING — 允许慢, profile 为 {} (不设 enable_thinking)。
     # aliyun 今天仅存的 4 类模型里有 3 类是 _THINKING_ONLY, 它们只能落在这里。
     SLOT.REASONING: [
-        ("aliyun_c", "kimi-k2.7-code"),                # 1.8s len=43
-        ("aliyun_b", "kimi-k2.7-code"),                # 2.1s len=42
-        ("aliyun_a", "qwen3.7-max-2026-05-17"),        # 2.2s len=48 (关思考会 400)
-        ("aliyun_a", "kimi-k2.7-code"),                # 2.8s len=44
-        ("aliyun_a", "qwen3.7-max-preview"),           # 4.6s len=45 (关思考会 400)
-        ("tencent", "mimo-v2.5-pro"),                  # 6/6  24.7s
         # ⛔ ("aliyun_c", "qwen3.7-max-preview") **不进任何池**: 同一型号在 aliyun_a
         #    上 4.6s, 在 aliyun_c 上实测 **66.9 秒** —— 超过 call_chain 的 30s 总预算,
         #    选中它等于这一跳必然超时, 还会把后面候选的预算一起吃掉(见 _TEXT_TAIL
@@ -1249,6 +1213,21 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
         #    探针 200), 只是没有任何槽的契约容得下 67 秒。
         #    📌 判据: **同一个模型在不同账号上的延迟可以差一个数量级** —— 延迟必须
         #       按 (账号, 模型) 量, 不能按模型名推。
+        # A1(2026-08-15): A2 删掉 aliyun×3 + tencent 之后本池会变空 ——
+        # 七个槽统一成 aistore -> deepseek -> zhipu, 这里补上前两条
+        # (zhipu 由 _TEXT_TAIL 兜底, 不必在池里重复声明)。
+        #
+        # ⚠️ 本槽 profile 是 `{}`(**思考开着**), 预算 **30s** ——
+        #    detector.py:1496 是它唯一的产品调用点, 不传 timeout
+        #    ⇒ call_chain 默认 30s。⛔ **不许拿 6.0s 判它**(那是餐饮 T3 链的
+        #    预算)。该 profile 下实测: aistore 8.03-8.95s / deepseek 7.26s /
+        #    zhipu 11.49s ⇒ 三条都在契约内。
+        #
+        # 🔴 统一的是「用哪些模型」, ⛔ 不是「怎么调用它们」: 本槽的 `{}` 与
+        #    chart/mapper 的严格 JSON、chat 等的 enable_thinking:False 必须
+        #    保持区分 —— 把 profile 也统一等于让 reasoning 丢掉思考。
+        ("aistore", "DeepSeek-V4-Flash-A"),
+        ("deepseek", "deepseek-v4-flash"),
     ],
     # VL — 空链。owner 2026-08-09 拍板(spec §9.1): 业务用不到 VL(prod 7 天仅 1 次
     #      真实调用), 明确报错优于把图片请求静默降级给文本模型瞎猜(CLAUDE.md 核心
@@ -1610,28 +1589,12 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # aliyun_c (May 14 2026): 3rd Aliyun bailian account — brand-new free
         # quota intact (1M/SKU per Steve console screenshot). Sits at chain
         # HEAD so its fresh quota consumes first, preserving aliyun_b/a balances.
-        "aliyun_c": (
-            os.getenv("LLM_ALIYUN_C_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            os.getenv("LLM_ALIYUN_C_API_KEY", ""),
-        ),
-        "aliyun_a": (
-            os.getenv("LLM_ALIYUN_A_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            os.getenv("LLM_ALIYUN_A_API_KEY") or os.getenv("LLM_API_KEY", ""),
-        ),
         # aliyun_a_deepseek (May 13 2026): same endpoint + key as aliyun_a, but
         # SLOT_MODELS routes DeepSeek-class SKUs (deepseek-v4-pro) here. DashScope
         # compatible-mode hosts those models with their own free-quota pool
         # (~999K intact on Steve's screenshot 2026-05-13) — independent of the
         # qwen-* quota that the `aliyun_a` slot consumes. After #580 Option 2
         # this is now the SOLE DeepSeek-class entry in the chain.
-        "aliyun_a_deepseek": (
-            os.getenv("LLM_ALIYUN_A_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            os.getenv("LLM_ALIYUN_A_API_KEY") or os.getenv("LLM_API_KEY", ""),
-        ),
-        "aliyun_b": (
-            os.getenv("LLM_ALIYUN_B_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            os.getenv("LLM_ALIYUN_B_API_KEY", ""),
-        ),
         # Shanghai Telecom AI Store: OpenAI-compatible endpoint.  The API key
         # is production-secret-only; no fallback to another env name prevents
         # an unrelated credential from being sent to this provider by mistake.
@@ -1675,10 +1638,6 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # OpenAI-compatible. "用完即停" like aliyun (no silent paid billing), so
         # placed by quality: deepseek-v4-pro heads REASONING/INSIGHTS, tencent
         # fast models sit 2nd elsewhere, rest in _TEXT_TAIL. See top-of-file note.
-        "tencent": (
-            os.getenv("LLM_TENCENT_BASE_URL", "https://tokenhub.tencentmaas.com/v1"),
-            os.getenv("LLM_TENCENT_API_KEY", ""),
-        ),
         "zhipu": (
             os.getenv("LLM_ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
             os.getenv("LLM_ZHIPU_API_KEY", ""),
@@ -1702,10 +1661,6 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # `doubao-seed-1-6-251015`. Same trap as TokenHub's deepseek-v4-pro vs
         # deepseek-v4-pro-202606. The list also carries a `status` field
         # (Shutdown / Retiring / active) — prefer active, Retiring is a countdown.
-        "ark": (
-            os.getenv("LLM_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
-            os.getenv("LLM_ARK_API_KEY", ""),
-        ),
     }
     return mapping.get(account, ("", ""))
 
@@ -1744,7 +1699,15 @@ def _provider_config(account: str) -> Tuple[str, str]:
 # Re-audit recommended ~every 2 weeks or whenever "All providers exhausted"
 # log line reappears (per `tests/qa-llm-quota/audit-matrix.md` cadence note).
 DEFAULT_CHAIN: List[str] = [
-    "aistore", "aliyun_c", "aliyun_b", "aliyun_a", "tencent", "zhipu", "aliyun_a_deepseek",
+    # 2026-08-15: 收敛到三个账号(owner 裁定「暂时限制用 ai store 和
+    # deepseek 还有 zhipu, 后面我有要求的时候我们再说」)。
+    # ⛔ 删的是**条目**不是**机制**: DashScope 的 enable_thinking 双开关、
+    #    _TOKENHUB_* 四个常量、_ARK_DISABLE_THINKING、三个 _*_ONLY 集合
+    #    全部留着 —— 它们在 _apply_slot_params 里每次调用都过, 删了不省
+    #    什么, 而**删机制的账是在重新要用的时候才结的**: #580 删 deepseek
+    #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
+    #    thinking 注入那一半, 差点 DOA。
+    "aistore", "deepseek", "zhipu",
 ]
 
 
