@@ -238,6 +238,8 @@ frontend/CretasFoodTrace/src/
 4. **例外要说明** - 若中途编译是为解除阻塞、验证高风险接口/迁移、排查失败，或用户明确要求增量验证，应说明原因后执行。
 5. **Repository 查询启动门禁** - 修改 Spring Data Repository 方法、`@Query`/JPQL/HQL、Entity 字段或枚举映射时，必须新增或更新真实 JPA Context 测试（优先命名为 `*RepositoryQueryValidationTest`）并运行通过；Mockito、纯编译、`-DskipTests` 或仅 Service 单测不能证明查询可在 Hibernate 启动期解析。
 6. **禁止绕过未完成的 JPA 门禁** - 涉及上述范围的 PR，CI 中 `JPA repository query startup gate` 必须完成并通过后才可合并。CI 因基础设施异常无法完成时，只有在同一 commit 本地运行等价真实 JPA Context 测试并取得成功证据后，协调者才可说明原因并请求/执行管理员合并；没有该证据不得以紧急发布为由绕过。
+7. **闸的命名约定（决定它跑不跑）** - CI 在 push 上只执行一个窄选择器（`ci.yml` 的 `TARGET_TESTS`）。**新写的闸必须以 `*ContractTest` 或 `*StartupGuardTest` 结尾**，否则它只会被编译、不会被执行 —— 「CI 绿」对它等于没有背书。判据是机械的：*凡是会去读 `src/main` 下源码的测试，类名必须落在选择器的匹配面里*，由 `GateSelectorCoverageContractTest` 钉住（存量 29 个已冻结成棘轮，只许变短，⛔ 不许把新的塞进那份名单）。
+8. **别拿 CI 绿当未执行测试的证据** - 说「这条测试进 CI 了」之前，先找到会执行它的那一行 `run:`，并确认它的 `if:` 与触发事件。仓里多数 workflow 是 `workflow_dispatch`（不会自动跑），`daily-integration.yml` 亦然；Java 侧除选择器命中的那些之外，**没有任何定时全量**。需要背书就用 `release-cretas.sh --tests` 把它挂进制品。
 
 ### 开发流程去浪费
 
