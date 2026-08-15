@@ -68,6 +68,17 @@ export interface PageResponse<T> {
 
 // ========== API客户端类 ==========
 
+/** 供应关系 (GET /suppliers/{id}/materials 返回形状, 只列本屏用到的字段) */
+export interface SupplierMaterialRelation {
+  id: string;
+  supplierId: string;
+  materialTypeId: string;
+  materialName?: string;
+  purchaseUnit?: string;
+  defaultPurchasePrice?: number | null;
+  active?: boolean;
+}
+
 class SupplierApiClient {
   private getPath(factoryId?: string) {
     const currentFactoryId = getCurrentFactoryId(factoryId);
@@ -175,6 +186,24 @@ class SupplierApiClient {
       `${this.getPath(factoryId)}/active`
     );
     return response.data || [];
+  }
+
+  /**
+   * 6b. 取该供应商【可供的原料】(供应关系)
+   * GET /api/mobile/{factoryId}/suppliers/{supplierId}/materials
+   *
+   * 用途: 新建采购单时把物料选择器收敛到「这个供应商真的能供」的范围。
+   * 不收敛的话用户能选到没有供应关系的物料, 提交时后端抛 409
+   * 「该供应商未启用所选物料的供应关系」/「供应商与物料的供应关系不存在」——
+   * 表单填完才被拒, 属于防呆反模式(界面提供了走不通的选项)。
+   */
+  async getSupplierMaterials(supplierId: string, factoryId?: string): Promise<SupplierMaterialRelation[]> {
+    if (!supplierId || !supplierId.trim()) return [];
+    const response = await apiClient.get<{ code: number; data: SupplierMaterialRelation[]; message: string; success: boolean }>(
+      `${this.getPath(factoryId)}/${supplierId}/materials`
+    );
+    // active !== false —— 与 web-admin 的 resolveSupplierMaterialRelations 同口径
+    return (response.data || []).filter((row) => row.active !== false);
   }
 
   /**
