@@ -140,16 +140,21 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
     // Perform login
     await rnAuthOrInject(page);
 
-    // Verify main navigator loaded — check for tab bar (ARIA role="tab")
-    const homeTab = page.getByRole('tab', { name: '首页' });
-    const homeVisible = await homeTab.isVisible().catch(() => false);
-    console.log('RN-01 home tab visible:', homeVisible);
+    // 判据: 主导航起来了 = 出现了 tab 栏, 且登录表单不在了。
+    //
+    // ⚠️ 不要盯具体 tab 文案。原实现找的是「首页」/「管理」, 而这两个标签**都已不存在**:
+    //    factory_super_admin 现在的 tab 是 总览 / 审批 / 分析 / 我的,
+    //    operator 是 工序 / 我的 —— tab 集合随角色变, 文案也随产品改。
+    //    实测长相: 页面明明已经渲染出「经营总览」首页, 断言却报 false,
+    //    看起来像「登录没成功」。同一类坑今天已经踩过一次(登录页 placeholder
+    //    从「请输入用户名」改成「请输入手机号或用户名」, 打断了整套 web E2E)。
+    const anyTab = page.getByRole('tab').first();
+    await expect(anyTab).toBeVisible({ timeout: 30000 });
+    const tabNames = await page.getByRole('tab').allTextContents();
+    console.log('RN-01 tabs:', tabNames.map((t) => t.replace(/\s+/g, ' ').trim()).join(' | '));
 
-    const mgmtTab = page.getByRole('tab', { name: '管理' });
-    const mgmtVisible = await mgmtTab.isVisible().catch(() => false);
-    console.log('RN-01 management tab visible:', mgmtVisible);
-
-    expect(homeVisible || mgmtVisible).toBeTruthy();
+    // 阴性对照: 还停在登录页就不算登录成功(光有 tab 栏可能是 landing 页的伪装)
+    await expect(page.locator('[data-testid="login-submit-btn"]')).toHaveCount(0);
 
     await page.screenshot({ path: SD + '/01b-logged-in.png', fullPage: true });
   });
