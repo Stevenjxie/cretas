@@ -315,11 +315,16 @@ export async function skipIfForbidden(page: Page, route: string): Promise<void> 
   // 两个分支都等满就把整条用例的预算烧光 —— 我第一版把上限放到 30s, web-admin-e2e
   // 当场从 71 passed 掉到 53 passed。上限 12s: 够 SPA 启动(实测 3-5s), 又不至于噬满预算。
   const BUDGET = 12000;
-  const sawForbidden = Promise.any([
-    page.waitForURL(/\/403/, { timeout: BUDGET }),
-    page.getByRole('heading', { name: '403' }).waitFor({ timeout: BUDGET }),
-    page.getByText('访问被拒绝').waitFor({ timeout: BUDGET }),
-  ]).then(() => true);
+  // 三个信号里**任意一个**命中即算 403。不用 Promise.any: 它要 ES2021 lib,
+  // 而独立 tsc 检查这个文件时会报 TS2550。这里手写等价物 —— 失败的分支永不 resolve,
+  // 所以不会像 `.catch(() => false)` 那样让「先到期的失败」赢掉比赛。
+  const sawForbidden = new Promise<boolean>((resolve) => {
+    [
+      page.waitForURL(/\/403/, { timeout: BUDGET }),
+      page.getByRole('heading', { name: '403' }).waitFor({ timeout: BUDGET }),
+      page.getByText('访问被拒绝').waitFor({ timeout: BUDGET }),
+    ].forEach((pr) => { pr.then(() => resolve(true)).catch(() => { /* 这一路没命中 */ }); });
+  });
   const gaveUp = new Promise<boolean>((r) => setTimeout(() => r(false), BUDGET));
   // ⚠️ 这里**不能**用 ANY_CONTENT_SELECTOR: 它含 h1/h2/h3, 而 403 页面自己就是
   // `<h1>403</h1><h2>访问被拒绝</h2>` —— 用它当"正常内容"信号, 403 页会自证清白。
@@ -333,4 +338,66 @@ export async function skipIfForbidden(page: Page, route: string): Promise<void> 
   if (forbidden || page.url().includes('/403')) {
     test.skip(true, `当前账号无权访问 ${route}(渲染 403/访问被拒绝), 非功能缺陷`);
   }
+}
+
+/**
+ * 给 RN(Expo web) 注入登录态 —— 口令不可用时的兜底。
+ *
+ * <p>背景: RN 的两个套件(`rn-expo-web` / `liushanmen-rn-e2e`)都靠 `factory_admin1/123456`
+ * 走界面登录。该账号在本环境返回「用户名或密码错误」, 于是**这两个套件一条都跑不起来** ——
+ * 而失败长相是「登录页卡住」, 很容易误读成 RN 应用坏了。
+ *
+ * <p>RN 在 web 上的存储长相(实测, Expo web localStorage):
+ * `StorageService.setSecureItem` 在 `Platform.OS === 'web'` 时走 AsyncStorage,
+ * 而 AsyncStorage 的 web 后端就是**明文 localStorage**, 键名不加前缀:
+ *   `secure_access_token` / `secure_refresh_token` / `secure_token_type` / `secure_token_expiry`
+ * 外加 zustand 持久化的 `auth-storage-v3`(partialize: user / tokens / isAuthenticated)。
+ *
+ * <p>⚠️ 用 `addInitScript` 而不是先 goto 再 evaluate: 后者会先渲染一次未登录的应用,
+ * 应用启动时读不到 token 就把自己推去登录页(web-admin 那边踩过同样的坑)。
+ */
+export async function injectRnSession(
+  context: BrowserContext,
+  token: string,
+  loginData: Record<string, unknown>,
+  opts: { refreshToken?: string; role?: string; expiresInSec?: number } = {},
+): Promise<void> {
+  const role = opts.role || (loginData.role as string) || 'operator';
+  const expiresIn = opts.expiresInSec ?? 24 * 3600;
+  const user = {
+    id: loginData.userId,
+    username: loginData.username,
+    email: '',
+    isActive: true,
+    userType: 'factory',
+    factoryUser: {
+      role,
+      factoryId: loginData.factoryId,
+      factoryName: loginData.factoryName || '',
+      factoryType: loginData.factoryType || 'FACTORY',
+      businessDomain: 'FACTORY',
+      permissions: loginData.permissions || ['*:*'],
+    },
+  };
+  const tokens = {
+    accessToken: token,
+    refreshToken: opts.refreshToken || token,
+    expiresIn,
+    tokenType: 'Bearer',
+  };
+  const persisted = { state: { user, tokens, isAuthenticated: true }, version: 0 };
+  const expiryMs = String(Date.now() + expiresIn * 1000);
+
+  await context.addInitScript(
+    ([tok, refresh, expiry, persistedJson]: string[]) => {
+      try {
+        localStorage.setItem('secure_access_token', tok);
+        localStorage.setItem('secure_refresh_token', refresh);
+        localStorage.setItem('secure_token_type', 'Bearer');
+        localStorage.setItem('secure_token_expiry', expiry);
+        localStorage.setItem('auth-storage-v3', persistedJson);
+      } catch { /* storage 被禁用时不要打断导航 */ }
+    },
+    [tokens.accessToken, tokens.refreshToken, expiryMs, JSON.stringify(persisted)],
+  );
 }
