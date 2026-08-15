@@ -28,7 +28,7 @@ import java.util.List;
  *
  * <p>角色映射（聚合层决定，Controller 仅透传）:
  * <ul>
- *   <li>finance_manager → {采购财审, 销售财审, 价格异常, 盘点审批}</li>
+ *   <li>finance_manager → {采购财审, 销售财审, 价格异常, 盘点审批, 退货财审, 售价调整, 报损审批}</li>
  *   <li>cashier → {已审付款}</li>
  *   <li>其他 → 空列表（HTTP 200，非 403）</li>
  * </ul>
