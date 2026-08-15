@@ -222,9 +222,12 @@ describe('ProcessTaskListScreen', () => {
       data: mockTasks,
     });
 
+    // getTasks 自己构造返回对象, 只透出 { content, totalElements } —— 后端 PageResponse
+    // 上的 totalPages 在 processTaskApiClient 里就被丢掉了, 两个调用方也都不读它。
+    // 桩里写 totalPages 是在描述一个真实那侧永远不会给出的形状。
     mockedProcessTaskApi.getTasks.mockResolvedValue({
       success: true,
-      data: { content: mockTasks, totalElements: 2, totalPages: 1 },
+      data: { content: mockTasks, totalElements: 2 },
     });
   });
 
