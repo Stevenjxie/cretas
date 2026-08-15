@@ -85,16 +85,30 @@ def test_deepseek_survives_the_registry_staleness_cliff(model):
             f"{model} 在 {day} 被拒 —— 它在最需要它的那天是死的")
 
 
-def test_the_staleness_cliff_is_real_for_a_model_outside_the_minimal_set():
+def test_the_staleness_cliff_is_real_for_a_model_outside_the_minimal_set(monkeypatch):
     """阳性对照: 证明 registry_stale 这道闸**真的会咬人**。
 
     ⛔ 没有这条, 上面那条「deepseek 没被拒」可能只是因为闸根本不开火。
+
+    🔴 2026-08-15 (A2) 订正: 原来是**去两张表里找**一个「在 _SAFE_MODELS 但不在
+       _MINIMAL_SAFE_SET」的条目当对照。A2 把两张表收敛成同样的 6 条之后,
+       **这样的条目不存在了**, 对照当场失去对象。
+       ⇒ 改成**构造**一个: 对照的主体应该由测试自己决定, ⛔ 不该依赖生产表
+         碰巧有一个多余条目 —— 那是「阳性对照只在某个样本上成立」的老毛病。
+
+    ⚠️ 顺带记一个事实: A2 之后 `_SAFE_MODELS == _MINIMAL_SAFE_SET`(都是 6 条),
+       所以 `registry_stale` 对**当前**这三条链是 no-op。它仍然必须留着 ——
+       将来任何一条新条目只要漏登记 _MINIMAL_SAFE_SET, 就会在 2026-09-04 之后
+       被它拒掉(那正是 deepseek 差点踩的那个坑)。
     """
-    outsider = next(
-        (pair for pair in llm_router._SAFE_MODELS
-         if pair not in llm_router._MINIMAL_SAFE_SET), None)
-    assert outsider is not None, "所有白名单条目都在 minimal 集里 —— 这条对照失效了"
-    assert llm_router._refuse_reason(*outsider, datetime.date(2026, 9, 5)) == "registry_stale"
+    ghost = ("aistore", "__not-in-minimal-set__")
+    monkeypatch.setitem(llm_router._SAFE_MODELS, ghost, datetime.date(2099, 1, 1))
+    assert ghost not in llm_router._MINIMAL_SAFE_SET
+    stale = datetime.date(2026, 9, 5)
+    assert llm_router._registry_stale(stale) is True
+    assert llm_router._refuse_reason(*ghost, stale) == "registry_stale"
+    # 阴性: 同一条目在 registry 未超龄时不该被这道闸拒
+    assert llm_router._refuse_reason(*ghost, datetime.date(2026, 8, 15)) is None
 
 
 # ── T7-c thinking 注入 ──────────────────────────────────────────────────
@@ -104,24 +118,36 @@ def test_every_deepseek_model_on_a_chain_gets_the_thinking_switch():
     写成 `for model in ("deepseek-v4-flash", ...)` 正是 organizer 这轮在
     test_llm_router_aistore.py 上修掉的反模式: 型号改一个字母或新 SKU 漏登记时,
     `model in frozenset` 静默为 False, 而只认字面量的闸照绿。
+
+    🔴 2026-08-15 (A1) 订正: 原来断言「**任何**链上的 deepseek 都拿到开关」——
+       那编码的是「deepseek 只出现在关思考的槽上」这个当时成立、A1 之后不成立的
+       前提。A1 把 deepseek 加进了 `SLOT.REASONING`, 而那个槽的 profile 是 `{}`
+       (**思考故意开着**, 预算 30s) ⇒ 它**不该**拿到关思考开关。
+       ⇒ 判据抬成真正的不变式: **拿不拿开关, 由槽的 profile 决定**。
+         这样它同时也守住了反方向 —— reasoning **不许**被误关思考。
     """
     base = {"messages": [{"role": "user", "content": "return json"}]}
-    checked = []
+    off, on = [], []
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
             if account != "deepseek":
                 continue
-            checked.append((slot.value, model))
+            wants_off = (llm_router._SLOT_PARAMS.get(slot) or {}).get(
+                "enable_thinking") is False
             out = llm_router._apply_slot_params(slot, account, model, base)
-            assert out.get("thinking") == {"type": "disabled"}, (
-                f"{slot.value}/{model}: 没拿到关思考开关。实测不关思考时 "
-                f"7.26s/17.58s、reasoning=800、content=0、finish_reason=length "
-                f"—— 必然撞穿 6.0s 单跳预算且返回空。")
+            got = out.get("thinking") == {"type": "disabled"}
+            assert got == wants_off, (
+                f"{slot.value}/{model}: profile 要求关思考={wants_off}, 实际注入={got}。"
+                f"实测不关思考时 7.26s/17.58s、reasoning=800、content=0、"
+                f"finish_reason=length —— 在 6.0s 预算的槽上会撞穿且返回空; "
+                f"而 reasoning 槽(profile {{}}, 预算 30s)**故意**开着思考。")
             # DashScope 的参数不该出现在 DeepSeek 的 payload 里
             assert "enable_thinking" not in out
-    assert checked, (
-        "一个 deepseek 条目都没扫到 —— 闸空转了。"
-        "要么池没加上, 要么 SLOT_MODELS 的形状变了, 先查闸本身。")
+            (off if wants_off else on).append(slot.value)
+    assert off, ("一个「该关思考」的 deepseek 条目都没扫到 —— 闸空转了。"
+                 "要么池没加上, 要么 SLOT_MODELS 的形状变了, 先查闸本身。")
+    assert on, ("一个「该开思考」的 deepseek 条目都没扫到 —— 那么本闸的反方向"
+                "(reasoning 不许被误关思考)其实没被验到。")
 
 
 def test_deepseek_thinking_switch_is_keyed_by_the_exact_model_string():
