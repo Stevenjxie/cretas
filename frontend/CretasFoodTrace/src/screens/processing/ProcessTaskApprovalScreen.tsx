@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, Alert } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { Text, Appbar, ActivityIndicator, Checkbox } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { processTaskApiClient } from '../../services/api/processTaskApiClient';
-import { NeoButton, NeoCard, ScreenWrapper } from '../../components/ui';
+import { NeoButton, NeoCard, ScreenWrapper, AppDialogHost, appAlert, appPrompt } from '../../components/ui';
 import { theme } from '../../theme';
+import { getUserFriendlyMessage } from '../../utils/errorHandler';
 
 interface ApprovalItem {
   id: number;
@@ -52,31 +53,31 @@ export default function ProcessTaskApprovalScreen() {
       setItems(prev => prev.filter(i => i.id !== id));
       setSelected(prev => { const s = new Set(prev); s.delete(id); return s; });
     } catch (err) {
-      Alert.alert('错误', err instanceof Error ? err.message : '审批失败');
+      appAlert('审批失败', getUserFriendlyMessage(err));
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleReject = (id: number) => {
-    Alert.prompt('驳回原因', '请输入驳回原因', async (reason) => {
-      if (!reason) return;
+    // ⛔ 原本用 Alert.prompt —— 那是 iOS 专有 API, Android 上这个按钮点了毫无反应。
+    appPrompt('驳回原因', '请说明驳回这条报工的原因', async (reason) => {
       setActionLoading(id);
       try {
         await processTaskApiClient.rejectReport(id, reason);
         setItems(prev => prev.filter(i => i.id !== id));
       } catch (err) {
-        Alert.alert('错误', err instanceof Error ? err.message : '驳回失败');
+        appAlert('驳回失败', getUserFriendlyMessage(err));
       } finally {
         setActionLoading(null);
       }
-    }, 'plain-text', '', '输入原因...');
+    }, { placeholder: '例如: 数量与实际不符', multiline: true });
   };
 
   const handleBatchApprove = async () => {
     if (selected.size === 0) return;
     const ids = Array.from(selected);
-    Alert.alert('批量审批', `确定通过 ${ids.length} 条报工？`, [
+    appAlert('批量审批', `确定通过 ${ids.length} 条报工？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
         setActionLoading(-1);
@@ -85,7 +86,7 @@ export default function ProcessTaskApprovalScreen() {
           setItems(prev => prev.filter(i => !selected.has(i.id)));
           setSelected(new Set());
         } catch (err) {
-          Alert.alert('错误', err instanceof Error ? err.message : '批量审批失败');
+          appAlert('批量审批失败', getUserFriendlyMessage(err));
         } finally {
           setActionLoading(null);
         }
@@ -173,6 +174,7 @@ export default function ProcessTaskApprovalScreen() {
           </View>
         }
       />
+      <AppDialogHost />
     </ScreenWrapper>
   );
 }

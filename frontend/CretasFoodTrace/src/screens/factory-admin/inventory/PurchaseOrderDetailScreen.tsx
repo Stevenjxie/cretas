@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import { Text, Appbar, Card, Chip, Button, ActivityIndicator, DataTable, Divider } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -10,6 +10,7 @@ import { todayIso } from '../../../utils/orderDate';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
 import { useAuthStore } from '../../../store/authStore';
 import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
+import { AppDialogHost, appAlert, appPrompt } from '../../../components/ui';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -41,7 +42,7 @@ export default function PurchaseOrderDetailScreen() {
       setLoading(true);
       const res = await purchaseApiClient.getOrder(orderId);
       if (res.success) setOrder(res.data);
-    } catch { Alert.alert('错误', '加载失败'); }
+    } catch { appAlert('错误', '加载失败'); }
     finally { setLoading(false); }
   };
 
@@ -49,7 +50,7 @@ export default function PurchaseOrderDetailScreen() {
     const actionLabels: Record<string, string> = {
       submit: '提交审批', approve: '审批通过', reject: '驳回', cancel: '取消',
     };
-    Alert.alert('确认', `确认${actionLabels[action]}？`, [
+    appAlert('确认', `确认${actionLabels[action]}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
         try {
@@ -60,20 +61,19 @@ export default function PurchaseOrderDetailScreen() {
             case 'reject': res = await purchaseApiClient.rejectOrder(orderId); break;
             case 'cancel': res = await purchaseApiClient.cancelOrder(orderId); break;
           }
-          if (res?.success) { Alert.alert('成功', '操作成功'); loadOrder(); }
-        } catch { Alert.alert('错误', '操作失败'); }
+          if (res?.success) { appAlert('成功', '操作成功'); loadOrder(); }
+        } catch { appAlert('错误', '操作失败'); }
       }},
     ]);
   };
 
   const handleEditDraft = () => {
     if (!order) return;
-    Alert.prompt(
+    // ⛔ 原本用 Alert.prompt —— iOS 专有 API, Android 上「编辑备注」是死按钮。
+    appPrompt(
       '编辑备注',
       '修改采购单备注（其他字段请在Web端编辑）',
-      [
-        { text: '取消', style: 'cancel' },
-        { text: '保存', onPress: async (newRemark) => {
+      async (newRemark) => {
           try {
             const items = (order.items || []).map(item => ({
               materialTypeId: item.materialTypeId,
@@ -89,12 +89,10 @@ export default function PurchaseOrderDetailScreen() {
               items,
               remark: newRemark || order.remark,
             });
-            if (res?.success) { Alert.alert('成功', '已更新'); loadOrder(); }
-          } catch { Alert.alert('错误', '更新失败'); }
-        }},
-      ],
-      'plain-text',
-      order.remark || '',
+            if (res?.success) { appAlert('成功', '已更新'); loadOrder(); }
+          } catch { appAlert('更新失败', '请稍后重试，或在 Web 端修改备注'); }
+      },
+      { defaultValue: order.remark || '', placeholder: '填写备注', multiline: true, confirmText: '保存', required: false },
     );
   };
 
@@ -231,6 +229,7 @@ function InfoRow({ label, value, valueStyle }: { label: string; value: string; v
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={[styles.infoValue, valueStyle]}>{value}</Text>
+      <AppDialogHost />
     </View>
   );
 }
