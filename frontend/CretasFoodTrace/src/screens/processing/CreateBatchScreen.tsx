@@ -12,13 +12,13 @@ import { handleError } from '../../utils/errorHandler';
 import { NeoCard, NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 
-type CreateBatchScreenProps = ProcessingScreenProps<'CreateBatch'>;
+// CreateBatch 路由已下线, 本屏只经 EditBatch 进入。
 type EditBatchScreenProps = ProcessingScreenProps<'EditBatch'>;
 
 export default function CreateBatchScreen() {
   const { t } = useTranslation('processing');
-  const navigation = useNavigation<CreateBatchScreenProps['navigation']>();
-  const route = useRoute<EditBatchScreenProps['route'] | CreateBatchScreenProps['route']>();
+  const navigation = useNavigation<EditBatchScreenProps['navigation']>();
+  const route = useRoute<EditBatchScreenProps['route']>();
   const { user } = useAuthStore();
 
   const batchId = route.params && 'batchId' in route.params ? route.params.batchId : undefined;
@@ -110,15 +110,19 @@ export default function CreateBatchScreen() {
         notes: notes.trim() || undefined,
       };
 
-      if (isEditMode) {
-        const response = await materialBatchApiClient.updateBatch(batchId!, batchData);
-        Alert.alert('成功', '批次信息已更新！', [{ text: '返回', onPress: () => navigation.goBack() }]);
-      } else {
-        const response = await materialBatchApiClient.createBatch(batchData);
-        Alert.alert('成功', `原材料批次 ${batchNumber} 入库成功！`, [
-          { text: '返回列表', onPress: () => navigation.goBack() },
-        ]);
+      // 只剩编辑一支: 新建走的 POST /material-batches 已被后端停用(409
+      // 「普通批次页面已关闭无来源入库与续入」), 对应的 `CreateBatch` 路由也已下线,
+      // 本屏现在只经 `EditBatch`(必带 batchId)进入。
+      if (!isEditMode) {
+        Alert.alert(
+          '原料入库已改流程',
+          '原料入库请由仓储角色从「待收货 / 无单入库」进入；本页只用于编辑已有批次。',
+          [{ text: '返回', onPress: () => navigation.goBack() }],
+        );
+        return;
       }
+      await materialBatchApiClient.updateBatch(batchId!, batchData);
+      Alert.alert('成功', '批次信息已更新！', [{ text: '返回', onPress: () => navigation.goBack() }]);
     } catch (error) {
       handleError(error, { showAlert: true, title: isEditMode ? '更新失败' : '入库失败', logError: true });
     } finally {

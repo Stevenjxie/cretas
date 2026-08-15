@@ -71,7 +71,6 @@ export type ProcessingStackParamList = {
   // 批次管理
   BatchList: { status?: string; search?: string };
   BatchDetail: { batchId: string; readonly?: boolean };
-  CreateBatch: undefined;
   EditBatch: { batchId: string };
 
   // 质检管理
@@ -106,9 +105,7 @@ export type ProcessingStackParamList = {
     initialValues?: Record<string, any>;
   } | undefined;
 
-  // 原材料管理
-  MaterialReceipt: undefined;
-  MaterialReceiptAI: undefined;
+  // 原材料管理
   MaterialBatchManagement: undefined;
   MaterialBatchSuccess: {
     batchNumber: string;
@@ -713,7 +710,6 @@ export type WHHomeStackParamList = {
 export type WHInboundStackParamList = {
   WHInboundList: undefined;
   WHInboundDetail: { batchId: string };
-  WHInboundCreate: undefined;
   SupplierDeliveryList: undefined;
   SupplierDeliveryCreate: undefined;
   SupplierDeliveryDetail: { noteId: string };

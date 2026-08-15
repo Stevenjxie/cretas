@@ -251,7 +251,9 @@ export function WHInboundListScreen() {
           <Button
             mode="contained"
             icon="plus"
-            onPress={() => navigation.navigate("WHInboundCreate")}
+            // 原本跳 WHInboundCreate —— 那个屏调已停用的 POST /material-batches(409),
+            // 屏已删。同树里正规的无单入库是 WHUnorderedInboundReceive。
+            onPress={() => navigation.navigate("WHPurchaseReceiveList")}
             style={[styles.actionButton, { backgroundColor: "#4CAF50" }]}
             labelStyle={styles.actionButtonLabel}
           >

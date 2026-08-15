@@ -42,7 +42,11 @@ const ROLE_CARDS: Record<string, (props: QuickActionCardGridProps) => CardConfig
     { icon: 'wrench', label: '设备状态', description: '查看设备运行', color: '#9C27B0', action: () => onSendIntent('查看设备') },
   ],
   warehouse_manager: ({ onSendIntent, onNavigate }) => [
-    { icon: 'package-down', label: '原料入库', description: '扫码或手动入库', color: '#2196F3', action: () => onNavigate('MaterialReceiptAI') },
+    // 原本指向 MaterialReceiptAI —— 那个屏提交必 409(普通批次页面已关闭无来源入库与续入),
+    // 而且它在工厂侧的 ProcessingStack 里, 仓储角色的导航树里压根没有这个路由。
+    // 仓储树里正规的入口是「待收货」列表 WHPurchaseReceiveList(无参)。
+    // ⚠️ 不能用 WHUnorderedInboundReceive: 它必须带 noticeId, 不是空白新建。
+    { icon: 'package-down', label: '原料入库', description: '扫码或手动入库', color: '#2196F3', action: () => onNavigate('WHPurchaseReceiveList') },
     { icon: 'package-up', label: '出库发货', description: '发货出库', color: '#4CAF50', action: () => onSendIntent('出库') },
     { icon: 'magnify', label: '查库存', description: '查看物料库存', color: '#FF9800', action: () => onSendIntent('查看库存') },
     { icon: 'alert', label: '低库存', description: '库存预警查看', color: '#F44336', action: () => onSendIntent('低库存预警') },

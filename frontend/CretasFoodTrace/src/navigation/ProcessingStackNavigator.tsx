@@ -13,8 +13,6 @@ import CostAnalysisDashboard from '../screens/processing/CostAnalysisDashboard';
 import TimeRangeCostAnalysisScreen from '../screens/processing/TimeRangeCostAnalysisScreen';
 import ProductionPlanManagementScreen from '../screens/processing/ProductionPlanManagementScreen';
 import MaterialBatchManagementScreen from '../screens/processing/MaterialBatchManagementScreen';
-import MaterialReceiptScreen from '../screens/processing/MaterialReceiptScreen';
-import MaterialReceiptAIScreen from '../screens/processing/MaterialReceiptAIScreen';
 import MaterialBatchSuccessScreen from '../screens/processing/MaterialBatchSuccessScreen';
 // 2026-07-30 客户反馈新增: 物料需求单 (只读)
 import MaterialRequisitionListScreen from '../screens/processing/MaterialRequisitionListScreen';
@@ -126,10 +124,8 @@ export function ProcessingStackNavigator() {
         name="BatchDetail"
         component={BatchDetailScreen}
       />
-      <Stack.Screen
-        name="CreateBatch"
-        component={CreateBatchScreen}
-      />
+      {/* CreateBatch(新建模式)已下线: 后端 POST /material-batches 停用 → 409。
+          同一个组件仍以 EditBatch 注册, 编辑走 updateBatch, 是好的。 */}
       <Stack.Screen
         name="EditBatch"
         component={CreateBatchScreen}
@@ -175,14 +171,9 @@ export function ProcessingStackNavigator() {
         name="MaterialBatchManagement"
         component={MaterialBatchManagementScreen}
       />
-      <Stack.Screen
-        name="MaterialReceipt"
-        component={MaterialReceiptScreen}
-      />
-      <Stack.Screen
-        name="MaterialReceiptAI"
-        component={MaterialReceiptAIScreen}
-      />
+      {/* MaterialReceipt / MaterialReceiptAI 两个屏已删: 都提交到已停用的
+          POST /material-batches(409 普通批次页面已关闭无来源入库与续入)。
+          入库改从仓储角色的收货流程进(WHUnorderedInboundReceive 等)。 */}
       <Stack.Screen
         name="MaterialBatchSuccess"
         component={MaterialBatchSuccessScreen}

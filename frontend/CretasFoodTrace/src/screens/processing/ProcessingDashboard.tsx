@@ -269,15 +269,10 @@ export default function ProcessingDashboard() {
             {/* 工厂用户操作按钮 */}
             {canOperate && (
               <View style={styles.actionsGrid}>
-                <Button
-                  mode="contained"
-                  icon="truck-delivery"
-                  onPress={() => navigation.navigate('CreateBatch')}
-                  style={styles.actionButton}
-                  buttonColor="#1976D2"
-                >
-                  {t('dashboard.quickActions.materialInbound')}
-                </Button>
+                {/* 原「原料入库」按钮已移除: 它进的是 CreateBatch 的**新建**模式,
+                    而新建走已停用的 POST /material-batches → 409
+                    「普通批次页面已关闭无来源入库与续入」。入库现在只从仓储角色的
+                    收货流程进(WHUnorderedInboundReceive 等), 那在另一棵导航树里。 */}
                 <Button
                   mode="contained"
                   icon="file-document-edit"

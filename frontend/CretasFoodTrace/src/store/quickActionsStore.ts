@@ -143,8 +143,8 @@ export const DISPATCHER_ACTIONS: QuickAction[] = [
 ];
 
 export const WAREHOUSE_MGR_ACTIONS: QuickAction[] = [
-  { id: 'manual-receipt', label: '手动入库', icon: 'package-down', iconColor: '#059669', iconBg: '#ECFDF5', screen: 'MaterialReceipt' },
-  { id: 'ai-receipt', label: 'AI入库', icon: 'robot', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'MaterialReceiptAI' },
+  // 原本这里有「手动入库」(MaterialReceipt) 和「AI入库」(MaterialReceiptAI) 两条,
+  // 两个屏都提交到已停用的 POST /material-batches(409)。屏已删, 入库改从仓储收货流程进。
   { id: 'inventory', label: '库存查看', icon: 'warehouse', iconColor: '#1890ff', iconBg: '#EFF6FF', screen: 'MaterialBatchManagement' },
   { id: 'outbound', label: '出库管理', icon: 'package-up', iconColor: '#EA580C', iconBg: '#FFF7ED', screen: 'WHOutboundList' },
 ];
