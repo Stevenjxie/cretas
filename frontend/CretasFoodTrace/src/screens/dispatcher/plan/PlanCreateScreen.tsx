@@ -261,7 +261,7 @@ export function PlanCreateScreen() {
 
             {showSourceTypePicker && (
               <View style={styles.pickerDropdown}>
-                <ScrollView style={{ maxHeight: 250 }}>
+                <ScrollView style={{ maxHeight: 250 }} nestedScrollEnabled>
                   {SOURCE_TYPE_OPTIONS.map((option) => (
                     <TouchableOpacity
                       key={option.value}
@@ -318,7 +318,7 @@ export function PlanCreateScreen() {
 
             {showProductPicker && (
               <View style={styles.pickerDropdown}>
-                <ScrollView style={{ maxHeight: 200 }}>
+                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
                   {products.map((product) => (
                     <TouchableOpacity
                       key={product.id}
