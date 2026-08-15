@@ -76,9 +76,15 @@ export default function QICameraScreen() {
   };
 
   const confirmPhotos = () => {
-    // 返回上一页并传递照片
-    navigation.goBack();
-    // TODO: 可以通过状态管理或回调传递照片数据
+    // 🔴 这里原本只是 `navigation.goBack()` 加一句 TODO ——
+    //    用户拍完照返回, **照片就地丢弃**, 表单永远收不到。
+    //    这是「质检看不了图片」的第一环(另外两环: 后端不落库、读回时硬编空数组)。
+    //    用 merge 把 uri 回传给表单, 由表单在提交拿到质检记录 id 之后上传成附件。
+    navigation.navigate({
+      name: 'QIForm',
+      params: { capturedPhotos: photos },
+      merge: true,
+    } as never);
   };
 
   if (!permission) {

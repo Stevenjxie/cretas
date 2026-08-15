@@ -31,6 +31,7 @@ import {
   formatDateTime,
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
+import { AttachmentList, AttachmentUploadButton } from '../../components/attachment';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIRecordDetail'>;
@@ -49,6 +50,8 @@ export default function QIRecordDetailScreen() {
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
   const { recordId } = route.params;
+
+  const [attachmentRefreshKey, setAttachmentRefreshKey] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [record, setRecord] = useState<QualityRecord | null>(null);
@@ -160,19 +163,23 @@ export default function QIRecordDetailScreen() {
         </View>
       </View>
 
-      {/* 照片证据 */}
-      {record.photos && record.photos.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('recordDetail.photoEvidence')}</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {record.photos.map((photo, index) => (
-              <TouchableOpacity key={index} style={styles.photoItem}>
-                <Image source={{ uri: photo }} style={styles.photoImage} />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+      {/* 照片证据 —— 走通用附件子系统(与采购单同一套)。
+          原实现读 `record.photos`, 而那个字段在 API 层被硬编成 `[]`,
+          所以这一段**从来没有渲染过**。 */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{t('recordDetail.photoEvidence')}</Text>
+        <AttachmentList
+          entityType="QUALITY_CHECK"
+          entityId={String(record.id)}
+          refreshKey={attachmentRefreshKey}
+          emptyText="暂无照片"
+        />
+        <AttachmentUploadButton
+          entityType="QUALITY_CHECK"
+          entityId={String(record.id)}
+          onUploaded={() => setAttachmentRefreshKey((k) => k + 1)}
+        />
+      </View>
 
       {/* 检验信息 */}
       <View style={styles.section}>
