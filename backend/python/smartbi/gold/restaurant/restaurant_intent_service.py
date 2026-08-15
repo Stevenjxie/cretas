@@ -256,6 +256,37 @@ def _time_range_disclosure(spec: Any) -> str:
     return "\n\n" + template.format(window=DEFAULT_TIME_PHRASE)
 
 
+def _time_window_substitution_disclosure(spec: Any) -> str:
+    """用户说了时间词, 而我们用的是**另一个**窗口时, 必须把实际窗口说出来。
+
+    ⛔ 与 `_time_range_disclosure` 的区别是本轮最贵的那条教训:
+       那个守「用户**没说**时间, 代码补了默认」; 这个守「用户**说了**时间,
+       而我们没有对应的口径, 于是用了 T3 给的近似」。后者隐蔽得多 ——
+       前者用户知道自己没说, 后者用户以为自己说了。
+
+    实测原形(2026-08-15): 「上个季度每周的营业额趋势」→ 词表里表达不了季度
+    → 模型降级成 relative/month/count=3 → 「最近3个月」→ (2026-05-18, 2026-08-15),
+    而用户要的是 (2026-04-01, 2026-06-30)。**不反问、不披露。**
+
+    ⚠️ 「季度」那个词已经由 resolver 接住了。这段披露守的是**下一个还没被发现
+       的词** —— 那比修好季度更重要, 因为词表永远补不完。
+    """
+    if not getattr(spec, "window_from_llm_phrase", False):
+        return ""
+    label = str(getattr(spec, "window_label", "") or "").strip()
+    if not label or label == "全部历史":
+        # 没有可说的窗口就别硬说 —— 那会变成另一种谎报。
+        return ""
+    start, end = (getattr(spec, "date_range", None) or (None, None))
+    if not start or not end:
+        return ""
+    return (
+        f"\n\n（时间范围：这次按「{label}」（{start} 至 {end}）算的。"
+        f"你问的时间说法我没有完全对应的口径，如果不是这个意思，"
+        f"直接说具体日期区间，例如「2026-04-01 到 2026-06-30」。）"
+    )
+
+
 def _store_scope_disclosure(spec: Any) -> str:
     """门店范围取了默认值就必须说出来。
 
@@ -1936,6 +1967,7 @@ async def tiered_answer(
         # 本该被拦下的空答案会因为多了一句范围说明而蒙混过关。
         answer_text += _store_scope_disclosure(spec)
         answer_text += _time_range_disclosure(spec)
+        answer_text += _time_window_substitution_disclosure(spec)
 
         # 🔴 2026-08-11: 用默认范围答完了 —— 记一行, 让下一句「模拟·长宁龙之梦店」
         #    能被认成对**这一问**的收窄, 而不是一个丢了菜品的裸店名新问句。

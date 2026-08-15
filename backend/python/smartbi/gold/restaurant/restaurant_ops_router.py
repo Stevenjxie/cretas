@@ -2631,6 +2631,23 @@ def _resolve_sales_date_range(
     absolute = parse_absolute_date_range(text, today=anchor)
     if absolute is not None:
         start, end, _matched = absolute
+        # 🔴 2026-08-15 (T6(e)): 本函数是**历史数据**解析器 —— 它的每一条相对
+        #    分支的右端点都不超过 anchor(结构上不可能越界), 唯独这条绝对区间
+        #    分支例外: `parse_absolute_date_range` 只拦 start>end 与「无年份且
+        #    落未来」, ⛔ 不拦 end > 今天。于是「8月1号到8月31号」在 8-15 当天
+        #    会带回 16 天还没发生的日期, 下游按窗口求和 ⇒ 分母里混进未来。
+        #
+        # ⛔ 例外(必须留): **预测类查询的窗口本来就在未来** —— 少说这半句它上线
+        #    第一天就会打在预测上。本断言只作用于历史查询, 而作用域是**结构性**
+        #    的: 预测排班那条路(`restaurant_ops_router` 8200-8760)根本不调本函数,
+        #    未来时间词也在下面被 `_FUTURE_WINDOW_LABEL` 单独接走。
+        if end > anchor:
+            logger.warning(
+                "[time-window] 绝对区间右端点在未来, 已截到今天: "
+                "%s~%s -> %s~%s (anchor=%s, text=%r)",
+                start, end, start, anchor, anchor, text,
+            )
+            end = anchor
         # 标签用「指定区间」而不是日期串本身: 渲染层会在标签后再补一次具体
         # 日期 (相对时间是「本月（2026-07-01 至 2026-07-27）」), 标签若也写成
         # 日期就会渲染出「X（X）」的重复。契约校验只要求答案里含该标签, 满足。
@@ -2750,6 +2767,28 @@ def _resolve_sales_date_range(
     if any(token in text for token in ("上个月", "上月")):
         last_of_prev = anchor.replace(day=1) - timedelta(days=1)
         return (last_of_prev.replace(day=1), last_of_prev), "上个月"
+
+    # 季度 (2026-08-15 加)。⛔ 放在 本月/上个月 **之后**: 两个周期同时出现时
+    # ("上个季度和上个月对比") 主窗取**近端**周期, 与上面 R26 的既有约定一致。
+    #
+    # 🔴 为什么必须由代码算: 在此之前「上个季度」整条链路都表达不了 ——
+    #    T3 词表只有 today/this_week/this_month, resolver 无季度分支, 于是模型
+    #    只能降级成 relative/month/count=3。实测 (MOCK_REST, 今天 2026-08-15)
+    #    5/5 都吐 {'type':'relative','unit':'month','count':3} → 「最近3个月」
+    #    → (2026-05-18, 2026-08-15), 而正确答案是 (2026-04-01, 2026-06-30)。
+    #    **代码算得没错, 错在喂给代码的那个词已经被换过了。**
+    if "季度" in text:
+        q_index = (anchor.month - 1) // 3            # 0..3
+        if any(token in text for token in ("上个季度", "上季度", "上一季度")):
+            year, prev_q = (anchor.year - 1, 3) if q_index == 0 else (anchor.year, q_index - 1)
+            start = date(year, prev_q * 3 + 1, 1)
+            end = date(year + 1, 1, 1) - timedelta(days=1) if prev_q == 3 \
+                else date(year, prev_q * 3 + 4, 1) - timedelta(days=1)
+            return (start, end), "上个季度"
+        if any(token in text for token in ("本季度", "这个季度", "当季", "这季度")):
+            # 与 本月/今年 同规则: 进行中的周期右端点是 anchor, ⛔ 不是季度末
+            # (那会把未来日期算进窗口)。
+            return (date(anchor.year, q_index * 3 + 1, 1), anchor), "本季度"
 
     # R26: 显式日历年 ("2025年全年营收") — 此前落全部历史,
     # "2025年全年" 还被菜名抽取当候选。带月的形态由前面的绝对月规则接走。

@@ -362,6 +362,21 @@ class RestaurantQuerySpec:
     store_scope_defaulted: bool = False
     # 时间窗是**代码补的默认值**(用户没说时间)时为 True —— 同样只影响披露。
     time_range_defaulted: bool = False
+    # 时间窗来自 **T3 对问句的解读**, 而不是用户原话里能直接解出来的词, 为 True。
+    #
+    # 🔴 2026-08-15 加。存在的唯一理由也是**披露**, 但它守的是比
+    # `time_range_defaulted` 更隐蔽的一种: 那个是「用户没说时间, 代码补了默认」,
+    # 这个是「用户**说了**时间, 而我们没有对应的口径, 于是用了模型给的近似」。
+    #
+    # 实测原形(今天 2026-08-15): 「上个季度每周的营业额趋势」
+    #   确定性层解不出季度 → 模型只能吐 relative/month/count=3 → 「最近3个月」
+    #   → (2026-05-18, 2026-08-15), 而用户要的是 (2026-04-01, 2026-06-30)。
+    #   代码算得完全正确, **错在喂给代码的那个词已经被换过了**, 而且不反问、不披露。
+    #
+    # ⚠️ 「季度」这一个词已由 resolver 接住(见 `_resolve_sales_date_range`),
+    #    但这个标记守的是**下一个还没被发现的词** —— 那比修好季度更重要。
+    # ⛔ 同样不要拿它去改 SQL: 窗口该是什么就是什么, 它只影响怎么告诉用户。
+    window_from_llm_phrase: bool = False
     # Options are proposed by the LLM after it sees the tenant's real store
     # catalogue, then allowlisted here before the UI renders them.  This keeps
     # the decision about *what to ask* semantic while keeping every displayed
@@ -2185,8 +2200,13 @@ def _build_spec(
         time_range_defaulted = True
 
     effective_query = query
+    window_from_llm_phrase = False
     if time_phrase and _resolve_sales_date_range(query)[1] == "全部历史":
         effective_query = f"{query} {time_phrase}".strip()
+        # 走到这里 = 用户原话解不出窗口, 窗口是 `time_phrase` 给的。
+        # ⛔ 只有**不是代码默认**的那一半才算「替换」——代码默认已经由
+        #    `time_range_defaulted` 披露过, 两条一起会说两遍。
+        window_from_llm_phrase = not time_range_defaulted
     sales_spec = _resolve_sales_query_spec(effective_query)
     date_range, window_label = sales_spec.date_range, sales_spec.window_label
     requested_metrics = (
@@ -2673,6 +2693,7 @@ def _build_spec(
         store_scope=store_scope,
         store_scope_defaulted=store_scope_defaulted,
         time_range_defaulted=time_range_defaulted,
+        window_from_llm_phrase=window_from_llm_phrase,
         store_slots=store_slots,
         compare_stores=(store_scope == "multiple"),
         store_options=tuple(store_options),
@@ -5399,7 +5420,8 @@ def _build_t3_prompt(
         "1. 你绝对不能计算或输出具体日期！time_range 只能是结构化描述，例如: "
         '{"type": "relative", "unit": "month", "count": 2} (最近2个月), '
         '{"type": "relative", "unit": "day", "count": 10} (最近10天), '
-        '{"type": "named", "value": "today"|"this_week"|"this_month"}, '
+        '{"type": "named", "value": "today"|"this_week"|"this_month"'
+        '|"this_quarter"|"last_quarter"}, '
         '{"type": "absolute", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD"} '
         '(⚠️ 仅当用户原话里就写了具体日期区间时照抄，例如「6月3号到18号」'
         '「2026-06-03到2026-06-18」——这是转录不是计算；年份缺失就按你读到的年份填，'
@@ -5474,10 +5496,18 @@ def _parse_t3_time_range(time_range: Any) -> str:
         return ""
     if kind == "named":
         value = time_range.get("value")
+        # ⛔ 这张表与 T3 prompt 里给模型的 named 取值清单是**一对**, 两份必须一致。
+        #    多出来的键模型永远不会吐(死键), 少的键会让模型降级成 relative ——
+        #    2026-08-15 实测: 没有 quarter 时, 「上个季度」5/5 被降级成
+        #    {'type':'relative','unit':'month','count':3} → 「最近3个月」,
+        #    答出 (2026-05-18, 2026-08-15) 而正确答案是 (2026-04-01, 2026-06-30)。
+        #    ⇒ 一致性由 tests/test_time_window_quarter_and_disclosure.py 钉住。
         return {
             "today": "今天",
             "this_week": "本周",
             "this_month": "本月",
+            "this_quarter": "本季度",
+            "last_quarter": "上个季度",
         }.get(value, "")
     if kind == "absolute":
         # 用户原话给了显式区间时，LLM 只负责**转录**。这里把它还原成中文短语，
