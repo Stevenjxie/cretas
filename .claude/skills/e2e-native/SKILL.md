@@ -48,15 +48,24 @@ allowed-tools:
 
 ## 测试账号
 
-| 角色 | 用户名 | 密码 | factoryId | Navigator |
-|------|--------|------|-----------|-----------|
-| 工厂超级管理员 | `factory_admin1` | `123456` | F001 | FactoryAdminNavigator |
-| 平台管理员 | `platform_admin` | `123456` | - | MainNavigator |
-| 车间主管 | `workshop_sup1` | `123456` | F001 | WorkshopSupervisorNavigator |
-| 仓储主管 | `warehouse_mgr1` | `123456` | F001 | WarehouseManagerNavigator |
-| HR 管理员 | `hr_admin1` | `123456` | F001 | HRNavigator |
-| 调度员 | `dispatcher1` | `123456` | F001 | DispatcherNavigator |
-| 质检员 | `quality_insp1` | `123456` | F001 | QualityInspectorNavigator |
+⚠️ **口令不写进仓库**：真值放本地 `.env.test`（模板见根目录 `.env.test.example`）。
+
+| 角色 | 用户名 | 口令来源 | factoryId | Navigator |
+|------|--------|---------|-----------|-----------|
+| 工厂超级管理员 | `f006_admin` | `$TEST_FACTORY_ADMIN_PASS` | F006 | FactoryAdminNavigator |
+| 平台管理员 | `platform_admin` | `$TEST_PLATFORM_ADMIN_PASS` | - | MainNavigator |
+| 车间主管 | `f006_workshop` | `$TEST_WORKSHOP_SUP_PASS` | F006 | WorkshopSupervisorNavigator |
+| 仓储主管 | `f006_warehouse_mgr` | `$TEST_WAREHOUSE_MGR_PASS` | F006 | WarehouseManagerNavigator |
+| HR 管理员 | `f006_hr_admin` | `$TEST_HR_ADMIN_PASS` | F006 | HRNavigator |
+| 调度员 | `f006_dispatcher` | `$TEST_DISPATCHER_PASS` | F006 | DispatcherNavigator |
+| 质检员 | `f006_quality_insp` | `$TEST_QUALITY_INSP_PASS` | F006 | QualityInspectorNavigator |
+
+⛔ **F001 那套账号（`factory_admin1` / `workshop_sup1` / …）是死值**：迁移
+`V20261029_68` 把工厂域收敛成只剩 F006 + LIUSHANMEN，F001 连同它的账号一并**物理删除**。
+用它们登录两个端点都 401 —— 长相是「E2E 全挂」，很容易被误读成应用坏了。
+
+✅ **F006「六膳门食品科技」是团队自己的测试租户，可以写入。**
+⛔ **LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混），只读。
 
 ---
 

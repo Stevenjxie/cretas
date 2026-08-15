@@ -134,8 +134,9 @@ flows:
 # flows/factory-admin/smoke.yaml
 appId: com.cretas.foodtrace
 env:
-  USERNAME: factory_admin1
-  PASSWORD: "123456"
+  USERNAME: f006_admin
+  # 口令由 maestro test --env TEST_FACTORY_ADMIN_PASS=... 注入, 不写进仓库
+  PASSWORD: ${TEST_FACTORY_ADMIN_PASS}
   HOME_ROOT_ID: fa-home-root
 ---
 - launchApp:
@@ -168,8 +169,9 @@ env:
 # flows/dispatcher/smoke.yaml
 appId: com.cretas.foodtrace
 env:
-  USERNAME: dispatcher1
-  PASSWORD: "123456"
+  USERNAME: f006_dispatcher
+  # 口令由 maestro test --env TEST_DISPATCHER_PASS=... 注入, 不写进仓库
+  PASSWORD: ${TEST_DISPATCHER_PASS}
   HOME_ROOT_ID: ds-home-root
 ---
 - launchApp:
@@ -198,8 +200,9 @@ env:
 # flows/factory-admin/smartbi-dashboard.yaml
 appId: com.cretas.foodtrace
 env:
-  USERNAME: factory_admin1
-  PASSWORD: "123456"
+  USERNAME: f006_admin
+  # 口令由 maestro test --env TEST_FACTORY_ADMIN_PASS=... 注入, 不写进仓库
+  PASSWORD: ${TEST_FACTORY_ADMIN_PASS}
   HOME_ROOT_ID: fa-home-root
 ---
 - launchApp:
@@ -237,8 +240,9 @@ env:
 # flows/dispatcher/plan-create.yaml
 appId: com.cretas.foodtrace
 env:
-  USERNAME: dispatcher1
-  PASSWORD: "123456"
+  USERNAME: f006_dispatcher
+  # 口令由 maestro test --env TEST_DISPATCHER_PASS=... 注入, 不写进仓库
+  PASSWORD: ${TEST_DISPATCHER_PASS}
   HOME_ROOT_ID: ds-home-root
 ---
 - launchApp:

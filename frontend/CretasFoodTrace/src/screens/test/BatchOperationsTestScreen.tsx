@@ -449,7 +449,7 @@ export const BatchOperationsTestScreen = () => {
       <Card style={styles.logCard}>
         <Card.Title title="测试日志" />
         <Card.Content>
-          <ScrollView style={styles.logContainer}>
+          <ScrollView style={styles.logContainer} nestedScrollEnabled>
             {logs.map((log, index) => (
               <Text key={index} style={styles.logText}>
                 {log}

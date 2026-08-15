@@ -45,7 +45,8 @@ import java.util.stream.Collectors;
  *
  * <p>角色映射（常量，不可变）:
  * <ul>
- *   <li>finance_manager → {PURCHASE_FINANCE_REVIEW, SALES_FINANCE_REVIEW, PRICE_ANOMALY, STOCKTAKE_APPROVAL}</li>
+ *   <li>finance_manager → {PURCHASE_FINANCE_REVIEW, SALES_FINANCE_REVIEW, PRICE_ANOMALY,
+ *       STOCKTAKE_APPROVAL, RETURN_FINANCE_REVIEW, SALES_PRICE_ADJUSTMENT, WASTAGE_APPROVAL}</li>
  *   <li>cashier → {PAYMENT_DISBURSE}</li>
  *   <li>其他 → 空集合</li>
  * </ul>

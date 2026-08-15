@@ -243,7 +243,7 @@ export function CreatePlanScreen() {
 
             {showProductPicker && (
               <View style={styles.pickerDropdown}>
-                <ScrollView style={{ maxHeight: 200 }}>
+                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
                   {products.map((product) => (
                     <TouchableOpacity
                       key={product.id}
