@@ -38,19 +38,9 @@ describe('棘轮: 不许再调已停用的 createBatch', () => {
     // 仪器自检：扫不到文件时下面的断言恒真
     expect(files.length).toBeGreaterThan(200);
 
-    /**
-     * 已知欠账 —— 本轮之外, 待 owner 拍板后处理。列在这里是为了让闸能挡住**新增**,
-     * 而不是假装它们不存在。
-     *
-     *  · CreateBatchScreen        —— **可达**: 生产看板那个「原料入库」主按钮就是它
-     *    (ProcessingDashboard:275) + WorkTypeListScreen:161。新建走 createBatch → 409;
-     *    编辑走 updateBatch, 是好的。
-     *  · WHInboundCreateScreen    —— 注册在 WHInboundStackNavigator 里, 但**没有任何地方跳它**。
-     */
-    const KNOWN_DEBT = [
-      `screens${path.sep}processing${path.sep}CreateBatchScreen.tsx`,
-      `screens${path.sep}warehouse${path.sep}inbound${path.sep}WHInboundCreateScreen.tsx`,
-    ];
+    // 欠账已清零: CreateBatchScreen 的新建支已下线(只留 EditBatch/updateBatch),
+    // WHInboundCreateScreen 已删。闸从「挡新增」升级成「一个都不许有」。
+    const KNOWN_DEBT: string[] = [];
 
     const offenders: string[] = [];
     for (const f of files) {

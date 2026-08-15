@@ -157,8 +157,13 @@ export function WorkTypeListScreen() {
     // Route to specific Wizards based on Work Type Code
     switch (workType.code) {
       case 'WT-RECEIVE':
-        // 原料接收 -> 原料入库向导
-        navigation.dispatch(CommonActions.navigate('CreateBatch'));
+        // 原「原料入库向导」(CreateBatch 新建模式)已停用 —— 后端 POST /material-batches
+        // 抛 409「普通批次页面已关闭无来源入库与续入」。按防呆 Rule 5 给出去处,
+        // 不留一个点了必失败的入口。
+        Alert.alert(
+          '原料入库已改流程',
+          '原料入库请由仓储角色从「待收货 / 无单入库」进入；本页的旧入库向导已停用。',
+        );
         break;
       case 'WT-INSPECT':
         // 质量检验 -> 质检记录向导

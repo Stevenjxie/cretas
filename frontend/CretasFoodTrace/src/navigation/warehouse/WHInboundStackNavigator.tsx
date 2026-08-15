@@ -10,7 +10,6 @@ import { WHInboundStackParamList } from "../../types/navigation";
 // 导入入库相关页面组件
 import WHInboundListScreen from "../../screens/warehouse/inbound/WHInboundListScreen";
 import WHInboundDetailScreen from "../../screens/warehouse/inbound/WHInboundDetailScreen";
-import WHInboundCreateScreen from "../../screens/warehouse/inbound/WHInboundCreateScreen";
 import WHInspectScreen from "../../screens/warehouse/inbound/WHInspectScreen";
 import WHPutawayScreen from "../../screens/warehouse/inbound/WHPutawayScreen";
 import WHReceiptCreateScreen from "../../screens/warehouse/inbound/WHReceiptCreateScreen";
@@ -41,12 +40,8 @@ export function WHInboundStackNavigator() {
         options={{ title: "入库详情" }}
       />
 
-      {/* 新建入库 */}
-      <Stack.Screen
-        name="WHInboundCreate"
-        component={WHInboundCreateScreen}
-        options={{ title: "新建入库" }}
-      />
+      {/* 「新建入库」已删: 它调停用的 POST /material-batches(409), 而且**没有任何地方
+          跳它**。仓储侧的正规入库是 WHPurchaseReceiveList / WHUnorderedInboundReceive。 */}
 
       {/* 质检 */}
       <Stack.Screen

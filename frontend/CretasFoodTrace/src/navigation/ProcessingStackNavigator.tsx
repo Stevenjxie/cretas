@@ -124,10 +124,8 @@ export function ProcessingStackNavigator() {
         name="BatchDetail"
         component={BatchDetailScreen}
       />
-      <Stack.Screen
-        name="CreateBatch"
-        component={CreateBatchScreen}
-      />
+      {/* CreateBatch(新建模式)已下线: 后端 POST /material-batches 停用 → 409。
+          同一个组件仍以 EditBatch 注册, 编辑走 updateBatch, 是好的。 */}
       <Stack.Screen
         name="EditBatch"
         component={CreateBatchScreen}
