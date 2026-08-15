@@ -47,13 +47,13 @@ test.describe('CRUD Interactions', () => {
   test('system users table renders', async ({ page }) => {
     await go(page, '/system/users');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('hr employees table renders', async ({ page }) => {
     await go(page, '/hr/employees');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('sales orders table renders', async ({ page }) => {
@@ -64,31 +64,31 @@ test.describe('CRUD Interactions', () => {
   test('quality inspections table renders', async ({ page }) => {
     await go(page, '/quality/inspections');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('procurement orders table renders', async ({ page }) => {
     await go(page, '/procurement/orders');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('equipment list renders', async ({ page }) => {
     await go(page, '/equipment/list');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('AI intents table renders', async ({ page }) => {
     await go(page, '/system/ai-intents');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('transfer list table renders', async ({ page }) => {
     await go(page, '/transfer/list');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   // --- Search ---

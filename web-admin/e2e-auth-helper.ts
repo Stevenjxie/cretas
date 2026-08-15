@@ -298,8 +298,39 @@ export async function skipIfForbidden(page: Page, route: string): Promise<void> 
   // domcontentloaded 之后才执行。我第一版就是立刻读, 于是永远读不到 403,
   // skip 形同虚设(写了但从不触发, 且没有任何迹象说明它没起作用)。
   // 这里给一个有界的等待: 命中就 skip, 没命中(绝大多数用例)立刻往下走。
-  await page.waitForURL(/\/403/, { timeout: 1500 }).catch(() => { /* 未跳转 = 有权访问 */ });
-  if (page.url().includes('/403')) {
-    test.skip(true, `当前账号无权访问 ${route}(被守卫跳到 /403), 非功能缺陷`);
+  // ⚠️ 不能只看 URL: 这个 SPA 是**原地渲染** 403 组件的, 地址栏仍停在原路由。
+  // 实测 /system/ai-intents 的失败快照里 heading 就是 "403 / 访问被拒绝",
+  // 而 page.url() 依然是 /system/ai-intents —— 只查 URL 的版本永远不触发。
+  // 两个信号都认: 跳转到 /403, 或页面上出现 403 组件。
+  //
+  // ⚠️ 窗口不能是固定的 2s。Promise.race 里每个分支都 .catch(() => false), 所以**最先
+  // 到期的那个 false 就赢了** —— 实际窗口是 min(各 timeout)。这个 SPA 从 domcontentloaded
+  // 到路由守卫渲染出 403 要好几秒, 2s 版本的 skip 从来没触发过, 表现成 `.el-table` 等满
+  // 45s 再失败(2026-08-15 实测 /system/ai-intents 就是这样, 快照里明明写着 403)。
+  //
+  // 正确的判据是**赛跑**: 403 标记先出现 → skip; 页面正常内容先出现 → 不是 403, 立刻往下走。
+  // 这样正常用例不会被拖上固定等待, 而 403 用例有足够长的窗口(30s)显形。
+  //
+  // ⚠️ 必须有**硬上限**: 既没有 403 标记、也没有业务容器的页面是存在的(404 页就是),
+  // 两个分支都等满就把整条用例的预算烧光 —— 我第一版把上限放到 30s, web-admin-e2e
+  // 当场从 71 passed 掉到 53 passed。上限 12s: 够 SPA 启动(实测 3-5s), 又不至于噬满预算。
+  const BUDGET = 12000;
+  const sawForbidden = Promise.any([
+    page.waitForURL(/\/403/, { timeout: BUDGET }),
+    page.getByRole('heading', { name: '403' }).waitFor({ timeout: BUDGET }),
+    page.getByText('访问被拒绝').waitFor({ timeout: BUDGET }),
+  ]).then(() => true);
+  const gaveUp = new Promise<boolean>((r) => setTimeout(() => r(false), BUDGET));
+  // ⚠️ 这里**不能**用 ANY_CONTENT_SELECTOR: 它含 h1/h2/h3, 而 403 页面自己就是
+  // `<h1>403</h1><h2>访问被拒绝</h2>` —— 用它当"正常内容"信号, 403 页会自证清白。
+  // 只认 403 页上不会出现的容器类元素。
+  const sawContent = page.locator('.el-table, .el-card, canvas, .echarts, .el-tabs, .el-descriptions, .el-form')
+    .filter({ visible: true }).first()
+    .waitFor({ timeout: BUDGET })
+    .then(() => false);
+
+  const forbidden = await Promise.race([sawForbidden, sawContent, gaveUp]).catch(() => false);
+  if (forbidden || page.url().includes('/403')) {
+    test.skip(true, `当前账号无权访问 ${route}(渲染 403/访问被拒绝), 非功能缺陷`);
   }
 }

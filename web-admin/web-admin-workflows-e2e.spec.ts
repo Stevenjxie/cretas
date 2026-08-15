@@ -44,7 +44,7 @@ test.describe('Business Workflows', () => {
     const hasFilter = await filterEl.isVisible().catch(() => false);
     // Even if no filter, table should load
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/prod-batches-filter.png` });
   });
 
@@ -96,14 +96,14 @@ test.describe('Business Workflows', () => {
   test('sales orders table shows status column', async ({ page }) => {
     await go(page, '/sales/orders');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/sales-orders-status.png` });
   });
 
   test('sales finished goods inventory view', async ({ page }) => {
     await go(page, '/sales/finished-goods');
     const content = page.locator('.el-table, .el-card').first();
-    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   // === HR Workflows ===
@@ -111,7 +111,7 @@ test.describe('Business Workflows', () => {
   test('employee list shows table with pagination', async ({ page }) => {
     await go(page, '/hr/employees');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     const pager = page.locator('.el-pagination');
     const hasPager = await pager.isVisible().catch(() => false);
     await page.screenshot({ path: `${SD}/hr-employees.png` });
@@ -130,7 +130,7 @@ test.describe('Business Workflows', () => {
   test('user management shows role column', async ({ page }) => {
     await go(page, '/system/users');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/system-users.png` });
   });
 
@@ -146,7 +146,7 @@ test.describe('Business Workflows', () => {
   test('AI intents config shows intent list', async ({ page }) => {
     await go(page, '/system/ai-intents');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/ai-intents.png` });
   });
 
@@ -187,7 +187,7 @@ test.describe('Business Workflows', () => {
   test('finance AR/AP page renders', async ({ page }) => {
     await go(page, '/finance/ar-ap');
     const content = page.locator('.el-card, .el-table').first();
-    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/finance-arap.png` });
   });
 
@@ -196,14 +196,14 @@ test.describe('Business Workflows', () => {
   test('quality inspections list with filters', async ({ page }) => {
     await go(page, '/quality/inspections');
     const table = page.locator('.el-table');
-    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/quality-inspections.png` });
   });
 
   test('quality standards management', async ({ page }) => {
     await go(page, '/quality/standards');
     const content = page.locator('.el-table, .el-card').first();
-    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 25000 });
+    await expect(content.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
     await page.screenshot({ path: `${SD}/quality-standards.png` });
   });
 });

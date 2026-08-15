@@ -15,7 +15,11 @@ import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStor
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = process.env.E2E_API_URL || resolveApiBase();
-const FACTORY_ID = 'F001';
+// ⚠️ 不能硬编工厂: 口令登录失效后走的是 vue-auth 产出的 storageState token, 那是
+// f006_admin/F006 的会话。写死 'F001' 会让所有**纯 API** 用例拿 403「无权访问该工厂数据」,
+// 而页面用例照常通过 —— 长得完全像"W7 这个接口坏了"(2026-08-15 实测)。
+// 工厂 ID 必须跟着会话走。
+let FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
 const SD = 'test-results/screenshots/liushanmen';
 
 let TOKEN = '';
@@ -81,6 +85,7 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
       console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
     }
     TOKEN = authResult.token;
+    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
     expect(TOKEN).toBeTruthy();
   });
 
@@ -463,6 +468,7 @@ test.describe.serial('六扇门一期 新功能页面 E2E', () => {
       console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
     }
     TOKEN = authResult.token;
+    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
     expect(TOKEN).toBeTruthy();
   });
 
