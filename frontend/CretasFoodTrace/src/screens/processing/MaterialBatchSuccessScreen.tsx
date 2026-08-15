@@ -27,7 +27,9 @@ const MaterialBatchSuccessScreen: React.FC = () => {
   const { batchNumber, materialName, quantity, supplierName } = route.params;
 
   const handleContinueReceipt = () => {
-    navigation.replace('MaterialReceiptAI');
+    // 原本 replace('MaterialReceiptAI') —— 等于入库成功后又把人送回那个提交必 409 的屏。
+    // 工厂侧没有可用的入库入口了, 回批次列表是同树内唯一有意义的去处。
+    navigation.replace('MaterialBatchManagement');
   };
 
   const handleViewBatches = () => {

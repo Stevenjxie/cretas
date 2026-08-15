@@ -106,9 +106,7 @@ export type ProcessingStackParamList = {
     initialValues?: Record<string, any>;
   } | undefined;
 
-  // 原材料管理
-  MaterialReceipt: undefined;
-  MaterialReceiptAI: undefined;
+  // 原材料管理
   MaterialBatchManagement: undefined;
   MaterialBatchSuccess: {
     batchNumber: string;

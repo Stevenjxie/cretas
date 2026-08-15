@@ -903,15 +903,10 @@ export default function MaterialBatchManagementScreen() {
         </Dialog>
       </Portal>
 
-      {/* P3-库存: FAB for Creating New Material Batch - 跳转到AI智能入库页面 */}
-      {canManageInventory && (
-        <FAB
-          icon="robot"
-          style={styles.fab}
-          onPress={() => navigation.navigate('MaterialReceiptAI' as never)}
-          label="AI智能入库"
-        />
-      )}
+      {/* 原本这里有个「AI智能入库」FAB, 指向 MaterialReceiptAI —— 那个屏提交必 409
+          (普通批次页面已关闭无来源入库与续入)。入库现在只从仓储角色的收货流程进
+          (WHUnorderedInboundReceive 等), 而那在另一棵导航树里, 工厂侧无从跳转,
+          所以这里不留一个点了必失败的按钮。 */}
     </View>
   );
 }

@@ -114,9 +114,9 @@ describe('QuickActionCardGrid card configs', () => {
     expect(mockOnNavigate).toHaveBeenCalledWith('ProcessTaskList');
   });
 
-  it('WM card-0 (原料入库) calls onNavigate("MaterialReceiptAI")', () => {
+  it('WM card-0 (原料入库) calls onNavigate("WHUnorderedInboundReceive")', () => {
     const { element, mockOnNavigate } = getRenderedTree('warehouse_manager');
     getCards(element)[0].props.onPress();
-    expect(mockOnNavigate).toHaveBeenCalledWith('MaterialReceiptAI');
+    expect(mockOnNavigate).toHaveBeenCalledWith('WHUnorderedInboundReceive');
   });
 });
