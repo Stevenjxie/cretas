@@ -99,6 +99,25 @@ const statusMap: Record<string, { text: string; type: string }> = {
   CANCELLED: { text: '已取消', type: 'danger' },
 };
 
+/**
+ * 采购状态文案 —— `FINANCE_APPROVED` 要分两种情况说。
+ *
+ * 后端只有在审批历史里**确实存在财务角色的通过动作**时才写 `financeReviewedBy`；
+ * 工厂没配财务节点时那个字段是空的。这时单据确实可以往下走
+ * (收货门禁认的就是它), 但**没有人做过财务审核** —— 再显示「财务已审核」就是在骗人。
+ */
+function purchaseStatusText(o: { status?: string; financeReviewedBy?: number | null } | null): string {
+  if (!o?.status) return '';
+  if (o.status === 'FINANCE_APPROVED' && !o.financeReviewedBy) return '无需财务审核（未设置审批节点）';
+  return statusMap[o.status]?.text || enumLabel(o.status);
+}
+
+function purchaseStatusType(o: { status?: string; financeReviewedBy?: number | null } | null): string {
+  if (!o?.status) return 'info';
+  if (o.status === 'FINANCE_APPROVED' && !o.financeReviewedBy) return 'info';
+  return statusMap[o.status]?.type || 'info';
+}
+
 const receiveStatusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   PENDING_QC: { text: '待质检', type: 'warning' },
@@ -313,8 +332,8 @@ async function handleDownloadPdf(externalVersion: boolean) {
             <el-button :icon="ArrowLeft" @click="router.push('/procurement/orders')">返回</el-button>
             <span class="page-title">{{ label('purchaseOrder') }}详情</span>
             <el-button v-if="order" plain @click="documentTraceVisible = true">单据追溯</el-button>
-            <el-tag v-if="order" :type="(statusMap[order.status]?.type) || 'info'" size="large">
-              {{ statusMap[order.status]?.text || enumLabel(order.status) }}
+            <el-tag v-if="order" :type="purchaseStatusType(order)" size="large">
+              {{ purchaseStatusText(order) }}
             </el-tag>
           </div>
           <div class="header-right" v-if="order">
@@ -364,7 +383,7 @@ async function handleDownloadPdf(externalVersion: boolean) {
           <el-button plain @click="goFinanceDetails">查看财务详情</el-button>
         </div>
         <el-descriptions :column="4" border>
-          <el-descriptions-item label="采购状态">{{ statusMap[order.status]?.text || enumLabel(order.status) }}</el-descriptions-item>
+          <el-descriptions-item label="采购状态">{{ purchaseStatusText(order) }}</el-descriptions-item>
           <el-descriptions-item label="收货状态">{{ order.receiptStatus ? enumLabel(order.receiptStatus) : (receives.length ? '已有收货记录' : '尚无收货记录') }}</el-descriptions-item>
           <el-descriptions-item label="发票状态">{{ order.invoiceStatus ? enumLabel(order.invoiceStatus) : '未归集' }}</el-descriptions-item>
           <el-descriptions-item label="付款状态">{{ order.paymentStatus ? enumLabel(order.paymentStatus) : '未归集' }}</el-descriptions-item>
