@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolveApiBase } from './e2e-auth-helper';
+import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolveApiBase, E2E_USER, E2E_PASS, E2E_USER_2, E2E_PASS_2, hasPasswordCredentials } from './e2e-auth-helper';
 
 /**
  * RN Expo Web E2E Tests — Playwright against localhost:3010
@@ -13,6 +13,10 @@ import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolve
 let RN_FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
 let RN_TOKEN = '';
 const RN_BASE_URL = process.env.RN_BASE_URL || 'http://localhost:3010';
+// ⚠️ 这个常量此前**不存在**, 而 rnAuthOrInject 里用了它 —— Playwright 不做类型检查,
+//    所以表现是 `fetchLoginToken` 抛 ReferenceError 被 catch 吞掉、每次都静默走注入分支:
+//    口令登录这条路在本文件里从来没真正尝试过。
+const API = process.env.E2E_API_URL || resolveApiBase();
 const SD = 'test-results/screenshots/rn-expo-web';
 
 /**
@@ -26,8 +30,10 @@ const SD = 'test-results/screenshots/rn-expo-web';
  * 「登录页卡住 / 找不到 tab」, 很容易误读成 RN 应用本身坏了。
  * 这里复用 vue-auth 产出的 storageState token(与 web 侧同一个来源)。
  */
-async function rnAuthOrInject(page: Page, username = 'factory_admin1', password = '123456') {
+async function rnAuthOrInject(page: Page, username = E2E_USER, password = E2E_PASS) {
   try {
+    // 没配口令就别去打登录接口 —— 空口令只会换来一个 401 噪音, 直接走注入。
+    if (!hasPasswordCredentials()) throw new Error('未配置口令(TEST_FACTORY_ADMIN_PASS / E2E_PASS), 走会话注入');
     const r = await fetchLoginToken(username, password, API);
     RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
     await rnLogin(page, username, password);
@@ -50,7 +56,7 @@ async function rnAuthOrInject(page: Page, username = 'factory_admin1', password 
   }
 }
 
-async function rnLogin(page: Page, username = 'factory_admin1', password = '123456') {
+async function rnLogin(page: Page, username = E2E_USER, password = E2E_PASS) {
   await page.goto(RN_BASE_URL, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(3000);
 
@@ -288,7 +294,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-07: workshop_sup1 role — different tab visibility', async ({ page }) => {
-    await rnAuthOrInject(page, 'workshop_sup1', '123456');
+    await rnAuthOrInject(page, E2E_USER_2, E2E_PASS_2);
 
     // workshop_supervisor tabs: 首页, 批次, 人员, 设备, 我的
     // Should NOT see: "管理" as a bottom tab (only factory_admin has it)

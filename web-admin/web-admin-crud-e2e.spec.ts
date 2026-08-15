@@ -8,7 +8,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { loginOrReuseSession, resolveApiBase, fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { loginOrReuseSession, resolveApiBase, fetchLoginToken, injectAuthCookie, LoginResult, E2E_USER, E2E_PASS } from './e2e-auth-helper';
 import { skipIfForbidden } from './e2e-auth-helper';
 import { expectAnyVisible } from './e2e-auth-helper';
 
@@ -28,7 +28,7 @@ async function go(page: Page, path: string) {
 }
 
 test.beforeAll(async () => {
-  authResult = await loginOrReuseSession('factory_admin1', '123456', API, 'crud');
+  authResult = await loginOrReuseSession(E2E_USER, E2E_PASS, API, 'crud');
 });
 
 test.describe('CRUD Interactions', () => {

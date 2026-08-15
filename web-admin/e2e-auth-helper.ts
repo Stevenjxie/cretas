@@ -47,6 +47,34 @@ export function resolveApiBase(): string {
 const DEFAULT_API = resolveApiBase();
 
 /**
+ * 测试账号 —— 仓库里**只写用户名, 不写口令**(CLAUDE.md: 测试凭证不提交代码仓库)。
+ *
+ * 优先消费仓库既有约定 `.env.test.example` 里的 `TEST_FACTORY_ADMIN_*` /
+ * `TEST_WORKSHOP_SUP_*`; `E2E_USER`/`E2E_PASS` 作为一次性覆盖。
+ *
+ * ⛔ 原默认值 `factory_admin1 / 123456` 是**死值**: 迁移 V20261029_68 把工厂域收敛成
+ * 只剩 F006 + LIUSHANMEN, F001 连同 factory_admin1 / workshop_sup1 一并物理删除
+ * (`.env.test.example` 开头就记着这件事)。实测生产库 130 个用户里根本没有它,
+ * 两个登录端点都返回 401 —— 而整套 spec 一直硬编着它。
+ *
+ * 没配口令时**不去打登录接口**(空口令只会换来一个 401 噪音), 直接走会话注入:
+ * 见 loginOrReuseSession / injectRnSession。配了就走真登录。
+ */
+export const E2E_USER =
+  process.env.E2E_USER || process.env.TEST_FACTORY_ADMIN_USER || 'f006_admin';
+export const E2E_PASS =
+  process.env.E2E_PASS || process.env.TEST_FACTORY_ADMIN_PASS || '';
+/** 第二个角色(车间主管), 用于角色可见性对比用例。 */
+export const E2E_USER_2 =
+  process.env.E2E_USER_2 || process.env.TEST_WORKSHOP_SUP_USER || E2E_USER;
+export const E2E_PASS_2 =
+  process.env.E2E_PASS_2 || process.env.TEST_WORKSHOP_SUP_PASS || E2E_PASS;
+
+/** 有没有配口令 —— 没配就别去打登录接口, 直接走注入。 */
+export const hasPasswordCredentials = (): boolean => E2E_PASS.length > 0;
+
+
+/**
  * 从 storageState 文件里取出 access token。
  *
  * <p>为什么需要: 套件里有两套鉴权 —— 多数 project 靠 `storageState`(vue-auth 产出),

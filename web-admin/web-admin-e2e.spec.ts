@@ -8,7 +8,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult, E2E_USER, E2E_PASS } from './e2e-auth-helper';
 import { skipIfForbidden } from './e2e-auth-helper';
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
@@ -37,7 +37,7 @@ test.beforeAll(async () => {
   // 经 addInitScript 注入(而不是 goto('/login') 后再写 localStorage)。
   // 实测(干净机器, 内存 25GB): 这条路 71 条里 69 过 —— 不需要真实账号也能跑。
   try {
-    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    authResult = await fetchLoginToken(E2E_USER, E2E_PASS, API);
   } catch (e) {
     const token = resolveTokenFromStorageState();
     if (!token) throw e;              // 两条路都没有就如实失败, 不假装跑过
