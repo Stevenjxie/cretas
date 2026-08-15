@@ -737,9 +737,22 @@ def _needs_reporting_unit_yield_guard(query: str) -> bool:
     mentions_units = any(
         term in normalized
         for term in (
-            "单位", "kg", "千克", "克", "盒", "袋", "只",
+            "单位", "kg", "千克", "克", "盒", "袋",
             "跨单位", "每单位重量", "每盒", "每袋",
         )
+    )
+    # “只” is also a common adverb in phrases such as “只有 5”. Treat it as a
+    # count unit only when the surrounding wording actually describes a unit;
+    # otherwise transfer-stock questions can be stolen by this earlier guard.
+    mentions_units = mentions_units or any(
+        term in normalized
+        for term in (
+            "单位是只", "单位为只", "按只", "每只", "多少只",
+            "只/个", "个/只", "只等", "只、",
+        )
+    ) or any(
+        f"{number}只" in normalized
+        for number in "0123456789一二三四五六七八九十"
     )
     return mentions_reporting and mentions_units
 
