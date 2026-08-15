@@ -175,6 +175,71 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     return f"**{warning}**\n\n{answer_text}"
 
 
+#: 哪些意图配得上一张**菜品级**三列表。
+#:
+#: 🔴 2026-08-16 订正 —— 这里我自己错过一次, 记下来:
+#:   第一版**只**挂 `GROSS_MARGIN`, 理由是「SALES_SUMMARY 是门店级概览, 在它下面
+#:   塞菜品表是换了粒度不是换了形式」。这个理由本身站得住, **但它是从
+#:   `_INTENT_DESCRIPTIONS` 的字面推出来的**, 而实测「老板打烊那句话」的产出者
+#:   正是 `SALES_SUMMARY` 的 resolver(`restaurant_ops_router.py`)。
+#:   ⇒ 排除它 = 表格在**日结这条唯一要它的路上永远不出现**。接线接了个寂寞。
+#:   ⚠️ 判据不是「哪个意图名字更像菜品级」, 是「老板打烊时那句话落到谁身上」。
+_DISH_TABLE_INTENTS = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",   # 日结主路 —— B-1 要的就是它
+    "RESTAURANT_OPS_GROSS_MARGIN",    # 直接问菜品毛利
+})
+
+#: 表里最多列几道菜。列不下的在披露里逐项交代(条数 + 营收 + 毛利), ⛔ 不静默截断。
+_DISH_TABLE_TOP_N = 10
+
+
+async def _maybe_append_dish_table(
+    pool, factory_id: str, spec, answer_text: str, output_pref
+) -> str:
+    """偏好里有 table 就把菜品三列表拼进正文, 否则原样返回。
+
+    ## ⛔ 这里不算任何指标
+
+    数据来自 `dish_margin.compute_dish_margins`(本仓自称的「唯一的结构化出数处」),
+    排版来自 `daily_table.render`。本函数只做**接线**。
+    ⛔ 禁止在这条路上写 `revenue - food_cost` —— 那会长出第二份毛利口径。
+
+    ## fail-open
+
+    拼表格失败 ⛔ 不许让一次问答失败 —— 用户问的是经营情况, 表格只是形式。
+    ⚠️ 但**失败要留痕**(warning 日志), 否则「表格从来没出现过」会长得和
+    「这个租户没有菜品数据」一模一样, 谁都发现不了(形态 B: 最干净的日志掩盖
+    最彻底的失败)。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import OUTPUT_FORM_TABLE
+
+    if OUTPUT_FORM_TABLE not in (output_pref or ()):
+        return answer_text
+    if getattr(spec, "intent", None) not in _DISH_TABLE_INTENTS:
+        return answer_text
+
+    try:
+        from smartbi.gold.restaurant.daily_table import render
+        from smartbi.gold.restaurant.dish_margin import compute_dish_margins
+
+        start, end = getattr(spec, "date_range", (None, None))
+        kwargs = {"date_range": (start, end)} if start and end else {}
+        data = await compute_dish_margins(pool, factory_id, **kwargs)
+        table = render(data, top_n=_DISH_TABLE_TOP_N)
+    except Exception as e:                                    # noqa: BLE001 — fail-open
+        logger.warning(f"[restaurant-intent] dish table render failed: {e}")
+        return answer_text
+
+    if not table:
+        # 一道菜都没有 ⇒ ⛔ 不拼一张空表, 也不假装成功。
+        logger.warning(
+            f"[restaurant-intent] dish table empty for {factory_id} "
+            f"(intent={getattr(spec, 'intent', None)})"
+        )
+        return answer_text
+    return f"{answer_text}\n\n{table}"
+
+
 #: 说不清用户想看什么时的兜底反问。
 _GENERIC_CLARIFICATION = "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
 
@@ -2003,6 +2068,20 @@ async def tiered_answer(
             except (TypeError, ValueError):
                 tenant_output_pref = [tenant_output_pref]
 
+        # ── B-1: 把已经解析好的输出偏好**真的用起来** ──────────────────────
+        # 🔴 这个字段从设计之初就在, 也一直被算出来放进响应(下面 `output_preference`),
+        #    但**没有任何消费端** —— 前端拿到它不分支, 于是「列个表」和不说话
+        #    出来的东西一模一样。产出端有了 ≠ 消费端收得到(形态 B)。
+        # ⇒ 这里是**唯一**的消费点: 偏好含 table 且是菜品级毛利问句时, 把表格
+        #   拼进 `answer_text` —— 载体是问答屏的 MarkdownRenderer(已在用, 见
+        #   AIChatScreen.tsx:799), ⛔ 不新建数据通道、⛔ 不碰通知中心。
+        output_pref = tuple(
+            resolve_output_preference(spec, tenant_default=tenant_output_pref)
+        )
+        answer_text = await _maybe_append_dish_table(
+            pool, factory_id, spec, answer_text, output_pref
+        )
+
         result: Dict[str, Any] = {
             "kind": "answer",
             "answer_text": answer_text,
@@ -2023,9 +2102,10 @@ async def tiered_answer(
             # 就是接线口」)，但一直没人传，于是租户级口径**形同虚设**。
             # 存储用的是早就存在的 `business_config_overrides`，不新建表；
             # 读取走 `shared/async_config_lookup`（异步侧唯一承载，见该模块 docstring）。
-            "output_preference": list(
-                resolve_output_preference(spec, tenant_default=tenant_output_pref)
-            ),
+            # ⚠️ 与上面 `output_pref` 是**同一个值**, ⛔ 不重算一遍(形态 D: 两份必漂 ——
+            #    一份决定要不要拼表格, 另一份告诉前端渲染成什么, 漂了就会出现
+            #    「响应说 text-only 而正文里躺着一张表」)。
+            "output_preference": list(output_pref),
             "query_plan_hash": spec.plan_hash,
             "executed_resolvers": list(executed_codes),
             "structured_context": structured_context,

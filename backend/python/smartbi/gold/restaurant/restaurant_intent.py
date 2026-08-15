@@ -447,22 +447,79 @@ _OUTPUT_FORM_TOKENS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 DEFAULT_OUTPUT_PREFERENCE: Tuple[str, ...] = (OUTPUT_FORM_TEXT, OUTPUT_FORM_TABLE)
 
 
+#: 「我**不要**这个形态」的前缀。⛔ 不含裸「别」——「特别用表格」会被误判成否定。
+#: ⚠️ 否定短语**由肯定 token 派生**(前缀 + token), ⛔ 不另写一张否定词表 ——
+#:    两张表必漂(形态 D): 加一个新 token 时否定表不会跟着加。
+_OUTPUT_FORM_NEGATIONS: Tuple[str, ...] = (
+    "别用", "不要", "不用", "别给", "别做", "不想要", "别列",
+)
+
+#: 纯「只要文字」的说法。⛔ 它不是一个可被否定的形态, 所以不进 `_OUTPUT_FORM_TOKENS`
+#: (那张表的每一项都会被上面的前缀派生出否定式, 而「别用文字」没有意义)。
+_OUTPUT_TEXT_ONLY_TOKENS: Tuple[str, ...] = (
+    "用文字", "文字就行", "文字说", "说一下就行", "别列表", "不用列表",
+)
+
+
 def _detect_output_preference(text: str) -> Tuple[str, ...]:
     """抽用户**显式**要的输出形态；空元组 = 没提，交给租户默认。
 
     显式要了表/图/报告时文字始终保留 —— 老板要的是「图 + 一句结论」，
     不是拿图把结论换掉。
+
+    ## 🔴 2026-08-16: 加否定处理
+
+    上一版是**纯加法**(`return (TEXT, *forms)`), 于是实测:
+
+        '用文字说就行'      -> ()               落默认 (text, table), 照样出表格
+        '别用表格'         -> ('text','table')  说「别用」反而**锁死**表格
+        '不要表格,文字就行' -> ('text','table')  同上
+
+    成因两处: 没有「只要文字」这一档; 且「别用**表格**」里的「表格」二字命中了
+    TABLE 的肯定 token。⇒ 这个缺陷在零消费端时看不见, **一旦有人读这个偏好
+    就会变成用户可见的行为**(本仓先例: 我的修复让潜伏缺陷变得可达)。
+
+    ## ⛔ 为什么不是「否定命中就返回 (TEXT,)」
+
+    那会把「别用图，用表格」清空成纯文字 —— 用户明明要了表格。
+    ⇒ 正确形状是**逐形态相减**:
+
+        1. 先扫否定 -> suppressed
+        2. 再扫肯定 -> forms
+        3. forms -= suppressed
+        4. forms 空 **且说过话** -> (TEXT,)      ← 这一条是关键
+        5. 两者都没命中          -> ()           落默认
+
+    🔴 第 4 条把「说了但全被否掉」与「压根没说」分开。两者都返回 `()` 的话,
+       「别用表格」会落回默认 `(TEXT, TABLE)` —— 缺陷原样保留。
     """
     if not text:
         return ()
     lowered = text.lower()
-    forms = [
-        form
-        for form, tokens in _OUTPUT_FORM_TOKENS
-        if any(token in lowered for token in tokens)
-    ]
+
+    said = False                      # 用户是否**显式表达过**输出形态
+    suppressed = set()
+    for form, tokens in _OUTPUT_FORM_TOKENS:
+        for token in tokens:
+            if any(neg + token in lowered for neg in _OUTPUT_FORM_NEGATIONS):
+                suppressed.add(form)
+                said = True
+                break
+
+    forms = []
+    for form, tokens in _OUTPUT_FORM_TOKENS:
+        if any(token in lowered for token in tokens):
+            said = True               # 说了就算说了, 哪怕随后被自己否掉
+            if form not in suppressed:
+                forms.append(form)
+
+    if any(token in lowered for token in _OUTPUT_TEXT_ONLY_TOKENS):
+        said = True
+
+    if not said:
+        return ()                     # 压根没提 ⇒ 交给租户默认
     if not forms:
-        return ()
+        return (OUTPUT_FORM_TEXT,)    # 说了, 但要的/剩下的只有文字
     return (OUTPUT_FORM_TEXT, *forms)
 
 
