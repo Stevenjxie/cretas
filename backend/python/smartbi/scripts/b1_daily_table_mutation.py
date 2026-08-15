@@ -57,8 +57,14 @@ N4_NEW = 'return "\\n".join(lines) + "\\n\\n" + "\\n".join(notes)   # MUTATION N
 N5_OLD = "    cov = data.get(\"coverage\") or {}"
 N5_NEW = "    cov = {}   # MUTATION N5 —— 限定语被删掉"
 
+#: N6 —— 把「成本 > 营收」那条点名删掉(负数照样显示, 只是不说它是什么)。
+#: 这是「数字准了但没用」的那一步: 老板看到 −¥115,674 只会以为系统坏了。
+N6_OLD = "    if broken:"
+N6_NEW = "    if False:   # MUTATION N6 —— 不再指着坏数据说话"
+
 MUTATIONS = [
     ("N1 缺卡行填 ¥0.00", [(N1_OLD, N1_NEW)], {"2a"}),
+    ("N6 不再点名成本>营收的菜", [(N6_OLD, N6_NEW)], {"8"}),
     ("N5 删掉覆盖率限定语(退化成普通 BI 报表)", [(N5_OLD, N5_NEW)], {"7"}),
     ("N4 披露之间用 \\n 不用空行(渲染后并成一坨)", [(N4_OLD, N4_NEW)], {"6"}),
     ("N2 差额把缺卡的菜也算进去", [(N2_OLD, N2_NEW)], {"1"}),
