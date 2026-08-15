@@ -244,8 +244,12 @@ def test_slots_for_text_tail_member_covers_every_slot_that_appends_it():
     from common import llm_router
     from scripts.probe_llm_registry import _slots_for
 
-    pair = ("tencent", "minimax-m2.7")
-    assert pair in llm_router._TEXT_TAIL  # 前提: 它确实是地板成员
+    # 🔴 2026-08-15: 原来写死 ("tencent","minimax-m2.7") —— 账号收敛后它不在了。
+    #    本用例守的是「**地板成员**覆盖每一个非 VL 槽」这个性质, 与是哪一条无关。
+    #    ⇒ 从 _TEXT_TAIL 现取, 正是本文件下面那条注释自己说的
+    #      「测试里写死的 (账号,模型) 也是会过期的数据」。
+    assert llm_router._TEXT_TAIL, "地板空了 —— 那才是真问题"
+    pair = llm_router._TEXT_TAIL[0]
     slots = set(_slots_for(pair))
     expected = {s for s in llm_router.SLOT if s not in llm_router._NO_TEXT_TAIL_SLOTS}
     assert slots == expected
@@ -263,9 +267,18 @@ def test_slots_for_pool_only_member_is_unaffected():
     # REASONING 池里的一条(它是 _THINKING_ONLY, 进不了任何关思考的槽)。
     # 📌 与夹具模型名同源的问题: **测试里写死的 (账号,模型) 也是会过期的数据**,
     #    它挑的是"当时恰好只属于一个槽"的那一条, 而"属于哪些槽"每轮都在变。
-    pair = ("aliyun_b", "kimi-k2.7-code")
+    # 🔴 2026-08-15: 同上, 改成**现取**一条「只属于一个池且不在地板里」的。
+    tail = set(llm_router._TEXT_TAIL)
+    only_one = [
+        (p, [s for s, pool in llm_router._SLOT_POOLS.items() if p in pool])
+        for p in {q for pool in llm_router._SLOT_POOLS.values() for q in pool}
+        if p not in tail
+    ]
+    candidates = [(p, slots) for p, slots in only_one if len(slots) == 1]
+    assert candidates, "没有「只属于一个池」的条目了 —— 本用例的前提不成立"
+    pair, slots = sorted(candidates)[0]
     assert pair not in llm_router._TEXT_TAIL
-    assert _slots_for(pair) == [llm_router.SLOT.REASONING]
+    assert _slots_for(pair) == slots
 
 
 def test_probe_normalizes_before_applying_slot_params(monkeypatch):

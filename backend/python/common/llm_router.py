@@ -158,6 +158,31 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("deepseek", "deepseek-v4-flash"): _d(2026, 11, 15),
     ("deepseek", "deepseek-v4-pro"): _d(2026, 11, 15),
 
+    # ══ 2026-08-15 账号收敛 ════════════════════════════════════════
+    # owner 裁定:「暂时限制用 ai store 和 deepseek 还有 zhipu, **后面我有要求
+    # 的时候我们再说**」。⇒ 删掉 aliyun_a/b/c、aliyun_a_deepseek、tencent、ark
+    # 六个账号的**条目**(19 条), 留 aistore 3 + deepseek 2 + zhipu 1。
+    #
+    # ⛔ **删的是条目, 不是机制**: DashScope 的 enable_thinking 双开关、
+    #    _TOKENHUB_* 四个常量、_ARK_DISABLE_THINKING、三个 _*_ONLY 集合、
+    #    以及 _apply_slot_params 里 ark/tencent 两个分支**全部保留**。
+    #    它们每次调用都过, 删了不省什么; 而**删机制的账是在重新要用的时候才结**
+    #    —— #580 删 deepseek 时注释写「entire removal was 1 file」, 这次加回来
+    #    才发现少了 thinking 注入那一半, 差点 DOA。
+    #
+    # 删除依据(2026-08-15 实测, 真实 T3 prompt + 各槽自己的 profile):
+    #   ark/doubao-seed-2-0-code-preview-260215   0/2 全死(quota + 严格JSON下 http400)
+    #   tencent/deepseek-v4-flash-202605          0/2 全死(quota)
+    #   tencent/minimax-m2.7                      活, 但 12.58~15.90s ——
+    #                                             在 6.0s 单跳预算的槽上只会烧满
+    #                                             6 秒再交棒, 从不真正应答
+    #   tencent/mimo-v2.5-pro                     活, 18.72s(同上)
+    #   aliyun 在池 5 条                          全活, 但 6.06~16.51s, 且**只服务
+    #                                             SLOT.REASONING 一个槽**
+    #   aliyun 纯死重 4 条                        不在任何链上(3 个是 OCR SKU)
+    # ⚠️ 上面那 5 条 aliyun「全活」—— 删它们不是因为死了, 是因为**慢且只服务一个
+    #    槽**, 而那个槽现在由 aistore/deepseek/zhipu 覆盖(A1)。
+    #
     # ══ 2026-08-13 全量重审 ════════════════════════════════════════
     # 判据不变: 控制台显示有余量 ∩ 生产探针非空 content。单边证据一律不收 ——
     # 探针 200 但控制台无余量的最危险: 那说明「免费额度用完即停」没覆盖它,

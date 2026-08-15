@@ -101,11 +101,19 @@ def test_every_aistore_model_on_a_chain_has_a_recorded_thinking_verdict():
                 missing.append((slot.value, model))
                 continue
             needs_switch, why = verdict
+            # 🔴 2026-08-15 (A1): 拿不拿开关**还取决于槽的 profile** ——
+            #    REASONING 的 profile 是 `{}`(思考故意开着, 预算 30s), 那里
+            #    **不该**注入。原来只比登记表, 编码了「aistore 只出现在关思考的
+            #    槽上」这个 A1 之前才成立的前提。
+            wants_off = (llm_router._SLOT_PARAMS.get(slot) or {}).get(
+                "enable_thinking") is False
+            expected = needs_switch and wants_off
             out = llm_router._apply_slot_params(slot, account, model, base)
             got = out.get("thinking") == {"type": "disabled"}
-            assert got == needs_switch, (
-                f"{slot.value}/{model}: 登记说 needs_switch={needs_switch}, "
-                f"实际注入={got}。依据: {why}"
+            assert got == expected, (
+                f"{slot.value}/{model}: 登记 needs_switch={needs_switch} × "
+                f"槽 profile 要求关思考={wants_off} ⇒ 应注入={expected}, "
+                f"实际={got}。依据: {why}"
             )
             # enable_thinking 是 DashScope 的参数, 不该出现在 aistore 的 payload 里
             assert "enable_thinking" not in out, (
@@ -176,14 +184,14 @@ class _Response:
 @pytest.mark.asyncio
 async def test_http_200_error_body_falls_back(monkeypatch):
     monkeypatch.setenv("LLM_AISTORE_API_KEY", "fake-aistore")
-    monkeypatch.setenv("LLM_TENCENT_API_KEY", "fake-tencent")
+    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "fake-deepseek")
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 13))
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
         [
             ("aistore", "DeepSeek-V4-Flash-A"),
-            ("tencent", "deepseek-v4-flash-202605"),
+            ("deepseek", "deepseek-v4-flash"),
         ],
     )
     good = {"choices": [{"message": {"content": "后备模型正常返回"}}]}
@@ -211,14 +219,14 @@ async def test_http_200_error_body_falls_back(monkeypatch):
 @pytest.mark.asyncio
 async def test_stream_error_event_before_content_falls_back(monkeypatch):
     monkeypatch.setenv("LLM_AISTORE_API_KEY", "fake-aistore")
-    monkeypatch.setenv("LLM_TENCENT_API_KEY", "fake-tencent")
+    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "fake-deepseek")
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 13))
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
         [
             ("aistore", "DeepSeek-V4-Flash-A"),
-            ("tencent", "deepseek-v4-flash-202605"),
+            ("deepseek", "deepseek-v4-flash"),
         ],
     )
 
