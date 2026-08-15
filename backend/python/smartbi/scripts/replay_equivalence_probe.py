@@ -53,6 +53,12 @@ import sys
 
 from smartbi.scripts._probe_bootstrap import bootstrap_probe
 
+#: 告警分级。⛔ **判定住在一个无副作用的模块里**, 不在这里 ——
+#: 本模块在模块级跑 `bootstrap_probe`(设租户 ContextVar / 改 sys.path),
+#: 判定跟它同住的话, 单测只要 import 一下就会污染同进程的其它用例。
+#: 实测: 7 条不相干的测试因此变红(单独跑 9 passed, 一起跑 7 failed)。
+from smartbi.scripts.replay_alert_policy import alert_for  # noqa: F401,E402
+
 FACTORY = os.environ.get("PROBE_FACTORY", "MOCK_REST")
 ctx = bootstrap_probe(FACTORY)
 
@@ -168,37 +174,6 @@ def _write_probe_out(out) -> None:
     dest = os.environ.get("PROBE_OUT", "/tmp/replay_equivalence.json")
     with open(dest, "w", encoding="utf-8", newline="") as fh:
         json.dump(out, fh, ensure_ascii=False, indent=2)
-
-
-#: 告警分级 —— **判定在这里, ⛔ 不在 shell 里**。cron 只负责把非空的那行追加进
-#: 告警文件。这样它可单测, 而且不用在 shell 里解 JSON。
-#:
-#: 🔴 (a) 类不告警(owner 2026-08-15 裁定 ①):
-#:    `eligible_stored == 0` 意思是「存量按设计全部失效, 等人逐条盖章」——
-#:    **不是故障**, 而它每天都会发生。天天误报的告警最终会让**所有**告警
-#:    一起被忽略(形态 E: 闸的完备性与闸的存活是矛盾的)。
-#:    ⇒ 它照常落台账(`eligible_stored` 那一列), 只是不喊。
-def alert_for(rc: int, *, positive_control, eligible_stored, stored_total) -> str:
-    """这次跑批该不该喊、喊什么。返回空串 = 不喊。
-
-    ⚠️ 三态见硬约束 4。rc=2 的三个成因处置完全不同, ⛔ 不许压成一句。
-    """
-    if rc == 0:
-        return ""
-    if rc != 2:
-        return ("REPLAY EQUIV DRIFT — 有条目不再等价(指纹**可能没变**)")
-    # rc == 2 的三个成因
-    if not positive_control:
-        return ("REPLAY EQUIV INSTRUMENT DEAD — 合成阳性对照没通过, "
-                "格式门本身坏了; 本次读数作废")
-    if not stored_total:
-        return ("REPLAY EQUIV INSTRUMENT DEAD — 晋升表 0 行(plan_version 对不上), "
-                "本次读数作废")
-    if eligible_stored:
-        return (f"REPLAY EQUIV INSTRUMENT DEAD — 有 {eligible_stored} 条合格存量"
-                "却一条都没回放, A 遍撬棍没打开晋升闸; 本次读数作废")
-    # (a): eligible_stored == 0 —— 按设计如此, ⛔ 不喊。
-    return ""
 
 
 def _write_alert(line: str) -> None:

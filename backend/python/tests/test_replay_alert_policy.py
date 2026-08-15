@@ -26,7 +26,11 @@ from __future__ import annotations
 
 import pytest
 
-from smartbi.scripts.replay_equivalence_probe import alert_for
+#: ⛔ 从**无副作用**的那个模块 import。
+#: `replay_equivalence_probe` 在模块级跑 `bootstrap_probe`(设租户 ContextVar /
+#: 改 sys.path), 只要 import 它, 同进程后面的用例就会被污染 ——
+#: 实测 7 条不相干的测试因此变红(单独跑 9 passed, 一起跑 7 failed)。
+from smartbi.scripts.replay_alert_policy import alert_for
 
 
 def _alert(rc, *, pc=1, elig=0, total=40):
@@ -117,3 +121,42 @@ def test_cron_clears_the_alert_file_and_does_not_decide():
                  and any(t in ln for t in decision_terms)]
     assert not offenders, (
         f"告警判定又写回 shell 了, 那段没法单测: {offenders}")
+
+
+# ── 🔴 载体：判定模块必须**无 import 期副作用** ──────────────────────────
+def test_policy_module_has_no_import_side_effects():
+    """⛔ 判定模块不许 import 任何会在模块级动全局状态的东西。
+
+    实测代价(2026-08-15): 这些断言原来住在 `replay_equivalence_probe` 里,
+    而那个模块在模块级跑 `bootstrap_probe`(设租户 ContextVar / 改 sys.path)。
+    于是本文件只是 import 了它, 同进程后面的
+    `test_tenant_ctx_plumbing` / `test_capability_calculator_unit`
+    **7 条当场变红** —— 单独跑 9 passed, 一起跑 7 failed。
+
+    ▎判定逻辑要能被单独 import。跟 IO/自举/全局状态放在一起,
+    ▎它就只能连着那一整套一起加载, 而那一整套会改别人的世界。
+    """
+    import ast
+    from pathlib import Path
+
+    mod = (Path(__file__).resolve().parents[1] / "smartbi" / "scripts"
+           / "replay_alert_policy.py")
+    assert mod.exists(), f"⛔ 路径写错了就不是「跳过」而是「没测」: {mod}"
+    tree = ast.parse(mod.read_text(encoding="utf-8"))
+
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+    banned = [m for m in imported
+              if m and m != "__future__" and m.startswith("smartbi")]
+    assert not banned, (
+        f"判定模块 import 了 smartbi 的东西: {banned} —— "
+        "那会把自举/全局状态一起拉进来, 正是它被拆出来的原因")
+
+    # 模块级只许有 import / 常量 / 函数定义, ⛔ 不许有裸调用。
+    calls = [n for n in tree.body if isinstance(n, ast.Expr)
+             and isinstance(n.value, ast.Call)]
+    assert not calls, f"判定模块在模块级有调用: {[ast.dump(c)[:60] for c in calls]}"
