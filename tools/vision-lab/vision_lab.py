@@ -634,7 +634,10 @@ def verify_export_parity(best_pt: Path, onnx: Path, validation_dir: Path, thresh
         model = YOLO(str(model_path), task="detect")
         output: list[tuple[bool, bool]] = []
         for image in images:
-            result = model.predict(str(image), imgsz=640, conf=0.001, iou=0.45, verbose=False)[0]
+            result = model.predict(
+                str(image), imgsz=640, conf=0.001, iou=0.45,
+                verbose=False, device="cpu", rect=False,
+            )[0]
             white = color = 0.0
             if result.boxes is not None and len(result.boxes):
                 for cls, conf in zip(result.boxes.cls.cpu().tolist(), result.boxes.conf.cpu().tolist()):
