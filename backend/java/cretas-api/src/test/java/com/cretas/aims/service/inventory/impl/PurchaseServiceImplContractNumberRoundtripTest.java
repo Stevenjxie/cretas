@@ -5,8 +5,14 @@ import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.SettlementType;
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.SupplierMaterial;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
@@ -49,6 +55,7 @@ class PurchaseServiceImplContractNumberRoundtripTest {
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
+    @Mock private SupplierMaterialRepository supplierMaterialRepository;
 
     private PurchaseServiceImpl service;
 
@@ -70,6 +77,43 @@ class PurchaseServiceImplContractNumberRoundtripTest {
                 null,  // applicationEventPublisher
                 null   // materialBatchService
         );
+        ReflectionTestUtils.setField(service, "supplierMaterialRepository", supplierMaterialRepository);
+    }
+
+    /**
+     * create 路径的采购合同桩。
+     *
+     * <p>2026-08-15 补：这两条 create 用例此前在 origin/main 上一直是红的 ——
+     * {@code applySupplierPurchaseContract} 后来加了「查物料 + 查供应关系」两步，
+     * 而夹具没跟上，于是 {@code ResourceNotFoundException: 采购物料不存在: MAT-001}。
+     * 断言本身（contractNumber / settlementType / invoiceReminderDays 的 roundtrip）没问题，
+     * 它们只是**从来没跑到被断言的那一行**。
+     *
+     * <p>⚠️ 放在 helper 里而不是 {@code setUp}：MockitoExtension 是严格模式，
+     * update 系列用例不走这条路，在 setUp 里桩会触发 UnnecessaryStubbingException。
+     */
+    private void stubPurchaseContract() {
+        RawMaterialType material = new RawMaterialType();
+        material.setId("MAT-001");
+        material.setFactoryId(FACTORY);
+        material.setName("原料A");
+        material.setUnit("kg");
+        // 采购税率必须显式配置 —— 生产代码拒绝「默认 0% 下单」, 夹具也不能留空
+        material.setTaxTreatment(TaxTreatment.TAXABLE);
+        material.setTaxRate(TaxRate.TAX_13);
+        when(materialTypeRepository.findById("MAT-001")).thenReturn(Optional.of(material));
+
+        SupplierMaterial relation = new SupplierMaterial();
+        relation.setId("REL-001");
+        relation.setFactoryId(FACTORY);
+        relation.setSupplierId(SUPPLIER_ID);
+        relation.setMaterialTypeId("MAT-001");
+        relation.setPurchaseUnit("kg");
+        relation.setActive(true);
+        when(supplierMaterialRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(
+                FACTORY, SUPPLIER_ID, "MAT-001")).thenReturn(true);
+        when(supplierMaterialRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                FACTORY, SUPPLIER_ID, "MAT-001")).thenReturn(Optional.of(relation));
     }
 
     // ===== CREATE tests =====
@@ -82,6 +126,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
         supplier.setId(SUPPLIER_ID);
         when(supplierRepository.findByIdAndFactoryId(eq(SUPPLIER_ID), eq(FACTORY)))
                 .thenReturn(Optional.of(supplier));
+
+        stubPurchaseContract();
 
         PurchaseOrder saved = new PurchaseOrder();
         saved.setId(ORDER_ID);
@@ -117,6 +163,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
         supplier.setId(SUPPLIER_ID);
         when(supplierRepository.findByIdAndFactoryId(eq(SUPPLIER_ID), eq(FACTORY)))
                 .thenReturn(Optional.of(supplier));
+        stubPurchaseContract();
+
         PurchaseOrder saved = new PurchaseOrder();
         saved.setId(ORDER_ID);
         when(purchaseOrderRepository.save(any())).thenReturn(saved);

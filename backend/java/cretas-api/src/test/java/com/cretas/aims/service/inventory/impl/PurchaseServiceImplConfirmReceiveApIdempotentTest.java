@@ -55,6 +55,8 @@ import static org.mockito.Mockito.*;
 @DisplayName("PurchaseServiceImpl confirmReceive 应付幂等 (doomed-tx 修复)")
 class PurchaseServiceImplConfirmReceiveApIdempotentTest {
 
+    @Mock private com.cretas.aims.repository.AttachmentRepository attachmentRepository;
+
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Mock private PurchaseReceiveRecordRepository receiveRecordRepository;
@@ -88,6 +90,15 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
                 applicationEventPublisher,
                 materialBatchService);
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
+        // 2026-08-15 补夹具: confirmReceive 后来加了「必须先有收货凭证」这道闸,
+        // attachmentRepository 是可选注入, 夹具没装 → null → 503「收货凭证服务暂不可用」。
+        // 这里装上并给 1 张凭证, 让用例回到它原本要验的那一段。
+        ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
+        // lenient: 有的用例在到达凭证闸之前就先抛(如重复确认), 严格模式会报 UnnecessaryStubbing
+        org.mockito.Mockito.lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                any(), eq(com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT), any()))
+                .thenReturn(1L);
+
     }
 
     @Test
@@ -98,8 +109,16 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
         // PO 行: 下单 100, 已收 20 → 本次 12.5 在 30% 抄收上限内, 不触发超收 fail-fast。
         PurchaseOrderItem poItem = purchaseOrderItem(new BigDecimal("100.00"), new BigDecimal("20.00"));
 
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        // 2026-08-15 修夹具: confirmReceive 已改用 findByIdAndFactoryIdForUpdate (悲观锁),
+        // 夹具还桩着旧的 findById → 查不到入库单 → 抛 ResourceNotFound(404),
+        // 于是这些用例从来没跑到自己要断言的那一段。
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
         when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
+        // 同上: confirmReceive 里查采购单也走了带锁的查询(校验段, :2056)。
+        // ⚠️ 但【挂账段】(:2127) 用的仍是普通 findById —— 同一个方法里对同一张采购单
+        // 用了两种查询, 所以两个都得桩。只桩带锁那个会让 order 变成 null,
+        // 挂账被静默跳过, 表现为 recordPayableIfAbsent「零调用」。
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY)).thenReturn(Optional.of(order));
         when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
@@ -173,6 +192,9 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
         item.setMaterialTypeId(MATERIAL_ID);
         item.setQuantity(ordered);
         item.setReceivedQuantity(alreadyReceived);
+        // 2026-08-15 补: validatePersistedReceiptSelection 会对采购行与收货行各取一次
+        // 库存基本单位并要求非空(canonicalUnit 空即抛), 夹具的采购行一直没给单位。
+        item.setUnit("kg");
         return item;
     }
 

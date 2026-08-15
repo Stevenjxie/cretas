@@ -61,6 +61,7 @@ class PurchaseServiceOaSubmissionTest {
     @Mock ApplicationEventPublisher events;
     @Mock MaterialBatchService batchService;
     @Mock SupplierMaterialRepository supplierMaterialRepository;
+    @Mock com.cretas.aims.repository.workflow.ApprovalHistoryRepository approvalHistoryRepository;
     @Mock SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
     @Mock UnitContractService unitContractService;
     @Mock WorkflowEngineService workflowEngine;
@@ -81,6 +82,7 @@ class PurchaseServiceOaSubmissionTest {
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
         ReflectionTestUtils.setField(service, "approvalWorkflowService", approvalWorkflowService);
         ReflectionTestUtils.setField(service, "userRepository", userRepository);
+        ReflectionTestUtils.setField(service, "approvalHistoryRepository", approvalHistoryRepository);
         // 自审例外已从本类的私有方法提取到 SelfApprovalPolicy(销售/采购/调拨共用),
         // 用同一批 mock 构造真实策略, 行为与提取前等价。
         ReflectionTestUtils.setField(service, "selfApprovalPolicy",
@@ -381,6 +383,22 @@ class PurchaseServiceOaSubmissionTest {
         when(workflowEngine.transitionNode(
                 "instance-1", 1309L, "finance_manager", HistoryAction.APPROVE, null))
                 .thenReturn(approved);
+
+        // 2026-08-15 补夹具: PR #2660 之后, financeReviewedBy 只有在【审批历史里真有
+        // 一条 finance_manager 的 APPROVE】时才盖章(findFinanceApproval, :972)。
+        // 生产上这条历史由 transitionNode 落库, 但这里 workflowEngine 是 mock, 不写历史,
+        // 于是 findFinanceApproval 返 null → 不盖章 → 断言拿到 null。
+        // 本用例的当前节点【就是】财务节点且执行人是 finance_manager, 按 #2660 的口径
+        // 本来就该盖章, 所以补的是历史这一格, 不是放宽断言。
+        when(approvalHistoryRepository.findByFactoryIdAndInstanceIdOrderByCreatedAtAsc("F006", "instance-1"))
+                .thenReturn(List.of(com.cretas.aims.entity.workflow.ApprovalHistory.builder()
+                        .factoryId("F006")
+                        .instanceId("instance-1")
+                        .action(HistoryAction.APPROVE)
+                        .actorRole("finance_manager")
+                        .actorId(1309L)
+                        .createdAt(java.time.LocalDateTime.now())
+                        .build()));
 
         PurchaseOrder result = service.applyWorkflowAction(
                 "F006", "po-1", "instance-1",

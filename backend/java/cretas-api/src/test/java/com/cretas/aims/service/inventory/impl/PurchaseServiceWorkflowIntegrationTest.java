@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.cretas.aims.exception.BusinessException;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -175,12 +176,18 @@ class PurchaseServiceWorkflowIntegrationTest {
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
 
         when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(true);
-        when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
-                .thenReturn(Optional.empty());
 
+        // 2026-08-15 改前提: approveOrder 已【不再】从 approve 端点起实例 ——
+        // 源码 :1095 写明「唯一合法的创建边界是 submitOrder, 从 approve 起实例会重造
+        // 『已提交但 OA 里看不见』的 split-brain」。本用例原本桩 startWorkflow,
+        // 那条路已被刻意删除, 所以改成「已有 RUNNING 实例, transitionNode 后仍 RUNNING」。
+        // 用例要守的东西不变: PO 落到 WORKFLOW_RUNNING 且通知下一节点审批人。
         ApprovalWorkflowInstance running = buildInstance(
                 "inst-abc", InstanceStatus.RUNNING, List.of("approval_finance"));
-        when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq("PURCHASE_ORDER"), eq(po.getId()), anyMap(), eq(APPROVER_ID)))
+        when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
+                .thenReturn(Optional.of(running));
+        when(workflowEngine.transitionNode(eq("inst-abc"), eq(APPROVER_ID), anyString(),
+                eq(HistoryAction.APPROVE), anyString()))
                 .thenReturn(running);
 
         // approvalWorkflowService.getById returns a workflow with a JSON node defining approverRoles
@@ -208,42 +215,39 @@ class PurchaseServiceWorkflowIntegrationTest {
                 .notifyRole(eq(FACTORY_ID), roleCaptor.capture(), anyString(), anyString());
         assertEquals("finance_manager", roleCaptor.getValue());
 
-        // startWorkflow context 应含 amount / decision
-        ArgumentCaptor<Map<String, Object>> ctxCap = ArgumentCaptor.forClass(Map.class);
-        verify(workflowEngine).startWorkflow(eq(FACTORY_ID), eq("PURCHASE_ORDER"), eq(po.getId()),
-                ctxCap.capture(), eq(APPROVER_ID));
-        Map<String, Object> ctx = ctxCap.getValue();
-        assertEquals(new BigDecimal("50000"), ctx.get("amount"));
-        assertEquals("APPROVE", ctx.get("decision"));
-        assertEquals(0, ctx.get("priceVarianceItemCount"));
+        // 走的是 resume(transitionNode), 且绝不从 approve 端点起实例
+        verify(workflowEngine).transitionNode(eq("inst-abc"), eq(APPROVER_ID), anyString(),
+                eq(HistoryAction.APPROVE), anyString());
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
     }
 
     @Test
-    @DisplayName("approve_with_low_amount_auto_completes: condition skip 财务 → instance APPROVED → PO APPROVED")
-    void approve_with_low_amount_auto_completes() {
-        PurchaseOrder po = buildPo(new BigDecimal("2000")); // 远低于 30000 阈值
+    @DisplayName("approve_without_instance_is_rejected: 无 RUNNING 实例 → 409, 禁止从 approve 端点重造实例")
+    void approve_without_instance_is_rejected() {
+        // 2026-08-15 重写。原用例名 approve_with_low_amount_auto_completes, 桩的是
+        // 「getCurrentInstance 空 → approveOrder 调 startWorkflow 起实例 → 低额单 end_auto 自动完成」。
+        // 那条路已被**刻意删除**(源码 :1094-1099): 从 approve 端点起实例会重造
+        // 「已提交但 OA 里看不见」的 split-brain, 并绕过 initiator/审计契约。
+        //
+        // ⚠️ 所以这不是「断言写错了」, 是**需求变了** —— 断言守的是历史而不是需求。
+        // 改成守【新的那条保护】: 没有 RUNNING 实例时必须 409, 而不是偷偷补一个实例。
+        // 实测全仓此前**没有任何测试**守着 PURCHASE_APPROVAL_INSTANCE_MISSING。
+        //
+        // 「低额单自动跳过财务节点」那部分语义属于创建侧(submitOrder), 由
+        // PurchaseServiceOaSubmissionTest 覆盖, 本次改写没有丢覆盖。
+        PurchaseOrder po = buildPo(new BigDecimal("2000"));
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
 
         when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(true);
         when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
                 .thenReturn(Optional.empty());
 
-        // 工程师配的 workflow 让低额单走 end_auto → APPROVED 终态
-        ApprovalWorkflowInstance terminated = buildInstance(
-                "inst-low", InstanceStatus.APPROVED, List.of());
-        terminated.setCompletedAt(java.time.LocalDateTime.now());
-        when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq("PURCHASE_ORDER"), eq(po.getId()), anyMap(), eq(APPROVER_ID)))
-                .thenReturn(terminated);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.approveOrder(FACTORY_ID, po.getId(), APPROVER_ID));
+        assertEquals("PURCHASE_APPROVAL_INSTANCE_MISSING", ex.getErrorCode());
 
-        PurchaseOrder result = service.approveOrder(FACTORY_ID, po.getId(), APPROVER_ID);
-
-        assertEquals(PurchaseOrderStatus.APPROVED, result.getStatus(),
-                "instance APPROVED → PO APPROVED (自动跳过财务节点)");
-        assertEquals(APPROVER_ID, result.getApprovedBy());
-        assertNotNull(result.getApprovedAt());
-
-        // 没有 active approval 节点, 无需 notifyRole.
-        verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
+        // 阴性对照: 绝不能顺手起一个实例
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
     }
 
     @Test
