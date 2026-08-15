@@ -127,17 +127,24 @@ bash tests/api/test_authentication.sh
 
 ## 测试账号
 
-**密码统一**: `123456`
+**口令不写进仓库**: 真值放本地 `.env.test`（模板见根目录 `.env.test.example`）。
 
-| 账号 | 角色 | factoryId |
-|------|------|-----------|
-| factory_admin1 | 工厂管理员 | F001 |
-| workshop_sup1 | 车间主任 | F001 |
-| warehouse_mgr1 | 仓储主管 | F001 |
-| hr_admin1 | HR 管理员 | F001 |
-| dispatcher1 | 调度员 | F001 |
-| quality_insp1 | 质检员 | F001 |
-| platform_admin | 平台管理员 | - |
+| 账号 | 角色 | factoryId | 口令来源 |
+|------|------|-----------|---------|
+| f006_admin | 工厂管理员 | F006 | `$TEST_FACTORY_ADMIN_PASS` |
+| f006_workshop | 车间主任 | F006 | `$TEST_WORKSHOP_SUP_PASS` |
+| f006_warehouse_mgr | 仓储主管 | F006 | `$TEST_WAREHOUSE_MGR_PASS` |
+| f006_hr_admin | HR 管理员 | F006 | `$TEST_HR_ADMIN_PASS` |
+| f006_dispatcher | 调度员 | F006 | `$TEST_DISPATCHER_PASS` |
+| f006_quality_insp | 质检员 | F006 | `$TEST_QUALITY_INSP_PASS` |
+| platform_admin | 平台管理员 | - | `$TEST_PLATFORM_ADMIN_PASS` |
+
+⛔ **F001 那套账号（`factory_admin1` / `workshop_sup1` / …）是死值**：迁移
+`V20261029_68` 把工厂域收敛成只剩 F006 + LIUSHANMEN，F001 连同它的账号一并**物理删除**，
+用它们登录一律 401（长相是「全挂」，容易被误读成应用坏了）。
+
+✅ **F006「六膳门食品科技」是团队自己的测试租户，可以写入。**
+⛔ **LIUSHANMEN「六膳门」是真客户**（名字很像，别搞混），只读。
 
 ## 参考
 

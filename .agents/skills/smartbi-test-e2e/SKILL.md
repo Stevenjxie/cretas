@@ -27,8 +27,8 @@ description: SmartBI E2E 上传测试。将生成的测试 Excel 通过浏览器
 | 项目 | 默认值 |
 |------|--------|
 | BASE_URL | `http://localhost:5173` |
-| 用户名 | `factory_admin1` |
-| 密码 | `123456` |
+| 用户名 | `f006_admin`（F006 团队测试租户；`factory_admin1` 是死值，见下） |
+| 密码 | `$TEST_FACTORY_ADMIN_PASS`（本地 `.env.test`，不写进仓库） |
 | 截图目录 | `tests/test-data/screenshots/` |
 | 上传超时 | 120 秒 |
 
@@ -55,7 +55,7 @@ description: SmartBI E2E 上传测试。将生成的测试 Excel 通过浏览器
 
 1. `browser_navigate` → `{BASE_URL}/login`
 2. `browser_snapshot` 获取页面结构
-3. `browser_fill_form` 填写用户名 `factory_admin1`、密码 `123456`
+3. `browser_fill_form` 填写用户名 `f006_admin`、密码取自 `$TEST_FACTORY_ADMIN_PASS`
 4. `browser_click` 点击登录按钮
 5. `browser_wait_for` 等待跳转成功（URL 变为 `/dashboard` 或主页）
 6. `browser_snapshot` 确认登录成功
