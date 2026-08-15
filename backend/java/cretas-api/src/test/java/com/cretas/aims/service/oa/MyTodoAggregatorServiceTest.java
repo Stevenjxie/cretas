@@ -95,6 +95,12 @@ class MyTodoAggregatorServiceTest {
     @Mock
     private WastageReportService wastageReportService;
 
+    @Mock
+    private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngineService;
+
+    @Mock
+    private com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
+
     private MyTodoAggregatorService service;
 
     // ─── helpers ─────────────────────────────────────────────────────────────
@@ -207,6 +213,8 @@ class MyTodoAggregatorServiceTest {
 
     @BeforeEach
     void setUp() {
+        // 2026-08-15: 采购财审改按 OA 实例的当前节点取(见 fetchPurchaseFinanceReview 的说明),
+        // 这两个是 required=false 的字段注入依赖, 测试里要显式装上。
         service = new MyTodoAggregatorServiceImpl(
                 purchaseService,
                 salesService,
@@ -220,6 +228,37 @@ class MyTodoAggregatorServiceTest {
                 salesPriceAdjustmentService,
                 wastageReportService
         );
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "workflowEngineService", workflowEngineService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "purchaseOrderRepository", purchaseOrderRepository);
+    }
+
+    /**
+     * 让「有一张采购单正停在财务节点等 callerRole 审批」这件事成立。
+     *
+     * <p>⚠️ 口径变更: 此前桩的是 {@code purchaseService.getPurchaseOrdersByStatus(PENDING_FINANCE_REVIEW)},
+     * 而 prod 实测那个状态**永远是 0 条** —— OA 投影只有 RUNNING→WORKFLOW_RUNNING /
+     * APPROVED→FINANCE_APPROVED, 根本不经过 PENDING_FINANCE_REVIEW。
+     * 也就是说旧夹具喂的是一种**真实系统永远不会产出的形状**, 测试绿而线上永远空。
+     */
+    private void stubPendingPurchaseApproval(String orderId, String orderNumber,
+                                             java.math.BigDecimal amount, String supplierName) {
+        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance inst =
+                com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.builder()
+                        .id("inst-" + orderId)
+                        .factoryId(FACTORY_ID)
+                        .moduleCode("PURCHASE_ORDER")
+                        .businessEntityId(orderId)
+                        .status(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                        .currentNodeIds(new java.util.ArrayList<>(List.of("approval_finance")))
+                        .initiatedAt(java.time.LocalDateTime.now())
+                        .build();
+        when(workflowEngineService.findPendingForRole(eq(FACTORY_ID), anyString(),
+                eq("PURCHASE_ORDER"), any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(inst)));
+        when(purchaseOrderRepository.findAllById(any()))
+                .thenReturn(List.of(fakePurchaseOrder(orderId, orderNumber, amount, supplierName)));
     }
 
     // ─── Role mapping tests ────────────────────────────────────────────────
@@ -232,10 +271,7 @@ class MyTodoAggregatorServiceTest {
         @DisplayName("finance_manager: 4 类来源各 1 条 → listTodos 返 4 条")
         void listTodos_financeManager_returns5Types() {
             // arrange
-            when(purchaseService.getPurchaseOrdersByStatus(eq(FACTORY_ID),
-                    eq(PurchaseOrderStatus.PENDING_FINANCE_REVIEW), eq(1), eq(Integer.MAX_VALUE)))
-                    .thenReturn(com.cretas.aims.dto.common.PageResponse.of(
-                            List.of(fakePurchaseOrder("po-1", "PO-001", new BigDecimal("3000"), "北京飞熊")), 1, 1, 1L));
+            stubPendingPurchaseApproval("po-1", "PO-001", new BigDecimal("3000"), "北京飞熊");
 
             when(salesService.getSalesOrdersByStatus(eq(FACTORY_ID),
                     eq(SalesOrderStatus.PENDING_FINANCE_REVIEW), eq(1), eq(Integer.MAX_VALUE)))
@@ -532,7 +568,9 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("采购查询抛异常 → 其他 3 类正常返回，不 500")
         void fanOut_purchaseFails_othersStillReturn() {
-            when(purchaseService.getPurchaseOrdersByStatus(anyString(), any(), anyInt(), anyInt()))
+            // 让【现在真正走的那条路】抛 —— 桩已不再调用的旧方法等于没测到 fail-soft
+            when(workflowEngineService.findPendingForRole(anyString(), anyString(),
+                    anyString(), any(Pageable.class)))
                     .thenThrow(new RuntimeException("DB connection timeout"));
 
             when(salesService.getSalesOrdersByStatus(eq(FACTORY_ID),
@@ -610,10 +648,20 @@ class MyTodoAggregatorServiceTest {
             so1.setCreatedAt(newer);
             so1.setUpdatedAt(newer);
 
-            when(purchaseService.getPurchaseOrdersByStatus(eq(FACTORY_ID),
-                    eq(PurchaseOrderStatus.PENDING_FINANCE_REVIEW), eq(1), eq(Integer.MAX_VALUE)))
-                    .thenReturn(com.cretas.aims.dto.common.PageResponse.of(
-                            List.of(po1), 1, 1, 1L));
+            // 采购财审改按 OA 实例取; 实例的 initiatedAt 决定卡片的 submittedAt, 排序意图不变
+            when(workflowEngineService.findPendingForRole(eq(FACTORY_ID), anyString(),
+                    eq("PURCHASE_ORDER"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(
+                            com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.builder()
+                                    .id("inst-po-old")
+                                    .factoryId(FACTORY_ID)
+                                    .moduleCode("PURCHASE_ORDER")
+                                    .businessEntityId(po1.getId())
+                                    .status(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                                    .currentNodeIds(new java.util.ArrayList<>(List.of("approval_finance")))
+                                    .initiatedAt(older)
+                                    .build())));
+            when(purchaseOrderRepository.findAllById(any())).thenReturn(List.of(po1));
 
             when(salesService.getSalesOrdersByStatus(eq(FACTORY_ID),
                     eq(SalesOrderStatus.PENDING_FINANCE_REVIEW), eq(1), eq(Integer.MAX_VALUE)))

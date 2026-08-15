@@ -20,7 +20,7 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 // DTO 类型定义 (mirror 后端 TodoItemDTO.java)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/** 待办类型 — 5 个值, 对应 5 条业务来源 */
+/** 待办类型 — 与后端 TodoItemDTO.TodoType 对齐(勿手写个数, 加一个就在这里补一行) */
 export type TodoType =
   | 'PURCHASE_FINANCE_REVIEW'  // 采购单待财务审核
   | 'SALES_FINANCE_REVIEW'     // 销售单待财务审核
@@ -42,6 +42,10 @@ export interface TodoItemDTO {
   submittedAt: string;   // ISO datetime string
   needDetail: boolean;
   detailPath: string | null;
+  /** OA 审批实例 ID —— 仅 OA 驱动的类型有值(当前: PURCHASE_FINANCE_REVIEW) */
+  instanceId?: string | null;
+  /** 当前节点 ID(乐观锁), 调 OA 动作端点必带 */
+  expectedNodeId?: string | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -91,6 +95,38 @@ class TodoApprovalApiClient {
     const id = getCurrentFactoryId(factoryId);
     if (!id) throw new Error('factoryId 是必需的，请先登录');
     return id;
+  }
+
+  // ─── OA 统一动作入口 ─────────────────────────────────────────────────────────
+
+  /**
+   * 在 OA 审批中心处理当前节点。
+   *
+   * <p>⚠️ 采购的 `/finance-approve` `/finance-reject` 已于 2026-07-21 (#1557) 停用,
+   * 直接抛 410「采购审批只能在 OA 审批中心处理」。凡是 OA 驱动的待办, 通过/驳回
+   * **必须**走这个入口, 否则就是一个点了必失败的按钮。
+   *
+   * @param expectedNodeId 乐观锁: 与实例当前节点不符时后端返 409 OA_TASK_NODE_CHANGED
+   *                       (「审批节点已变化, 请刷新待办后重试」) —— 防两个人同时批。
+   */
+  async oaAction(
+    instanceId: string,
+    action: 'APPROVE' | 'REJECT',
+    expectedNodeId: string,
+    notes?: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: unknown; message?: string }> {
+    return apiClient.post(
+      `/api/mobile/${this.fid(factoryId)}/workflow/instances/${instanceId}/actions`,
+      {
+        action,
+        notes,
+        expectedNodeId,
+        // 每次点击一个新键。重复点不会重复执行 —— 第一次成功后节点已推进,
+        // 第二次会被 expectedNodeId 的乐观锁挡成 409, 而不是批两次。
+        idempotencyKey: `oa-${instanceId}-${expectedNodeId}-${action}-${Date.now()}`,
+      },
+    );
   }
 
   // ─── 采购财务审核 ───────────────────────────────────────────────────────────

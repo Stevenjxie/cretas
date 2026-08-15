@@ -90,6 +90,25 @@ public class TodoItemDTO {
     private boolean needDetail;
 
     /**
+     * OA 审批实例 ID（仅 OA 驱动的类型有值，如 PURCHASE_FINANCE_REVIEW）。
+     *
+     * <p>RN 用它调统一动作入口 {@code POST /workflow/instances/{instanceId}/actions}。
+     * 采购的 {@code /finance-approve} 等老端点已于 2026-07-21 (#1557) 停用（抛 410
+     * 「采购审批只能在 OA 审批中心处理」），所以卡片上的通过/驳回**必须**走 OA 动作端点，
+     * 否则就是一个点了必失败的按钮。
+     */
+    private String instanceId;
+
+    /**
+     * 当前节点 ID（乐观锁）。
+     *
+     * <p>动作端点要求带 {@code expectedNodeId}，与实例的 currentNodeIds 不符时返回
+     * 409 {@code OA_TASK_NODE_CHANGED}「审批节点已变化，请刷新待办后重试」——
+     * 防止两个人同时批、后到的那个把别人已经推进的节点又推一次。
+     */
+    private String expectedNodeId;
+
+    /**
      * RN 详情路由 hint（可选）。
      * 格式如 "TodoDetail/purchase/{refId}"，RN 无需 switch 即可直接 navigate。
      */
