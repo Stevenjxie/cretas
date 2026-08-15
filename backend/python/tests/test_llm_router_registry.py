@@ -34,100 +34,43 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 # `_SAFE_MODELS` 后面的 "2026-08-10 探针复审剔除" 段落:
 #   aliyun_c/qwen3-max-2025-09-23, aliyun_c/qwen3-vl-32b-instruct,
 #   aliyun_c/qwen3.7-max (与 qwen3.7-max-2026-05-17/-preview/-2026-05-20 不同模型)。
-_FROZEN_ALIYUN_REGISTRY = {
-    # 2026-08-13 全量重审: owner 三账号控制台余量截图 ∩ 生产探针非空 content。
-    # 上一版 26 条 → 本版 9 条。删掉的 17 条**全部实测 403 FreeTierOnly**,
-    # 不是"人审觉得不该留", 是它们当天真的调不动了。
-    #
-    # 🔴 被删的里面包括 qwen3.8-max(三账号各 100 万、到期 11/01)与
-    #    qwen3.7-flash 系列(10/23) —— 全表跑道最长的那几条, 昨天还都是双证通过的。
-    #    判据: **到期日只说「什么时候一定没」, 不说「今天还有没有」。**
-    #
-    # ⛔ aliyun_c/deepseek-v4-flash-0731 单独说明: 控制台写着剩 479,703、到期
-    #    10/31, 而探针 403。单边证据不收 —— 控制台与运行时打架时**不是**"控制台
-    #    更权威所以加上"。
-    ("aliyun_a", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
-    ("aliyun_a", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
-    ("aliyun_a", "qwen3.7-max-2026-05-17"): datetime.date(2026, 8, 24),
-    ("aliyun_a", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
-
-    ("aliyun_b", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
-    ("aliyun_b", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
-
-    ("aliyun_c", "qwen3.5-ocr"): datetime.date(2026, 9, 14),
-    ("aliyun_c", "kimi-k2.7-code"): datetime.date(2026, 9, 14),
-    ("aliyun_c", "qwen3.7-max-preview"): datetime.date(2026, 8, 24),
+#: 人审冻结表。⛔ 改注册表必须同步改这张表, 而改这张表要求有当天的证据。
+#:
+#: 🔴 2026-08-15 owner 裁定收敛到 aistore / deepseek / zhipu 三家
+#:    (原话:「暂时限制用 ai store 和 deepseek 还有 zhipu, 后面我有要求的时候
+#:    我们再说」)。旧的 aliyun / tencent / ark 冻结表**直接替换, ⛔ 不留注释**:
+#:    这张表不是历史记录, 是**对当前状态的断言**; 把旧值留在里面(哪怕注释掉)
+#:    它就同时是「记录」又是「断言」—— 同一个东西有两份, 它一定会漂。
+#:    留痕已有两份且都是权威位置: git 历史(完整旧表 + 那个 commit)、
+#:    以及 llm_router.py 里 08-09 / 08-13 两轮人审结论的审计注释。
+_FROZEN_REGISTRY = {
+    # AI Store: owner 确认账号级自动停 + 生产同源探针; 到期日是**真额度到期**。
+    ("aistore", "DeepSeek-V4-Flash-A"): datetime.date(2026, 9, 13),
+    ("aistore", "Qwen3-235B-A22B"): datetime.date(2026, 9, 13),
+    ("aistore", "Qwen3-32B"): datetime.date(2026, 9, 13),
+    # DeepSeek 官方: ⚠️ 日期是我们自己设的**强制复审点**, 不是额度到期
+    #    (按量付费本身没有到期日)。语义与上面三条不同。
+    ("deepseek", "deepseek-v4-flash"): datetime.date(2026, 11, 15),
+    ("deepseek", "deepseek-v4-pro"): datetime.date(2026, 11, 15),
+    # zhipu: 文本地板, 无到期日。
+    ("zhipu", "glm-4.5-air"): None,
 }
 
 
-# ── 2026-08-10 探针淘汰 5 条 (全部 403 AllocationQuota.FreeTierOnly) ──────
-#   aliyun_b/qwen3.7-max-preview
-#   aliyun_c/deepseek-v3.2            ← 当天曾是 REVIEW/CHAT/MAPPER 三槽链头
-#   aliyun_c/glm-4.6                  ← 淘汰前是 REVIEW 链头
-#   aliyun_c/qwen3-next-80b-a3b-instruct
-#   aliyun_c/qwen3-vl-flash-2026-01-22 ← 唯一 VL, 移除后 SLOT.VL 变空链(§9.1 已拍板)
-# 移除只需探针证据(准入才要控制台余量 ∩ 探针双证) —— 移除永远不制造计费风险。
-# 08-13 那批 aliyun_c 免费额度正在成批烧完 —— 同一天稍晚又淘汰 1 条:
-#   aliyun_c/qwen3.5-plus-2026-02-15  ← 上一次淘汰后它接替成为 REVIEW 链头,
-#                                        几小时内也烧完。今天第三个死在链头上的。
-# 📌 这正是「按到期日升序」的直接后果: 链头位置本身是最大消耗源, 而排在链头的
-#    恰恰是额度最少的那个 —— 排序策略在持续地把自己的头部烧掉。
+def test_registry_matches_frozen_probe_result():
+    """人审冻结表 vs 代码里的注册表。两边来源不同, 不是恒真式。"""
+    assert llm_router._SAFE_MODELS == _FROZEN_REGISTRY
 
 
-def test_aliyun_registry_matches_frozen_probe_result():
-    """人审冻结表 vs 代码里的注册表。两边来源不同, 不是恒真式。
+def test_minimal_safe_set_is_a_subset_of_the_registry():
+    """⚠️ 两张表**当前内容相同是偶然, 不是设计**:
+    一张是计费白名单, 一张是 registry 超龄后的最小可信集, 语义不同。
 
-    改注册表必须同步改这张表, 而改这张表要求有当天的控制台+探针证据。
+    ⇒ 这里只断言**子集**关系(那才是真不变式), ⛔ 不断言相等 —— 否则下一个人
+      看到「两张表一样」会以为其中一张多余, 把它删掉。
     """
-    actual = {k: v for k, v in llm_router._SAFE_MODELS.items()
-              if k[0].startswith("aliyun_")}
-    assert actual == _FROZEN_ALIYUN_REGISTRY
-
-
-def test_non_aliyun_registry_matches_frozen_probe_result():
-    """地板: 2026-08-12 起 ark 恢复 1 条、tencent 3 条、zhipu 1 条。
-
-    08-09 那版是「tencent 收缩到 1 个, ark 清空(provider 配置保留)」。08-12
-    owner 给出控制台余量 + 账号级计费开关确认(ark 安心体验模式 / tencent 用完即停),
-    生产同源探针连过两轮, 按准入判据(控制台 ∩ 探针, 双证)加回。
-    """
-    actual = {k: v for k, v in llm_router._SAFE_MODELS.items()
-              if not k[0].startswith("aliyun_")}
-    assert actual == {
-        # Shanghai Telecom AI Store: owner-confirmed account auto-stop + live
-        # synthetic probes on 2026-08-13.  A conservative hard expiry prevents
-        # the one-month grant from remaining callable indefinitely.
-        ("aistore", "DeepSeek-V4-Flash-A"): datetime.date(2026, 9, 13),
-        ("aistore", "Qwen3-235B-A22B"): datetime.date(2026, 9, 13),
-        ("aistore", "Qwen3-32B"): datetime.date(2026, 9, 13),
-        # 🔒 DeepSeek 官方 (2026-08-15, T7) —— **等 Steve 对白名单的明确 yes**,
-        #    在那之前 ⛔ 不许合并。
-        # 🔴 这两条的日期**不是**额度到期, 是我们自己设的**强制复审点**
-        #    (按量付费本身没有到期日)。与上面 aistore 那三条语义不同。
-        # 加它的理由是 aistore 三条 2026-09-13 硬到期, 而它们是五个槽的链首;
-        # 同日实测 _MINIMAL_SAFE_SET 8 条里 2 死 3 超预算, 扣掉 aistore 后
-        # 既活着又在 6.0s 内的只剩 zhipu 一条。
-        ("deepseek", "deepseek-v4-flash"): datetime.date(2026, 11, 15),
-        ("deepseek", "deepseek-v4-pro"): datetime.date(2026, 11, 15),
-        # tencent: owner 2026-08-13 控制台 14 个服务 ID ∩ 探针产出正文(len≥8)= 9 个。
-        # ⚠️ GET /models 返回 **102** 个而控制台只有 14 个 —— **接口目录 ≠ 账号权益**,
-        #    清单只认控制台。
-        ("tencent", "deepseek-v4-flash-202605"): None,
-        ("tencent", "kimi-k2.7-code-highspeed"): None,
-        ("tencent", "kimi-k2.7-code"): None,
-        ("tencent", "minimax-m2.7"): None,
-        ("tencent", "mimo-v2.5-pro"): None,
-        # 特化 SKU(hy-mt2=机器翻译 / hy-role、hunyuan-role=角色扮演)。
-        # 在白名单里 = 计费安全且 owner 确认; **不在任何池里** = 没跑过契约。
-        ("tencent", "hunyuan-role-latest"): None,
-        ("tencent", "hy-mt2-lite"): None,
-        ("tencent", "hy-role"): None,
-        ("tencent", "hy-mt2-plus"): None,
-        # ark: owner 给的 18 个官方 Model ID 逐条实打, **只有 3 个可调**;
-        # 3 个里 2 个不合契约(见 _ARK_CONTRACT_REJECTED / 角色扮演 SKU)。
-        ("ark", "doubao-seed-2-0-code-preview-260215"): None,
-        ("zhipu", "glm-4.5-air"): None,
-    }
+    assert llm_router._MINIMAL_SAFE_SET <= set(llm_router._SAFE_MODELS)
+    assert llm_router._MINIMAL_SAFE_SET, "最小集空了 —— 超龄之后就没有任何可用候选"
 
 
 def test_fast_non_dashscope_floor_precedes_the_slow_one():

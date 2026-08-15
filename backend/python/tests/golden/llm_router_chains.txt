@@ -1,54 +1,29 @@
-== chat (len=6)
+== chat (len=3)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== simple_text (len=5)
+== simple_text (len=2)
    2026-09-13  aistore/Qwen3-32B
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== insights (len=6)
+== insights (len=3)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== chart (len=7)
+== chart (len=4)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-09-13  aistore/Qwen3-235B-A22B
    2026-11-15  deepseek/deepseek-v4-flash
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== mapper (len=6)
+== mapper (len=3)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air
-== reasoning (len=10)
-   2026-09-14  aliyun_c/kimi-k2.7-code
-   2026-09-14  aliyun_a/kimi-k2.7-code
-   2026-08-24  aliyun_a/qwen3.7-max-preview
-   2099-01-01  tencent/mimo-v2.5-pro
-   2026-08-24  aliyun_a/qwen3.7-max-2026-05-17
-   2026-09-14  aliyun_b/kimi-k2.7-code
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
+== reasoning (len=3)
+   2026-09-13  aistore/DeepSeek-V4-Flash-A
+   2026-11-15  deepseek/deepseek-v4-flash
    2099-01-01  zhipu/glm-4.5-air
 == vl (len=0)
-== review (len=6)
+== review (len=3)
    2026-09-13  aistore/DeepSeek-V4-Flash-A
    2026-11-15  deepseek/deepseek-v4-flash
-   2099-01-01  tencent/deepseek-v4-flash-202605
-   2099-01-01  ark/doubao-seed-2-0-code-preview-260215
-   2099-01-01  tencent/minimax-m2.7
    2099-01-01  zhipu/glm-4.5-air

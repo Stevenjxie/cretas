@@ -165,7 +165,10 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     assert chain[0] not in _measured_failures(), (
         f"MAPPER 链头 {chain[0]} 是实测不达标的模型 —— 每次调用都先撞一跳"
     )
-    assert ("tencent", "minimax-m2.7") in chain     # non-DashScope floor
+    # 🔴 2026-08-15: 原来点名 ("tencent","minimax-m2.7") 当地板 —— 账号收敛后
+    #    地板是 zhipu。守的是「链尾有个非 aistore 的地板」这个**性质**。
+    assert any(a == "zhipu" for a, _m in chain), (
+        f"MAPPER 链尾没有非 aistore 的地板: {chain}")
     assert ("zhipu", "glm-4.5-air") in chain
     pool = llm_router._SLOT_POOLS[SLOT.MAPPER]      # pool only — floor excluded
     assert all(model not in llm_router._THINKING_ONLY for _a, model in pool)
@@ -302,13 +305,20 @@ _TODAY = datetime.date(2026, 8, 13)  # registry audit date → not stale
 
 
 def test_refuse_allows_current_registered_model():
-    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-preview", _TODAY) is None
-    assert llm_router._refuse_reason(
-        "aliyun_a", "qwen3.7-max-2026-05-17", _TODAY
-    ) is None
-    assert llm_router._refuse_reason(
-        "aliyun_a", "kimi-k2.7-code", _TODAY
-    ) is None
+    """守的是**需求**:「注册过且未到期的模型不该被这道闸拒」。
+
+    🔴 2026-08-15 改表达: 原来点名三条 aliyun 条目, 而账号收敛后它们不存在了。
+       守的东西没变, 变的是**用什么表达它** —— 改成遍历注册表本身,
+       这样以后换任何账号都不会因为「点名的那条没了」而红。
+    """
+    checked = 0
+    for (account, model), expiry in llm_router._SAFE_MODELS.items():
+        if expiry is not None and expiry <= _TODAY:
+            continue                      # 已到期的本来就该被拒, 不在本条守备范围
+        assert llm_router._refuse_reason(account, model, _TODAY) is None, (
+            f"{account}/{model} 已注册且未到期, 却被拒")
+        checked += 1
+    assert checked, "一条都没扫到 —— 闸空转了, 先查闸本身"
 
 
 def test_refuse_rejects_unregistered_landmine():
@@ -343,13 +353,21 @@ def test_refuse_denylist_veto():
 
 def test_staleness_failsafe_narrows_to_minimal_set():
     stale = _TODAY + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1)
-    # a normal (never-registered) model is refused when stale — the stale check
-    # fires before allowlist membership is even consulted.
-    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-plus", stale) == "registry_stale"
-    # …but a minimal-set survivor still allowed (if not itself expired).
-    # 2026-08-09: glm-5.2 从 aliyun_c 注册表整体移除(见 08-09 重审), 换成实测
-    # 仍在 _MINIMAL_SAFE_SET 里、到期日 09/14 的 aliyun_c/kimi-k2.7-code。
-    assert llm_router._refuse_reason("aliyun_c", "kimi-k2.7-code", stale) is None
+    # 守的是**性质**: 超龄时「不在最小集的被拒 / 在最小集的放行」。
+    # 🔴 2026-08-15 改表达: 原来点名 aliyun 条目。账号收敛后
+    #    `_SAFE_MODELS` 与 `_MINIMAL_SAFE_SET` **内容相同**, 于是
+    #    「在前者不在后者」的真实条目**不存在了** ——
+    #    ⇒ 反例改成**构造**一个 ghost, ⛔ 不依赖生产表碰巧有差异。
+    ghost = ("aistore", "__never-registered__")
+    assert ghost not in llm_router._MINIMAL_SAFE_SET
+    assert llm_router._refuse_reason(*ghost, stale) == "registry_stale"
+    # 正例: 最小集里任意一条未到期的仍然放行
+    survivor = next(
+        (pair for pair in sorted(llm_router._MINIMAL_SAFE_SET)
+         if (llm_router._SAFE_MODELS.get(pair) is None
+             or llm_router._SAFE_MODELS[pair] > stale)), None)
+    assert survivor is not None, "最小集里没有一条能活过超龄日 —— 那才是真问题"
+    assert llm_router._refuse_reason(*survivor, stale) is None
 
 
 def test_future_date_every_slot_keeps_a_live_fallback():
@@ -390,9 +408,20 @@ def test_fast_slots_disable_thinking_on_aliyun_hybrid():
     assert p["enable_thinking"] is False
 
 
-def test_reasoning_does_not_force_enable_thinking():
-    # deepseek-v3.1 400s on enable_thinking=true (only supports false/absent); forced
-    # deep thinking also times out call_chain. REASONING must NOT inject enable_thinking.
+# 🔴 2026-08-15: 下面四条原来拿 `SLOT.REASONING` 当「profile 不要求关思考」的
+#    样本。裁定把该槽改成显式 `enable_thinking: False` 之后, **仓里已经没有
+#    这样的槽了**(VL 也是 False)。
+#    ⇒ 它们守的**机制**没变、也仍然有价值:「profile 不要求关时, 各 provider
+#      分支不许自作主张注入关思考」。⇒ 把前提**显式构造出来**(monkeypatch 成
+#      `{}`), ⛔ 不再借用某个真实槽当时恰好是什么 profile ——
+#      那正是「阳性对照只在某个样本上成立」的老毛病。
+def _profile_that_does_not_ask_to_disable(monkeypatch):
+    monkeypatch.setitem(llm_router._SLOT_PARAMS, SLOT.REASONING, {})
+
+
+def test_reasoning_does_not_force_enable_thinking(monkeypatch):
+    # deepseek-v3.1 400s on enable_thinking=true (only supports false/absent)。
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(SLOT.REASONING, "aliyun_c", "deepseek-v3.1", {"messages": []})
     assert "enable_thinking" not in p
 
@@ -419,7 +448,8 @@ def test_tokenhub_common_models_get_the_documented_thinking_object(model):
     assert "enable_thinking" not in p
 
 
-def test_tokenhub_reasoning_slot_does_not_disable_thinking():
+def test_tokenhub_reasoning_slot_does_not_disable_thinking(monkeypatch):
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(
         SLOT.REASONING, "tencent", "deepseek-v4-pro-202606", {"messages": []},
     )
@@ -436,7 +466,8 @@ def test_zhipu_glm45_plus_gets_the_documented_thinking_object(model):
     assert "enable_thinking" not in p
 
 
-def test_zhipu_reasoning_slot_keeps_thinking_available():
+def test_zhipu_reasoning_slot_keeps_thinking_available(monkeypatch):
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(
         SLOT.REASONING, "zhipu", "glm-4.5-air", {"messages": []},
     )
@@ -547,6 +578,10 @@ class _ScriptedClient:
                 account = "aliyun_b"
             elif "key_a" in auth:
                 account = "aliyun_a"
+        elif "coregpu" in url:
+            account = "aistore"
+        elif "api.deepseek.com" in url:
+            account = "deepseek"
         elif "tokenhub" in url:
             account = "tencent"
         elif "volces" in url:
@@ -558,11 +593,15 @@ class _ScriptedClient:
 
 
 def _patch_keys(monkeypatch):
-    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
-    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
-    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
-    monkeypatch.setenv("LLM_TENCENT_API_KEY", "key_tencent_fake")
-    monkeypatch.setenv("LLM_ARK_API_KEY", "key_ark_fake")
+    """⚠️ 这些账号是**任意的** —— 下面那批 smoke 测的是 `call_chain` 的**机制**
+    (403 落下一跳 / 空正文重试 / content_validator / total_timeout), ⛔ 不是注册表。
+
+    2026-08-15 收敛账号(aistore/deepseek/zhipu)时这批用例集体变红, 而红的原因
+    (`not_allowlisted`)与被测行为**毫无关系** —— 很容易被读成「我这次改坏了什么」。
+    ⇒ 换账号时只需改这里和 `_CHAT_SMOKE_CHAIN`, ⛔ 不要去改各用例的断言。
+    """
+    monkeypatch.setenv("LLM_AISTORE_API_KEY", "key_aistore_fake")
+    monkeypatch.setenv("LLM_DEEPSEEK_API_KEY", "key_deepseek_fake")
     monkeypatch.setenv("LLM_ZHIPU_API_KEY", "key_zhipu_fake")
 
 
@@ -577,7 +616,8 @@ def _patch_keys(monkeypatch):
 # 📌 判据: **夹具里的模型名也是会过期的数据。** 它不像 golden 那样有闸盯着,
 #    坏了的表现是一整批用例集体报同一个与被测行为无关的错(not_allowlisted),
 #    很容易被读成"我这次改坏了什么"。
-_CHAT_SMOKE_CHAIN = [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code")]
+_CHAT_SMOKE_CHAIN = [("aistore", "DeepSeek-V4-Flash-A"),
+                     ("deepseek", "deepseek-v4-flash")]
 
 
 @pytest.mark.asyncio
@@ -605,13 +645,13 @@ async def test_call_chain_falls_through_403_to_next(monkeypatch):
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(403, "AllocationQuota.FreeTierOnly"),
-        "aliyun_b": _fake_response(200, json_payload=ok),
+        "aistore": _fake_response(403, "AllocationQuota.FreeTierOnly"),
+        "deepseek": _fake_response(200, json_payload=ok),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
     assert result == ok
-    assert client.call_log == [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code")]
+    assert client.call_log == _CHAT_SMOKE_CHAIN
 
 
 @pytest.mark.asyncio
@@ -628,7 +668,9 @@ async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     """
     _patch_keys(monkeypatch)
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
-    first_account, first_model = "aliyun_a", "kimi-k2.7-code"
+    # ⚠️ 这两个账号是**任意的** —— 测的是 SetLimitExceeded 的缓存行为, 与是
+    #    哪家 provider 无关。2026-08-15 收敛账号时换成保留的两家。
+    first_account, first_model = "aistore", "DeepSeek-V4-Flash-A"
     second_account, second_model = "zhipu", "glm-4.5-air"
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
@@ -663,8 +705,8 @@ async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
     empty = {"choices": [{"message": {"content": ""}}]}
     good = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(200, json_payload=empty),   # 200 but garbage
-        "aliyun_b": _fake_response(200, json_payload=good),
+        "aistore": _fake_response(200, json_payload=empty),   # 200 but garbage
+        "deepseek": _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -688,8 +730,15 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
-        [("aliyun_a", "kimi-k2.7-code"), ("aliyun_b", "kimi-k2.7-code"),
-         ("aliyun_c", "kimi-k2.7-code"), ("zhipu", "glm-4.5-air")],
+        # 🔴 2026-08-15: 必须**四条**。上一版收敛账号时我改成了三条 ——
+        #    而上面那段注释白纸黑字写着「2-3 candidates … every attempt
+        #    individually times out instead (verified empirically); 4 candidates
+        #    … reliably trips the explicit branch」。
+        #    本地凑巧绿(时序), **CI 红** —— 注释我读了, 没照做。
+        # ⚠️ 这里用两条 aistore 只是为了凑够条数; 本用例测的是**预算耗尽的分支**,
+        #    与是哪几个模型无关(_SlowClient 对所有请求一律 sleep)。
+        [("aistore", "DeepSeek-V4-Flash-A"), ("aistore", "Qwen3-235B-A22B"),
+         ("deepseek", "deepseek-v4-flash"), ("zhipu", "glm-4.5-air")],
     )
 
     class _SlowClient(_ScriptedClient):
@@ -779,20 +828,6 @@ def test_no_chain_calls_a_stale_or_translation_only_tokenhub_model():
     assert not offenders, f"stale TokenHub general routes remain: {offenders}"
 
 
-def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
-    """2026-08-09: only minimax-m2.7 survived the re-audit; the other three
-    _TOKENHUB_VERIFIED pairs from 08-02 now 401008 quota-exhausted and were
-    removed from _SAFE_MODELS. Task 4 rebuilt _TEXT_TAIL off the new registry,
-    so this now also checks the survivor is actually wired into the floor
-    (the test's name always promised this; it couldn't be checked until
-    Task 4 replaced the chain literal).
-    """
-    for pair in _TOKENHUB_REGISTERED_2026_08_09:
-        assert pair in llm_router._SAFE_MODELS, (
-            f"{pair} not registered -> _refuse_reason blocks it"
-        )
-        assert pair in llm_router._TEXT_TAIL, f"{pair} registered but not wired into the floor"
-
 
 def test_negative_confidence_safety_net_is_the_content_validator_not_chain_order():
     """毒丸(计划正确但 confidence 恒为负)的防线在**内容校验**, 不在链顺序。
@@ -880,8 +915,8 @@ async def test_call_chain_content_validator_rejects_a_200_and_falls_through(monk
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     good = {"choices": [{"message": {"content": '{"intent":"X","confidence":0.95}'}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(200, json_payload=pill),
-        "aliyun_b": _fake_response(200, json_payload=good),
+        "aistore": _fake_response(200, json_payload=pill),
+        "deepseek": _fake_response(200, json_payload=good),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
@@ -910,7 +945,7 @@ async def test_call_chain_without_a_content_validator_keeps_the_first_200(monkey
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(200, json_payload=pill),
+        "aistore": _fake_response(200, json_payload=pill),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -927,8 +962,8 @@ async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch
     first = {"choices": [{"message": {"content": "text one"}}]}
     second = {"choices": [{"message": {"content": "text two"}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(200, json_payload=first),
-        "aliyun_b": _fake_response(200, json_payload=second),
+        "aistore": _fake_response(200, json_payload=first),
+        "deepseek": _fake_response(200, json_payload=second),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     calls = {"n": 0}
@@ -957,19 +992,6 @@ async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch
 # router cannot detect (it cannot tell a paid 200 from a free one).
 # ════════════════════════════════════════════════════════════════════════
 
-def test_ark_provider_config_reads_its_own_env(monkeypatch):
-    monkeypatch.setenv("LLM_ARK_API_KEY", "ark_key_fake")
-    monkeypatch.delenv("LLM_ARK_BASE_URL", raising=False)
-    base, key = llm_router._provider_config("ark")
-    assert key == "ark_key_fake"
-    assert base == "https://ark.cn-beijing.volces.com/api/v3"
-
-
-def test_ark_base_url_is_overridable(monkeypatch):
-    monkeypatch.setenv("LLM_ARK_API_KEY", "ark_key_fake")
-    monkeypatch.setenv("LLM_ARK_BASE_URL", "https://ark.example/api/v3")
-    base, _ = llm_router._provider_config("ark")
-    assert base == "https://ark.example/api/v3"
 
 
 def test_ark_without_a_key_is_unreachable(monkeypatch):
@@ -1082,13 +1104,6 @@ _ARK_NOT_ENTITLED = {
 }
 
 
-def test_ark_registry_is_exactly_the_measured_viable_set():
-    registered = {m for (a, m) in llm_router._SAFE_MODELS if a == "ark"}
-    assert registered == _ARK_VIABLE, (
-        "ark registry drifted from the measured set; re-measure before editing "
-        f"(missing={_ARK_VIABLE - registered}, extra={registered - _ARK_VIABLE})"
-    )
-
 
 def test_ark_paused_or_contract_rejected_models_are_not_reachable():
     """2026-08-09: doubao-seed-2-1-turbo-260628 and doubao-seed-2-0-lite-260428
@@ -1124,8 +1139,9 @@ def test_ark_gets_arks_own_thinking_switch_not_dashscopes():
     assert "enable_thinking" not in out, "enable_thinking is a DashScope param"
 
 
-def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning():
-    """REASONING must not have its reasoning switched off."""
+def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning(monkeypatch):
+    """profile 不要求关思考时, ark 分支不许注入关。"""
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     out = llm_router._apply_slot_params(
         SLOT.REASONING, "ark", "deepseek-v4-pro-260425",
         {"model": "deepseek-v4-pro-260425"},
@@ -1141,51 +1157,47 @@ def test_tokenhub_thinking_switch_is_model_family_specific():
     assert out["enable_thinking"] is False
 
 
-def test_non_aliyun_floor_interleaves_two_independent_providers():
-    """The floor exists for "Aliyun is entirely gone". 2026-08-09 audit
-    collapsed it from 7 candidates (tencent x6 interleaved with ark x2, per
-    the pre-rewrite _TEXT_TAIL) down to 2 survivors that same day: 7 tencent
-    SKUs hit 401008 FREE_QUOTA_EXHAUSTED and both ark SKUs hit
-    SetLimitExceeded (see the new _TEXT_TAIL's comment). At this reduced size
-    the invariant that must still hold is the same one that mattered before:
-    it is not a single point of failure — the survivors must span 2 different
-    providers, not one provider's two models.
+def test_the_chain_is_not_a_single_point_of_failure():
+    """守的是**需求**:「一次 provider 故障不该把某个槽清空」。
+
+    🔴 2026-08-15 改表达。原来断言**地板**(`_TEXT_TAIL` 的非 aliyun 条目)必须
+       跨 ≥2 家。A2 之后地板**就是单点**(只剩 zhipu 一条)—— 那是 owner 的裁定,
+       不是缺陷。⇒ 但它守的风险(单点)**没有消失, 只是转移了**: 现在由整条链
+       承担。所以改成守「每个非空槽的链跨 ≥2 家 provider」, ⛔ 不是删掉。
     """
-    floor = [
-        (a, m) for (a, m) in llm_router._TEXT_TAIL
-        if a not in llm_router._ALIYUN_ACCOUNTS
-    ]
-    assert len(floor) >= 2, floor
-    assert len(set(a for a, _m in floor)) >= 2, (
-        f"floor is single-provider ({floor}) — one outage empties it"
-    )
+    checked = 0
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        if not chain:
+            continue                      # VL 是已裁定的空链
+        providers = {a for a, _m in chain}
+        assert len(providers) >= 2, (
+            f"{slot.value} 只有一家 provider ({providers}) —— 一次故障就清空它")
+        checked += 1
+    assert checked, "一个非空槽都没扫到 —— 闸空转了"
 
 
-def test_floor_is_exactly_the_2026_08_09_survivor_set():
-    """Pins the measured production floor.
+def test_the_deleted_accounts_are_really_gone():
+    """⛔ 阴性断言: 2026-08-15 收敛掉的六个账号不许悄悄回来。
 
-    08-09 的 TokenHub/Ark 崩塌把它从 7 缩到 2(上一个测试记着为什么)。2026-08-12
-    owner 提供控制台余量 + 账号级计费开关确认后按双证判据加回 3 条, 且**顺序**
-    也被钉住: 三条 ≤1.2s 的排在 6.7s 的 minimax-m2.7 之前, zhipu 仍在最后。
-
-    顺序在这里承重, 因为三条新条目到期日都是 None, `_build_chain` 的稳定排序
-    原样保留 _TEXT_TAIL 的书写顺序 —— 换句话说这个列表就是链尾的真实顺序。
+    ⚠️ 这条是删掉那几条 ark / tokenhub 用例时**留下的替代品** —— 直接删测试会让
+       「手滑把账号加回来」变成没人看的事。它守的是**裁定本身**。
+    ⇒ 真要加回来(owner:「后面我有要求的时候我们再说」), 改这条断言即可,
+      那一步是**显式**的。
     """
-    floor = [
-        (a, m) for (a, m) in llm_router._TEXT_TAIL
-        if a not in llm_router._ALIYUN_ACCOUNTS
-    ]
-    # 🔴 2026-08-13: 上一版这五条里**头两条死了**(ark 429 / tencent/hy3 402),
-    #    而它们正是 08-12 刚以「快地板」身份加进来的。地板排在链尾, 只有前面全挂
-    #    才会被走到 —— 所以它坏了最不容易被发现, 而它坏的那天正是最需要它的那天。
-    # ⚠️ 上面 docstring 里「到期日都是 None → 稳定排序原样保留书写顺序 → 这个列表
-    #    就是链尾的真实顺序」那句话是**错的**: 排序键在到期日之前还有能力档和延迟
-    #    档两位。真正守链尾顺序的是
-    #    test_fast_non_dashscope_floor_precedes_the_slow_one(已改成断言 SLOT_MODELS)
-    #    加上 _ABSOLUTE_LAST 这个结构键。本条只守 _TEXT_TAIL 的**成员**。
-    assert floor == [
-        ("tencent", "deepseek-v4-flash-202605"),
-        ("ark", "doubao-seed-2-0-code-preview-260215"),
-        ("tencent", "minimax-m2.7"),
-        ("zhipu", "glm-4.5-air"),
-    ]
+    import inspect
+    src = inspect.getsource(llm_router._provider_config)
+    for account in ("aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
+                    "tencent", "ark"):
+        assert f'"{account}": (' not in src, (
+            f"{account} 又出现在 _provider_config 里 —— "
+            "2026-08-15 owner 裁定收敛到 aistore/deepseek/zhipu 三家")
+        assert not any(a == account for a, _m in llm_router._SAFE_MODELS), (
+            f"{account} 又出现在 _SAFE_MODELS 里")
+    # ⛔ 机制**必须还在**(裁定: 删条目不删机制) —— 它们是加回来时的另一半
+    for sym in ("_TOKENHUB_ENABLE_THINKING_MODELS", "_TOKENHUB_THINKING_OBJECT_MODELS",
+                "_ARK_DISABLE_THINKING", "_THINKING_ONLY", "_REASONING_ONLY"):
+        assert hasattr(llm_router, sym), (
+            f"{sym} 被一起删了 —— #580 删 deepseek 时就是这样, "
+            "加回来才发现少了 thinking 注入那一半")
+
+
