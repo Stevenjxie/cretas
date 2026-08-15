@@ -4,7 +4,13 @@ import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.SupplierMaterial;
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
@@ -35,6 +41,7 @@ class PurchaseServiceImplCreateOrderNullablePriceTest {
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
+    @Mock private SupplierMaterialRepository supplierMaterialRepository;
 
     private PurchaseServiceImpl service;
 
@@ -54,6 +61,7 @@ class PurchaseServiceImplCreateOrderNullablePriceTest {
                 null,
                 null,
                 null);
+        ReflectionTestUtils.setField(service, "supplierMaterialRepository", supplierMaterialRepository);
     }
 
     @Test
@@ -72,6 +80,31 @@ class PurchaseServiceImplCreateOrderNullablePriceTest {
             return order;
         });
         when(purchaseOrderItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // 2026-08-15 补夹具: applySupplierPurchaseContract 后来加了「查物料 + 查供应关系」,
+        // 这条用例此前一直红在 ResourceNotFoundException: 采购物料不存在: rm_qhj_002 ——
+        // 从来没跑到下面那两条「不许伪造 0 价」的断言上。
+        // ⚠️ 物料与供应关系都【不给价】, 正是本用例要守的场景: 价格未知就该保持 null。
+        RawMaterialType material = new RawMaterialType();
+        material.setId("rm_qhj_002");
+        material.setFactoryId(FACTORY);
+        material.setName("青花椒");
+        material.setUnit("kg");
+        material.setTaxTreatment(TaxTreatment.TAXABLE);
+        material.setTaxRate(TaxRate.TAX_13);
+        when(materialTypeRepository.findById("rm_qhj_002")).thenReturn(Optional.of(material));
+
+        SupplierMaterial relation = new SupplierMaterial();
+        relation.setId("REL-qhj-002");
+        relation.setFactoryId(FACTORY);
+        relation.setSupplierId(SUPPLIER_ID);
+        relation.setMaterialTypeId("rm_qhj_002");
+        relation.setPurchaseUnit("kg");
+        relation.setActive(true);
+        when(supplierMaterialRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(
+                FACTORY, SUPPLIER_ID, "rm_qhj_002")).thenReturn(true);
+        when(supplierMaterialRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                FACTORY, SUPPLIER_ID, "rm_qhj_002")).thenReturn(Optional.of(relation));
 
         CreatePurchaseOrderRequest.PurchaseOrderItemDTO item = new CreatePurchaseOrderRequest.PurchaseOrderItemDTO();
         item.setMaterialTypeId("rm_qhj_002");
