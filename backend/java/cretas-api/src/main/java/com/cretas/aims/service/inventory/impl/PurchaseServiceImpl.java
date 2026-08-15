@@ -313,18 +313,41 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同买手对同供应商重复建 DRAFT 单 → 409。
-        // 键含 createdBy, 误拦仅"同一人 60s 内对同供应商双击"; 合法重复下单 (不同人/超 60s) 不受影响。
+        //
+        // ⚠️ 2026-08-15 键补上**内容维度** (Steve 拍板)。原先的键是
+        // (工厂 + 供应商 + 买手 + DRAFT + 60s), **不含任何内容维度** —— 同一买手 60s 内
+        // 给同一供应商下两张**内容不同**的单会被误拦。`status = DRAFT` 救不了场: web-admin 里
+        // 「创建」与「提交」是两个动作, 单据创建后就停在 DRAFT, 误拦窗口是活的。
+        //
+        // 同族兄弟实现都带内容维度 (ShipmentRecord=quantity / PaymentRecord=amount /
+        // InquiryQuote=materialTypeId+quantity / ExpenseRequest=category+amount+expenseDate /
+        // FoodSample=batchNumber)。唯一不带的那个 —— InternalTransfer —— 已于 2026-06-18
+        // 因「同一天给同一目标厂调不同物料被判成重复, 备料被彻底卡住」**整道移除**,
+        // 其墓志铭写着「唯独调拨没有 —— 它是异类」, 而那句当时就不成立: 采购是第二个异类。
+        //
+        // 现在只有**行项目内容也相同**才判为双击: 双击必然内容相同 → 照样 409, 保护不减;
+        // 连下两张不同的单 → 内容不同 → 放行, 误拦消失。
         java.util.List<PurchaseOrder> poDupes = request.getSupplierId() == null || request.getSupplierId().isBlank()
                 ? java.util.List.of()
                 : purchaseOrderRepository.findRecentDuplicateOrders(
                         factoryId, request.getSupplierId(), userId, java.time.LocalDateTime.now().minusSeconds(60));
         if (!poDupes.isEmpty()) {
-            PurchaseOrder existing = poDupes.get(0);
-            throw new com.cretas.aims.exception.BusinessException(409, String.format(
-                    "60 秒内已对该供应商创建采购单 (%s, 状态 %s), 如确为另一单请稍候再建",
-                    existing.getOrderNumber(), existing.getStatus()))
-                    .withHint("如需查看已有采购单请打开 " + existing.getOrderNumber())
-                    .withHintTarget(existing.getId());
+            List<String> requestSignature = requestContentSignature(request.getItems());
+            Map<String, List<PurchaseOrderItem>> itemsByOrder = purchaseOrderItemRepository
+                    .findByPurchaseOrderIdIn(poDupes.stream().map(PurchaseOrder::getId).toList())
+                    .stream()
+                    .collect(Collectors.groupingBy(PurchaseOrderItem::getPurchaseOrderId));
+            for (PurchaseOrder existing : poDupes) {
+                List<String> existingSignature = orderContentSignature(
+                        itemsByOrder.getOrDefault(existing.getId(), List.of()));
+                if (existingSignature.equals(requestSignature)) {
+                    throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                            "60 秒内已对该供应商创建过内容相同的采购单 (%s, 状态 %s), 如确为另一单请修改明细后再建",
+                            existing.getOrderNumber(), existing.getStatus()))
+                            .withHint("如需查看已有采购单请打开 " + existing.getOrderNumber())
+                            .withHintTarget(existing.getId());
+                }
+            }
         }
 
         // 生成订单号: PO-YYYYMMDD-序号
@@ -395,6 +418,38 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         log.info("创建采购订单: factoryId={}, orderNumber={}, items={}", factoryId, orderNumber, items.size());
         return order;
+    }
+
+    // ─── 防呆 R4 幂等闸的内容维度 ─────────────────────────────────────────────
+    //
+    // 口径与同域的 InquiryQuote 一致: (物料类型 + 数量)。取排序后的多重集,
+    // 所以行的**顺序**不影响判定 —— 同一张单换个行序重发仍算双击。
+    //
+    // ⚠️ 数量必须按**数值**比, 不能按 BigDecimal.equals: `1.0` 与 `1.00` scale 不同,
+    // equals 为 false 而 compareTo 为 0。前端两次提交的小数位很容易不一致,
+    // 用 equals 会让双击漏过闸 —— 这正是闸要挡的那件事。stripTrailingZeros 归一化。
+
+    /** 请求侧 (DTO) 的内容指纹。 */
+    private static List<String> requestContentSignature(List<CreatePurchaseOrderRequest.PurchaseOrderItemDTO> items) {
+        if (items == null) return List.of();
+        return items.stream()
+                .map(i -> contentKey(i.getMaterialTypeId(), i.getQuantity()))
+                .sorted()
+                .toList();
+    }
+
+    /** 已有单侧 (实体) 的内容指纹。 */
+    private static List<String> orderContentSignature(List<PurchaseOrderItem> items) {
+        if (items == null) return List.of();
+        return items.stream()
+                .map(i -> contentKey(i.getMaterialTypeId(), i.getQuantity()))
+                .sorted()
+                .toList();
+    }
+
+    private static String contentKey(String materialTypeId, BigDecimal quantity) {
+        String qty = quantity == null ? "null" : quantity.stripTrailingZeros().toPlainString();
+        return (materialTypeId == null ? "null" : materialTypeId) + "|" + qty;
     }
 
     @Override
