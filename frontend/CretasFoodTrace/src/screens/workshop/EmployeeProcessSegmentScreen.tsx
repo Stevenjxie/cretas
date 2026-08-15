@@ -6,7 +6,6 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
-  Alert,
   ActivityIndicator,
   Platform,
 } from 'react-native';
@@ -15,6 +14,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { employeeProcessSegmentApi, ActiveSegment } from '../../services/api/employeeProcessSegmentApiClient';
 import { BarcodeScannerModal } from '../../components/processing/BarcodeScannerModal';
+import { AppDialogHost, appAlert, appPrompt } from '../../components/ui';
 
 export default function EmployeeProcessSegmentScreen() {
   const navigation = useNavigation();
@@ -34,7 +34,7 @@ export default function EmployeeProcessSegmentScreen() {
       setSegments(res.data ?? []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '加载失败';
-      Alert.alert('错误', msg);
+      appAlert('错误', msg);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -56,16 +56,16 @@ export default function EmployeeProcessSegmentScreen() {
     try {
       const employeeId = parseInt(data, 10);
       if (isNaN(employeeId)) {
-        Alert.alert('扫码失败', '无法识别工牌信息');
+        appAlert('扫码失败', '无法识别工牌信息');
         return;
       }
       setActionLoading('start');
       await employeeProcessSegmentApi.start(factoryId, { employeeId });
-      Alert.alert('成功', '已开始工序段');
+      appAlert('成功', '已开始工序段');
       fetchActive();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '开工失败';
-      Alert.alert('开工失败', msg);
+      appAlert('开工失败', msg);
     } finally {
       setActionLoading(null);
     }
@@ -80,11 +80,11 @@ export default function EmployeeProcessSegmentScreen() {
           employeeId: segment.employeeId,
           reason,
         });
-        Alert.alert('成功', '已签退');
+        appAlert('成功', '已签退');
         fetchActive();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : '签退失败';
-        Alert.alert('签退失败', msg);
+        appAlert('签退失败', msg);
       } finally {
         setActionLoading(null);
       }
@@ -93,7 +93,7 @@ export default function EmployeeProcessSegmentScreen() {
   }, [factoryId, fetchActive]);
 
   const confirmCheckout = useCallback((segment: ActiveSegment) => {
-    Alert.alert('选择签退类型', `${segment.employeeName}`, [
+    appAlert('选择签退类型', `${segment.employeeName}`, [
       { text: '取消', style: 'cancel' },
       { text: '正常下班', onPress: () => handleCheckout(segment, 'NORMAL') },
       { text: '提前离开', style: 'destructive', onPress: () => handleCheckout(segment, 'EARLY_LEAVE') },
@@ -102,13 +102,16 @@ export default function EmployeeProcessSegmentScreen() {
 
   const handleSwitch = useCallback((segment: ActiveSegment) => {
     if (!factoryId) return;
-    Alert.prompt(
+    // ⛔ 原本用 Alert.prompt —— iOS 专有 API, Android 上「换工种」是死按钮。
+    // ⚠️ 仍在管用户要「工种 ID」, 按 fool-proof Rule 3 应改成工种选择器 —— 已记入
+    //    docs/dispatch/2026-08-15-sheet-findings-product-decisions.md 待办。
+    appPrompt(
       '换工种',
-      `请输入 ${segment.employeeName} 的新工种 ID`,
+      `请输入 ${segment.employeeName} 的新工种编号`,
       async (input) => {
         const newWorkTypeId = parseInt(input, 10);
         if (isNaN(newWorkTypeId)) {
-          Alert.alert('错误', '请输入有效的工种 ID');
+          appAlert('错误', '请输入有效的工种 ID');
           return;
         }
         try {
@@ -117,18 +120,16 @@ export default function EmployeeProcessSegmentScreen() {
             employeeId: segment.employeeId,
             newWorkTypeId,
           });
-          Alert.alert('成功', '已切换工种');
+          appAlert('成功', '已切换工种');
           fetchActive();
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : '切换失败';
-          Alert.alert('切换失败', msg);
+          appAlert('切换失败', msg);
         } finally {
           setActionLoading(null);
         }
       },
-      'plain-text',
-      '',
-      'number-pad',
+      { placeholder: '工种编号', confirmText: '切换' },
     );
   }, [factoryId, fetchActive]);
 
@@ -172,28 +173,17 @@ export default function EmployeeProcessSegmentScreen() {
               <Text style={styles.actionBtnText}>签退</Text>
             )}
           </TouchableOpacity>
-          {Platform.OS === 'ios' ? (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.switchBtn]}
-              onPress={() => handleSwitch(item)}
-              disabled={isItemLoading}
-            >
-              <Text style={styles.switchBtnText}>换工种</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.switchBtn]}
-              onPress={() => {
-                Alert.alert('换工种', `请输入 ${item.employeeName} 的新工种 ID (数字)`, [
-                  { text: '取消', style: 'cancel' },
-                  { text: '确定', onPress: () => handleSwitch(item) },
-                ]);
-              }}
-              disabled={isItemLoading}
-            >
-              <Text style={styles.switchBtnText}>换工种</Text>
-            </TouchableOpacity>
-          )}
+          {/* 原本这里按 Platform 分了两支: iOS 直接 handleSwitch, Android 先弹一个
+              「请输入工种 ID」的提示框, 点确定后仍然调 handleSwitch → Alert.prompt →
+              **在 Android 上什么都不会发生**。也就是说 Android 用户点两次、看见一次提示,
+              然后没有任何输入框。appPrompt 跨平台后这个分支没有存在理由。 */}
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.switchBtn]}
+            onPress={() => handleSwitch(item)}
+            disabled={isItemLoading}
+          >
+            <Text style={styles.switchBtnText}>换工种</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -251,6 +241,7 @@ export default function EmployeeProcessSegmentScreen() {
         onScan={handleScan}
         title="扫描工牌"
       />
+      <AppDialogHost />
     </View>
   );
 }
