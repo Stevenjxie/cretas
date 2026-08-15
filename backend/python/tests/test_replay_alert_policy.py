@@ -122,6 +122,14 @@ def test_cron_clears_the_alert_file_and_does_not_decide():
     assert not offenders, (
         f"告警判定又写回 shell 了, 那段没法单测: {offenders}")
 
+    # 🔴 「没喊」有两种：**决定不喊** / **没能做决定**。后者必须喊。
+    #    实测(2026-08-15): 探针一个 NameError 让它在第 190 行就崩了,
+    #    告警文件压根没被创建 —— 而「文件不存在」和「(a) 类决定不喊」
+    #    在 `[ -s ... ]` 里长得一模一样, 表象都是「alerts 没有新增」。
+    assert "! -f /tmp/replay_equivalence.alert" in src, (
+        "cron 没有区分「决定不喊」和「没能做决定」—— "
+        "探针崩掉时会静默, 而那正好长得像修好了")
+
 
 # ── 🔴 载体：判定模块必须**无 import 期副作用** ──────────────────────────
 def test_policy_module_has_no_import_side_effects():
