@@ -8714,8 +8714,20 @@ public class IntentKnowledgeBase {
         Optional<String> result = doMatchPhrase(input, businessSpecificMap);
         if (result.isPresent()) {
             // 📊 [NarrowPath] 埋点 3/3 —— 只打 taken=true 一侧, 且只打餐饮那张表。
-            // 这条是「601 条兜底短语到底有没有人走」的**唯一**读数来源:
-            // 观察窗跑满之前不许删那张表(见 restaurantPhraseMapping 的 601 个 .put)。
+            //
+            // 🔴 2026-08-15 订正: 原文写「这条是『601 条到底有没有人走』的**唯一**
+            //    读数来源」—— **那句是假的**, 而且它差点让我们删掉一张在用的表。
+            //    `restaurantPhraseMapping` 有**三个**读点:
+            //      1. 本方法(有埋点)              实测 0 次命中
+            //      2. 覆盖率计算(本文件 :9027)     无埋点, 未量
+            //      3. SemanticIntentMatcher :130  无埋点 —— 它把整张表灌进
+            //         **embedding 向量索引**(实测「Loaded 653 restaurant phrase
+            //         mappings (total: 4805)」× 241 次启动), 命中时只打
+            //         「Semantic match found」, **一行 [NarrowPath] 都没有**。
+            //    实测那条路真的命中过: `'菜品级别' -> '菜品'`, 而 `菜品` **只在**
+            //    餐饮这张表里(工厂表 0 处)。
+            // ⛔ 所以本埋点读到 0 **不能**推出「这张表没人用」。删表的依据见
+            //    docs/decisions/2026-08-15-601短语表与飞轮盖章-挂账.md —— 结论是**不删**。
             // ⚠️ factoryId 打 "n/a": 本方法没有租户在作用域里, 而它有 11 个调用点,
             //    为一个观察窗给它加参数不划算。需要按租户拆时再说。
             if ("RESTAURANT".equals(businessDomain)) {

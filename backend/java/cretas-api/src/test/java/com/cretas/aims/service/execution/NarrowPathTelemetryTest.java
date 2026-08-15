@@ -21,10 +21,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * [NarrowPath] 埋点断言 —— 跑在**产品真实入口** {@link IntentKnowledgeBase#matchPhrase}
  * 上(真实例、真 601 条表、无 mock), 不是直接调我自己写的 log 语句。
  *
- * <p>🔴 这个埋点不是可有可无的日志: 它是「601 条兜底短语到底有没有人走」的唯一读数
- * 来源。上一轮实测生产 Java 日志里 {@code factoryPack / ReadVeto / previewOnly /
- * matchPhrase} 四个词全是 0 次(阳性对照 {@code INFO}=9593) —— 不是没人走, 是**根本
- * 没有仪器**。观察窗没跑满之前不许删那张表。
+ * <p>🔴 <b>2026-08-15 订正</b>: 原文写「它是『601 条到底有没有人走』的<b>唯一</b>读数
+ * 来源」—— <b>那句是假的</b>, 而且它差点让我们删掉一张在用的表。
+ * {@code restaurantPhraseMapping} 有<b>三个</b>读点: ① 本埋点覆盖的
+ * {@link IntentKnowledgeBase#matchPhrase}; ② 覆盖率计算({@code IntentKnowledgeBase:9027});
+ * ③ {@code SemanticIntentMatcher} 把整张表灌进 <b>embedding 向量索引</b>。
+ * 第 ③ 条命中时只打「Semantic match found」, <b>一行 [NarrowPath] 都没有</b> ——
+ * 实测它真的命中过 {@code '菜品级别' -> '菜品'}, 而 {@code 菜品} <b>只在</b>餐饮这张表里。
+ *
+ * <p>⛔ 所以本埋点读到 0 <b>不能</b>推出「这张表没人用」。删表的依据见
+ * {@code docs/decisions/2026-08-15-601短语表与飞轮盖章-挂账.md} —— 结论是<b>不删</b>。
+ * 本埋点仍然有价值(它量的是 {@code matchPhrase} 那条路), 只是<b>不是唯一读数来源</b>。
  *
  * <p>⚠️ 埋点最容易长成的坏形状是「两侧都打」或「打了个恒真的东西」。这里钉死两条:
  * ① 命中才打(taken=true 一侧); ② 只打餐饮那张表, 工厂表命中不打 —— 否则读数会被
