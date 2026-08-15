@@ -27,6 +27,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
@@ -111,6 +112,13 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private com.cretas.aims.service.inventory.PurchaseExceptionService purchaseExceptionService;
+
+    /**
+     * 审批历史 —— 用来回答「**财务节点到底有没有真的执行过**」。
+     * required=false: 没有 OA 运行时的旧上下文照样能启动。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ApprovalHistoryRepository approvalHistoryRepository;
 
     /** Rule 2 hydration: lookup SO orderNumber for PO.salesOrderNumber @Transient. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -560,8 +568,10 @@ public class PurchaseServiceImpl implements PurchaseService {
             order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
             order.setApprovedBy(initiatorUserId);
             order.setApprovedAt(LocalDateTime.now());
-            order.setFinanceReviewedBy(initiatorUserId);
-            order.setFinanceReviewedAt(LocalDateTime.now());
+            // 🔴 原本这里把**提交人自己**写成财务审核人。没有配审批链 ≠ 财务看过了。
+            //    留空, 前端显示「无需财务审核(未设置审批节点)」。
+            order.setFinanceReviewedBy(null);
+            order.setFinanceReviewedAt(null);
             log.info("采购订单无需审批，直接生效: orderId={}, orderNumber={}",
                     orderId, order.getOrderNumber());
             return purchaseOrderRepository.save(order);
@@ -869,8 +879,59 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (status == PurchaseOrderStatus.FINANCE_APPROVED) {
             order.setApprovedBy(actorId);
             order.setApprovedAt(LocalDateTime.now());
-            order.setFinanceReviewedBy(actorId);
-            order.setFinanceReviewedAt(LocalDateTime.now());
+            // 🔴 这里原本无条件 `setFinanceReviewedBy(actorId)` —— 把**业务审批人**写成了财务审核人。
+            //
+            // 原注释的假设是「配置的 PURCHASE_ORDER 链就是完整 OA 链, 走到 APPROVED 即已含财务节点」。
+            // 这个假设在真实数据上不成立 (prod 实测 2026-08-15):
+            //   · LIUSHANMEN 的链只有一个 admin_approval(approverRoles=[factory_super_admin]), 没有财务节点
+            //   · 其余工厂**一条采购审批链都没有**
+            // 结果是产品里那个 procurement/finance-review 模块永远没有单据进得去。
+            //
+            // 现在只有审批历史里**确实存在财务角色的 APPROVE**才盖章; 否则留空,
+            // 前端据「状态已放行但审核人为空」显示「无需财务审核(未设置审批节点)」。
+            // ⚠️ 状态仍是 FINANCE_APPROVED —— 收货门禁认的就是它, 改状态会把没有财务节点的
+            //    工厂(例如 LIUSHANMEN)的采购收货整条堵死。
+            ApprovalHistory financeApproval = findFinanceApproval(instance);
+            if (financeApproval != null) {
+                order.setFinanceReviewedBy(financeApproval.getActorId());
+                order.setFinanceReviewedAt(financeApproval.getCreatedAt());
+            } else {
+                order.setFinanceReviewedBy(null);
+                order.setFinanceReviewedAt(null);
+                log.info("采购单 {} 的审批链无财务节点, 不记财务审核人 (工厂 {})",
+                        order.getOrderNumber(), order.getFactoryId());
+            }
+        }
+    }
+
+    /** 财务角色 —— 数据库里实际只有这一个 (SELECT DISTINCT role_code ... ILIKE '%financ%')。 */
+    private static final String FINANCE_ROLE = "finance_manager";
+
+    /**
+     * 审批历史里有没有**财务角色的通过动作**。
+     *
+     * <p>判据取 {@code actorRole} 而不是去解析工作流 JSON 里的 {@code approverRoles} ——
+     * 前者是「实际发生了什么」, 后者只是「本来打算让谁批」。配置改了、节点被跳过、
+     * 委派给别人, 都只有前者说得准。
+     */
+    private ApprovalHistory findFinanceApproval(ApprovalWorkflowInstance instance) {
+        if (approvalHistoryRepository == null || instance == null) {
+            return null;
+        }
+        try {
+            return approvalHistoryRepository
+                    .findByFactoryIdAndInstanceIdOrderByCreatedAtAsc(
+                            instance.getFactoryId(), instance.getId())
+                    .stream()
+                    .filter(h -> h.getAction() == ApprovalHistory.HistoryAction.APPROVE)
+                    .filter(h -> FINANCE_ROLE.equalsIgnoreCase(h.getActorRole()))
+                    .reduce((first, second) -> second)   // 取最后一次财务通过
+                    .orElse(null);
+        } catch (Exception e) {
+            // 查不到历史时按「没有财务审核」处理 —— 宁可少盖章, 不要盖错章。
+            log.warn("查审批历史失败, 按无财务审核处理: instanceId={}, err={}",
+                    instance.getId(), e.getMessage());
+            return null;
         }
     }
 
