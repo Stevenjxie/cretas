@@ -19,7 +19,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, CreatePurchaseOrderRequest } from '../../../services/api/purchaseApiClient';
 import { todayIso } from '../../../utils/orderDate';
-import { supplierApiClient, Supplier } from '../../../services/api/supplierApiClient';
+import { supplierApiClient, Supplier, SupplierMaterialRelation } from '../../../services/api/supplierApiClient';
 import {
   materialTypeApiClient,
   MaterialType,
@@ -74,6 +74,9 @@ export default function PurchaseOrderCreateScreen() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<MaterialType[]>([]);
+  // 该供应商【可供的原料】—— 物料选择器只列这些。见下方 useEffect 的说明。
+  const [supplierRelations, setSupplierRelations] = useState<SupplierMaterialRelation[] | null>(null);
+  const [relationsLoading, setRelationsLoading] = useState(false);
   const [packagingByMaterial, setPackagingByMaterial] = useState<Record<string, MaterialPackagingHierarchy | null>>({});
 
   // 头部表单 (DynamicForm) — supplier/expectedDate/remark; Canvas 可加自定义字段
@@ -85,6 +88,49 @@ export default function PurchaseOrderCreateScreen() {
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'material' | 'unit'; key: string } | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
+
+  const selectedSupplierId = String(headerValues?.supplierId ?? '').trim();
+
+  /**
+   * 供应商变了 → 重取「这个供应商可供的原料」, 并把已选但不再可供的行清空。
+   *
+   * ⚠️ 为什么要这一步 (2026-08-15, Google Sheet 反馈「采购订单新建 409」):
+   * 此前本屏加载的是【全厂所有原料】, 选择器只按搜索词过滤, 不看供应关系。
+   * 用户选完供应商后能选到跟他没有供应关系的物料, 一路填完提交才被后端拒:
+   *   409「该供应商未启用所选物料的供应关系」/「供应商与物料的供应关系不存在」
+   * web-admin 那边一直是对的(resolveSupplierMaterialRelations + 提交前校验),
+   * 只有 RN 这处漂了 —— 同一条规则两处实现, 漏的那处从任何一侧看都像已经修好了。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedSupplierId) {
+      setSupplierRelations(null);
+      return () => { cancelled = true; };
+    }
+    setRelationsLoading(true);
+    (async () => {
+      try {
+        const rows = await supplierApiClient.getSupplierMaterials(selectedSupplierId, factoryId);
+        if (cancelled) return;
+        setSupplierRelations(rows);
+        // 换供应商后, 已选的物料可能不再可供 —— 清空那些行的物料, 别把走不通的组合留在表单里
+        const supplied = new Set(rows.map((r) => r.materialTypeId));
+        setItems((prev) => prev.map((it) => (
+          it.materialTypeId && !supplied.has(it.materialTypeId)
+            ? { ...it, materialTypeId: '', materialName: '', materialUnit: '', unit: '', materialPackagingSpecId: '' }
+            : it
+        )));
+      } catch (err) {
+        if (cancelled) return;
+        // 取不到就【不假装可供】—— 留 null, 选择器显示「无法确认可供范围」而不是列出全厂原料
+        log.error('加载供应关系失败', err as Error);
+        setSupplierRelations(null);
+      } finally {
+        if (!cancelled) setRelationsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedSupplierId, factoryId]);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -293,11 +339,16 @@ export default function PurchaseOrderCreateScreen() {
     ? items.find((item) => item.key === openMenuFor.key)
     : undefined;
   const normalizedPickerSearch = pickerSearch.trim().toLowerCase();
+  // 先收敛到「该供应商可供」, 再按搜索词过滤。
+  // supplierRelations 为 null = 还没选供应商 / 取失败 → 一个都不列 (宁可不给选, 不给走不通的选项)
+  const suppliedMaterials = supplierRelations === null
+    ? []
+    : materials.filter((m) => supplierRelations.some((r) => r.materialTypeId === m.id));
   const visiblePickerMaterials = normalizedPickerSearch
-    ? materials.filter((material) =>
+    ? suppliedMaterials.filter((material) =>
         material.name.toLowerCase().includes(normalizedPickerSearch)
         || material.code.toLowerCase().includes(normalizedPickerSearch))
-    : materials;
+    : suppliedMaterials;
   const activeUnitOptions = activePickerItem ? getUnitOptionsFor(activePickerItem) : [];
 
   if (loading) {
@@ -522,9 +573,38 @@ export default function PurchaseOrderCreateScreen() {
             >
               {openMenuFor?.kind === 'material' ? (
                 visiblePickerMaterials.length === 0 ? (
-                  <View style={styles.pickerEmpty}>
-                    <Text style={styles.pickerEmptyTitle}>暂无匹配原料</Text>
-                    <Text style={styles.pickerEmptyHint}>请修改搜索词，或联系管理员在原料管理中创建。</Text>
+                  /*
+                   * 空态要说清【为什么空】。此前无论什么原因都只说「暂无匹配原料，请修改搜索词」——
+                   * 而真正常见的原因是「还没选供应商」或「这个供应商没配供应关系」,
+                   * 让用户去改搜索词是把他支到一件他做了也没用的事上。
+                   */
+                  <View style={styles.pickerEmpty} testID="purchase-material-empty">
+                    {!selectedSupplierId ? (
+                      <>
+                        <Text style={styles.pickerEmptyTitle}>请先选择供应商</Text>
+                        <Text style={styles.pickerEmptyHint}>原料按「该供应商可供的范围」筛选，选好供应商后这里才会有内容。</Text>
+                      </>
+                    ) : relationsLoading ? (
+                      <>
+                        <Text style={styles.pickerEmptyTitle}>正在加载可供原料…</Text>
+                        <Text style={styles.pickerEmptyHint}>正在读取该供应商的供应关系。</Text>
+                      </>
+                    ) : supplierRelations === null ? (
+                      <>
+                        <Text style={styles.pickerEmptyTitle}>无法确认可供范围</Text>
+                        <Text style={styles.pickerEmptyHint}>供应关系读取失败，请下拉重试；这里不列出全部原料，避免选到该供应商供不了的物料。</Text>
+                      </>
+                    ) : supplierRelations.length === 0 ? (
+                      <>
+                        <Text style={styles.pickerEmptyTitle}>该供应商暂无可供原料</Text>
+                        <Text style={styles.pickerEmptyHint}>请先在「供应商—原料」中为该供应商配置供应关系并维护采购价，或改选其他供应商。</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.pickerEmptyTitle}>暂无匹配原料</Text>
+                        <Text style={styles.pickerEmptyHint}>该供应商可供 {supplierRelations.length} 种原料，请修改搜索词。</Text>
+                      </>
+                    )}
                   </View>
                 ) : (
                   visiblePickerMaterials.map((material) => {
