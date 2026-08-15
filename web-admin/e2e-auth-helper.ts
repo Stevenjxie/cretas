@@ -124,10 +124,15 @@ export function resolveTokenFromStorageState(
  * 判据: 跑重型套件时把**可用内存**与通过数并排记, 两条曲线一起动就说明在量环境。
  */
 export async function fetchLoginToken(
-  username = 'factory_admin1',
-  password = '123456',
+  username = E2E_USER,
+  password = E2E_PASS,
   apiBase = DEFAULT_API,
 ): Promise<LoginResult> {
+  if (!password) {
+    throw new Error(
+      `未配置 ${username} 的 E2E 口令；请设置 E2E_PASS/TEST_FACTORY_ADMIN_PASS，或使用 loginOrReuseSession 复用受控 storageState`,
+    );
+  }
   const res = await fetch(`${apiBase}/auth/unified-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -237,8 +242,8 @@ export async function setupAuth(
   page: Page,
   baseUrl: string,
   apiBase = DEFAULT_API,
-  username = 'factory_admin1',
-  password = '123456',
+  username = E2E_USER,
+  password = E2E_PASS,
 ): Promise<LoginResult> {
   const result = await fetchLoginToken(username, password, apiBase);
   await injectAuthCookie(context, page, result.token, result.loginData, baseUrl);
@@ -254,23 +259,39 @@ export async function setupAuth(
  * 「每个列表都空但不报错」)。
  */
 export async function loginOrReuseSession(
-  username = 'factory_admin1',
-  password = '123456',
+  username = E2E_USER,
+  password = E2E_PASS,
   apiBase = DEFAULT_API,
   tag = 'e2e',
 ): Promise<LoginResult> {
+  let loginError: unknown;
+  if (password) {
+    try {
+      return await fetchLoginToken(username, password, apiBase);
+    } catch (e) {
+      loginError = e;
+    }
+  }
+
+  const token = resolveTokenFromStorageState();
+  if (!token) {
+    if (loginError instanceof Error) throw loginError;
+    throw new Error(
+      `未配置 ${username} 的 E2E 口令，且 storageState 中没有可复用 token`,
+    );
+  }
+
   try {
-    return await fetchLoginToken(username, password, apiBase);
-  } catch (e) {
-    const token = resolveTokenFromStorageState();
-    if (!token) throw e;
     const c = JSON.parse(
       Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'),
     );
     if (!c.factoryId || !c.userId) {
       throw new Error('storageState 里的 token 缺 factoryId/userId, 注进去会让工厂级接口全挂');
     }
-    console.warn(`[${tag}] 口令登录不可用, 改用 storageState token: ${(e as Error).message}`);
+    const reason = loginError instanceof Error
+      ? `口令登录不可用: ${loginError.message}`
+      : '未配置口令';
+    console.warn(`[${tag}] ${reason}, 改用 storageState token`);
     return {
       token,
       loginData: {
@@ -278,6 +299,8 @@ export async function loginOrReuseSession(
         factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'],
       },
     };
+  } catch (e) {
+    throw new Error(`无法复用 storageState token: ${(e as Error).message}`);
   }
 }
 
