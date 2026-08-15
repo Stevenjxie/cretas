@@ -730,8 +730,15 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
-        [("aistore", "DeepSeek-V4-Flash-A"), ("deepseek", "deepseek-v4-flash"),
-         ("zhipu", "glm-4.5-air")],
+        # 🔴 2026-08-15: 必须**四条**。上一版收敛账号时我改成了三条 ——
+        #    而上面那段注释白纸黑字写着「2-3 candidates … every attempt
+        #    individually times out instead (verified empirically); 4 candidates
+        #    … reliably trips the explicit branch」。
+        #    本地凑巧绿(时序), **CI 红** —— 注释我读了, 没照做。
+        # ⚠️ 这里用两条 aistore 只是为了凑够条数; 本用例测的是**预算耗尽的分支**,
+        #    与是哪几个模型无关(_SlowClient 对所有请求一律 sleep)。
+        [("aistore", "DeepSeek-V4-Flash-A"), ("aistore", "Qwen3-235B-A22B"),
+         ("deepseek", "deepseek-v4-flash"), ("zhipu", "glm-4.5-air")],
     )
 
     class _SlowClient(_ScriptedClient):
