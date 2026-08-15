@@ -651,7 +651,11 @@ async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
     pool = _restaurant_pool()
     llm_json = json.dumps({
         "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "time_range": "2026-01-01 to 2026-03-31",  # NOT the expected dict shape
+        # NOT the expected dict shape.
+        # ⚠️ 2026-08-15: 年份特意用 1999 —— 原来写的是 2026-01-01~03-31, 而那
+        #    恰好等于「今天落在 Q2 时的上个季度」。那种日子里, 「模型的值被采纳」
+        #    与「代码算对了」会产出**同一个** date_range, 阴性对照当天失去区分力。
+        "time_range": "1999-01-01 to 1999-03-31",
         "confidence": 0.8,
         "clarification_needed": False,
     })
@@ -664,10 +668,24 @@ async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
 
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    # The malformed LLM date is ignored, and the system must ask the user
-    # instead of silently substituting an arbitrary default window.
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+
+    # 🔴 2026-08-15 订正: 本用例原来断言「必须反问」, 那是**当时**「上个季度」
+    #    确定性层解不出来的推论, 不是本用例要守的性质。现在季度由代码算
+    #    (owner 裁定 ①), 再反问反而是缺陷 —— 用户明明说清楚了。
+    #    ⇒ 守的东西从「字面(会不会反问)」抬到「性质(模型塞的日期有没有被采纳)」,
+    #      而 docstring 里那句合同一个字都没变: raw date 被忽略, 窗口来自
+    #      确定性层对**原句**的解析。
+    today = date.today()
+    q_index = (today.month - 1) // 3
+    year, prev_q = (today.year - 1, 3) if q_index == 0 else (today.year, q_index - 1)
+
+    # 阴性对照: 模型走私进来的那个 raw date 不许变成窗口
+    assert spec.date_range != (date(1999, 1, 1), date(1999, 3, 31))
+    assert spec.date_range[0] != date(1999, 1, 1)
+    # 阳性: 窗口正是确定性层从原句算出来的上个季度
+    assert spec.window_label == "上个季度"
+    assert spec.date_range[0] == date(year, prev_q * 3 + 1, 1)
+    assert spec.clarification_needed is False
 
 
 @pytest.mark.asyncio
