@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
  * 所以每条放行用例都额外 verify「候选单被查出来了、且行项目被加载做了比对」，
  * 断言的是「闸跑了并且判定放行」，不是「闸没跑」。
  */
-class PurchaseOrderIdempotencyContentDimensionTest {
+class PurchaseOrderIdempotencyContentDimensionContractTest {
 
     private static final String FACTORY = "F006";
     private static final Long BUYER = 1309L;

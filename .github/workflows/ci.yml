@@ -139,6 +139,26 @@ jobs:
       # `*StartupGuardTest` 是给这类闸立的命名约定 —— 以后新写的启动期守卫按这个后缀
       # 命名就自动被捞进来, 不用再改 CI(改 CI 这件事没人会记得, 于是新闸又不跑)。
       #
+      # 🔴 2026-08-16: 再扩一项 `*ContractTest`, 并显式排除一个类。
+      # 上面那条「约定就能自动捞进来」的设想, 实测没有兑现 —— 因为**约定只有人记得才生效**,
+      # 而那正是它自己想解决的问题。当天量的结果:
+      #   全仓 1277 个测试类, push 上真正被执行的只有 37 个(= 2.9%);
+      #   46 个「会去读 src/main 源码」的闸里, **29 个**不匹配任何约定后缀, 一条都没跑过;
+      #   而前一晚新写的 PurchaseOrderIdempotency… 闸, 即使把选择器扩到 4 项**仍然**匹配不上
+      #   (它当时叫 …ContentDimensionTest)。差一点就换来一道同样不执行的闸。
+      #
+      # 所以这次不只是加后缀, 而是把约定**机械化**:
+      # `GateSelectorCoverageContractTest` 枚举所有读 src/main 的测试类, 断言它们的类名
+      # 落在本选择器的匹配面里。存量 29 个冻结成棘轮(只许变短), 名单外新增的当场红。
+      # ⇒ 下一个忘记按约定命名的人, 会在 CI 上被拦住, 而不是安静地多一道哑闸。
+      #
+      # `!SkuUnitStorageIsCodeContractTest`: 该类在 origin/main 上有 2 条一直红的断言,
+      # 守的是已被有意改掉的行为(两侧都已从 normalized.code() 迁到权威函数 storageUnit,
+      # 因为 code() 会把「只」写成 pcs)。文件落在 ACTIVE 台账
+      # BUG-F006-UNIT-DIMENSION-SCOPE-001 的 scope 锁里, 由该任务 owner 修复后删掉这个排除。
+      #
+      # 实测代价: 选择器从 54 条 → 358 条测试, 本地 wall 129s(热编译), 远低于本步 30min 上限。
+      #
       # ⚠️ 下面两处 TARGET_TESTS 必须**逐字相同**: 后者写进制品 manifest 的
       # target_tests, 预热的覆盖检查(requested ⊆ ci_ran)拿它做判据。
       # target_tests is passed through the environment, never interpolated into
@@ -149,7 +169,7 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 30
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest,!SkuUnitStorageIsCodeContractTest' || '') }}
         run: |
           started=$(date +%s)
           if [ -n "$TARGET_TESTS" ]; then
@@ -174,7 +194,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         working-directory: backend/java/cretas-api/target
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest,!SkuUnitStorageIsCodeContractTest' || '') }}
         run: |
           JAR=cretas-backend-system-1.0.0.jar
           test -f "$JAR"
