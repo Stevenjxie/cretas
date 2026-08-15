@@ -62,10 +62,32 @@ LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
   echo "$out"
   echo "=== done (rc=$rc) ==="
 
-  # rc: 0 = 全等价; 1 = 有 ②/③; 2 = 仪器问题(阳性对照 0 / 表里 0 行)
-  # ⛔ 阳性对照失败要单独喊 —— 那不是「产品没问题」，是「这次没量到东西」。
+  # ── rc 三态(硬约束 4)。⚠️ rc=2 是「**这次没量到东西**」，不是「量到了但不合格」。
+  #   rc=0  全等价
+  #   rc=1  有 ②执行不等价 / ③执行失败  —— 读数有效，且指向缺陷
+  #   rc=2  这次没量到东西。**三个成因，处置完全不同**：
+  #         (a) eligible_stored=0  存量按设计全部失效(旧格式，等人逐条盖章)
+  #             → **不是故障**。没有等价性证据，但也没有东西坏掉。
+  #         (b) eligible_stored>0 却 0 条回放 → **仪器坏了**(A 遍撬棍失效)
+  #         (c) positive_control=0 / 表里 0 行 → 格式门本身坏了 / plan_version 对不上
+  # 🔴 2026-08-15 订正：原来三种一律喊「阳性对照未通过」，而 08-13 起每天落的都是
+  #    (a) —— positive_control 明明是 1。**一个天天误报的告警最终会被忽略**(形态 E)，
+  #    所以按 eligible_stored 分开喊。
   if [ "$rc" -eq 2 ]; then
-    echo "REPLAY EQUIV INSTRUMENT DEAD $(date '+%F %T') — 阳性对照未通过, 本次读数作废, 见 $LOG" >> "$ALERTS"
+    elig=$(python - <<'PY' 2>/dev/null || echo "?"
+import json
+try:
+    p = json.load(open('/tmp/replay_equivalence.json', encoding='utf-8'))
+    print(p.get('eligible_stored') if isinstance(p, dict) else '?')
+except Exception:
+    print('?')
+PY
+)
+    if [ "$elig" = "0" ]; then
+      echo "REPLAY EQUIV NO ELIGIBLE STOCK $(date '+%F %T') — 存量 0 条合格(旧格式, 等人逐条盖章), 本轮无等价性证据; ⛔ 这不是故障, 见 $LOG" >> "$ALERTS"
+    else
+      echo "REPLAY EQUIV INSTRUMENT DEAD $(date '+%F %T') — 有合格存量($elig 条)却一条没回放, 或格式门本身坏了; 本次读数作废, 见 $LOG" >> "$ALERTS"
+    fi
   elif [ "$rc" -ne 0 ]; then
     echo "REPLAY EQUIV DRIFT $(date '+%F %T') — 有条目不再等价(指纹**可能没变**), 见 $LOG" >> "$ALERTS"
   fi
@@ -89,6 +111,11 @@ print(json.dumps({
     #   positive_control  机制今天还能不能开火(恒 1, 为 0 = 仪器坏了)
     #   eligible_stored   存量里今天真的会回放几条(为 0 是**事实**不是故障)
     #   replay_hits       这一轮实际命中了几条(旧口径, 保留可比性)
+    # 🔴 2026-08-15: `counts` 的 ⓪ 标签**没跟上拆两行** —— 它写着
+    #    「阳性对照未命中」, 而阳性对照(positive_control)明明是 1。
+    #    同一行里两个字段打架, 实测连着三天。已在探针侧把 ⓪ 拆成
+    #    「存量格式过期(按设计不回放)」/「合格却没回放(仪器问题)」两类。
+    # ⛔ **历史行一个字不改** —— 台账只追加。对齐的是今后写入的那一份。
     "positive_control": meta.get('positive_control'),
     "eligible_stored": meta.get('eligible_stored'),
     "stored_total": meta.get('stored_total'),

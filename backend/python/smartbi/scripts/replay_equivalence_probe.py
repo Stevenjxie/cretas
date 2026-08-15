@@ -9,9 +9,25 @@
 ## 做法
 
 ⛔ 不重建内部调用链 —— 前三版都死在「我搭的环境和生产不一样」上。
-   这一版只做一件事：**把指纹闸在探针进程里打开**（monkeypatch，仓库代码一行不动），
+   这一版只做一件事：在探针进程里 monkeypatch 指纹（仓库代码一行不动），
    让存量计划真的走 `_replay_zero_token_plan` → 真实执行链。
    B 遍恢复真指纹 = 今天线上的行为。
+
+🔴 **2026-08-15 订正：A 遍那根撬棍自 08-13 起撬不动晋升闸了。**
+
+   原文写的是「把指纹闸在探针进程里打开」，那句话**今天是假的**：
+
+     探针撬的  `ri._routing_rules_fingerprint`
+       它唯一的消费者是 restaurant_intent.py:2999 的**计划缓存版本键**
+     晋升闸比的 restaurant_intent.py:3248-3249
+       `plan_semantics_segment(row.fp) != _plan_semantics_fingerprint()`
+
+   2026-08-13 的**指纹分层**把晋升闸换成了语义段比对，而撬棍还压在旧杠杆上。
+   实测：08-13 02:25 那次 `hitA=True` 38/40，03:40 之后**每一次都是 0/40**。
+   ⇒ 形态 B「机制在、没接上」——monkeypatch 照跑、不报错、什么都没打开。
+
+   ⚠️ 在撬棍修好之前，本探针**无法产出任何等价性证据**。它现在能诚实回答的
+      只有一件事：「今天有几条存量是合格的」（`eligible_stored`）。
 
 🔴 **阳性对照**：A 遍必须能在日志里看到 `zero-token promoted-route hit`。
    看不到就说明 A 和 B 跑的是同一条路，「等价」是假的 —— 这条不通过整轮读数作废。
@@ -218,8 +234,15 @@ async def main():
         res_b, err_b = await ask(phrase)
 
         pa, pb = projection(res_a), projection(res_b)
+        # ⓪ 拆两类(2026-08-15) —— 原来一个标签把两件事压在一起, 于是台账上
+        #    「阳性对照 1」和「40 条阳性对照未命中」同行打架:
+        #      · 这条**本来就不合格**(旧格式) → 不回放是**设计**, 不是故障
+        #      · 这条**合格却没回放**       → 那才是仪器问题(撬棍失效)
+        #    判定用的是与 `eligible_stored` **同一个表达式**, ⛔ 不另写一套。
+        row_eligible = ri.plan_semantics_segment(row_fp or "") == live_sem
         if not hit_a:
-            cls = "⓪阳性对照未命中(本条分类作废)"
+            cls = ("⓪存量格式过期(按设计不回放)" if not row_eligible
+                   else "⓪合格却没回放(仪器问题: A 遍撬棍失效)")
         elif is_failure(pa, err_a) or is_failure(pb, err_b):
             cls = "③执行失败"
         elif pa.get("kind") == pb.get("kind") and pa["kpis"] == pb["kpis"]:
@@ -227,6 +250,7 @@ async def main():
         else:
             cls = "②执行不等价"
         out.append({"i": i, "phrase": phrase, "class": cls, "hit_a": hit_a,
+                    "eligible": row_eligible,
                     "A": pa, "B": pb, "err_A": err_a, "err_B": err_b})
         print(f"[{i:>2}/{len(rows)}] {cls}  hitA={hit_a}  {phrase[:32]}")
 
@@ -244,7 +268,16 @@ async def main():
     print("\n=== 阳性对照 ===")
     print(f"A 遍命中晋升的条数 = {hits}/{len(out)}")
     if hits == 0:
-        print("⛔ 0 条命中 —— A 和 B 跑的是同一条路, 本轮读数作废(仪器没活)")
+        # 🔴 rc=2 一直都对(硬约束 4: 「这次没量到东西」), 错的是**诊断**。
+        #    0 条命中有两个完全不同的成因, 处置也完全不同:
+        if eligible_stored == 0:
+            print(f"⛔ 0 条命中, 且 eligible_stored=0/{len(out)} —— "
+                  "**存量按设计全部失效**(旧格式, 等人逐条盖章), ⛔ 不是仪器死了。"
+                  " 本轮没有等价性证据, 但这不是故障。")
+        else:
+            print(f"⛔ 0 条命中, 而 eligible_stored={eligible_stored}/{len(out)} —— "
+                  "**仪器问题**: 有合格条目却一条都没回放, A 遍撬棍没打开晋升闸"
+                  "(见本文件头部 2026-08-15 订正)。")
         return 2
 
     from collections import Counter
