@@ -8,6 +8,7 @@
  * test projects that declare `dependencies: ['vue-auth']`.
  */
 import { test as setup, expect } from '@playwright/test';
+import { injectAuthCookie, resolveTokenFromStorageState } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 
@@ -55,6 +56,28 @@ async function doLogin(page: import('@playwright/test').Page, username: string, 
     console.log(`[auth-setup] ${username} retry: user=${user2 ? 'OK' : 'STILL NULL'}, cookie=${authCookie2 ? 'SET' : 'STILL MISSING'}`);
   }
 
+  // 🔴 口令登录失败时的兜底 —— 否则这一步会「成功」地存下一个**没有 cookie 的**状态。
+  //
+  // 实测长相 (2026-08-15): factory_admin1/123456 在本环境返回「用户名或密码错误」,
+  // 本 setup 照样跑完并保存 `cookies: []` 的 storageState, 而且**不报错**。
+  // 于是所有 `dependencies: ['vue-auth']` 的项目(vue-web-admin / p0p1p2 / phase2 /
+  // liushanmen / data-fabric…)全部停在登录页 —— phase2-verify 6 条挂在
+  // 「找不到节点面板/审批表格」, 看起来像工作流设计器坏了, 实际是根本没登录。
+  // web-admin 靠 **HttpOnly cookie** 鉴权, 只有 localStorage 是不够的。
+  const preSaveCookies = await page.context().cookies();
+  if (!preSaveCookies.find((c) => c.name === 'cretas_access_token')) {
+    const tk = process.env.E2E_TOKEN || resolveTokenFromStorageState(outPath);
+    if (tk) {
+      const claims = JSON.parse(Buffer.from(
+        tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+      console.log(`[auth-setup] ${username}: 口令登录拿不到 cookie, 改用已有 token 合成会话 (user=${claims.username}, factory=${claims.factoryId})`);
+      await injectAuthCookie(page.context(), page, tk, {
+        userId: claims.userId, username: claims.username, role: claims.role,
+        factoryId: claims.factoryId, factoryType: 'FACTORY', permissions: ['*:*'],
+      }, BASE_URL);
+    }
+  }
+
   // Navigate to dashboard to trigger router (ensures correct origin for storageState)
   await page.goto(BASE_URL + '/dashboard', { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(3000);
@@ -70,6 +93,14 @@ async function doLogin(page: import('@playwright/test').Page, username: string, 
   const originCount = saved.origins?.length || 0;
   const itemCount = saved.origins?.reduce((n: number, o: { localStorage?: unknown[] }) => n + (o.localStorage?.length || 0), 0) || 0;
   console.log(`[auth-setup] ${username}: saved cookies=${cookieCount}, origins=${originCount}, localStorage items=${itemCount}`);
+
+  // ⛔ 存下一个没有 auth cookie 的 storageState = 把「没登录」伪装成「登录好了」,
+  //    下游整片套件会以最难查的方式失败。宁可在这里红。
+  const savedAuthCookie = (saved.cookies || []).find(
+    (c: { name: string }) => c.name === 'cretas_access_token');
+  expect(savedAuthCookie,
+    `${username} 的 storageState 里没有 cretas_access_token cookie —— ` +
+    '口令登录失败且没有可用的兜底 token(设 E2E_TOKEN 或先跑一次能登录的账号)').toBeTruthy();
 }
 
 setup('factory_admin1 登录并保存状态', async ({ page }) => {

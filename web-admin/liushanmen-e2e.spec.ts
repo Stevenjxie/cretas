@@ -148,27 +148,38 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
     const supResp = await api('/suppliers?page=1&size=1');
     const supList = Array.isArray(supResp.data) ? supResp.data : supResp.data?.content || [];
     const supplierId = supList.length ? supList[0].id : undefined;
-    console.log(`W2: supplierId=${supplierId}`);
+    console.log(`W2: supplierId=${supplierId}`);  // 期初建账不需要供应商, 这里仅顺带验证供应商接口可用
 
-    // 3. Create a batch via API (correct field names for CreateMaterialBatchRequest)
-    const batchResp = await api('/material-batches', {
+    // 3. 建一笔入库。
+    //
+    // ⛔ 不能再打 `POST /material-batches` —— 那个入口**已被产品有意停用**:
+    //    `MaterialBatchController` 上标着 @Deprecated, 直接抛
+    //    409「普通批次页面已关闭无来源入库与续入」, hint 指向
+    //    「仓储待收货 / 客供料 / 调拨 / 退货 / 盘点 / 受控调整; 期初建账使用独立入口」。
+    //    这条用例只需要「有一笔带成本的入库让移动均价动一下」, 对应的正规入口就是期初建账。
+    //
+    // ⚠️ 这个 describe 是 serial 的: W2 一挂, 后面 W3–W9 **7 条根本不执行**
+    //    (报 "did not run", 而汇总只显示 8 passed —— 看起来像用例变少了)。
+    //    所以 W2 卡住的不是一条, 是八条。
+    const openingResp = await api('/material-batches/opening', {
       method: 'POST',
       body: JSON.stringify({
-        materialTypeId: mtId,
-        supplierId: supplierId,
-        receiptDate: new Date().toISOString().split('T')[0],
-        receiptQuantity: 100,
-        quantityUnit: mt.unit || 'KG',
-        totalWeight: 100,
-        totalValue: 9900,
-        unitPrice: 99.0,
-        storageLocation: 'E2E测试库位',
+        batchKey: `E2E-W2-${tag}`,   // 幂等键: 重跑不会重复建账
+        remark: 'E2E W2 移动均价验证',
+        items: [{
+          materialTypeId: mtId,
+          quantity: 100,
+          quantityUnit: mt.unit || 'kg',
+          unitPrice: 99.0,
+          batchNumber: `E2E-W2-${tag}`,
+        }],
       }),
     });
-    if (!batchResp.success) {
-      console.log(`W2: batch creation failed: ${batchResp.message}`);
+    if (!openingResp.success) {
+      console.log(`W2: 期初建账失败: ${openingResp.message} / hint=${openingResp.actionHint}`);
     }
-    expect(batchResp.success).toBeTruthy();
+    expect(openingResp.success).toBeTruthy();
+    console.log(`W2: 期初建账 created=${openingResp.data?.createdCount} priced=${openingResp.data?.pricedCount} value=${openingResp.data?.totalOpeningValue}`);
 
     // 4. Verify moving avg updated
     const after = await api(`/raw-material-types/${mtId}`);
