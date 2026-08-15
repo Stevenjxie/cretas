@@ -63,6 +63,16 @@ def _data(dishes):
         "totalRevenueWithCost": sum(d["revenue"] for d in with_cost),
         "totalProfit": sum(d["grossProfit"] for d in with_cost),   # 抬头只算有卡的
         "industryDefaultCostRatio": RATIO,
+        # 🔴 真实那侧确实产出这两个 —— 夹具不带就等于替产品把限定语删了,
+        #    断言会在一个「没有限定语的世界」里全绿(形态 B‴: 桩的形状要真实那侧给得出)
+        "coverage": {
+            "dishCount": len(with_cost),
+            "totalDishCount": len(dishes),
+            "revenueRatio": (sum(d["revenue"] for d in with_cost)
+                             / sum(d["revenue"] for d in dishes)) if dishes else 0,
+        },
+        "estimationBasis": ("无配方菜按行业默认成本率 32% 估算"
+                            if len(with_cost) < len(dishes) else ""),
     }
 
 
@@ -115,6 +125,25 @@ def main() -> int:
     check("4 套餐披露在", COMBO_DISCLOSURE in out)
     check("5 份数最多的那道标了「推断」", "推断" in out and "份数最多" in out)
 
+    check(
+        "7 覆盖率限定语在（客户读的正是这一层，删了就是普通 BI 报表）",
+        "没覆盖的那部分不在毛利结论里" in out and "6/7" in out,
+        "coverage 6/7",
+    )
+
+    # 🔴 断言的是**渲染后的分段**, 不是文案内容。
+    #    markdown 把连续非空行并成一个段落 —— 四条披露若只用 \n 分隔, 在店长屏幕上
+    #    是一坨。本仓踩过同形(8 张表格并成一坨, CI 全绿没发现)。
+    #    ⛔ `·` / `ℹ️` / `⚠️` 都不是 markdown 列表语法, 指望它们分行是错的。
+    body = out.split("|\n\n", 1)[1] if "|\n\n" in out else out
+    blocks = [b for b in body.split("\n\n") if b.strip()]
+    runs = [b for b in blocks if len([l for l in b.split("\n") if l.strip()]) > 1]
+    check(
+        "6 每条披露自成一段(markdown 不会把它们并成一坨)",
+        not runs,
+        f"{len(blocks)} 段, 粘连的段落 {len(runs)} 个",
+    )
+
     print("\n" + "=" * 78)
     # ── 阳性对照 ──────────────────────────────────────────────────────────
     carded = render(ALL_CARDED, top_n=10)
@@ -126,7 +155,7 @@ def main() -> int:
         print("⛔ 那两个字面与数据无关(恒出现) ⇒ 断言 2a/2b 是恒真式, 本轮作废。")
         return 2
 
-    print(f"[主断言]   {7 - len(bad)}/7 条通过")
+    print(f"[主断言]   {9 - len(bad)}/9 条通过")
     if bad:
         print(f"\n🔴 不通过: {bad}")
         return 1

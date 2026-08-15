@@ -176,11 +176,18 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
 
 
 #: 哪些意图配得上一张**菜品级**三列表。
-#: ⛔ 只挂 `RESTAURANT_OPS_GROSS_MARGIN` —— 它的指标恰好就是 `gross_profit/gross_margin`
-#:   且粒度是菜品(见 `_INTENT_DESCRIPTIONS`: 「菜品级别的毛利/毛利率分析」)。
-#: ⛔ **不挂** `RESTAURANT_OPS_SALES_SUMMARY`: 那是**门店级**总体概览
-#:   (revenue/orders/avg_ticket), 在它下面塞一张菜品表是换了粒度, 不是换了形式。
-_DISH_TABLE_INTENTS = frozenset({"RESTAURANT_OPS_GROSS_MARGIN"})
+#:
+#: 🔴 2026-08-16 订正 —— 这里我自己错过一次, 记下来:
+#:   第一版**只**挂 `GROSS_MARGIN`, 理由是「SALES_SUMMARY 是门店级概览, 在它下面
+#:   塞菜品表是换了粒度不是换了形式」。这个理由本身站得住, **但它是从
+#:   `_INTENT_DESCRIPTIONS` 的字面推出来的**, 而实测「老板打烊那句话」的产出者
+#:   正是 `SALES_SUMMARY` 的 resolver(`restaurant_ops_router.py`)。
+#:   ⇒ 排除它 = 表格在**日结这条唯一要它的路上永远不出现**。接线接了个寂寞。
+#:   ⚠️ 判据不是「哪个意图名字更像菜品级」, 是「老板打烊时那句话落到谁身上」。
+_DISH_TABLE_INTENTS = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",   # 日结主路 —— B-1 要的就是它
+    "RESTAURANT_OPS_GROSS_MARGIN",    # 直接问菜品毛利
+})
 
 #: 表里最多列几道菜。列不下的在披露里逐项交代(条数 + 营收 + 毛利), ⛔ 不静默截断。
 _DISH_TABLE_TOP_N = 10

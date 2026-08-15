@@ -169,6 +169,26 @@ def render(data: Dict[str, Any], *, top_n: int = 10) -> str:
             f"毛利 {_money(gap['truncatedProfit'])}）—— 表里毛利合计与全店毛利差的 "
             f"{_money(gap['profitGap'])} 就是它们。"
         )
+    # 🔴 限定语不许丢。客户读的**正是**这一层 —— 删了, 产品就是普通 BI 报表。
+    #    ⛔ 不自己算覆盖率, 直接取 `compute_dish_margins` 已经算好的 `coverage`
+    #    (形态 D: 自己再算一遍就是第二份口径)。
+    cov = data.get("coverage") or {}
+    if cov.get("totalDishCount"):
+        ratio = float(cov.get("revenueRatio") or 0.0)
+        notes.append(
+            f"📐 这张表的成本/毛利只覆盖 {cov.get('dishCount')}/{cov.get('totalDishCount')} 道菜"
+            f"（按营收算 {ratio * 100:.1f}%）。"
+            f"**没覆盖的那部分不在毛利结论里** —— ⛔ 别把它读成全店毛利。"
+        )
+    basis = data.get("estimationBasis")
+    if basis:
+        notes.append(f"📐 {basis}")
+
     notes.append(COMBO_DISCLOSURE)
 
-    return "\n".join(lines) + "\n\n" + "\n".join(notes)
+    # 🔴 披露之间必须是**空行**, ⛔ 不能只用 \n。
+    #    markdown 把连续的非空行当**同一个段落**软换行 —— 四条披露会在店长屏幕上
+    #    并成一坨。而 `·` / `ℹ️` / `⚠️` 都**不是** markdown 列表语法, 救不了它。
+    #    ⚠️ 本仓踩过一模一样的: 8 张表格上线后并成一坨, 四个 PR + 两轮 85/85 电池
+    #      + CI 全绿都没发现 —— 因为没有任何断言读的是**渲染后**的分段。
+    return "\n".join(lines) + "\n\n" + "\n\n".join(notes)

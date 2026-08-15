@@ -83,9 +83,24 @@ def test_no_table_when_preference_is_text_only(stub_margins):
     assert stub_margins == [], "⛔ 不要表格时不该白查一次库"
 
 
-def test_no_table_for_store_level_intent(stub_margins):
-    """门店级概览下塞菜品表 = 换了粒度, ⛔ 不是换了形式。"""
+def test_table_appended_for_daily_close_intent(stub_margins):
+    """🔴 日结主路 —— 老板打烊那句话的产出者就是 SALES_SUMMARY 的 resolver。
+
+    我第一版把它**排除**了(理由: 门店级概览下塞菜品表是换了粒度)。
+    理由本身站得住, 但它是从意图描述的字面推的 ——
+    ⇒ 结果是表格在**唯一要它的那条路上永远不出现**, 接线接了个寂寞。
+    这条断言就是钉住那个错误不许回来。
+    """
     out = _run(_Spec(SUMMARY), (OUTPUT_FORM_TEXT, OUTPUT_FORM_TABLE))
+    assert out.startswith(BASE)
+    assert "| 菜品 | 营收 | 成本 | 毛利 |" in out
+    assert len(stub_margins) == 1
+
+
+def test_no_table_for_unrelated_intent(stub_margins):
+    """⛔ 不是所有意图都配一张菜品表 —— 库存预警下塞菜品毛利表是答非所问。"""
+    out = _run(_Spec("RESTAURANT_OPS_INVENTORY_WARNING"),
+               (OUTPUT_FORM_TEXT, OUTPUT_FORM_TABLE))
     assert out == BASE
     assert stub_margins == []
 
