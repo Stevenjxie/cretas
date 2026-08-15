@@ -45,12 +45,26 @@ _ESTIMATION_BASIS = "行业默认成本率 {pct:.0f}%"
 
 
 async def compute_dish_margins(
-    pool, factory_id: str, *, days: int = 30,
+    pool, factory_id: str, *, days: int = 30, date_range=None,
 ) -> Dict[str, Any]:
     """按菜品算毛利, 返回 `/restaurant-ops/gross-margin` 的 `data` 结构。
 
     返回的键与该端点**逐字一致**(dishes / coverage / menuEngineering / totals...),
     因为它就是从那里搬来的; 端点现在调本函数, 响应形状不变。
+
+    ## `date_range` (2026-08-15 加, 为日结表格)
+
+    `days` 是**滚动窗**(`CURRENT_DATE - days`); 日结要的是**当日**。
+    ⇒ 加一个可选的 `(start, end)` 显式窗口, `days` 那条路径**一个字不动**。
+
+    ⛔ **时间窗是参数, 不是口径** —— 口径是「怎么算」(分子分母、成本来源、
+       摊派规则), 这里只换 WHERE 的两个端点, 分子分母一个字没动。
+    ⚠️ 由 `test_date_range_matches_days_for_the_same_window` 钉住:
+       `date_range=(今天-29, 今天)` 必须与 `days=30` **逐字相同**。
+       不相同就说明它确实改了语义 —— 那时才是口径问题, 停下报 organizer。
+
+    ⛔ 调用方要传当日窗口时**复用 `daily_close.daily_close_window()`**,
+       ⛔ 不要自己算当日边界 —— 那是第二处窗口定义(形态 D, 这条线栽过)。
     """
     # Resolver returns enriched[] via .answer_text string; to avoid re-parsing,
     # recompute the per-dish dict here directly from the same join logic (thin wrapper).
@@ -58,8 +72,9 @@ async def compute_dish_margins(
     # For now: call back into the DB to build the structured list:
     async with pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
-        pos_rows = await conn.fetch(
-            """
+        # ⛔ 两条分支只差 WHERE 的时间谓词, SELECT / JOIN / GROUP BY **逐字相同** ——
+        #    口径不因窗口形态改变。
+        _SELECT = """
             SELECT p.name AS dish_name, p.normalized_name,
                    SUM(i.qty)::float AS qty,
                    SUM(i.amount)::float AS revenue,
@@ -68,12 +83,21 @@ async def compute_dish_margins(
               JOIN fact_pos_transaction t ON t.id = i.transaction_id
               JOIN dim_product p ON p.product_id = i.product_id
              WHERE i.factory_id = $1 AND t.factory_id = $1 AND p.factory_id = $1
-               AND t.date >= CURRENT_DATE - ($2::int)
+               AND {when}
              GROUP BY p.name, p.normalized_name
              ORDER BY revenue DESC NULLS LAST
-            """,
-            factory_id, days,
-        )
+        """
+        if date_range is not None:
+            start, end = date_range
+            pos_rows = await conn.fetch(
+                _SELECT.format(when="t.date >= $2::date AND t.date <= $3::date"),
+                factory_id, start, end,
+            )
+        else:
+            pos_rows = await conn.fetch(
+                _SELECT.format(when="t.date >= CURRENT_DATE - ($2::int)"),
+                factory_id, days,
+            )
 
     # Name match + alias fallback — see restaurant_ops_router.resolve_gross_margin for details.
     # P1-5 also loads excluded dish list to drop noise from analysis.
