@@ -129,3 +129,46 @@
 
 - **AI 追问管手机端操作员要 ID** → PR #2644。实测「牛腩排入库42件」被追问「请提供原材料类型ID」，
   而下一轮回答「55厂 牛腩排」就能走到 `WRITE_CONFIRM_REQUIRED` —— 后端本来就吃名称。
+
+---
+
+## 五、RN 里两个「提交必失败」的入库屏（死代码 + 地雷，**不是线上故障**）
+
+`MaterialReceiptScreen` / `MaterialReceiptAIScreen` 都调
+`materialBatchApiClient.createBatch` → `POST /material-batches`。
+生产实测（补全必填字段后）：
+
+```
+http=409
+message: 普通批次页面已关闭无来源入库与续入
+hint:    请从仓储待收货、客供料、调拨、退货、盘点或受控调整任务进入；期初建账使用独立入口
+```
+
+⚠️ **今天用户到不了这两个屏** —— 别把它当线上故障。核实过程值得记下来，
+因为我中途两次差点下错结论：
+
+| 搜索面 | 得到的结论 | 对不对 |
+|---|---|---|
+| 只搜 `screens/` + `components/` | 「没人导航过去，是死代码」 | ❌ 太窄 |
+| 铺开搜全 `src/` | 找到 `quickActionsStore.ts:146` 的「手动入库」磁贴 | 更准，但仍不够 |
+| 再查那组磁贴谁渲染 | `WAREHOUSE_MGR_ACTIONS` **没有任何屏 import**（`WHHomeScreen` 也不用） | ✅ 到不了 |
+
+所以准确表述是：**注册在导航里、被一组没人渲染的快捷操作引用、后端入口已停用**。
+谁把 `WAREHOUSE_MGR_ACTIONS` 接进仓管首页，当天就上线一个「填完整张表、提交必失败」的表单。
+
+正规路径是 `WHUnorderedInboundReceive`（`WHInboundStackNavigator`）。
+
+**待定（产品决策）**：删掉这两个屏，还是把快捷操作指到正规入库流程。
+
+### 附带：收货签收照片和质检是同一个形态
+
+`MaterialReceiptScreen:204` 原文：
+
+```js
+// P0-16 签收照片本地 URI 列表 — TODO: 待后端加附件上传接口后改为上传后的 URL 列表
+photoUris: signaturePhotos.length > 0 ? signaturePhotos : undefined,
+```
+
+把本地 `file:///…` URI 当数据发给后端；而 `qualityPhotos` 这个字段**后端全仓 grep 零命中**。
+注释里等的那个「附件上传接口」**早就有了** —— `Attachment.EntityType` 里
+`PURCHASE_RECEIPT` 就在，采购单详情在用同一套。又一例「机制在，只是没接上」。
