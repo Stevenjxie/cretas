@@ -389,7 +389,20 @@ _FACTORY_MATERIAL_SALES_ANSWER = """\
 _FACTORY_FORM_ASSISTANT_RESULT_ANSWER = """\
 AI 表单助手只有在服务端实际执行成功且业务结果可以回读时，才能报告操作成功。
 
+缺少实体信息时，手机追问必须使用业务名称：原材料、产品、供应商、客户、仓库、设备都提示“说名称就行”，批次说批次号、人员说姓名；不得向一线用户索要 UUID、内部 ID 或工程字段。
+
+当前用户有权进入相关页面时，报工驳回原因、采购单备注和换工种输入使用跨 Android/iOS/Web 的应用内对话框；驳回原因默认必填，采购备注允许留空。换工种当前仍要求工种编号，尚未升级为按名称选择，不能扩大描述。
+
 自然语言解析、关闭助手面板、把字段填入草稿或模型文字声称“已成功”，都不等于业务写入完成。若本轮没有实际写入、服务端拒绝、权限/状态校验失败或写后回读失败，页面必须明确显示未执行或失败，并保留真实原因；不能信任模型自报结果，也不能返回假成功。用户仍须在目标表单核对实体、日期、数量、单位和关联对象后按页面流程提交。"""
+_FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER = """\
+调拨能发出的数量以实物可用量为准，不以账面可用量单独判断：`实物可用量 = max(0, 账面可用量 − 未结算报工占用量)`。
+
+1. 调拨批次选择器与确认发运使用同一公式。材料已经投入生产但报工尚未完成小结/结算时，即使批次账面仍有余额，也不能再次调出；应先完成生产小结，或选择其它批次、缩小调拨量。
+2. 指定批次时按所选批次逐行校验；不指定时由服务端按 FEFO 分配。发运前会再次锁定并校验实物可用量，避免选择后又被生产占用造成重复出库。
+3. 每个实际扣减批次都写一条来源为 `TRANSFER_OUT` 的物料消耗台账。FEFO 跨多个批次时逐批记录物料、批次、数量、单价、金额和调拨单号，不能只留一条无法追溯的汇总。
+4. 单位比较可以兼容客户端英文码与主档中文写法，但落账必须回到主档真实单位；kg/g 等科学单位可按明确换算比较，`个`、`只`、`片` 等计数单位不能互换。报工也使用同一规则，单位错误要在扣库存前失败。
+
+验收时同时回读调拨发出量、源批次余额、未结算报工占用和逐批 `TRANSFER_OUT` 台账；网络重试不得重复扣减或重复记账。"""
 _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 中餐的单菜精确毛利算不准，也不能自动或实时算出每一道菜的真实毛利。
 
@@ -399,6 +412,15 @@ _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 4. SmartBI 的成本卡运营口径与上述期间财务口径不是一回事：汇总层展示实收营收，但毛利额和毛利率的分子、分母都只使用“有可用成本卡”的菜品营收，并用同一菜品营收口径披露覆盖率。毛利只扣食材成本，不扣人工、房租、水电等，不能称为利润或利润率。
 5. 成本卡来自理论用量，出处始终是 `ESTIMATED`。补齐缺卡菜品能提高“可算进毛利的营收覆盖率”，但不能承诺“补上就从估变实”。系统最多点名 3 道优先补卡菜并给出覆盖率可能提升；成本明显高于平均售价的异常卡会被点名并暂时排除，修正后自动重新纳入。
 6. 菜品平均毛利率和四象限毛利轴只适合相对比较，不是精确财务结果。餐饮导览助手只说明以上口径并指向正确板块，不替用户计算或分析真实经营数据。"""
+_RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER = """\
+餐饮问答把“数据来源接通进度”“成本卡营收覆盖率”和“下一步动作”分开表达，不能把一个数字冒充另一个。
+
+1. “你的数据补到 6 类里的 X 类了”按当前登记来源逐类判断“有、部分、有但没接线、无”，说明数据接到了哪里；它不是成本卡覆盖率，也不能只看表里有行就宣称能力已接通。
+2. 成本卡覆盖率是“有可用成本卡菜品营收 ÷ 全部菜品营收”。问“哪些菜没有成本卡”时，只列本次明确日期范围内有销售但缺卡的菜，按能带来的营收覆盖提升排序，并指向现有配方编辑页；系统不会新造第二个成本卡页面，也不会替用户填写配方。
+3. 最近补卡后，只有同期间覆盖率真实提高时，日结才反馈“能算进毛利的营收从 X% 到 Y%”；没有提高就不制造进步。提高的是理论成本卡覆盖，不能说单菜毛利已经从估算变成实测。
+4. 答案后的动作按 T2 缺卡补录、T1 可执行下钻等优先级排序。T1 只给登记且当前 resolver 真支持的门店/时间维度；无数据、权限遮蔽、服务不可用或仍需澄清时不显示按钮，不能静默降级成无效追问。
+
+餐饮导览助手只解释这些口径并指向 SmartBI 餐饮 AI，不替用户计算、补卡或分析真实门店数据。"""
 _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER = """\
 餐饮问答只在时间是唯一缺项且规划结果可信时默认最近 30 天，并在答案里明确披露；如果还缺门店、指标等其它条件，或规划不可确认，系统继续澄清，不能用默认时间绕过门禁。
 
@@ -893,8 +915,28 @@ def _needs_factory_material_sales_guard(query: str) -> bool:
 def _needs_factory_form_assistant_result_guard(query: str) -> bool:
     normalized = (query or "").lower()
     assistant = any(term in normalized for term in ("表单助手", "ai 表单", "ai填表", "ai 录入"))
-    result = any(term in normalized for term in ("成功", "写入", "执行", "提交", "模型说"))
+    result = any(
+        term in normalized
+        for term in (
+            "成功", "写入", "执行", "提交", "模型说", "id", "uuid", "说名称",
+            "原材料类型", "供应商名称", "批次号",
+        )
+    )
     return assistant and result
+
+
+def _needs_factory_transfer_physical_stock_guard(query: str) -> bool:
+    """Keep transfer physical availability and per-batch audit deterministic."""
+    normalized = (query or "").lower()
+    mentions_transfer = any(term in normalized for term in ("调拨", "发运", "transfer_out"))
+    mentions_boundary = any(
+        term in normalized
+        for term in (
+            "实物可用", "账面", "未结算", "小结", "报工占用", "生产占用",
+            "fefo", "多个批次", "多批次", "逐批", "消耗台账", "追溯",
+        )
+    )
+    return mentions_transfer and mentions_boundary
 
 
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
@@ -1137,6 +1179,26 @@ def _needs_restaurant_single_dish_margin_guard(query: str) -> bool:
         )
     )
     return mentions_margin and mentions_single_dish_precision
+
+
+def _needs_restaurant_data_progress_followup_guard(query: str) -> bool:
+    """Keep source progress, cost-card coverage and follow-up actions distinct."""
+    normalized = (query or "").lower()
+    progress = any(
+        term in normalized
+        for term in ("数据补到", "补了几类", "6 类", "六类", "数据进度")
+    )
+    cost_card_action = any(
+        term in normalized
+        for term in (
+            "哪些菜没有成本卡", "缺成本卡", "缺卡菜", "补卡后", "配方编辑入口",
+        )
+    )
+    followup = any(
+        term in normalized
+        for term in ("追问按钮", "按钮什么时候", "t1", "t2", "下钻按钮")
+    )
+    return progress or cost_card_action or followup
 
 
 def _needs_restaurant_default_time_provenance_guard(query: str) -> bool:
@@ -2160,6 +2222,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_transfer_physical_stock_guard(request.question)
+    ):
+        guard_answer = _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_current_gates_guard(request.question)
     ):
         # A current-gates question can intentionally combine Workflow skuId,
@@ -2193,6 +2260,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_data_progress_followup_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_default_time_provenance_guard(request.question)
