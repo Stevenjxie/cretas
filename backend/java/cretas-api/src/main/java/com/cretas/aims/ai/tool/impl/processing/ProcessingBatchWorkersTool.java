@@ -122,7 +122,7 @@ public class ProcessingBatchWorkersTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "batchId", "请问要查询哪个批次的员工列表？请提供批次ID。"
+                "batchId", "请问要查询哪个批次的员工列表？说批次号就行"
         );
         String question = questions.get(paramName);
         return question != null ? question : super.getParameterQuestion(paramName);

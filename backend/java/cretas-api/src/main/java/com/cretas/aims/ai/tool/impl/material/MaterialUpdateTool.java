@@ -116,7 +116,7 @@ public class MaterialUpdateTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = new HashMap<>();
-        questions.put("batchId", "请问您要更新哪个批次的信息？请提供批次ID。");
+        questions.put("batchId", "请问您要更新哪个批次的信息？说批次号就行");
         questions.put("storageLocation", "请问新的存储位置是什么？");
         questions.put("notes", "请问需要添加什么备注？");
 

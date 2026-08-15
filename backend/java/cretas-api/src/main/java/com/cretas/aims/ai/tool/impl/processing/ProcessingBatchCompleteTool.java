@@ -137,7 +137,7 @@ public class ProcessingBatchCompleteTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问要完成哪个生产批次？请提供批次ID或批次号。";
+                return "请问要完成哪个生产批次？说批次号就行";
             case "actualQuantity":
                 return "请问实际生产了多少数量？";
             case "goodQuantity":

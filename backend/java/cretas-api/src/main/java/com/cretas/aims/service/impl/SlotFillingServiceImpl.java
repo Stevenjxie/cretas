@@ -68,6 +68,26 @@ public class SlotFillingServiceImpl implements SlotFillingService {
 
     private static final ObjectMapper SLOT_OBJECT_MAPPER = new ObjectMapper();
 
+    /**
+     * 实体引用型槽位 —— 追问时**只能说名称，不许问 ID**。
+     *
+     * <p>后端本来就接受名称：填槽续轮把「55厂 牛腩排」解析成 materialTypeId 后可以走到
+     * WRITE_CONFIRM_REQUIRED。但槽位标签取自 Tool schema 的 description（"原材料类型ID"），
+     * 于是手机端操作员看到的是「请提供原材料类型ID」——一个他既拿不到也不该知道的 UUID。
+     *
+     * <p>value 是给人看的词，不带「ID」。
+     */
+    private static final Map<String, String> ENTITY_REFERENCE_LABELS = Map.ofEntries(
+            Map.entry("materialTypeId", "原材料"),
+            Map.entry("rawMaterialTypeId", "原材料"),
+            Map.entry("productId", "产品"),
+            Map.entry("productTypeId", "产品"),
+            Map.entry("supplierId", "供应商"),
+            Map.entry("customerId", "客户"),
+            Map.entry("warehouseId", "仓库"),
+            Map.entry("equipmentId", "设备")
+    );
+
     @Override
     public IntentExecuteResponse checkAndStartSlotFilling(
             String factoryId,
@@ -159,9 +179,14 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             String type = (String) propDef.get("type");
             String description = (String) propDef.get("description");
 
+            // 实体引用型槽位优先用人话标签: Tool schema 的 description 普遍写成
+            // "原材料类型ID" / "供应商ID", 直接当标签会把 UUID 甩给操作员。
+            String entityLabel = ENTITY_REFERENCE_LABELS.get(paramName);
+
             RequiredSlot slot = RequiredSlot.builder()
                     .name(paramName)
-                    .label(description != null ? description : getParameterLabel(paramName))
+                    .label(entityLabel != null ? entityLabel
+                            : (description != null ? description : getParameterLabel(paramName)))
                     .type(mapJsonTypeToSlotType(type))
                     .required(true)
                     .validationHint(getParameterValidationHint(paramName))
@@ -540,6 +565,12 @@ public class SlotFillingServiceImpl implements SlotFillingService {
 
         String label = slot.getLabel() != null ? slot.getLabel() : slot.getName();
         String type = slot.getType() != null ? slot.getType().toUpperCase() : "TEXT";
+
+        // 实体引用型: 明确告诉用户说名称就行 —— 后端续轮会把名称解析成 ID。
+        String entityLabel = ENTITY_REFERENCE_LABELS.get(slot.getName());
+        if (entityLabel != null) {
+            return "请问是哪个" + entityLabel + "？说名称就行";
+        }
 
         switch (type) {
             case "BATCH_ID":

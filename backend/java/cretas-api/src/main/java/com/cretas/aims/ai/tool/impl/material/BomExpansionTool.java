@@ -152,7 +152,7 @@ public class BomExpansionTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
-            case "productTypeId" -> "请问要计算哪个产品的物料需求？请提供产品ID";
+            case "productTypeId" -> "请问要计算哪个产品的物料需求？说产品名称就行";
             case "quantity" -> "计划生产多少数量？";
             default -> super.getParameterQuestion(paramName);
         };

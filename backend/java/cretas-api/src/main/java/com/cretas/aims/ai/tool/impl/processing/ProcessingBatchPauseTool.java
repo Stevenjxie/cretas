@@ -99,7 +99,7 @@ public class ProcessingBatchPauseTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问要暂停哪个生产批次？请提供批次ID或批次号。";
+                return "请问要暂停哪个生产批次？说批次号就行";
             case "reason":
                 return "请说明暂停生产的原因（如：设备故障、原料不足、质量问题等）。";
             default:

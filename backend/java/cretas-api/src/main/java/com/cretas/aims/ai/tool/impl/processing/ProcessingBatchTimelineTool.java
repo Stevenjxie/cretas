@@ -157,7 +157,7 @@ public class ProcessingBatchTimelineTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问要查看哪个生产批次的时间线？请提供批次ID或批次号。";
+                return "请问要查看哪个生产批次的时间线？说批次号就行";
             default:
                 return super.getParameterQuestion(paramName);
         }

@@ -157,8 +157,8 @@ public class ProcessingWorkerAssignTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "batchId", "请问要分配员工到哪个批次？请提供批次ID。",
-                "workerIds", "请问要分配哪些员工？请提供员工ID列表。",
+                "batchId", "请问要分配员工到哪个批次？说批次号就行",
+                "workerIds", "请问要分配哪些员工？说员工姓名就行，多个用顿号隔开",
                 "notes", "请问需要添加分配备注吗？（可选）"
         );
         String question = questions.get(paramName);

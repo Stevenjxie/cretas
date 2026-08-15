@@ -134,7 +134,7 @@ public class MaterialAdjustQuantityTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "batchId", "请问您要调整哪个批次的库存？请提供批次ID或批次号。",
+                "batchId", "请问您要调整哪个批次的库存？说批次号就行",
                 "quantity", "请问调整后的库存数量是多少？",
                 "reason", "请说明调整库存的原因（如：盘点调整、损耗、入库补录等）。"
         );

@@ -146,7 +146,7 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问您要消耗哪个批次的原料？请提供批次ID或批次号。";
+                return "请问您要消耗哪个批次的原料？说批次号就行";
             case "quantity":
                 return "请问需要消耗多少数量？";
             case "productionPlanId":

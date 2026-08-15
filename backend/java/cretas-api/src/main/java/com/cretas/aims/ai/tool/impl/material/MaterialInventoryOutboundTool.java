@@ -122,7 +122,7 @@ public class MaterialInventoryOutboundTool extends AbstractBusinessTool {
         questions.put("materialName", "请问要出库哪种原料？");
         questions.put("quantity", "请问出库数量是多少？");
         questions.put("reason", "请问出库原因是什么？（生产领用/调拨/其他）");
-        questions.put("batchId", "请问是否指定出库批次？如有请提供批次ID。");
+        questions.put("batchId", "请问是否指定出库批次？如有说批次号就行");
 
         String question = questions.get(paramName);
         return question != null ? question : super.getParameterQuestion(paramName);
