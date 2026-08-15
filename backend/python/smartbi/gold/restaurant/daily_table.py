@@ -184,6 +184,34 @@ def render(data: Dict[str, Any], *, top_n: int = 10) -> str:
     if basis:
         notes.append(f"📐 {basis}")
 
+    # 🔴 成本 > 售价的菜, 点名说出来。
+    #
+    # 这一条是 prod 真跑时读数自己撞出来的: MOCK_REST 上被截断的 4 道菜
+    # 营收 ¥77,147 而毛利 **−¥115,674** —— 负毛利比营收还大。数字没错
+    # (恒等式照样成立), 但老板看到只会以为系统坏了。
+    #
+    # ⚠️ 这不是「显示问题」, 是**一条能让他做出决定的信息**: 有菜的成本卡
+    #    录成了比售价还高。⇒ 点名 + 说清下一步(去核那张卡), ⛔ 不是把负数藏起来。
+    #    「能不能让他做出决定 > 数字准不准」—— 藏起来两头都不占。
+    broken = sorted(
+        (d for d in (data.get("dishes") or [])
+         if d.get("hasCost") and float(d.get("grossProfit") or 0) < 0),
+        key=lambda d: float(d.get("grossProfit") or 0),
+    )
+    if broken:
+        names = "、".join(
+            f"{d.get('name')}（成本 {_money(float(d['totalCost']))} > 营收 "
+            f"{_money(float(d['revenue']))}）"
+            for d in broken[:3]
+        )
+        more = f"，另有 {len(broken) - 3} 道同样如此" if len(broken) > 3 else ""
+        notes.append(
+            f"🔴 **有 {len(broken)} 道菜的成本比营收还高**：{names}{more}。"
+            f"卖一份亏一份不合常理，**多半是成本卡录错了**（单位记成了整箱、"
+            f"或把整锅的料算到了一份上）。"
+            f"⇒ 下一步：先核这几张成本卡，⛔ 别急着据此调价或砍菜。"
+        )
+
     notes.append(COMBO_DISCLOSURE)
 
     # 🔴 披露之间必须是**空行**, ⛔ 不能只用 \n。

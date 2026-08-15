@@ -84,6 +84,9 @@ MIXED = _data([
     _dish("米饭",      600.0, 600, unit_cost=0.5),
     _dish("小菜A",     400.0,  20, unit_cost=5.0),
     _dish("小菜B",     300.0,  10, unit_cost=5.0),
+    # 🔴 坏成本卡: 成本 > 营收。prod 真跑时 MOCK_REST 上真的有(那张 ¥81.00 米饭卡),
+    #    被截断的 4 道菜合计毛利 −¥115,674 而营收只有 ¥77,147。
+    _dish("坏卡菜",    200.0,  10, unit_cost=81.0),
 ])
 ALL_CARDED = _data([
     _dish("甲", 900.0, 10, unit_cost=10.0),
@@ -99,6 +102,8 @@ def main() -> int:
         if not ok:
             bad.append(name)
 
+    _c = MIXED["coverage"]
+    _expected_cov = f"{_c['dishCount']}/{_c['totalDishCount']}"
     out = render(MIXED, top_n=4)
     print("── 渲染原文(top_n=4) ──")
     print(out)
@@ -127,8 +132,16 @@ def main() -> int:
 
     check(
         "7 覆盖率限定语在（客户读的正是这一层，删了就是普通 BI 报表）",
-        "没覆盖的那部分不在毛利结论里" in out and "6/7" in out,
-        "coverage 6/7",
+        # ⛔ 不把覆盖率写死成 "6/7" —— 第一版就是那么写的, 往夹具里加一道菜
+        #    (坏卡菜)之后当场红, 而**产品完全正确**。断言被夹具的偶然形状绑死了。
+        #    ⇒ 从 data 自己算出该出现的字面, 断言「表里说的 == 数据说的」。
+        "没覆盖的那部分不在毛利结论里" in out and _expected_cov in out,
+        f"coverage {_expected_cov}",
+    )
+
+    check(
+        "8 成本>营收的菜被点名 + 给了下一步动作（能做决定 > 数准）",
+        "成本比营收还高" in out and "坏卡菜" in out and "先核这几张成本卡" in out,
     )
 
     # 🔴 断言的是**渲染后的分段**, 不是文案内容。
@@ -150,12 +163,14 @@ def main() -> int:
     ctrl_a = NO_COST_CARD not in carded
     ctrl_b = "¥0.00" not in carded
     print(f"[阳性对照 a] 全部有卡时「{NO_COST_CARD}」不出现: {ctrl_a}")
+    ctrl_c = "成本比营收还高" not in carded
     print(f"[阳性对照 b] 没有零毛利行时 ¥0.00 不出现: {ctrl_b}")
-    if not (ctrl_a and ctrl_b):
+    print(f"[阳性对照 c] 全是好卡时不喊「成本比营收还高」: {ctrl_c}")
+    if not (ctrl_a and ctrl_b and ctrl_c):
         print("⛔ 那两个字面与数据无关(恒出现) ⇒ 断言 2a/2b 是恒真式, 本轮作废。")
         return 2
 
-    print(f"[主断言]   {9 - len(bad)}/9 条通过")
+    print(f"[主断言]   {10 - len(bad)}/10 条通过")
     if bad:
         print(f"\n🔴 不通过: {bad}")
         return 1
