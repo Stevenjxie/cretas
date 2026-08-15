@@ -41,15 +41,15 @@ _PY_ROOT = Path(__file__).resolve().parents[1]
 
 #: 🔴 已知未修的 F821，**逐条登记 + 写理由**（硬约束 8：故意不改的要留痕）。
 #:    ⛔ 只许缩短，不许加长 —— 加长意味着又放进来一个 NameError。
-KNOWN = {
-    "smartbi/api/chat.py:1566": (
-        "planner-outage fail-closed 的留痕行引用 `effective_user_q`，"
-        "而该名字只在流式那条路(:2462 起)的另一个函数里赋值。"
-        "⇒ 这条 fail-closed 触发时会抛 NameError 而不是打日志。"
-        "修法要定「这里该打哪个变量」(query / effective_ops_query)，"
-        "是另一个人的判断，不在本闸的范围里。"
-    ),
-}
+#:
+#: ✅ 空的（2026-08-15）。原来那一条 `smartbi/api/chat.py:1566` 已修:
+#:    它引用 `effective_user_q`，而那名字只在流式那条路(:2462 起)的**另一个
+#:    函数**里赋值 —— 一条**为了防止静默 fail-closed 而写的留痕，自己在静默
+#:    地失败**。owner 裁定打**进来的那个 raw query**(`query`, :1361 无条件赋值):
+#:    改写后的变量在失败点未定义，恰恰是因为**改写还没发生**；
+#:    fail-closed 留痕要记的是「进来的是什么」。
+#:    ⛔ 登记是留痕不是豁免 —— 修好就该摘掉，所以摘了。
+KNOWN: dict[str, str] = {}
 
 
 def _run_flake8():
@@ -80,12 +80,33 @@ def test_no_new_undefined_names():
         "新增了未定义名字(F821) —— 每一条都是一个等着抛 NameError 的缺陷:\n  "
         + "\n  ".join(new.values()))
 
-    # 🔴 阳性对照: 闸必须真的在扫东西。全仓一条都扫不出来时,
-    #    最可能的解释是「flake8 没跑到目标目录」, 而那时上面那条恒绿。
-    assert found, (
-        "一条 F821 都没扫到 —— 而登记表里明明有已知条目。"
-        "⇒ 大概率是闸没扫到目标目录, ⛔ 不要读成「全修好了」。"
-        "真修好了就把 KNOWN 清空并删掉本断言。")
+
+def test_the_gate_can_actually_fire():
+    """🔴 阳性对照 —— **「0 条违规」和「闸没在扫」长得一模一样**。
+
+    ⚠️ 第一版的阳性对照是「登记表非空 ⇒ 全仓至少扫得到 1 条」。
+       那条在 `KNOWN` 被清空的那天**会误红**, 而且它证明的是
+       「仓里有 bug」而不是「闸能开火」—— 两件事。
+    ⇒ 改成给它一个**故意写坏**的临时文件, 断言它认得出来。
+       这条与仓里有没有存量违规无关, 所以不会随修复而失效。
+    """
+    import tempfile
+    import textwrap
+
+    with tempfile.TemporaryDirectory() as d:
+        bad = Path(d) / "deliberately_broken.py"
+        bad.write_text(
+            textwrap.dedent("""
+                def f():
+                    return _this_name_is_never_defined
+            """), encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, "-m", "flake8", "--select=F821", str(bad)],
+            capture_output=True, text=True, timeout=120)
+
+    assert "F821" in proc.stdout, (
+        "闸对一个**故意写坏**的文件都没反应 —— 它没在守任何东西。"
+        f"\nstdout={proc.stdout!r}\nstderr={proc.stderr[:300]!r}")
 
 
 def test_known_list_is_not_stale():

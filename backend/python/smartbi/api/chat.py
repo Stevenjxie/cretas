@@ -1559,11 +1559,21 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         #    (#2485)只给 restaurant_intent 那 2 处装了留痕, 当天
                         #    电池 [40] 真的走到了**没装的这两处** —— 于是日志里
                         #    一点痕迹都没有。判据: **载体要算出来, 不能凭印象数。**
+                        # 🔴 2026-08-15: 这里原来打的是 `effective_user_q` ——
+                        #    那个名字**只在流式那条路(:2462 起)的另一个函数里**
+                        #    赋值, 在本函数里根本不存在。⇒ 这条**为了防止静默
+                        #    fail-closed 而写的留痕, 自己会抛 NameError 而不是留痕**。
+                        #
+                        # ⇒ 打**进来的那个** raw query(`query`, :1361 无条件赋值)。
+                        #    理由不是偏好: 改写后的变量在失败点未定义, 恰恰是因为
+                        #    **改写还没发生**。fail-closed 留痕要记的是「进来的是
+                        #    什么」, 不是「处理到一半变成什么」—— 处理到一半的东西
+                        #    在失败点可能根本不存在, 这次就是。
                         logger.warning(
                             "[restaurant-intent] planner-outage fail-closed: "
                             "continuation=False factory=%s session=%s query=%r",
                             factory_id_hdr, trusted_restaurant_session_key,
-                            str(effective_user_q)[:80],
+                            str(query)[:80],
                         )
                         answer_text = (
                             PLANNER_UNAVAILABLE
