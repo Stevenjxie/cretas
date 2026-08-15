@@ -28,10 +28,10 @@
  *   ./scripts/test/cleanup-sprint-10-test-data.sh loop-2
  */
 import { test, expect, Page, BrowserContext } from '@playwright/test';
-import { setupAuth } from '../../e2e-auth-helper';
+import { resolveApiBase, setupAuth } from '../../e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
-const API_BASE = process.env.E2E_API_BASE || 'http://47.100.235.168:10010/api/mobile';
+const API_BASE = process.env.E2E_API_BASE || resolveApiBase();
 const USER = process.env.E2E_USER || 'f006_admin';
 const PASS = process.env.E2E_PASS || '123456';
 const FACTORY_ID = process.env.E2E_FACTORY_ID || 'F006';

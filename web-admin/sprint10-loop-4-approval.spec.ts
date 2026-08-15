@@ -21,8 +21,9 @@
  * all verified during build (see report at end of session).
  */
 import { test, expect, APIResponse } from '@playwright/test';
+import { resolveApiBase } from './e2e-auth-helper';
 
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
+const API = resolveApiBase();
 const USER = process.env.E2E_USER || 'f006_admin';
 const PASS = process.env.E2E_PASS || '123456';
 const FACTORY_ID = process.env.E2E_FACTORY_ID || 'F006';

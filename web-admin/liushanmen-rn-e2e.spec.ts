@@ -13,15 +13,50 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { resolveApiBase, fetchLoginToken, resolveTokenFromStorageState, injectRnSession } from './e2e-auth-helper';
 
+let RN_FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
+let RN_TOKEN = '';
 const RN_BASE_URL = process.env.RN_BASE_URL || 'http://localhost:3010';
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
-const FACTORY_ID = 'F001';
+const API = process.env.E2E_API_URL || resolveApiBase();
+// ⚠️ 工厂 ID 跟随会话 —— 注入的是 storageState 那个账号的工厂, 写死会 403。
+//    见 RN_FACTORY_ID。
 const SD = 'test-results/screenshots/liushanmen-rn';
 
 let TOKEN = '';
 
 // --- Helpers (same pattern as rn-expo-web-e2e.spec.ts) ---
+
+/**
+ * 口令登录不可用时先注入会话 —— 否则整个套件一条都跑不起来。
+ *
+ * `factory_admin1/123456` 在本环境返回「用户名或密码错误」, 而失败长相是
+ * 「登录页卡住 / 找不到 tab」, 很容易误读成 RN 应用本身坏了。
+ * 这里复用 vue-auth 产出的 storageState token(与 web 侧同一个来源)。
+ */
+async function rnAuthOrInject(page: Page, username = 'factory_admin1', password = '123456') {
+  try {
+    const r = await fetchLoginToken(username, password, API);
+    RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
+    await rnLogin(page, username, password);
+    return;
+  } catch (e) {
+    const tk = resolveTokenFromStorageState();
+    if (!tk) throw e;
+    const c = JSON.parse(Buffer.from(
+      tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+    if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+    RN_FACTORY_ID = c.factoryId;
+    RN_TOKEN = tk;
+    await injectRnSession(page.context(), tk, {
+      userId: c.userId, username: c.username, role: c.role, factoryId: c.factoryId,
+      factoryType: 'FACTORY', permissions: ['*:*'],
+    });
+    console.warn(`[rn] 口令登录不可用, 改注入 storageState 会话 (factory=${c.factoryId})`);
+    await page.goto(RN_BASE_URL, { waitUntil: 'commit', timeout: 60000 });
+    await page.waitForSelector('[role="tab"]', { timeout: 30000 }).catch(() => {});
+  }
+}
 
 async function rnLogin(page: Page, username = 'factory_admin1', password = '123456') {
   await page.goto(RN_BASE_URL, { waitUntil: 'commit', timeout: 60000 });
@@ -95,7 +130,7 @@ async function apiLogin(): Promise<string> {
 }
 
 async function api(path: string, opts: RequestInit = {}): Promise<any> {
-  const res = await fetch(`${API}/${FACTORY_ID}${path}`, {
+  const res = await fetch(`${API}/${RN_FACTORY_ID}${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
@@ -124,7 +159,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-01: 仓储库存浏览 (S5)
   // ============================================================
   test('RN-LSM-01: 仓储Tab — 库存列表浏览', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to warehouse tab
     const tapped = await tapTab(page, '仓储');
@@ -163,7 +198,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-02: 报工 + 投入量字段 (S2+S3)
   // ============================================================
   test('RN-LSM-02: 报工表单含投入量字段', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -239,7 +274,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-03: 消耗汇总 + BOM达成率 (S4)
   // ============================================================
   test('RN-LSM-03: 生产批次消耗汇总', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -296,7 +331,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-04: AI自然语言查询消耗 (S1)
   // ============================================================
   test('RN-LSM-04: AI对话 — 查询物料消耗', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to AI tab
     const aiTapped = await tapTab(page, 'AI');
@@ -350,7 +385,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-05: AI查询毛利率 (S7)
   // ============================================================
   test('RN-LSM-05: AI对话 — 查询SKU毛利率', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const aiTapped = await tapTab(page, 'AI');
     if (!aiTapped) await tapTab(page, '智能');
     await page.waitForTimeout(3000);
@@ -394,7 +429,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-LSM-06: 生产批次列表 + 详情 (S5+S10)
   // ============================================================
   test('RN-LSM-06: 生产批次列表可达', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -440,7 +475,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
       console.log(`RN-LSM-07 API: ${mt.name}, movingAvgPrice=${avg}`);
     }
 
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to warehouse/inventory
     const tapped = await tapTab(page, '仓储');
@@ -506,7 +541,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
     }
 
     // UI: test AI chat with NL entry
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const aiTapped = await tapTab(page, 'AI');
     if (!aiTapped) await tapTab(page, '智能');
     await page.waitForTimeout(3000);
@@ -629,7 +664,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
     }
 
     // Step 7: UI — navigate to production tab to verify batches visible
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
     await shot(page, '09-supply-chain-production.png');
@@ -668,7 +703,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
     }
 
     // UI: verify batch detail shows yield rate
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -699,7 +734,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-P0-01: 批次详情BOM达成率卡片
   // ============================================================
   test('RN-P0-01: 批次详情 — BOM达成率卡片', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to Processing/生产 tab
     let tapped = await tapTab(page, '生产');
@@ -786,7 +821,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
     }
     console.log(`RN-P0-02: API has movingAvgPrice=${foundAvgPrice}`);
 
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to warehouse/inventory tab
     let tapped = await tapTab(page, '仓储');
@@ -831,7 +866,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-P1-01: 报工良品率实时计算
   // ============================================================
   test('RN-P1-01: 报工 — 良品率实时计算', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to processing tab
     let tapped = await tapTab(page, '生产');
@@ -926,7 +961,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-P1-02: AI入库成功页
   // ============================================================
   test('RN-P1-02: AI对话 — 入库流程', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to AI tab
     let aiTapped = await tapTab(page, 'AI');
@@ -994,7 +1029,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-P2-01: 工序投入产出对比
   // ============================================================
   test('RN-P2-01: 工序详情 — 投入产出对比', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to processing tab
     let tapped = await tapTab(page, '生产');
@@ -1066,7 +1101,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M82: 批次详情 — 完整消耗Tab流 (对标 Maestro 82)
   // ============================================================
   test('RN-M82: 批次详情 — 消耗Tab完整流', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // API: find a batch
     const batchResp = await api('/processing/batches?page=1&size=5');
@@ -1129,7 +1164,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M84: 报工良品率 — 输入不同数值验证色标 (对标 Maestro 84/85)
   // ============================================================
   test('RN-M84: 报工良品率 — 三色阈值验证', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to scan report
     let tapped = await tapTab(page, '批次');
@@ -1206,7 +1241,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M87: 工序任务详情 — 管理Tab路径 (对标 Maestro 87)
   // ============================================================
   test('RN-M87: 工序任务详情 — 管理Tab路径', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Factory admin: 管理 tab → 工序任务
     const tapped = await tapTab(page, '管理');
@@ -1255,7 +1290,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M88: AI入库完整流 (对标 Maestro 88)
   // ============================================================
   test('RN-M88: AI入库 — 意图识别+字段补全', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // API: test multiple receipt variants
     const variants = [
@@ -1305,7 +1340,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M89: 批次详情完整流 — 信息Tab→消耗Tab→返回 (对标 Maestro 89)
   // ============================================================
   test('RN-M89: 批次详情完整导航流', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // API: get batch data
     const batchResp = await api('/processing/batches?page=1&size=5');
@@ -1373,7 +1408,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
   // RN-M90: 库存详情完整流 — 移动均价 (对标 Maestro 90)
   // ============================================================
   test('RN-M90: 库存详情 — 均价+批次详情', async ({ page }) => {
-    await rnLogin(page, 'warehouse_mgr1', '123456');
+    await rnAuthOrInject(page, 'warehouse_mgr1', '123456');
 
     // API: verify material types have movingAvgPrice
     const matResp = await api('/raw-material-types/active');
@@ -1436,7 +1471,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
       return json.data?.accessToken || json.data?.token || '';
     })();
 
-    const wsBatchResp = await fetch(`${API}/${FACTORY_ID}/processing/batches?page=1&size=5`, {
+    const wsBatchResp = await fetch(`${API}/${RN_FACTORY_ID}/processing/batches?page=1&size=5`, {
       headers: { Authorization: `Bearer ${wsToken}` },
     });
     const wsBatches = (await wsBatchResp.json()).data?.content || [];
@@ -1458,7 +1493,7 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
     }
 
     // Step 4: UI — verify FA can see management and AI tabs
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const mgmtTab = await tapTab(page, '管理');
     console.log('RN-M91 FA 管理tab:', mgmtTab);
     await page.waitForTimeout(2000);

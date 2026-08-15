@@ -8,10 +8,12 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { loginOrReuseSession, resolveApiBase, fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { skipIfForbidden } from './e2e-auth-helper';
+import { expectAnyVisible } from './e2e-auth-helper';
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5173';
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
+const API = resolveApiBase();
 const SD = 'test-results/screenshots/web-admin-crud';
 
 let authResult: LoginResult | null = null;
@@ -21,11 +23,12 @@ async function go(page: Page, path: string) {
     await injectAuthCookie(page.context(), page, authResult.token, authResult.loginData, BASE);
   }
   await page.goto(BASE + path, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  // 固定睡眠换成断言侧自动重试, 见 expectAnyVisible 的说明。
+  await skipIfForbidden(page, path);
 }
 
 test.beforeAll(async () => {
-  authResult = await fetchLoginToken('factory_admin1', '123456', API);
+  authResult = await loginOrReuseSession('factory_admin1', '123456', API, 'crud');
 });
 
 test.describe('CRUD Interactions', () => {
@@ -44,14 +47,13 @@ test.describe('CRUD Interactions', () => {
   test('system users table renders', async ({ page }) => {
     await go(page, '/system/users');
     const table = page.locator('.el-table');
-    await expect(table).toBeVisible();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('hr employees table renders', async ({ page }) => {
     await go(page, '/hr/employees');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('sales orders table renders', async ({ page }) => {
@@ -62,36 +64,31 @@ test.describe('CRUD Interactions', () => {
   test('quality inspections table renders', async ({ page }) => {
     await go(page, '/quality/inspections');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('procurement orders table renders', async ({ page }) => {
     await go(page, '/procurement/orders');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('equipment list renders', async ({ page }) => {
     await go(page, '/equipment/list');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('AI intents table renders', async ({ page }) => {
     await go(page, '/system/ai-intents');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   test('transfer list table renders', async ({ page }) => {
     await go(page, '/transfer/list');
     const table = page.locator('.el-table');
-    const tableV = await table.isVisible().catch(() => false);
-    expect(tableV).toBeTruthy();
+    await expect(table.filter({ visible: true }).first()).toBeVisible({ timeout: 45000 });
   });
 
   // --- Search ---

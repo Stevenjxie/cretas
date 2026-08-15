@@ -11,11 +11,15 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
-const API = process.env.E2E_API_URL || 'http://47.100.235.168:10010/api/mobile';
-const FACTORY_ID = 'F001';
+const API = process.env.E2E_API_URL || resolveApiBase();
+// ⚠️ 不能硬编工厂: 口令登录失效后走的是 vue-auth 产出的 storageState token, 那是
+// f006_admin/F006 的会话。写死 'F001' 会让所有**纯 API** 用例拿 403「无权访问该工厂数据」,
+// 而页面用例照常通过 —— 长得完全像"W7 这个接口坏了"(2026-08-15 实测)。
+// 工厂 ID 必须跟着会话走。
+let FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
 const SD = 'test-results/screenshots/liushanmen';
 
 let TOKEN = '';
@@ -66,8 +70,22 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
   test.setTimeout(120000);
 
   test.beforeAll(async () => {
-    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
+    try {
+      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    } catch (e) {
+      const tk = resolveTokenFromStorageState();
+      if (!tk) throw e;
+      const c = JSON.parse(Buffer.from(
+        tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+      if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+      authResult = { token: tk, loginData: {
+        userId: c.userId, username: c.username, role: c.role,
+        factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'] } };
+      console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
+    }
     TOKEN = authResult.token;
+    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
     expect(TOKEN).toBeTruthy();
   });
 
@@ -130,27 +148,38 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
     const supResp = await api('/suppliers?page=1&size=1');
     const supList = Array.isArray(supResp.data) ? supResp.data : supResp.data?.content || [];
     const supplierId = supList.length ? supList[0].id : undefined;
-    console.log(`W2: supplierId=${supplierId}`);
+    console.log(`W2: supplierId=${supplierId}`);  // 期初建账不需要供应商, 这里仅顺带验证供应商接口可用
 
-    // 3. Create a batch via API (correct field names for CreateMaterialBatchRequest)
-    const batchResp = await api('/material-batches', {
+    // 3. 建一笔入库。
+    //
+    // ⛔ 不能再打 `POST /material-batches` —— 那个入口**已被产品有意停用**:
+    //    `MaterialBatchController` 上标着 @Deprecated, 直接抛
+    //    409「普通批次页面已关闭无来源入库与续入」, hint 指向
+    //    「仓储待收货 / 客供料 / 调拨 / 退货 / 盘点 / 受控调整; 期初建账使用独立入口」。
+    //    这条用例只需要「有一笔带成本的入库让移动均价动一下」, 对应的正规入口就是期初建账。
+    //
+    // ⚠️ 这个 describe 是 serial 的: W2 一挂, 后面 W3–W9 **7 条根本不执行**
+    //    (报 "did not run", 而汇总只显示 8 passed —— 看起来像用例变少了)。
+    //    所以 W2 卡住的不是一条, 是八条。
+    const openingResp = await api('/material-batches/opening', {
       method: 'POST',
       body: JSON.stringify({
-        materialTypeId: mtId,
-        supplierId: supplierId,
-        receiptDate: new Date().toISOString().split('T')[0],
-        receiptQuantity: 100,
-        quantityUnit: mt.unit || 'KG',
-        totalWeight: 100,
-        totalValue: 9900,
-        unitPrice: 99.0,
-        storageLocation: 'E2E测试库位',
+        batchKey: `E2E-W2-${tag}`,   // 幂等键: 重跑不会重复建账
+        remark: 'E2E W2 移动均价验证',
+        items: [{
+          materialTypeId: mtId,
+          quantity: 100,
+          quantityUnit: mt.unit || 'kg',
+          unitPrice: 99.0,
+          batchNumber: `E2E-W2-${tag}`,
+        }],
       }),
     });
-    if (!batchResp.success) {
-      console.log(`W2: batch creation failed: ${batchResp.message}`);
+    if (!openingResp.success) {
+      console.log(`W2: 期初建账失败: ${openingResp.message} / hint=${openingResp.actionHint}`);
     }
-    expect(batchResp.success).toBeTruthy();
+    expect(openingResp.success).toBeTruthy();
+    console.log(`W2: 期初建账 created=${openingResp.data?.createdCount} priced=${openingResp.data?.pricedCount} value=${openingResp.data?.totalOpeningValue}`);
 
     // 4. Verify moving avg updated
     const after = await api(`/raw-material-types/${mtId}`);
@@ -435,8 +464,22 @@ test.describe.serial('六扇门一期 新功能页面 E2E', () => {
   test.setTimeout(120000);
 
   test.beforeAll(async () => {
-    authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
+    try {
+      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+    } catch (e) {
+      const tk = resolveTokenFromStorageState();
+      if (!tk) throw e;
+      const c = JSON.parse(Buffer.from(
+        tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+      if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+      authResult = { token: tk, loginData: {
+        userId: c.userId, username: c.username, role: c.role,
+        factoryId: c.factoryId, factoryType: 'FACTORY', permissions: ['*:*'] } };
+      console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
+    }
     TOKEN = authResult.token;
+    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
     expect(TOKEN).toBeTruthy();
   });
 

@@ -18,7 +18,9 @@
     "build": "expo build",
     "build:android": "expo build:android",
     "build:ios": "expo build:ios",
-    "test": "jest"
+    "test": "jest",
+    "web:local": "env-cmd -f .env.local expo start --web --port 3010",
+    "web:test": "env-cmd -f .env.test expo start --web --port 3010"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",

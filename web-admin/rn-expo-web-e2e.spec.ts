@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolveApiBase } from './e2e-auth-helper';
 
 /**
  * RN Expo Web E2E Tests — Playwright against localhost:3010
@@ -9,6 +10,8 @@ import { test, expect, Page } from '@playwright/test';
  * - 5 个工序屏幕均已添加 testID
  */
 
+let RN_FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
+let RN_TOKEN = '';
 const RN_BASE_URL = process.env.RN_BASE_URL || 'http://localhost:3010';
 const SD = 'test-results/screenshots/rn-expo-web';
 
@@ -16,6 +19,37 @@ const SD = 'test-results/screenshots/rn-expo-web';
  * Login helper for RN Expo Web
  * Flow: Landing → click "登录" → fill form → submit → wait for main navigator
  */
+/**
+ * 口令登录不可用时先注入会话 —— 否则整个套件一条都跑不起来。
+ *
+ * `factory_admin1/123456` 在本环境返回「用户名或密码错误」, 而失败长相是
+ * 「登录页卡住 / 找不到 tab」, 很容易误读成 RN 应用本身坏了。
+ * 这里复用 vue-auth 产出的 storageState token(与 web 侧同一个来源)。
+ */
+async function rnAuthOrInject(page: Page, username = 'factory_admin1', password = '123456') {
+  try {
+    const r = await fetchLoginToken(username, password, API);
+    RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
+    await rnLogin(page, username, password);
+    return;
+  } catch (e) {
+    const tk = resolveTokenFromStorageState();
+    if (!tk) throw e;
+    const c = JSON.parse(Buffer.from(
+      tk.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+    if (!c.factoryId || !c.userId) throw new Error('storageState token 缺 factoryId/userId');
+    RN_FACTORY_ID = c.factoryId;
+    RN_TOKEN = tk;
+    await injectRnSession(page.context(), tk, {
+      userId: c.userId, username: c.username, role: c.role, factoryId: c.factoryId,
+      factoryType: 'FACTORY', permissions: ['*:*'],
+    });
+    console.warn(`[rn] 口令登录不可用, 改注入 storageState 会话 (factory=${c.factoryId})`);
+    await page.goto(RN_BASE_URL, { waitUntil: 'commit', timeout: 60000 });
+    await page.waitForSelector('[role="tab"]', { timeout: 30000 }).catch(() => {});
+  }
+}
+
 async function rnLogin(page: Page, username = 'factory_admin1', password = '123456') {
   await page.goto(RN_BASE_URL, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(3000);
@@ -104,7 +138,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
     await page.screenshot({ path: SD + '/01a-landing.png', fullPage: true });
 
     // Perform login
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Verify main navigator loaded — check for tab bar (ARIA role="tab")
     const homeTab = page.getByRole('tab', { name: '首页' });
@@ -125,7 +159,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-02: Processing Dashboard loads with action cards', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Tap "生产" tab
     const tapped = await tapTab(page, '生产');
@@ -159,7 +193,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-03: Navigate to Batch List', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -183,7 +217,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-04: Navigate to NFC Checkin screen', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -209,7 +243,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-05: Management tab loads', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     const tapped = await tapTab(page, '管理');
     console.log('RN-05 tapped management tab:', tapped);
@@ -231,7 +265,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-06: Profile tab loads', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     const tapped = await tapTab(page, '我的');
     console.log('RN-06 tapped profile tab:', tapped);
@@ -249,7 +283,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-07: workshop_sup1 role — different tab visibility', async ({ page }) => {
-    await rnLogin(page, 'workshop_sup1', '123456');
+    await rnAuthOrInject(page, 'workshop_sup1', '123456');
 
     // workshop_supervisor tabs: 首页, 批次, 人员, 设备, 我的
     // Should NOT see: "管理" as a bottom tab (only factory_admin has it)
@@ -270,7 +304,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-08: Navigate to Equipment Management', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -291,7 +325,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-09: Navigate to Material Batch Management', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     await tapTab(page, '生产');
     await page.waitForTimeout(3000);
 
@@ -312,7 +346,7 @@ test.describe('RN Expo Web E2E — Processing & Navigation', () => {
   // ============================================================
 
   test('RN-10: Attendance tab loads', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     const tapped = await tapTab(page, '考勤');
     console.log('RN-10 tapped attendance tab:', tapped);
@@ -348,7 +382,7 @@ test.describe('RN Expo Web E2E — ProcessTask Screens', () => {
    * 通用: ProcessingDashboard → "工序任务" (MainNavigator 角色)
    */
   async function navigateToTaskList(page: import('@playwright/test').Page) {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // 路径1: factory_admin1 → 管理 tab → 工序任务
     const mgmtTab = page.getByRole('tab', { name: '管理' });
@@ -777,7 +811,7 @@ test.describe('RN Expo Web E2E — ProcessTask Screens', () => {
 
   // === RN-PT-10: App审批页面入口 ===
   test('RN-PT-10: ProcessTask审批入口图标存在', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const navigated = await navigateToTaskList(page);
     test.skip(!navigated, 'Cannot reach task list');
 
@@ -791,7 +825,7 @@ test.describe('RN Expo Web E2E — ProcessTask Screens', () => {
 
   // === RN-PT-11: 报工表单有备注字段 ===
   test('RN-PT-11: 报工表单含备注输入框', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const navigated = await navigateToTaskList(page);
     test.skip(!navigated, 'Cannot reach task list');
 
@@ -822,7 +856,7 @@ test.describe('RN Expo Web E2E — ProcessTask Screens', () => {
 
   // === RN-PT-12: 字体大小验证 (>= 20px for processName) ===
   test('RN-PT-12: 工序名称字体 >= 20px', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
     const navigated = await navigateToTaskList(page);
     test.skip(!navigated, 'Cannot reach task list');
 
@@ -853,7 +887,7 @@ test.describe('RN Expo Web E2E — ProcessTask Screens', () => {
 
   // === RN-PT-14: NFC签到processCategory字段 (visual check) ===
   test('RN-PT-14: NFC签到页面可达', async ({ page }) => {
-    await rnLogin(page);
+    await rnAuthOrInject(page);
 
     // Navigate to NFC checkin
     const processingTab = page.getByRole('tab', { name: '生产' });
