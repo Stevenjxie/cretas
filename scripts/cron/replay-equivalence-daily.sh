@@ -77,7 +77,16 @@ LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
   #    而它拖下水的是**所有**告警的可信度(形态 E: 完备性与存活是矛盾的)。
   #
   # ⛔ 判定别再写回 shell —— 写在这里就没法单测，而它正是被误报咬了三天的那一段。
-  if [ -s /tmp/replay_equivalence.alert ]; then
+  #
+  # 🔴 但有**一件事必须留在这里**：探针根本没跑到「决定告不告警」那一步。
+  #    2026-08-15 实测：探针里一个 NameError 让它在第 190 行就崩了，
+  #    于是告警文件**压根没被创建** —— 而「文件不存在」在上面那个
+  #    `[ -s ... ]` 里长得和「(a) 类，决定不告警」**一模一样**。
+  #    当时的表象是「alerts 没有新增」，看起来正是我们想要的结果。
+  #    ⇒ **「没喊」有两种：决定不喊 / 没能做决定。后者必须喊。**
+  if [ ! -f /tmp/replay_equivalence.alert ]; then
+    echo "REPLAY EQUIV INSTRUMENT DEAD $(date '+%F %T') — 探针没跑到决定告警那一步(rc=$rc, 告警文件未生成), 大概率是崩了; 见 $LOG" >> "$ALERTS"
+  elif [ -s /tmp/replay_equivalence.alert ]; then
     while IFS= read -r line; do
       [ -n "$line" ] && echo "$line $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
     done < /tmp/replay_equivalence.alert

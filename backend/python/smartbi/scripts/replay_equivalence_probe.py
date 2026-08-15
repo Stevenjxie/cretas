@@ -187,7 +187,10 @@ def _write_alert(line: str) -> None:
 async def main():
     pool = await ctx.pool()
     print(f"# _PLAN_VERSION = {getattr(ri, '_PLAN_VERSION', '?')!r}")
-    print(f"# 当前路由指纹 = {_REAL_FP_FN()!r}")
+    # ⚠️ 两个指纹**不是同一个量**, 两个都打 —— 只打一个会让人以为
+    #    「指纹没变所以回放没变」, 而晋升闸比的是语义段那个。
+    print(f"# 规则指纹(喂计划缓存版本键) = {_REAL_RULES_FP_FN()!r}")
+    print(f"# 语义段(晋升闸比的就是它)   = {_REAL_SEM_FP_FN()!r}")
     clear_caches(verbose=True)
 
     async with pool.acquire() as conn:
