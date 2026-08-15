@@ -36,6 +36,7 @@ import {
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
+import { attachmentApi } from '../../services/api/attachmentApi';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIForm'>;
@@ -111,6 +112,15 @@ export default function QIFormScreen() {
 
   // 照片
   const [photos, setPhotos] = useState<string[]>([]);
+
+  // 从 QICamera 回传的照片。此前 setPhotos **一次都没被调用过** ——
+  // photos 恒为空数组, 所以「照片证据」这件事在质检里从来没成立过。
+  const capturedPhotos = (route.params as { capturedPhotos?: string[] } | undefined)?.capturedPhotos;
+  useEffect(() => {
+    if (capturedPhotos && capturedPhotos.length) {
+      setPhotos((prev) => Array.from(new Set([...prev, ...capturedPhotos])));
+    }
+  }, [capturedPhotos]);
 
   useEffect(() => {
     loadBatchDetail();
@@ -205,8 +215,33 @@ export default function QIFormScreen() {
 
       const record = await qualityInspectorApi.submitInspection(batch.id, formData);
 
+      // ⚠️ 后端返的是信封 `{ inspection, passRate }`, 不是记录本身 ——
+      //    直接取 `record.id` 恒为 undefined, QIResult 会拿到一个空 id。
+      const envelope = record as unknown as { id?: string; inspection?: { id?: string | number } };
+      const inspectionId = String(envelope.inspection?.id ?? envelope.id ?? '');
+
+      // 照片存成 QUALITY_CHECK 附件。`Attachment.EntityType.QUALITY_CHECK` 早就存在,
+      // 但在此之前全仓没有任何地方把它当附件归属用过 —— 机制建好了没接上。
+      if (inspectionId && photos.length) {
+        await Promise.all(
+          photos.map((uri, i) =>
+            attachmentApi
+              .uploadAndRegister(
+                { uri, name: `qc-${inspectionId}-${i + 1}.jpg`, type: 'image/jpeg', size: 0 },
+                'QUALITY_CHECK',
+                inspectionId,
+                { businessTag: 'QC_PHOTO' },
+              )
+              .catch((e: unknown) => {
+                // 单张失败不该把整次质检提交判为失败 —— 记录已经落库了。
+                console.warn(`[QI] 质检照片上传失败(${i + 1}/${photos.length}):`, e);
+              }),
+          ),
+        );
+      }
+
       navigation.replace('QIResult', {
-        recordId: record.id,
+        recordId: inspectionId,
         passed,
       });
     } catch (error) {
