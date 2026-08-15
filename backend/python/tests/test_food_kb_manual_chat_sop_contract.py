@@ -432,6 +432,12 @@ def test_reporting_unit_and_cross_unit_yield_use_the_reviewed_contract():
     )
     assert all(_needs_reporting_unit_yield_guard(q) for q in equivalent_questions)
     assert not _needs_reporting_unit_yield_guard("Workflow 怎么发布？")
+    assert not _needs_reporting_unit_yield_guard(
+        "调拨批次账面有 15，为什么实物可用只有 5，未结算报工怎么办？"
+    )
+    assert _needs_factory_transfer_physical_stock_guard(
+        "调拨批次账面有 15，为什么实物可用只有 5，未结算报工怎么办？"
+    )
     assert "计数/包装单位按字面量匹配" in _REPORTING_UNIT_YIELD_ANSWER
     assert "手工批次和已有库存批次都遵守同一单位合同" in (
         _REPORTING_UNIT_YIELD_ANSWER
