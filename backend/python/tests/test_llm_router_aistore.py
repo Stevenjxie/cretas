@@ -57,7 +57,10 @@ _AISTORE_THINKING_VERDICT: dict[str, tuple[bool, str]] = {
         "2026-08-15 生产端点实测: 带 thinking:disabled 1.43/1.43/1.56s、"
         "reasoning_tokens=None; 去掉该字段 8.03/8.13/8.95s、reasoning_tokens=800 "
         "(把 max_tokens 全烧在思考上)、content_len=0、finish_reason=length。"
-        "⇒ 没有这个开关它必然撞穿 6.0s 单跳预算, 且返回空。",
+        "⇒ 没有这个开关它会思考, 思考量随请求波动: 实测 4 次落在 5.69~8.95s, "
+        "其中 3 次超过 6.0s 单跳预算; 最坏情况把 max_tokens 全烧在 reasoning 上、"
+        "content 为空 (finish_reason=length)。"
+        "⛔ 不要写「必然」—— 有一次 5.69s / rt=402 / content=539 字符, 低于预算且非空。",
     ),
     "DeepSeek-V4-Flash": (
         False,
