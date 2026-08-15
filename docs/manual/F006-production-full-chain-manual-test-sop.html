@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-<span class="stamp code">origin/main · SOP sync 2026-08-14</span>
+              <span class="stamp code">origin/main · SOP sync 2026-08-15</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -337,6 +337,7 @@
           <div class="section-title"><h3>12 个关键角色：RN 仓储入口与 Web 业务边界</h3><p>一个账号只证明一个岗位：先确认入口，再确认能做什么、不能代谁做</p></div>
         </div>
         <div class="callout blue"><strong>当前入口真值</strong>RN App 的业务首页只向 <code>warehouse_manager</code> / <code>warehouse_worker</code> 开放；其余 10 个业务角色登录后进入“请使用电脑端”指引页，可复制 Web 地址、退出或切换仓库账号。<code>platform_admin</code> / <code>super_admin</code> 仅保留技术支持例外，不能据此宣称所有角色都能在手机办理业务。</div>
+        <div class="callout blue"><strong>手机追问与输入</strong>AI 缺少原材料、产品、供应商、客户、仓库或设备时只问业务名称并提示“说名称就行”，批次问批次号、人员问姓名，不向一线用户索要 UUID 或内部 ID。当前有权进入相关页面时，报工驳回原因、采购单备注和换工种输入使用跨 Android/iOS/Web 的应用内对话框；驳回原因必填，备注可留空。换工种当前仍要求工种编号，尚不是按名称选择，不能扩大描述。</div>
         <div class="callout blue"><strong>最小账号集不是万能账号集</strong>以下 12 个账号覆盖关键管理权限和一线闭环。登录后必须确认工厂为 F006、角色与页面一致；本页不保存密码。<code>rw</code> 仍受单据状态、数据范围和 OA 审批约束，看到入口不等于可以越权提交。</div>
         <div class="table-wrap"><table><thead><tr><th>岗位 / 账号</th><th>实际业务能力与入口</th><th>不可代做</th><th>主要交接</th></tr></thead><tbody>
           <tr><td><strong>老板 / 工厂超级管理员</strong><br><code>f006_admin</code><br><small>factory_super_admin</small></td><td><strong>电脑 Web：</strong>全工厂模块 <code>rw</code>；进入工厂管理员首页，可看 AI、报表、SmartBI、管理与系统配置。</td><td>不能把超级管理员当万能代办，绕过采购、收货、质检、付款、报工或 OA 节点。</td><td>只处理跨部门权限、配置和升级异常，处理后交回真实岗位继续。</td></tr>
@@ -462,7 +463,7 @@
         <div class="path">仓储管理 <b>›</b> 原料类型字典 <b>›</b> 新增</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-1"><span></span></span><span><h4>建立本轮测试投入物料</h4><p>创建 4 个可供批次选择的原料 A/B/C/D；另建“黄油调味料、香辛料”作为按工序辅料，以及“成品盒、封膜、外箱”作为包材。名称都加同一测试前缀，避免选错历史数据。</p><span class="expect">各名称在对应类别列表只出现一条；短料号由用户填写或采用系统建议值；辅料和包材之后能在 BOM 的对应页签被筛选到。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、基本类型；基本类型是必填业务属性。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>L1 → L2 → L3 分类为可选辅助信息；选择时必须是有效链路，并与基本类型一致。</li><li>新建包材必须填写大于 0 的采购参考价；普通原料/辅料未知价格可以留空，不能当成 0 元。</li></ul><span class="expect">单位显示为 kg，未选分类也能保存；选择分类时链路有效且基本类型一致。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。包材页面明确标记采购参考价必填，留空时在提交前说明 BOM 包装成本无法形成。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、基本类型；基本类型是必填业务属性。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>L1 → L2 → L3 分类为可选辅助信息；选择时必须是有效链路，并与基本类型一致。</li><li>新建包材必须填写大于 0 的采购参考价；普通原料/辅料未知价格可以留空，不能当成 0 元。</li></ul><span class="expect">单位显示为 kg，未选分类也能保存；选择分类时链路有效且基本类型一致。规范单位 <code>sheet</code> 在中文页面显示“张”，<code>tray</code>/<code>plate</code> 显示“托盘/板”；“只、个、件”分别保留真实字面，不统一折成 <code>pcs</code>。客户端英文码与主档中文写法只在可证明等价时通过比较，落账仍回到主档真实单位；kg/g 等科学单位可换算，个/只/片等计数单位不可互换。逐道报工也必须按批次库存单位填写，单位不兼容时在扣库存前失败。自定义单位可只填中文名由系统生成不冲突的英文码；用户已填码时不覆盖。包材页面明确标记采购参考价必填，留空时在提交前说明 BOM 包装成本无法形成。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-code-governance"><span></span></span><span><h4>使用短料号并保持不可复用</h4><p>新建物料时填写简短、可读的料号，或采用页面按基本类型给出的建议前缀（如 <code>YL</code>/<code>WL</code>/<code>BC</code>）后再确认。系统不再生成或要求 16 位分类业务编码；分类与料号彼此独立。</p><span class="expect">保存后的料号不可修改；与现存或已删除记录冲突时明确阻止，已删除料号也不回收复用。列表继续回显历史类别，但系统不替用户改写既有类型、分类或料号。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-packaging"><span></span></span><span><h4>原料多包装与基本单位库存</h4><p>在同一原料类型、紧邻库存基本单位维护有效包装规格，例如 <code>1箱=10kg</code>、<code>1袋=2.5kg</code>。它表达“采购包装单位 → 库存基本单位”，不在成品 SKU 管理里配置。采购、收货和跨仓调拨可按箱/袋录入，系统保存包装身份、数量、系数与折合基本量快照。</p><span class="expect">多规格必须显式选择；收货确认后的库存批次、余额、BOM 可用量和生产领料仍只使用 kg。超收按折合基本量比较；抄码/称重原料按现场实际称重，不套固定箱重。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="raw-byproduct"><span></span></span><span><h4>建立可盘点副产 SKU</h4><p>肥油、碎骨等可回收或可再投入副产也在原料类型字典建档，并打开“副产”标记。副产是物料标记，不是新的材质大类；名称、库存单位和真实原料/其它材质分类仍分别维护。</p><span class="expect">采购和普通 BOM 投入选择器排除副产标记项；BOM“副产”页签只列出已标记物料。同一副产只有一个库存身份，之后可被另一条工艺当原料投入。</span></span></label>
@@ -710,12 +711,12 @@
         <div class="callout blue"><strong>单据追踪只展示关系，不代替状态动作</strong>销售单、采购单、生产计划和调拨单详情可打开“单据追踪”，查看上下游节点并返回原单；追踪页不替用户提交审批、发运、签收或确认库存。调拨数量按物料/批次规范单位校验，状态应显示“待对方确认”等中文业务口径。</div>
         <div class="steps" style="margin-top:12px">
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-1"><span></span></span><span><h4>按计划生成物料需求单</h4><p>选择生产计划生成需求单，核对 BOM 展开的原料、辅料、包材和需求单位。生产仓若缺配置，立即停止，不得默认到任意仓。</p><span class="expect">需求单显示真实仓库路由和全部物料类别；无 BOM 时明确报错。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-2"><span></span></span><span><h4>仓管备料并确认实际拣货</h4><p>状态从“待备料”进入“备料中”；仓管逐行核对需求量和实际拣货量。不指定批次时由服务端按 FEFO 自动分配；指定时按 <code>[{batchNo, qty}]</code> 逐批次提交。</p><span class="expect">字符串批次列表或缺少数量的 malformed <code>batchRows</code> 在写入前返回 400；库存不足直接提示缺口，不能领成负数；实际拣货量与后续调拨发出量一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-2"><span></span></span><span><h4>仓管备料并确认实际拣货</h4><p>状态从“待备料”进入“备料中”；仓管逐行核对需求量和实际拣货量。不指定批次时由服务端按 FEFO 自动分配；指定时按 <code>[{batchNo, qty}]</code> 逐批次提交。批次选择器和确认发运都按“实物可用量 = max(0, 账面可用量 − 未结算报工占用量)”校验。</p><span class="expect">字符串批次列表或缺少数量的 malformed <code>batchRows</code> 在写入前返回 400；账上有量但已投入未完成小结/结算的批次不能再次调出，应先完成生产小结或改选其它批次、缩小数量；不能领成负数，实际拣货量与后续调拨发出量一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-3"><span></span></span><span><h4>调拨并由生产仓签收</h4><p>调出仓确认发运，生产仓按实物逐行确认签收；核对单号、源仓→目标仓、批次、数量和单位。发出与实收不一致时建立差异记录。</p><span class="expect">状态到“已签收”；调出仓减少、生产仓增加，工厂总库存不因同厂调拨凭空变化。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。默认发起人不得自批；只有当前 OA 节点明确授权 <code>factory_super_admin</code>、且发起人本人是本厂启用状态的该角色时，才允许自审批解除单总监死锁并留审计日志。</p><span class="expect">节点授权仓管或其他角色时超级管理员仍不得越权；其余步骤不能越级。源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-5"><span></span></span><span><h4>报工前做生产仓双边复核</h4><p>仓管在分仓库存查询记录生产仓批次；生产人员在逐道录入下拉中核对同一批次和可用量。</p><span class="expect">仓库账、需求/调拨单、报工选择器三处的物料、批次、单位和可用量一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-6"><span></span></span><span><h4>核对 RN 物料需求单只读回读</h4><p>在生产工作台打开“物料需求单”，进入列表和详情，核对需求单号、计划、状态及各物料的需求、已备料、已签收、已消耗、损耗和退料。</p><span class="expect">页面没有生成、备料、调拨、签收、关单或取消按钮；写操作继续由对应管理后台和岗位完成。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-audit"><span></span></span><span><h4>核对批次领用与消耗审计</h4><p>逐条回读批次消耗记录中的生产计划、用途和备注。计划关联使用 <code>productionPlanId</code>；<code>processId</code> 只作为旧名兼容，不能传加工批次 ID 冒充生产计划。</p><span class="expect">消耗记录能追到正确生产计划；用途与备注进入审计而不是接收后丢失。缺少计划时保持未关联，不猜一个计划。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-audit"><span></span></span><span><h4>核对批次领用与消耗审计（含调拨）</h4><p>逐条回读批次消耗记录中的生产计划、用途和备注。计划关联使用 <code>productionPlanId</code>；<code>processId</code> 只作为旧名兼容，不能传加工批次 ID 冒充生产计划。调拨确认发运后，再按实际扣减批次回读来源为 <code>TRANSFER_OUT</code> 的台账。</p><span class="expect">生产消耗能追到正确计划；FEFO 跨多个批次时，每个实际扣减批次各有一条调拨消耗台账，数量、单价、金额和调拨单号一致；重试不重复扣减或记账。用途与备注进入审计，缺少计划时保持未关联，不猜一个计划。</span></span></label>
         </div>
       </section>
 
@@ -770,7 +771,7 @@
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="approval-1"><span></span></span><span><h4>确认本次报工是直通还是待审批</h4><p>提交正式报工后先查看返回状态、审批实例号和页面提示；记录本次命中了哪条规则。没有审批规则时应明确直接生效，而不是显示一个永远没人处理的待审状态。</p><span class="expect">直通与待审批只能出现一种；状态、审批实例和库存生效时点一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="approval-2"><span></span></span><span><h4>主管复核报工完整内容</h4><p>审批人逐项核对工厂、计划、Workflow 版本、工序、投入批次与数量、产出、人员、工时、生产日期、损耗、留样及附件。</p><span class="expect">审批页不是只有汇总数字；审批人无权修改原始报工事实，跨 F006 对象不可见。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="approval-3"><span></span></span><span><h4>分别验证通过、驳回和修正重提</h4><p>先输入审批意见并驳回一条，确认生产人员可见原因、修正后重提；再由有权限人员通过。回读库存、工资和成本生效时间。</p><span class="expect">驳回不落最终库存/工资/成本；通过后只落一次；原审批、驳回原因和重提版本都可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="approval-3"><span></span></span><span><h4>分别验证通过、驳回和修正重提</h4><p>先在当前授权页面输入审批意见并驳回一条，确认 Android/iOS/Web 都能打开应用内原因输入框；生产人员看到原因并修正重提，再由有权限人员通过。回读库存、工资和成本生效时间。</p><span class="expect">驳回原因为必填，取消不提交；网络错误显示业务友好提示。驳回不落最终库存/工资/成本；通过后只落一次；原审批、驳回原因和重提版本都可追溯。</span></span></label>
         </div>
       </section>
 

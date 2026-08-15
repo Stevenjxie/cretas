@@ -14,6 +14,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
     _FACTORY_MATERIAL_SALES_ANSWER,
+    _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER,
     _FACTORY_WORKFLOW_MAINTENANCE_ANSWER,
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
@@ -30,6 +31,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_COST_CATEGORY_ANSWER,
     _RESTAURANT_DISCOUNT_GUIDE_ANSWER,
     _RESTAURANT_DATA_AVAILABILITY_ANSWER,
+    _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER,
     _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
     _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
@@ -56,6 +58,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_current_gates_guard,
     _needs_factory_form_assistant_result_guard,
     _needs_factory_material_sales_guard,
+    _needs_factory_transfer_physical_stock_guard,
     _needs_factory_workflow_maintenance_guard,
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
@@ -72,6 +75,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_cost_category_guard,
     _needs_restaurant_discount_guide_guard,
     _needs_restaurant_data_availability_guard,
+    _needs_restaurant_data_progress_followup_guard,
     _needs_restaurant_department_stocktake_guard,
     _needs_restaurant_flywheel_governance_guard,
     _needs_restaurant_guide_boundary_guard,
@@ -198,6 +202,13 @@ def test_20260813_factory_contracts_are_deterministic_and_isolated():
         "AI 表单助手模型说成功但没有写入怎么办？"
     )
     assert "服务端实际执行成功" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    assert _needs_factory_form_assistant_result_guard(
+        "AI 表单助手缺原材料类型 ID 时，手机操作员要说名称还是 UUID？"
+    )
+    assert "都提示“说名称就行”" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    assert "不得向一线用户索要 UUID、内部 ID" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    assert "跨 Android/iOS/Web 的应用内对话框" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
+    assert "换工种当前仍要求工种编号" in _FACTORY_FORM_ASSISTANT_RESULT_ANSWER
     assert not _needs_factory_material_sales_guard("餐饮今天怎么样？")
 
 
@@ -242,6 +253,38 @@ def test_20260814_restaurant_margin_contract_keeps_finance_and_ops_scopes_separa
     assert "不能称为利润或利润率" in answer
     assert "不能承诺“补上就从估变实”" in answer
     assert "导览助手只说明以上口径" in answer
+
+
+def test_20260815_factory_transfer_uses_physical_stock_and_per_batch_ledger():
+    assert _needs_factory_transfer_physical_stock_guard(
+        "调拨批次账面有 15，为什么实物可用只有 5，未结算报工怎么办？"
+    )
+    assert _needs_factory_transfer_physical_stock_guard(
+        "FEFO 调拨跨多个批次后怎样从 TRANSFER_OUT 消耗台账追溯？"
+    )
+    assert not _needs_factory_transfer_physical_stock_guard("餐饮成本卡覆盖率怎么读？")
+    answer = _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER
+    assert "max(0, 账面可用量 − 未结算报工占用量)" in answer
+    assert "每个实际扣减批次" in answer
+    assert "TRANSFER_OUT" in answer
+    assert "`个`、`只`、`片` 等计数单位不能互换" in answer
+
+
+def test_20260815_restaurant_progress_followups_and_cost_card_feedback_are_isolated():
+    assert _needs_restaurant_data_progress_followup_guard(
+        "数据补到 6 类里的几类和成本卡覆盖率是一回事吗？"
+    )
+    assert _needs_restaurant_data_progress_followup_guard(
+        "哪些菜没有成本卡，追问按钮什么时候不该显示？"
+    )
+    assert not _needs_restaurant_data_progress_followup_guard("Workflow 调拨怎么发运？")
+    answer = _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER
+    assert "有、部分、有但没接线、无" in answer
+    assert "有可用成本卡菜品营收 ÷ 全部菜品营收" in answer
+    assert "从 X% 到 Y%" in answer
+    assert "不能说单菜毛利已经从估算变成实测" in answer
+    assert "无数据、权限遮蔽、服务不可用或仍需澄清时不显示按钮" in answer
+    assert "不替用户计算、补卡或分析真实门店数据" in answer
 
 
 def test_only_production_chain_questions_force_the_current_sop_source():
@@ -1101,7 +1144,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-14" in html
+    assert "origin/main · SOP sync 2026-08-15" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
     assert "调整后应剩多少的绝对值" in html
