@@ -5,7 +5,10 @@ import com.cretas.aims.dto.labelqc.LabelQcDtos.AddPhotoRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.BoundingBox;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.CreateTaskRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.PhotoReviewRequest;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.LabelObjectReview;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.ObjectReviewPayload;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.ReviewTaskRequest;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.TrayObjectReview;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.TrainingDecisionRequest;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.LabelQcAnnotation;
@@ -14,7 +17,10 @@ import com.cretas.aims.entity.LabelQcTask;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.LabelQcAnnotationSource;
 import com.cretas.aims.entity.enums.LabelQcLabel;
+import com.cretas.aims.entity.enums.LabelQcObjectDecision;
+import com.cretas.aims.entity.enums.LabelQcObjectType;
 import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
+import com.cretas.aims.entity.enums.LabelQcPresence;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
 import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import com.cretas.aims.entity.enums.ProductCategory;
@@ -25,6 +31,7 @@ import com.cretas.aims.repository.LabelQcTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.event.LabelQcAnalysisRequestedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -71,7 +78,8 @@ class LabelQcServiceTest {
                 annotationRepository,
                 productTypeRepository,
                 attachmentService,
-                eventPublisher);
+                eventPublisher,
+                new ObjectMapper());
         task = LabelQcTask.builder()
                 .id(TASK_ID)
                 .factoryId(FACTORY_ID)
@@ -334,6 +342,92 @@ class LabelQcServiceTest {
         assertEquals(1, additions.size());
         assertEquals(LabelQcAnnotationSource.HUMAN, additions.get(0).getSource());
         assertEquals(LabelQcLabel.MISSING_COLOR_LABEL, additions.get(0).getHumanLabel());
+    }
+
+    @Test
+    void reviewPersistsCompletePerTrayObjectTruthWithoutOverwritingAiSnapshot() {
+        String screening = """
+                {"trays":[{"index":0,"bbox":[0.05,0.05,0.95,0.95],"labels":[
+                  {"type":"white","bbox":[0.1,0.1,0.3,0.3]},
+                  {"type":"color","bbox":[0.6,0.6,0.8,0.8]}
+                ]}]}
+                """;
+        photo.setScreeningDetail(screening);
+        ObjectReviewPayload objectReview = new ObjectReviewPayload(
+                1,
+                true,
+                List.of(new TrayObjectReview(
+                        0,
+                        "tray-0",
+                        new BoundingBox(0.05, 0.05, 0.95, 0.95),
+                        LabelQcObjectDecision.CONFIRMED,
+                        LabelQcPresence.PRESENT,
+                        LabelQcPresence.PRESENT,
+                        List.of(
+                                new LabelObjectReview(
+                                        "label-0-0",
+                                        LabelQcObjectType.WHITE_LABEL,
+                                        new BoundingBox(0.1, 0.1, 0.3, 0.3),
+                                        LabelQcObjectDecision.CONFIRMED,
+                                        false),
+                                new LabelObjectReview(
+                                        "label-0-1",
+                                        LabelQcObjectType.COLOR_LABEL,
+                                        new BoundingBox(0.6, 0.6, 0.8, 0.8),
+                                        LabelQcObjectDecision.CONFIRMED,
+                                        false)),
+                        List.of())),
+                List.of());
+        ReviewTaskRequest request = new ReviewTaskRequest(0L, "review-objects", List.of(
+                new PhotoReviewRequest(PHOTO_ID, List.of(
+                        new AnnotationReviewRequest(
+                                aiCandidate.getId(),
+                                LabelQcLabel.NO_DEFECT,
+                                null,
+                                "人工拒绝缺标疑点")), objectReview)));
+
+        var result = service.review(FACTORY_ID, TASK_ID, REVIEWER_ID, request);
+
+        assertEquals(screening, photo.getScreeningDetail());
+        assertNotNull(photo.getObjectReviewDetail());
+        assertEquals(REVIEWER_ID, photo.getObjectReviewedBy());
+        assertNotNull(photo.getObjectReviewedAt());
+        assertEquals(LabelQcPresence.PRESENT,
+                result.photos().get(0).objectReview().trays().get(0).whitePresence());
+    }
+
+    @Test
+    void reviewRejectsObjectTruthThatSilentlyDropsAnAiLabel() {
+        photo.setScreeningDetail("""
+                {"trays":[{"index":0,"bbox":[0.0,0.0,1.0,1.0],"labels":[
+                  {"type":"white","bbox":[0.1,0.1,0.3,0.3]}
+                ]}]}
+                """);
+        ObjectReviewPayload incomplete = new ObjectReviewPayload(
+                1,
+                true,
+                List.of(new TrayObjectReview(
+                        0,
+                        "tray-0",
+                        new BoundingBox(0.0, 0.0, 1.0, 1.0),
+                        LabelQcObjectDecision.CONFIRMED,
+                        LabelQcPresence.UNJUDGEABLE,
+                        LabelQcPresence.MISSING,
+                        List.of(),
+                        List.of())),
+                List.of());
+        ReviewTaskRequest request = new ReviewTaskRequest(0L, "review-incomplete-objects", List.of(
+                new PhotoReviewRequest(PHOTO_ID, List.of(
+                        new AnnotationReviewRequest(
+                                aiCandidate.getId(), LabelQcLabel.NO_DEFECT, null, null)), incomplete)));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.review(FACTORY_ID, TASK_ID, REVIEWER_ID, request));
+
+        assertEquals("LABEL_QC_OBJECT_REVIEW_INVALID", error.getErrorCode());
+        assertNull(photo.getObjectReviewDetail());
+        verify(annotationRepository, never()).saveAll(any());
     }
 
     @Test

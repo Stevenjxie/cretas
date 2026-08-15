@@ -36,7 +36,9 @@ import { useAuthStore } from '../../store/authStore';
 import {
   LabelQcBoundingBox,
   LabelQcLabel,
+  LabelQcObjectType,
   LabelQcPhoto,
+  LabelQcPresence,
   LabelQcTaskDetail,
 } from '../../types/labelQc';
 import {
@@ -71,6 +73,17 @@ import {
   translateBoundingBox,
   updateDraftAnnotation,
 } from './labelQcReviewModel';
+import {
+  addMobileObjectLabel,
+  confirmObjectTray,
+  PhotoObjectReviewDraft,
+  ObjectReviewItemDraft,
+  removeMobileObjectLabel,
+  setObjectPresence,
+  TrayObjectReviewDraft,
+  updateMobileObjectLabelBox,
+  validateObjectTray,
+} from './labelQcObjectReviewModel';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QILabelQcReview'>;
@@ -151,6 +164,8 @@ function AnnotationBox({
   onSelect,
   onMove,
   onResize,
+  displayLabel,
+  displayColor,
 }: {
   annotation: LabelQcReviewAnnotationDraft;
   selected: boolean;
@@ -160,6 +175,8 @@ function AnnotationBox({
   onSelect: () => void;
   onMove: (deltaX: number, deltaY: number) => void;
   onResize: (deltaX: number, deltaY: number) => void;
+  displayLabel?: string;
+  displayColor?: string;
 }) {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [resizeOffset, setResizeOffset] = useState({ x: 0, y: 0 });
@@ -213,16 +230,16 @@ function AnnotationBox({
 
   if (!bbox) return null;
 
-  const color = annotation.label
+  const color = displayColor ?? (annotation.label
     ? VERDICT_COLORS[annotation.label]
     : annotation.source === 'AI'
       ? PENDING_AI_COLOR
-      : PENDING_HUMAN_COLOR;
-  const finalLabel = annotation.label
+      : PENDING_HUMAN_COLOR);
+  const finalLabel = displayLabel ?? (annotation.label
     ? LABEL_COPY[annotation.label]
     : annotation.source === 'AI'
       ? 'AI 疑点'
-      : '人工新增';
+      : '人工新增');
 
   return (
     <GestureDetector gesture={moveGesture}>
@@ -428,7 +445,9 @@ function PhotoCanvas({
   photo,
   draft,
   referenceBoxes,
+  objectLabels,
   selectedKey,
+  selectedObjectKey,
   viewport,
   readOnly,
   onSelect,
@@ -438,11 +457,16 @@ function PhotoCanvas({
   onResize,
   onHumanLabel,
   onDelete,
+  onObjectSelect,
+  onObjectMove,
+  onObjectResize,
 }: {
   photo: LabelQcPhoto;
   draft: LabelQcReviewPhotoDraft;
   referenceBoxes: LabelQcScreenReferenceBox[];
+  objectLabels: ObjectReviewItemDraft[];
   selectedKey: string | null;
+  selectedObjectKey: string | null;
   viewport: Viewport;
   readOnly: boolean;
   onSelect: (key: string | null) => void;
@@ -452,6 +476,9 @@ function PhotoCanvas({
   onResize: (key: string, deltaX: number, deltaY: number) => void;
   onHumanLabel: (key: string, label: LabelQcLabel) => void;
   onDelete: (key: string) => void;
+  onObjectSelect: (key: string) => void;
+  onObjectMove: (key: string, deltaX: number, deltaY: number) => void;
+  onObjectResize: (key: string, deltaX: number, deltaY: number) => void;
 }) {
   const [container, setContainer] = useState({ width: 1, height: 1 });
   const startViewport = useRef(viewport);
@@ -575,6 +602,13 @@ function PhotoCanvas({
           const x = localX / surface.width;
           const y = localY / surface.height;
           if (x < 0 || x > 1 || y < 0 || y > 1) return;
+          const objectHit = [...objectLabels]
+            .reverse()
+            .find((label) => pointInsideBox(x, y, label.bbox));
+          if (objectHit) {
+            onObjectSelect(objectHit.key);
+            return;
+          }
           const hit = [...draft.annotations]
             .filter(
               (annotation) =>
@@ -589,7 +623,7 @@ function PhotoCanvas({
           }
         })
         .runOnJS(true),
-    [draft.annotations, onAdd, onSelect, readOnly, surface],
+    [draft.annotations, objectLabels, onAdd, onObjectSelect, onSelect, readOnly, surface],
   );
 
   const combinedGesture = useMemo(
@@ -649,6 +683,21 @@ function PhotoCanvas({
           )}
           {/* 参考层画在人工标注框之前 —— RN 按渲染顺序叠放, 先画即在下层 */}
           <ReferenceLayer boxes={referenceBoxes} surface={surface} />
+          {objectLabels.map((label) => (
+            <AnnotationBox
+              key={`object-${label.key}`}
+              annotation={{ key: label.key, source: 'HUMAN', bbox: label.bbox }}
+              selected={label.key === selectedObjectKey}
+              surface={surface}
+              viewportScale={viewport.scale}
+              readOnly={readOnly}
+              displayLabel={label.type === 'WHITE_LABEL' ? '白标' : '彩标'}
+              displayColor={label.type === 'WHITE_LABEL' ? '#0891B2' : '#9333EA'}
+              onSelect={() => onObjectSelect(label.key)}
+              onMove={(deltaX, deltaY) => onObjectMove(label.key, deltaX, deltaY)}
+              onResize={(deltaX, deltaY) => onObjectResize(label.key, deltaX, deltaY)}
+            />
+          ))}
           {draft.annotations
             .filter(
               (annotation) =>
@@ -713,6 +762,7 @@ function CurrentActionCard({
   onMarkReviewed: () => void;
 }) {
   const pending = pendingAnnotationCount(photo);
+  const pendingObjectTrays = photo.objectReview?.trays.filter((tray) => !tray.confirmed).length ?? 0;
   const hasConfirmedDefect = photo.annotations.some((annotation) =>
     isDefectLabel(annotation.label),
   );
@@ -789,6 +839,20 @@ function CurrentActionCard({
     );
   }
 
+  if (pendingObjectTrays > 0) {
+    return (
+      <View style={styles.actionCard}>
+        <View style={styles.actionCardHeader}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepBadgeText}>当前操作</Text>
+          </View>
+          <Text style={styles.actionTitle}>还有 {pendingObjectTrays} 个盒子待核对</Text>
+        </View>
+        <Text style={styles.actionBody}>请先在上方逐盒确认白标和彩标，再给出本图结论。</Text>
+      </View>
+    );
+  }
+
   if (!photo.reviewed) {
     return (
       <View style={styles.actionCard}>
@@ -824,6 +888,144 @@ function CurrentActionCard({
   );
 }
 
+const PRESENCE_COPY: Record<LabelQcPresence, string> = {
+  PRESENT: '有',
+  MISSING: '缺',
+  UNJUDGEABLE: '看不清',
+};
+
+function ObjectTrayQuickReview({
+  draft,
+  selectedTray,
+  selectedObjectKey,
+  readOnly,
+  onSelectTray,
+  onSelectObject,
+  onPresence,
+  onAdd,
+  onRemove,
+  onConfirm,
+}: {
+  draft: PhotoObjectReviewDraft;
+  selectedTray: TrayObjectReviewDraft | null;
+  selectedObjectKey: string | null;
+  readOnly: boolean;
+  onSelectTray: (key: string) => void;
+  onSelectObject: (key: string) => void;
+  onPresence: (type: LabelQcObjectType, presence: LabelQcPresence) => void;
+  onAdd: (type: LabelQcObjectType) => void;
+  onRemove: (key: string) => void;
+  onConfirm: () => void;
+}) {
+  if (!draft.trays.length) return null;
+  return (
+    <View style={styles.objectReviewCard} testID="qi-label-qc-object-review">
+      <View style={styles.objectReviewHeader}>
+        <Text style={styles.objectReviewTitle}>逐盒核对</Text>
+        <Text style={styles.objectReviewProgress}>
+          {draft.trays.filter((tray) => tray.confirmed).length}/{draft.trays.length}
+        </Text>
+      </View>
+      <View style={styles.objectTrayRow}>
+        {draft.trays.map((tray) => (
+          <TouchableRipple
+            key={tray.key}
+            style={[
+              styles.objectTrayChip,
+              selectedTray?.key === tray.key && styles.objectTrayChipActive,
+              tray.confirmed && styles.objectTrayChipDone,
+            ]}
+            onPress={() => onSelectTray(tray.key)}
+            accessibilityLabel={`盒子 ${tray.trayIndex + 1}${tray.confirmed ? '已确认' : '待确认'}`}
+          >
+            <Text style={styles.objectTrayChipText}>{tray.trayIndex + 1}{tray.confirmed ? '✓' : ''}</Text>
+          </TouchableRipple>
+        ))}
+      </View>
+      {selectedTray ? (
+        <View style={styles.objectTrayDetail}>
+          {(['WHITE_LABEL', 'COLOR_LABEL'] as LabelQcObjectType[]).map((type) => {
+            const current = type === 'WHITE_LABEL'
+              ? selectedTray.whitePresence
+              : selectedTray.colorPresence;
+            return (
+              <View key={type} style={styles.objectPresenceRow}>
+                <Text style={styles.objectPresenceName}>{type === 'WHITE_LABEL' ? '白标' : '彩标'}</Text>
+                {(['PRESENT', 'MISSING', 'UNJUDGEABLE'] as LabelQcPresence[]).map((presence) => (
+                  <TouchableRipple
+                    key={presence}
+                    style={[
+                      styles.objectPresenceButton,
+                      current === presence && styles.objectPresenceButtonActive,
+                    ]}
+                    onPress={() => onPresence(type, presence)}
+                    disabled={readOnly}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: current === presence }}
+                  >
+                    <Text style={[
+                      styles.objectPresenceText,
+                      current === presence && styles.objectPresenceTextActive,
+                    ]}>
+                      {PRESENCE_COPY[presence]}
+                    </Text>
+                  </TouchableRipple>
+                ))}
+                <TouchableRipple
+                  style={styles.objectAddButton}
+                  onPress={() => onAdd(type)}
+                  disabled={readOnly}
+                  accessibilityLabel={`补一个${type === 'WHITE_LABEL' ? '白标' : '彩标'}框`}
+                >
+                  <Text style={styles.objectAddText}>+框</Text>
+                </TouchableRipple>
+              </View>
+            );
+          })}
+          <View style={styles.objectLabelList}>
+            {selectedTray.labels.map((label) => (
+              <TouchableRipple
+                key={label.key}
+                style={[
+                  styles.objectLabelPill,
+                  selectedObjectKey === label.key && styles.objectLabelPillActive,
+                ]}
+                onPress={() => onSelectObject(label.key)}
+                disabled={readOnly}
+                accessibilityLabel={`选择${label.type === 'WHITE_LABEL' ? '白标' : '彩标'}框进行移动或缩放`}
+              >
+                <Text style={styles.objectLabelPillText}>
+                  {label.type === 'WHITE_LABEL' ? '白标' : '彩标'} · 点选后在照片上调整
+                </Text>
+              </TouchableRipple>
+            ))}
+          </View>
+          {selectedObjectKey && selectedTray.labels.some((label) => label.key === selectedObjectKey) ? (
+            <Button
+              mode="outlined"
+              textColor="#A12D23"
+              disabled={readOnly}
+              onPress={() => onRemove(selectedObjectKey)}
+              contentStyle={styles.objectDeleteContent}
+            >
+              删除选中的错框
+            </Button>
+          ) : null}
+          <Button
+            mode="contained"
+            buttonColor={QI_COLORS.primary}
+            disabled={readOnly}
+            onPress={onConfirm}
+            contentStyle={styles.objectConfirmContent}
+          >
+            本盒已核对
+          </Button>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function QILabelQcReviewScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
@@ -833,6 +1035,8 @@ export default function QILabelQcReviewScreen() {
   const [drafts, setDrafts] = useState<LabelQcReviewPhotoDraft[]>([]);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedObjectTrayKey, setSelectedObjectTrayKey] = useState<string | null>(null);
+  const [selectedObjectKey, setSelectedObjectKey] = useState<string | null>(null);
   const [viewports, setViewports] = useState<Record<string, Viewport>>({});
   const [visibleLayers, setVisibleLayers] = useState<LabelQcLayerVisibility>(
     LABEL_QC_ALL_LAYERS_VISIBLE,
@@ -863,6 +1067,8 @@ export default function QILabelQcReviewScreen() {
         initialDrafts[0]?.annotations.find((annotation) => !annotation.label)?.key
           ?? null,
       );
+      setSelectedObjectTrayKey(initialDrafts[0]?.objectReview?.trays[0]?.key ?? null);
+      setSelectedObjectKey(initialDrafts[0]?.objectReview?.trays[0]?.labels[0]?.key ?? null);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     } finally {
@@ -882,6 +1088,10 @@ export default function QILabelQcReviewScreen() {
   const selected = draft?.annotations.find(
     (annotation) => annotation.key === selectedKey,
   );
+  const objectReview = draft?.objectReview;
+  const selectedObjectTray = objectReview?.trays.find(
+    (tray) => tray.key === selectedObjectTrayKey,
+  ) ?? objectReview?.trays[0] ?? null;
   const readOnly = detail?.task.status === 'REVIEWED';
   const completedCount = drafts.filter(isPhotoReviewComplete).length;
   const allComplete =
@@ -896,6 +1106,34 @@ export default function QILabelQcReviewScreen() {
     () => buildScreeningReferenceBoxes(screenTrays, visibleLayers),
     [screenTrays, visibleLayers],
   );
+  const reviewedObjectBoxes = useMemo<LabelQcScreenReferenceBox[]>(() => {
+    if (!objectReview) return [];
+    return objectReview.trays.flatMap((tray) => {
+      const boxes: LabelQcScreenReferenceBox[] = [];
+      if (visibleLayers.tray) {
+        boxes.push({
+          key: `final-${tray.key}`,
+          layer: 'tray',
+          color: LABEL_QC_LAYER_META.tray.color,
+          bbox: tray.bbox,
+          caption: `人工最终盒子 ${tray.trayIndex + 1}`,
+        });
+      }
+      tray.labels.forEach((label) => {
+        const layer: LabelQcScreenLayer = label.type === 'WHITE_LABEL' ? 'white' : 'color';
+        if (!visibleLayers[layer]) return;
+        boxes.push({
+          key: `final-${label.key}`,
+          layer,
+          color: LABEL_QC_LAYER_META[layer].color,
+          bbox: label.bbox,
+          caption: `人工最终${LABEL_QC_LAYER_META[layer].text}`,
+        });
+      });
+      return boxes;
+    });
+  }, [objectReview, visibleLayers]);
+  const canvasReferenceBoxes = objectReview ? reviewedObjectBoxes : referenceBoxes;
   const toggleLayer = useCallback((layer: LabelQcScreenLayer) => {
     setVisibleLayers((current) => ({ ...current, [layer]: !current[layer] }));
   }, []);
@@ -921,6 +1159,63 @@ export default function QILabelQcReviewScreen() {
       drafts[index]?.annotations.find((annotation) => !annotation.label)?.key
         ?? null,
     );
+    setSelectedObjectTrayKey(drafts[index]?.objectReview?.trays[0]?.key ?? null);
+    setSelectedObjectKey(drafts[index]?.objectReview?.trays[0]?.labels[0]?.key ?? null);
+  };
+
+  const setObjectDraft = useCallback(
+    (updater: (objectDraft: PhotoObjectReviewDraft) => PhotoObjectReviewDraft) => {
+      setPhotoDraft((current) => current.objectReview
+        ? { ...current, reviewed: false, objectReview: updater(current.objectReview) }
+        : current);
+    },
+    [setPhotoDraft],
+  );
+
+  const handleObjectPresence = (type: LabelQcObjectType, presence: LabelQcPresence) => {
+    if (!selectedObjectTray) return;
+    setObjectDraft((current) => setObjectPresence(
+      current,
+      selectedObjectTray.key,
+      type,
+      presence,
+    ));
+  };
+
+  const handleAddObjectLabel = (type: LabelQcObjectType) => {
+    if (!selectedObjectTray) return;
+    const key = `mobile-object-${Date.now()}`;
+    setObjectDraft((current) => addMobileObjectLabel(
+      current,
+      selectedObjectTray.key,
+      type,
+      key,
+    ));
+    setSelectedObjectKey(key);
+    setError('新框已放在盒子中间，请在照片上拖动，并用右下角圆点缩放到完整标签。');
+  };
+
+  const handleRemoveObjectLabel = (key: string) => {
+    if (!selectedObjectTray) return;
+    setObjectDraft((current) => removeMobileObjectLabel(
+      current,
+      selectedObjectTray.key,
+      key,
+    ));
+    setSelectedObjectKey(null);
+  };
+
+  const handleConfirmObjectTray = () => {
+    if (!selectedObjectTray) return;
+    const validation = validateObjectTray(selectedObjectTray);
+    if (validation) {
+      setError(`盒子 ${selectedObjectTray.trayIndex + 1}：${validation}。请修正后再确认。`);
+      return;
+    }
+    setError(null);
+    setObjectDraft((current) => confirmObjectTray(current, selectedObjectTray.key));
+    const next = objectReview?.trays.find((tray) => !tray.confirmed && tray.key !== selectedObjectTray.key);
+    if (next) setSelectedObjectTrayKey(next.key);
   };
 
   const handleAdd = (x: number, y: number) => {
@@ -1152,12 +1447,32 @@ export default function QILabelQcReviewScreen() {
         <LayerToggleBar visible={visibleLayers} onToggle={toggleLayer} />
       )}
 
+      {objectReview && (
+        <ObjectTrayQuickReview
+          draft={objectReview}
+          selectedTray={selectedObjectTray}
+          selectedObjectKey={selectedObjectKey}
+          readOnly={Boolean(readOnly)}
+          onSelectTray={(key) => {
+            setSelectedObjectTrayKey(key);
+            setSelectedObjectKey(objectReview.trays.find((tray) => tray.key === key)?.labels[0]?.key ?? null);
+          }}
+          onSelectObject={setSelectedObjectKey}
+          onPresence={handleObjectPresence}
+          onAdd={handleAddObjectLabel}
+          onRemove={handleRemoveObjectLabel}
+          onConfirm={handleConfirmObjectTray}
+        />
+      )}
+
       <View style={styles.canvasWrap}>
         <PhotoCanvas
           photo={photo}
           draft={draft}
-          referenceBoxes={referenceBoxes}
+          referenceBoxes={canvasReferenceBoxes}
+          objectLabels={selectedObjectTray?.labels ?? []}
           selectedKey={selectedKey}
+          selectedObjectKey={selectedObjectKey}
           viewport={viewport}
           readOnly={readOnly}
           onSelect={setSelectedKey}
@@ -1189,6 +1504,27 @@ export default function QILabelQcReviewScreen() {
           onDelete={(key) => {
             setPhotoDraft((current) => removeDraftAnnotation(current, key));
             setSelectedKey(null);
+          }}
+          onObjectSelect={setSelectedObjectKey}
+          onObjectMove={(key, deltaX, deltaY) => {
+            const label = selectedObjectTray?.labels.find((item) => item.key === key);
+            if (!label || !selectedObjectTray) return;
+            setObjectDraft((current) => updateMobileObjectLabelBox(
+              current,
+              selectedObjectTray.key,
+              key,
+              translateBoundingBox(label.bbox, deltaX, deltaY),
+            ));
+          }}
+          onObjectResize={(key, deltaX, deltaY) => {
+            const label = selectedObjectTray?.labels.find((item) => item.key === key);
+            if (!label || !selectedObjectTray) return;
+            setObjectDraft((current) => updateMobileObjectLabelBox(
+              current,
+              selectedObjectTray.key,
+              key,
+              resizeBoundingBox(label.bbox, deltaX, deltaY),
+            ));
           }}
         />
       </View>
@@ -1524,6 +1860,75 @@ const styles = StyleSheet.create({
   actionButtons: { flexDirection: 'row', gap: 8, marginTop: 8 },
   actionButton: { flex: 1 },
   rejectButton: { borderColor: '#E3A59F', backgroundColor: '#FFF9F8' },
+  objectReviewCard: {
+    marginHorizontal: 12,
+    marginTop: 7,
+    padding: 10,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#B7D1F8',
+    backgroundColor: '#EFF6FF',
+  },
+  objectReviewHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  objectReviewTitle: { fontSize: 14, fontWeight: '800', color: '#173B60' },
+  objectReviewProgress: { fontSize: 13, fontWeight: '800', color: '#2563EB' },
+  objectTrayRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  objectTrayChip: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#B7C7DD',
+    backgroundColor: '#FFF',
+  },
+  objectTrayChipActive: { borderColor: '#2563EB', backgroundColor: '#DBEAFE' },
+  objectTrayChipDone: { borderColor: '#16A36A' },
+  objectTrayChipText: { fontSize: 14, fontWeight: '800', color: '#24415F' },
+  objectTrayDetail: { gap: 8, marginTop: 9 },
+  objectPresenceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  objectPresenceName: { width: 34, fontSize: 12, fontWeight: '800', color: '#24415F' },
+  objectPresenceButton: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#B7C7DD',
+    backgroundColor: '#FFF',
+  },
+  objectPresenceButtonActive: { borderColor: '#2563EB', backgroundColor: '#2563EB' },
+  objectPresenceText: { fontSize: 11, fontWeight: '700', color: '#24415F' },
+  objectPresenceTextActive: { color: '#FFF' },
+  objectAddButton: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    backgroundColor: '#DBEAFE',
+  },
+  objectAddText: { fontSize: 12, fontWeight: '800', color: '#1D4ED8' },
+  objectLabelList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  objectLabelPill: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#D7A7A2',
+    backgroundColor: '#FFF7F6',
+  },
+  objectLabelPillActive: {
+    borderWidth: 2,
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
+  },
+  objectLabelPillText: { fontSize: 11, fontWeight: '700', color: '#8F2E27' },
+  objectDeleteContent: { minHeight: 44 },
+  objectConfirmContent: { minHeight: 44 },
   bottomNav: {
     flexDirection: 'row',
     gap: 9,
