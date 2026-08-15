@@ -21,7 +21,10 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
@@ -76,6 +79,19 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private final PaymentRequestService paymentRequestService;
     private final SalesPriceAdjustmentService salesPriceAdjustmentService;
     private final WastageReportService wastageReportService;
+
+    /**
+     * 采购财审改走 OA 实例后需要的两个依赖 —— **字段注入而不是构造器参数**。
+     *
+     * <p>本类有两个构造器，且类注释里记着 2026-06-12 的 prod 启动阻塞事故
+     * （多构造器时 Spring 隐式注入失效）。往构造器加参数要同时改两个构造器和全部测试调用点，
+     * 风险与收益不成比例；{@code required = false} 拿不到就按本类既有的 fail-soft 返回空列表。
+     */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngineService;
+
+    @Autowired(required = false)
+    private PurchaseOrderRepository purchaseOrderRepository;
 
     // ─── Config ────────────────────────────────────────────────────────────
 
@@ -203,7 +219,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     private List<TodoItemDTO> fetchByType(String factoryId, String callerRole, TodoType type) {
         return switch (type) {
-            case PURCHASE_FINANCE_REVIEW -> fetchPurchaseFinanceReview(factoryId);
+            case PURCHASE_FINANCE_REVIEW -> fetchPurchaseFinanceReview(factoryId, callerRole);
             case SALES_FINANCE_REVIEW    -> fetchSalesFinanceReview(factoryId);
             case PRICE_ANOMALY           -> fetchPriceAnomaly(factoryId);
             case STOCKTAKE_APPROVAL      -> fetchStocktakeApproval(factoryId);
@@ -216,14 +232,56 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     // ── 采购财审 ─────────────────────────────────────────────────────────
 
-    private List<TodoItemDTO> fetchPurchaseFinanceReview(String factoryId) {
-        var page = purchaseService.getPurchaseOrdersByStatus(
-                factoryId, PurchaseOrderStatus.PENDING_FINANCE_REVIEW, 1, Integer.MAX_VALUE);
-        if (page == null || page.getContent() == null) return Collections.emptyList();
+    /**
+     * 采购财审待办 —— 按 **OA 实例的当前节点** 取，不再按采购单状态取。
+     *
+     * <p>⚠️ 2026-08-15 修正（prod 实测发现）。原实现查
+     * {@code PurchaseOrderStatus.PENDING_FINANCE_REVIEW}，而 **OA 投影根本不经过这个状态**：
+     * {@code projectWorkflowState} 只有 {@code RUNNING→WORKFLOW_RUNNING} 和
+     * {@code APPROVED→FINANCE_APPROVED}。唯一会置成 PENDING_FINANCE_REVIEW 的
+     * {@code legacyApproveOrder} 只被一个 AI 工具调用，普通流程到不了。
+     *
+     * <p>实测：在 F006 提交一张 ¥40,000 的采购单后，实例停在 {@code approval_finance}
+     * 节点等 finance_manager，而全库 {@code PENDING_FINANCE_REVIEW} 的采购单数 = **0**
+     * —— 也就是说**财务经理的待办里永远看不到正在等他审批的那张单**。
+     * 读数完全正常（列表成功返回、空列表），量的却不是该量的东西。
+     *
+     * <p>现在改成问 OA：{@code findPendingForRole} 返回「当前活动节点的 approverRoles
+     * 含调用方角色」的 RUNNING 实例，这才是「等我审批」的权威定义。
+     */
+    private List<TodoItemDTO> fetchPurchaseFinanceReview(String factoryId, String callerRole) {
+        if (workflowEngineService == null || purchaseOrderRepository == null
+                || callerRole == null || callerRole.isBlank()) {
+            return Collections.emptyList();
+        }
+        Page<ApprovalWorkflowInstance> page = workflowEngineService.findPendingForRole(
+                factoryId, callerRole, "PURCHASE_ORDER", PageRequest.of(0, 200));
+        if (page == null || page.getContent() == null || page.getContent().isEmpty()) {
+            return Collections.emptyList();
+        }
 
-        return page.getContent().stream()
-                .map(po -> mapPurchaseOrder(po))
+        List<String> orderIds = page.getContent().stream()
+                .map(ApprovalWorkflowInstance::getBusinessEntityId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
                 .collect(Collectors.toList());
+        Map<String, PurchaseOrder> byId = new HashMap<>();
+        purchaseOrderRepository.findAllById(orderIds).forEach(po -> byId.put(po.getId(), po));
+
+        List<TodoItemDTO> todos = new ArrayList<>();
+        for (ApprovalWorkflowInstance inst : page.getContent()) {
+            PurchaseOrder po = byId.get(inst.getBusinessEntityId());
+            // 查不到业务单就跳过 —— 不伪造一张卡片让人点进去 404
+            if (po == null) continue;
+            TodoItemDTO dto = mapPurchaseOrder(po);
+            dto.setInstanceId(inst.getId());
+            dto.setExpectedNodeId(inst.getCurrentNodeIds() == null || inst.getCurrentNodeIds().isEmpty()
+                    ? null : inst.getCurrentNodeIds().get(0));
+            // 提交时间用实例的发起时间, 比采购单 createdAt 更接近「什么时候到我这儿的」
+            if (inst.getInitiatedAt() != null) dto.setSubmittedAt(inst.getInitiatedAt());
+            todos.add(dto);
+        }
+        return todos;
     }
 
     private TodoItemDTO mapPurchaseOrder(PurchaseOrder po) {

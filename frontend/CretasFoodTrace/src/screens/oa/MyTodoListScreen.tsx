@@ -299,7 +299,14 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
       let resp: { success: boolean; message?: string };
       switch (item.type) {
         case 'PURCHASE_FINANCE_REVIEW':
-          resp = await todoApprovalApiClient.purchaseFinanceApprove(item.refId);
+          // 2026-08-15: 走 OA 动作端点。/finance-approve 已于 #1557 停用(410),
+          // 之前这里点下去必失败。缺 instanceId 说明后端没给 OA 上下文 —— 明说, 不静默。
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法审批', '这条待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            setApproving(false);
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'APPROVE', item.expectedNodeId);
           break;
         case 'SALES_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.salesFinanceApprove(item.refId);
@@ -357,7 +364,11 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
       let resp: { success: boolean; message?: string };
       switch (item.type) {
         case 'PURCHASE_FINANCE_REVIEW':
-          resp = await todoApprovalApiClient.purchaseFinanceReject(item.refId, reason);
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法驳回', '这条待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'REJECT', item.expectedNodeId, reason);
           break;
         case 'SALES_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.salesFinanceReject(item.refId, reason);
@@ -530,6 +541,9 @@ export default function MyTodoListScreen() {
         refId: item.refId,
         type: item.type,
         title: item.title,
+        // OA 驱动的类型要把实例上下文带过去, 否则详情页的通过/驳回没法调动作端点
+        instanceId: item.instanceId,
+        expectedNodeId: item.expectedNodeId,
       });
     },
     [navigation],

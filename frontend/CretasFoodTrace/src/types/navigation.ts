@@ -52,6 +52,10 @@ export type OATodoStackParamList = {
     refId: string;
     type: string;
     title: string;
+    /** OA 审批实例 ID —— OA 驱动的类型必须带, 详情页的通过/驳回要用它调动作端点 */
+    instanceId?: string | null;
+    /** 当前节点 ID(乐观锁) */
+    expectedNodeId?: string | null;
   };
 };
 

@@ -389,7 +389,7 @@ function formatQty(value: unknown): string {
 export default function TodoDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const route = useRoute<RouteType>();
-  const { refId, type, title } = route.params;
+  const { refId, type, title, instanceId, expectedNodeId } = route.params;
 
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -448,7 +448,12 @@ export default function TodoDetailScreen() {
       const todoType = type as TodoType;
       switch (todoType) {
         case 'PURCHASE_FINANCE_REVIEW':
-          resp = await todoApprovalApiClient.purchaseFinanceApprove(refId);
+          // 2026-08-15: /finance-approve 已于 #1557 停用(410), 改走 OA 动作端点
+          if (!instanceId || !expectedNodeId) {
+            appAlert('无法审批', '这条待办缺少 OA 审批实例信息，请返回列表下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(instanceId, 'APPROVE', expectedNodeId);
           break;
         case 'SALES_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.salesFinanceApprove(refId);
@@ -507,7 +512,11 @@ export default function TodoDetailScreen() {
       const todoType = type as TodoType;
       switch (todoType) {
         case 'PURCHASE_FINANCE_REVIEW':
-          resp = await todoApprovalApiClient.purchaseFinanceReject(refId, reason);
+          if (!instanceId || !expectedNodeId) {
+            appAlert('无法驳回', '这条待办缺少 OA 审批实例信息，请返回列表下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(instanceId, 'REJECT', expectedNodeId, reason);
           break;
         case 'SALES_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.salesFinanceReject(refId, reason);
