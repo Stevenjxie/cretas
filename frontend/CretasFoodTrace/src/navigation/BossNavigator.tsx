@@ -10,7 +10,6 @@ import SalesOrderDetailScreen from '../screens/factory-admin/inventory/SalesOrde
 import PurchaseOrderListScreen from '../screens/factory-admin/inventory/PurchaseOrderListScreen';
 import PurchaseOrderDetailScreen from '../screens/factory-admin/inventory/PurchaseOrderDetailScreen';
 import FinishedGoodsListScreen from '../screens/factory-admin/inventory/FinishedGoodsListScreen';
-import OATodoStackNavigator from './OATodoStackNavigator';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
@@ -51,11 +50,24 @@ export default function BossNavigator() {
         component={BossOverviewStack}
         options={{ title: '总览', tabBarIcon: ({ color, size }) => <Icon source="view-dashboard-outline" color={color} size={size} /> }}
       />
-      <Tab.Screen
-        name="BossApprovalTab"
-        component={OATodoStackNavigator}
-        options={{ title: '审批', tabBarIcon: ({ color, size }) => <Icon source="clipboard-check-outline" color={color} size={size} /> }}
-      />
+      {/*
+        2026-08-15 移除「审批」tab —— 它对工厂超管**永远是空的**。
+
+        后端 MyTodoAggregatorServiceImpl.ROLE_TYPES 只有 finance_manager / cashier 两个 key,
+        factory_super_admin 不在其中 → getOrDefault 返空集 → 空列表。
+        而这个角色在权限矩阵里是全模块 read_write, **过得了** MyTodoController 上的
+        @RequirePermission({"finance:read", ...}) —— 所以不是 403, 是 **HTTP 200 + 空列表**,
+        界面显示「暂无待办」, 长得像「你没有待办」而不是「这里查不到你的待办」。
+
+        prod 实测 (2026-08-15) 还查到更根本的一层: approval_workflow_instances **0 行**,
+        approval_history **0 行** —— 61 条审批链只是**配置**, 一条实例都没产生过。
+        配了采购审批链的两家 (F006 / LIUSHANMEN) **从来没有过任何采购单**(含软删除计 0),
+        而有采购单的三家一条链都没配。所以就算把角色加进 ROLE_TYPES, 这个 tab 依然是空的。
+
+        ⇒ 留一个永远空的入口比没有入口更糟, 先摘掉。
+        OA 待办中心当前定位: **财务/出纳专用**(MainNavigator / FinanceNavigator 已按角色守住)。
+        采购审批走 web-admin 或 OA 审批中心 (POST /workflow/instances/{id}/actions)。
+      */}
       {smartBiEnabled && (
         <Tab.Screen
           name="BossAnalysisTab"
