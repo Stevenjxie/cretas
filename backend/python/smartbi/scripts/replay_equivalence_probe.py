@@ -59,7 +59,23 @@ ctx = bootstrap_probe(FACTORY)
 from smartbi.gold.restaurant import restaurant_intent as ri  # noqa: E402
 from smartbi.gold.restaurant.restaurant_intent_service import tiered_answer  # noqa: E402
 
-_REAL_FP_FN = ri._routing_rules_fingerprint
+#: 🔴 A 遍的撬棍。**撬的必须是晋升闸真正比的那个量。**
+#:
+#: 晋升闸(restaurant_intent.py:3248-3249)比的是
+#:     plan_semantics_segment(row.routing_fingerprint) != _plan_semantics_fingerprint()
+#: 所以撬棍压在 `_plan_semantics_fingerprint` 上, ⛔ 不是
+#: `_routing_rules_fingerprint` —— 后者唯一的消费者是 :2999 的**计划缓存版本键**,
+#: 压它对晋升闸**一点作用都没有**(2026-08-13 指纹分层之后)。
+#: 实测代价: 08-13 02:25 `hitA=True` 38/40 → 03:40 起每次 0/40, 连续三天读数作废。
+_REAL_SEM_FP_FN = ri._plan_semantics_fingerprint
+
+#: ⚠️ 旧撬棍留着**只为变异对照**(证明「换了杠杆」这件事本身可观测), ⛔ 不参与判定。
+_REAL_RULES_FP_FN = ri._routing_rules_fingerprint
+
+#: 告警分级的产出文件。cron 只负责 `cat` 它, **判定在 Python 里**(可单测)。
+#: ⛔ 空文件 = 不告警。(a) 类「存量按设计全失效」落台账**不告警** ——
+#:    它每天都会发生, 而误报的告警最终会让所有告警一起被忽略(形态 E)。
+ALERT_OUT = os.environ.get("PROBE_ALERT_OUT", "/tmp/replay_equivalence.alert")
 
 #: 执行失败的用户可见长相。⛔ 看到它先怀疑探针(见 `_probe_bootstrap`)。
 FAILURE_MARKS = ("餐饮执行链暂时不可用", "系统这会儿有点忙", "系统这会儿没能弄懂")
@@ -154,6 +170,45 @@ def _write_probe_out(out) -> None:
         json.dump(out, fh, ensure_ascii=False, indent=2)
 
 
+#: 告警分级 —— **判定在这里, ⛔ 不在 shell 里**。cron 只负责把非空的那行追加进
+#: 告警文件。这样它可单测, 而且不用在 shell 里解 JSON。
+#:
+#: 🔴 (a) 类不告警(owner 2026-08-15 裁定 ①):
+#:    `eligible_stored == 0` 意思是「存量按设计全部失效, 等人逐条盖章」——
+#:    **不是故障**, 而它每天都会发生。天天误报的告警最终会让**所有**告警
+#:    一起被忽略(形态 E: 闸的完备性与闸的存活是矛盾的)。
+#:    ⇒ 它照常落台账(`eligible_stored` 那一列), 只是不喊。
+def alert_for(rc: int, *, positive_control, eligible_stored, stored_total) -> str:
+    """这次跑批该不该喊、喊什么。返回空串 = 不喊。
+
+    ⚠️ 三态见硬约束 4。rc=2 的三个成因处置完全不同, ⛔ 不许压成一句。
+    """
+    if rc == 0:
+        return ""
+    if rc != 2:
+        return ("REPLAY EQUIV DRIFT — 有条目不再等价(指纹**可能没变**)")
+    # rc == 2 的三个成因
+    if not positive_control:
+        return ("REPLAY EQUIV INSTRUMENT DEAD — 合成阳性对照没通过, "
+                "格式门本身坏了; 本次读数作废")
+    if not stored_total:
+        return ("REPLAY EQUIV INSTRUMENT DEAD — 晋升表 0 行(plan_version 对不上), "
+                "本次读数作废")
+    if eligible_stored:
+        return (f"REPLAY EQUIV INSTRUMENT DEAD — 有 {eligible_stored} 条合格存量"
+                "却一条都没回放, A 遍撬棍没打开晋升闸; 本次读数作废")
+    # (a): eligible_stored == 0 —— 按设计如此, ⛔ 不喊。
+    return ""
+
+
+def _write_alert(line: str) -> None:
+    """⛔ **永远**落盘(空串就写空文件) —— 与 `_write_probe_out` 同一条纪律:
+    不写的话 cron 会读到上一次的告警, 于是一条**昨天的**故障被当成今天的。
+    """
+    with open(ALERT_OUT, "w", encoding="utf-8", newline="") as fh:
+        fh.write(line + "\n" if line else "")
+
+
 async def main():
     pool = await ctx.pool()
     print(f"# _PLAN_VERSION = {getattr(ri, '_PLAN_VERSION', '?')!r}")
@@ -204,7 +259,7 @@ async def main():
         _write_probe_out({"rows": [], "positive_control": 0,
                           "eligible_stored": eligible_stored,
                           "stored_total": len(rows)})
-        return 2
+        return _finish(2, 0, eligible_stored, len(rows))
 
     if not rows:
         # 🔴 早退也必须写产出文件。不写的话 cron 的 `[ -r ... ]` 会读到
@@ -213,7 +268,7 @@ async def main():
         #    2026-08-13 在日结那条链上实测出现过一次, 同形状在这里也成立。
         _write_probe_out([])
         print("⛔ 0 行 —— plan_version 对不上, 这不是「没有存量计划」而是仪器问题")
-        return 2
+        return _finish(2, positive_control, 0, 0)
 
     recorder = HitRecorder()
     logging.getLogger("smartbi.gold.restaurant.restaurant_intent").setLevel(logging.INFO)
@@ -224,12 +279,19 @@ async def main():
         phrase, row_fp = row["normalized_phrase"], row["routing_fingerprint"]
 
         before = len(recorder.hits)
-        ri._routing_rules_fingerprint = (lambda fp=row_fp: fp)   # A: 打开指纹闸
+        # 🔴 A: 打开晋升闸。闸比的是
+        #      plan_semantics_segment(row.fp) != _plan_semantics_fingerprint()
+        #    所以让「活语义段」等于**这一行自己的**语义段, 这一行就过闸。
+        #    旧格式行的语义段是空串, 于是这里也返回空串 —— 两边相等, 闸开。
+        # ⛔ 不是压 `_routing_rules_fingerprint`: 那根杠杆自 08-13 指纹分层之后
+        #    与晋升闸无关(它只喂计划缓存版本键), 压它等于没测。
+        _row_sem = ri.plan_semantics_segment(row_fp or "")
+        ri._plan_semantics_fingerprint = (lambda s=_row_sem: s)
         clear_caches()
         res_a, err_a = await ask(phrase)
         hit_a = len(recorder.hits) > before
 
-        ri._routing_rules_fingerprint = _REAL_FP_FN               # B: 今天线上的行为
+        ri._plan_semantics_fingerprint = _REAL_SEM_FP_FN           # B: 今天线上的行为
         clear_caches()
         res_b, err_b = await ask(phrase)
 
@@ -254,7 +316,7 @@ async def main():
                     "A": pa, "B": pb, "err_A": err_a, "err_B": err_b})
         print(f"[{i:>2}/{len(rows)}] {cls}  hitA={hit_a}  {phrase[:32]}")
 
-    ri._routing_rules_fingerprint = _REAL_FP_FN
+    ri._plan_semantics_fingerprint = _REAL_SEM_FP_FN
     # 🔴 两个数写进产出, 台账才看得见拆分。⛔ 不要只 print ——
     #    台账读的是这份 json, print 只进日志。
     _write_probe_out({
@@ -278,7 +340,7 @@ async def main():
             print(f"⛔ 0 条命中, 而 eligible_stored={eligible_stored}/{len(out)} —— "
                   "**仪器问题**: 有合格条目却一条都没回放, A 遍撬棍没打开晋升闸"
                   "(见本文件头部 2026-08-15 订正)。")
-        return 2
+        return _finish(2, positive_control, eligible_stored, len(rows))
 
     from collections import Counter
     print("\n=== 三分类(贴这一段进 PR) ===")
@@ -290,7 +352,20 @@ async def main():
         if r["class"].startswith(("②", "③")):
             print(f"  [{r['i']:>2}] A={r['A'].get('kind')} B={r['B'].get('kind')}  {r['phrase']}")
     print(f"\n明细: {os.environ.get('PROBE_OUT', '/tmp/replay_equivalence.json')}")
-    return 0 if counts["②执行不等价"] == 0 and counts["③执行失败"] == 0 else 1
+    rc = 0 if counts["②执行不等价"] == 0 and counts["③执行失败"] == 0 else 1
+    return _finish(rc, positive_control, eligible_stored, len(rows))
+
+
+def _finish(rc, positive_control, eligible_stored, stored_total) -> int:
+    """⛔ **每条 return 都走这里** —— 告警文件与产出文件同一条纪律: 永远落盘。
+
+    不落的话 cron 会读到上一次的告警, 于是**昨天的**故障被当成今天的。
+    """
+    line = alert_for(rc, positive_control=positive_control,
+                     eligible_stored=eligible_stored, stored_total=stored_total)
+    _write_alert(line)
+    print(f"\n# alert = {line or '(不告警)'}")
+    return rc
 
 
 if __name__ == "__main__":

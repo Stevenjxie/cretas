@@ -54,42 +54,33 @@ LEDGER=/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl
   #    只要有一条路径不写文件, 台账就会把**上一次的计数**配上**这一次的 rc**,
   #    而那种行格式合法、字段齐全、看起来完全正常。
   #    我们靠台账做盖章决定, 一行脏读会让所有基于它的判断打折。
-  rm -f /tmp/replay_equivalence.json
+  rm -f /tmp/replay_equivalence.json /tmp/replay_equivalence.alert
 
-  out=$(PROBE_OUT=/tmp/replay_equivalence.json PYTHONIOENCODING=utf-8 \
+  out=$(PROBE_OUT=/tmp/replay_equivalence.json \
+        PROBE_ALERT_OUT=/tmp/replay_equivalence.alert PYTHONIOENCODING=utf-8 \
         python -X utf8 -u -m smartbi.scripts.replay_equivalence_probe 2>&1)
   rc=$?
   echo "$out"
   echo "=== done (rc=$rc) ==="
 
-  # ── rc 三态(硬约束 4)。⚠️ rc=2 是「**这次没量到东西**」，不是「量到了但不合格」。
-  #   rc=0  全等价
-  #   rc=1  有 ②执行不等价 / ③执行失败  —— 读数有效，且指向缺陷
-  #   rc=2  这次没量到东西。**三个成因，处置完全不同**：
-  #         (a) eligible_stored=0  存量按设计全部失效(旧格式，等人逐条盖章)
-  #             → **不是故障**。没有等价性证据，但也没有东西坏掉。
-  #         (b) eligible_stored>0 却 0 条回放 → **仪器坏了**(A 遍撬棍失效)
-  #         (c) positive_control=0 / 表里 0 行 → 格式门本身坏了 / plan_version 对不上
-  # 🔴 2026-08-15 订正：原来三种一律喊「阳性对照未通过」，而 08-13 起每天落的都是
-  #    (a) —— positive_control 明明是 1。**一个天天误报的告警最终会被忽略**(形态 E)，
-  #    所以按 eligible_stored 分开喊。
-  if [ "$rc" -eq 2 ]; then
-    elig=$(python - <<'PY' 2>/dev/null || echo "?"
-import json
-try:
-    p = json.load(open('/tmp/replay_equivalence.json', encoding='utf-8'))
-    print(p.get('eligible_stored') if isinstance(p, dict) else '?')
-except Exception:
-    print('?')
-PY
-)
-    if [ "$elig" = "0" ]; then
-      echo "REPLAY EQUIV NO ELIGIBLE STOCK $(date '+%F %T') — 存量 0 条合格(旧格式, 等人逐条盖章), 本轮无等价性证据; ⛔ 这不是故障, 见 $LOG" >> "$ALERTS"
-    else
-      echo "REPLAY EQUIV INSTRUMENT DEAD $(date '+%F %T') — 有合格存量($elig 条)却一条没回放, 或格式门本身坏了; 本次读数作废, 见 $LOG" >> "$ALERTS"
-    fi
-  elif [ "$rc" -ne 0 ]; then
-    echo "REPLAY EQUIV DRIFT $(date '+%F %T') — 有条目不再等价(指纹**可能没变**), 见 $LOG" >> "$ALERTS"
+  # ── 告警：**判定在 Python 里**(`alert_for`, 可单测)，这里只负责把非空的那行追加。
+  #
+  # ⚠️ rc 三态(硬约束 4)。rc=2 是「**这次没量到东西**」，不是「量到了但不合格」，
+  #    而它的三个成因处置完全不同：
+  #      (a) eligible_stored=0  存量按设计全部失效(旧格式，等人逐条盖章)
+  #          → **不是故障**，⛔ **不告警**(owner 2026-08-15 裁定 ①)。它照常落台账。
+  #      (b) eligible_stored>0 却 0 条回放 → **仪器坏了**(A 遍撬棍失效) → 告警
+  #      (c) positive_control=0 / 表里 0 行 → 格式门坏 / plan_version 对不上 → 告警
+  #
+  # 🔴 为什么 (a) 不喊：08-13 起每天落的都是 (a)，而告警一律喊「阳性对照未通过」——
+  #    positive_control 明明是 1。**一个天天误报的告警最终会被忽略**，
+  #    而它拖下水的是**所有**告警的可信度(形态 E: 完备性与存活是矛盾的)。
+  #
+  # ⛔ 判定别再写回 shell —— 写在这里就没法单测，而它正是被误报咬了三天的那一段。
+  if [ -s /tmp/replay_equivalence.alert ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && echo "$line $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    done < /tmp/replay_equivalence.alert
   fi
 
   # 台账: 每天一行, 让「哪天开始漂的」可回溯。⛔ 只记计数不记全文, 免得台账变日志。
