@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
 import com.cretas.aims.entity.enums.LabelQcPresence;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
 import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
+import com.cretas.aims.entity.enums.LabelQcTrayCropStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
@@ -185,5 +186,53 @@ public final class LabelQcDtos {
             LocalDateTime reviewedAt,
             ObjectReviewPayload objectReview,
             List<AnnotationResponse> finalAnnotations
+    ) {}
+
+    public record PlatformLabelReview(
+            @NotNull LabelQcObjectType type,
+            @NotNull @Valid BoundingBox bbox,
+            @NotNull Boolean truncated
+    ) {}
+
+    public record PlatformTrayReviewPayload(
+            @NotNull @Min(1) @Max(1) Integer version,
+            @NotNull Boolean complete,
+            @NotNull Boolean unjudgeable,
+            @NotNull LabelQcPresence whitePresence,
+            @NotNull LabelQcPresence colorPresence,
+            @NotNull @Size(max = 40) List<@Valid PlatformLabelReview> labels
+    ) {}
+
+    public record ReviewTrayCropRequest(
+            @NotNull @Min(0) Long expectedVersion,
+            @NotNull @Valid PlatformTrayReviewPayload review
+    ) {}
+
+    public record TrayCropResponse(
+            String id,
+            Long version,
+            String taskId,
+            String photoId,
+            Integer trayIndex,
+            String aiTrayKey,
+            LabelQcObjectDecision sourceDecision,
+            String sourceImageSha256,
+            String objectReviewSha256,
+            String cropSpecSha256,
+            String cropAlgorithmVersion,
+            Double paddingRatio,
+            BoundingBox trayBox,
+            BoundingBox cropBox,
+            String coordinateTransform,
+            String originalImageUrl,
+            Integer originalImageWidth,
+            Integer originalImageHeight,
+            LabelQcTrayCropStatus status,
+            PlatformTrayReviewPayload factoryProposals,
+            PlatformTrayReviewPayload platformReview,
+            Long reviewedBy,
+            LocalDateTime reviewedAt,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
     ) {}
 }

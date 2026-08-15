@@ -186,6 +186,51 @@ export interface LabelQcTrainingPhoto {
   finalAnnotations: LabelQcAnnotation[];
 }
 
+export type LabelQcTrayCropStatus = 'PENDING' | 'REVIEWED' | 'UNJUDGEABLE';
+
+export interface LabelQcPlatformLabelReview {
+  type: LabelQcObjectType;
+  bbox: LabelQcBoundingBox;
+  truncated: boolean;
+}
+
+export interface LabelQcPlatformTrayReview {
+  version: 1;
+  complete: boolean;
+  unjudgeable: boolean;
+  whitePresence: LabelQcPresence;
+  colorPresence: LabelQcPresence;
+  labels: LabelQcPlatformLabelReview[];
+}
+
+export interface LabelQcTrayCrop {
+  id: string;
+  version: number;
+  taskId: string;
+  photoId: string;
+  trayIndex: number;
+  aiTrayKey?: string | null;
+  sourceDecision: LabelQcObjectDecision;
+  sourceImageSha256?: string | null;
+  objectReviewSha256: string;
+  cropSpecSha256: string;
+  cropAlgorithmVersion: string;
+  paddingRatio: number;
+  trayBox: LabelQcBoundingBox;
+  cropBox: LabelQcBoundingBox;
+  coordinateTransform: string;
+  originalImageUrl: string;
+  originalImageWidth: number;
+  originalImageHeight: number;
+  status: LabelQcTrayCropStatus;
+  factoryProposals: LabelQcPlatformTrayReview;
+  platformReview?: LabelQcPlatformTrayReview | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function listLabelQcTasks(
   factoryId: string,
   params: {
@@ -277,4 +322,25 @@ export function exportLabelQcTrainingData(
   params: { from: string; to: string; limit?: number },
 ): Promise<ApiResponse<LabelQcTrainingPhoto[]>> {
   return get<LabelQcTrainingPhoto[]>(`/${factoryId}/label-qc/training-export`, { params });
+}
+
+export function listLabelQcTrayCrops(
+  factoryId: string,
+  params: { status?: LabelQcTrayCropStatus; page?: number; size?: number } = {},
+): Promise<ApiResponse<LabelQcPage<LabelQcTrayCrop>>> {
+  return get<LabelQcPage<LabelQcTrayCrop>>(`/${factoryId}/label-qc/tray-crops`, {
+    params: { status: params.status, page: params.page ?? 1, size: params.size ?? 20 },
+  });
+}
+
+export function reviewLabelQcTrayCrop(
+  factoryId: string,
+  cropId: string,
+  expectedVersion: number,
+  review: LabelQcPlatformTrayReview,
+): Promise<ApiResponse<LabelQcTrayCrop>> {
+  return put<LabelQcTrayCrop>(`/${factoryId}/label-qc/tray-crops/${cropId}/review`, {
+    expectedVersion,
+    review,
+  });
 }

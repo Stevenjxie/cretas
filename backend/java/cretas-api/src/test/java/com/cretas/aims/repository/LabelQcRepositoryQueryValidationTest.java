@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.LabelQcAnnotation;
 import com.cretas.aims.entity.LabelQcPhoto;
 import com.cretas.aims.entity.LabelQcTask;
+import com.cretas.aims.entity.LabelQcTrayCrop;
 import com.cretas.aims.entity.enums.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +44,7 @@ class LabelQcRepositoryQueryValidationTest {
     @Autowired LabelQcTaskRepository taskRepository;
     @Autowired LabelQcPhotoRepository photoRepository;
     @Autowired LabelQcAnnotationRepository annotationRepository;
+    @Autowired LabelQcTrayCropRepository trayCropRepository;
     @Autowired PlatformTransactionManager transactionManager;
 
     @Test
@@ -52,6 +54,7 @@ class LabelQcRepositoryQueryValidationTest {
         taskA.setTrainingStatus(LabelQcTrainingStatus.APPROVED);
         LabelQcPhoto photoA = persistPhoto(taskA, "attachment-a");
         persistAnnotation(taskA, photoA);
+        LabelQcTrayCrop cropA = persistTrayCrop(taskA, photoA, "crop-a");
         entityManager.flush();
         entityManager.clear();
 
@@ -116,10 +119,17 @@ class LabelQcRepositoryQueryValidationTest {
         assertThat(persistedPhotos.get(0).getObjectReviewedAt()).isNotNull();
         assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
                 "F-LABEL-B", taskA.getId())).isEmpty();
+        assertThat(photoRepository.findByFactoryIdAndId("F-LABEL-A", photoA.getId())).isPresent();
+        assertThat(photoRepository.findByFactoryIdAndId("F-LABEL-B", photoA.getId())).isEmpty();
         assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSource(
                 "F-LABEL-A", taskA.getId(), LabelQcAnnotationSource.AI)).isEqualTo(1);
         assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSource(
                 "F-LABEL-B", taskA.getId(), LabelQcAnnotationSource.AI)).isZero();
+        assertThat(trayCropRepository.findByFactoryIdAndId("F-LABEL-A", cropA.getId())).isPresent();
+        assertThat(trayCropRepository.findByFactoryIdAndId("F-LABEL-B", cropA.getId())).isEmpty();
+        assertThat(trayCropRepository.findByFactoryIdAndCropSpecSha256("F-LABEL-A", "crop-a")).isPresent();
+        assertThat(trayCropRepository.findByFactoryIdAndStatusOrderByCreatedAtAsc(
+                "F-LABEL-A", LabelQcTrayCropStatus.PENDING, PageRequest.of(0, 10))).hasSize(1);
         assertThat(taskRepository.findByFactoryIdAndStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
                 "F-LABEL-A",
                 LabelQcTaskStatus.NEEDS_REVIEW,
@@ -263,5 +273,27 @@ class LabelQcRepositoryQueryValidationTest {
                 .yMax(0.5)
                 .build();
         entityManager.persist(annotation);
+    }
+
+    private LabelQcTrayCrop persistTrayCrop(LabelQcTask task, LabelQcPhoto photo, String cropSpec) {
+        LabelQcTrayCrop crop = LabelQcTrayCrop.builder()
+                .factoryId(task.getFactoryId())
+                .taskId(task.getId())
+                .photoId(photo.getId())
+                .sourceAttachmentId(photo.getAttachmentId())
+                .sourceDecision(LabelQcObjectDecision.CONFIRMED)
+                .trayIndex(0)
+                .trayXMin(0.1).trayYMin(0.1).trayXMax(0.9).trayYMax(0.9)
+                .cropXMin(0.08).cropYMin(0.08).cropXMax(0.92).cropYMax(0.92)
+                .paddingRatio(0.03)
+                .cropAlgorithmVersion("test-v1")
+                .objectReviewSha256("b".repeat(64))
+                .cropSpecSha256(cropSpec)
+                .coordinateTransform("{}")
+                .factoryLabelProposals("{\"version\":1,\"complete\":true,\"unjudgeable\":true,\"whitePresence\":\"UNJUDGEABLE\",\"colorPresence\":\"UNJUDGEABLE\",\"labels\":[]}")
+                .status(LabelQcTrayCropStatus.PENDING)
+                .build();
+        entityManager.persist(crop);
+        return crop;
     }
 }

@@ -904,7 +904,6 @@ function ObjectTrayQuickReview({
   onPresence,
   onAdd,
   onRemove,
-  onConfirm,
 }: {
   draft: PhotoObjectReviewDraft;
   selectedTray: TrayObjectReviewDraft | null;
@@ -915,7 +914,6 @@ function ObjectTrayQuickReview({
   onPresence: (type: LabelQcObjectType, presence: LabelQcPresence) => void;
   onAdd: (type: LabelQcObjectType) => void;
   onRemove: (key: string) => void;
-  onConfirm: () => void;
 }) {
   if (!draft.trays.length) return null;
   return (
@@ -1011,15 +1009,7 @@ function ObjectTrayQuickReview({
               删除选中的错框
             </Button>
           ) : null}
-          <Button
-            mode="contained"
-            buttonColor={QI_COLORS.primary}
-            disabled={readOnly}
-            onPress={onConfirm}
-            contentStyle={styles.objectConfirmContent}
-          >
-            本盒已核对
-          </Button>
+          <Text style={styles.objectAutoConfirmHint}>切换盒子或照片时自动保存当前结果</Text>
         </View>
       ) : null}
     </View>
@@ -1154,6 +1144,15 @@ export default function QILabelQcReviewScreen() {
   );
 
   const selectPhoto = (index: number) => {
+    if (!readOnly && selectedObjectTray) {
+      const validation = validateObjectTray(selectedObjectTray);
+      if (validation) {
+        setError(`盒子 ${selectedObjectTray.trayIndex + 1}：${validation}。请修正后再切换照片。`);
+        return;
+      }
+      setObjectDraft((current) => confirmObjectTray(current, selectedObjectTray.key));
+    }
+    setError(null);
     setPhotoIndex(index);
     setSelectedKey(
       drafts[index]?.annotations.find((annotation) => !annotation.label)?.key
@@ -1203,19 +1202,6 @@ export default function QILabelQcReviewScreen() {
       key,
     ));
     setSelectedObjectKey(null);
-  };
-
-  const handleConfirmObjectTray = () => {
-    if (!selectedObjectTray) return;
-    const validation = validateObjectTray(selectedObjectTray);
-    if (validation) {
-      setError(`盒子 ${selectedObjectTray.trayIndex + 1}：${validation}。请修正后再确认。`);
-      return;
-    }
-    setError(null);
-    setObjectDraft((current) => confirmObjectTray(current, selectedObjectTray.key));
-    const next = objectReview?.trays.find((tray) => !tray.confirmed && tray.key !== selectedObjectTray.key);
-    if (next) setSelectedObjectTrayKey(next.key);
   };
 
   const handleAdd = (x: number, y: number) => {
@@ -1454,6 +1440,15 @@ export default function QILabelQcReviewScreen() {
           selectedObjectKey={selectedObjectKey}
           readOnly={Boolean(readOnly)}
           onSelectTray={(key) => {
+            if (!readOnly && selectedObjectTray) {
+              const validation = validateObjectTray(selectedObjectTray);
+              if (validation) {
+                setError(`盒子 ${selectedObjectTray.trayIndex + 1}：${validation}。请修正后再切换盒子。`);
+                return;
+              }
+              setObjectDraft((current) => confirmObjectTray(current, selectedObjectTray.key));
+            }
+            setError(null);
             setSelectedObjectTrayKey(key);
             setSelectedObjectKey(objectReview.trays.find((tray) => tray.key === key)?.labels[0]?.key ?? null);
           }}
@@ -1461,7 +1456,6 @@ export default function QILabelQcReviewScreen() {
           onPresence={handleObjectPresence}
           onAdd={handleAddObjectLabel}
           onRemove={handleRemoveObjectLabel}
-          onConfirm={handleConfirmObjectTray}
         />
       )}
 
@@ -1887,6 +1881,7 @@ const styles = StyleSheet.create({
   objectTrayChipDone: { borderColor: '#16A36A' },
   objectTrayChipText: { fontSize: 14, fontWeight: '800', color: '#24415F' },
   objectTrayDetail: { gap: 8, marginTop: 9 },
+  objectAutoConfirmHint: { fontSize: 12, lineHeight: 18, color: '#526779', textAlign: 'center' },
   objectPresenceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   objectPresenceName: { width: 34, fontSize: 12, fontWeight: '800', color: '#24415F' },
   objectPresenceButton: {

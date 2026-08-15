@@ -105,7 +105,7 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
       colorPresence: presenceFrom(rawTray.hasColor, colorCount),
       labels,
       rejectedAiObjectKeys: [] as string[],
-      confirmed: false,
+      confirmed: true,
     }];
   });
   return { photoId: photo.id, trays, rejectedAiTrayKeys: [] };
@@ -167,7 +167,6 @@ export function markObjectCorrected(item: { decision: 'CONFIRMED' | 'CORRECTED' 
 }
 
 export function validateTrayObjectDraft(tray: LabelQcTrayObjectDraft): string | null {
-  if (!tray.confirmed) return `盒子 ${tray.trayIndex + 1} 尚未确认`;
   const whiteCount = tray.labels.filter((label) => label.type === 'WHITE_LABEL').length;
   const colorCount = tray.labels.filter((label) => label.type === 'COLOR_LABEL').length;
   if (tray.whitePresence === 'PRESENT' && whiteCount === 0) return `盒子 ${tray.trayIndex + 1} 选择了“有白标”，请补画白标框`;

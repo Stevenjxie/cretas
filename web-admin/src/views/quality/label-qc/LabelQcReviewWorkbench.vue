@@ -295,6 +295,7 @@ function resetMainImageState(): void {
 }
 
 function selectPhoto(index: number): void {
+  if (index !== activePhotoIndex.value && !confirmCurrentObjectBeforeSwitch('照片')) return;
   activePhotoIndex.value = index;
   selectedKey.value = null;
   selectedTrayKey.value = drafts.value[index]?.objectReview?.trays[0]?.key ?? null;
@@ -383,8 +384,21 @@ function deleteHumanItem(): void {
 }
 
 function selectTray(tray: LabelQcTrayObjectDraft): void {
+  if (tray.key !== selectedTray.value?.key && !confirmCurrentObjectBeforeSwitch('盒子')) return;
   selectedTrayKey.value = tray.key;
   selectedObjectKey.value = tray.key;
+}
+
+function confirmCurrentObjectBeforeSwitch(target: '盒子' | '照片' | '提交'): boolean {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return true;
+  const error = validateTrayObjectDraft(tray);
+  if (error) {
+    ElMessage.warning(`${error}，请修正后再${target === '提交' ? '提交' : `切换${target}`}`);
+    return false;
+  }
+  tray.confirmed = true;
+  return true;
 }
 
 function objectBoxStyle(bbox: LabelQcBoundingBox, color: string): Record<string, string> {
@@ -458,38 +472,6 @@ function toggleTruncated(item: LabelQcObjectDraftItem): void {
   markObjectCorrected(item);
   tray.confirmed = false;
   setDirty(true);
-}
-
-function confirmSelectedTray(): void {
-  const tray = selectedTray.value;
-  if (!tray || !props.canReview) return;
-  tray.confirmed = true;
-  const error = validateTrayObjectDraft(tray);
-  if (error) {
-    tray.confirmed = false;
-    ElMessage.warning(error);
-    return;
-  }
-  setDirty(true);
-  const next = objectDraft.value?.trays.find((candidate) => !candidate.confirmed);
-  if (next) selectTray(next);
-}
-
-function confirmAllObjectTrays(): void {
-  const trays = objectDraft.value?.trays ?? [];
-  if (!props.canReview || !trays.length) return;
-  for (const tray of trays) {
-    tray.confirmed = true;
-    const error = validateTrayObjectDraft(tray);
-    if (error) {
-      tray.confirmed = false;
-      selectTray(tray);
-      ElMessage.warning(error);
-      return;
-    }
-  }
-  setDirty(true);
-  ElMessage.success(`本图 ${trays.length} 个盒子的白标和彩标已确认`);
 }
 
 function addObjectTray(): void {
@@ -1044,6 +1026,7 @@ function nextPhoto(): void {
 }
 
 function submitReview(): void {
+  if (!confirmCurrentObjectBeforeSwitch('提交')) return;
   const validation = validateReviewDraft(drafts.value);
   if (validation) {
     const incompleteIndex = firstIncompletePhotoIndex(drafts.value);
@@ -1428,7 +1411,7 @@ onBeforeUnmount(() => {
             <div class="object-review-heading">
               <div>
                 <span>第 1 步 · 逐盒核对</span>
-                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个盒子已确认</strong>
+                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个盒子状态有效</strong>
               </div>
               <button type="button" :disabled="!canReview" @click="addObjectTray">+ 漏了盒子</button>
             </div>
@@ -1493,18 +1476,7 @@ onBeforeUnmount(() => {
                 <button type="button" class="danger-link" :disabled="!canReview" @click="deleteObjectLabel(selectedObject)">删除错框</button>
               </div>
 
-              <button type="button" class="confirm-tray" :disabled="!canReview" @click="confirmSelectedTray">
-                <Check /> 本盒已核对
-              </button>
-              <button
-                v-if="objectDraft.trays.length > 1 && confirmedTrayCount === 0"
-                type="button"
-                class="confirm-all-trays"
-                :disabled="!canReview"
-                @click="confirmAllObjectTrays"
-              >
-                我已看完本图，全部盒子按当前结果确认
-              </button>
+              <p class="object-auto-confirm-hint">切换盒子或照片时自动保存当前结果；图层显示开关不改变审核结论。</p>
             </template>
           </section>
 
@@ -2855,4 +2827,5 @@ button:disabled {
 .confirm-tray { width: 100%; margin-top: 12px; color: #fff; border-color: #047857; background: #047857; font-weight: 800; }
 .confirm-all-trays { width: 100%; margin-top: 7px; color: #1d4ed8; }
 .empty-object-review { margin-top: 10px; color: #475569; font-size: 12px; line-height: 1.6; }
+.object-auto-confirm-hint { margin: 10px 0 0; color: #526779; font-size: 12px; line-height: 1.55; }
 </style>

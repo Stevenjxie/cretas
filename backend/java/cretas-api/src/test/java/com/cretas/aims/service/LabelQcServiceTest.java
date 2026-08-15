@@ -28,6 +28,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LabelQcAnnotationRepository;
 import com.cretas.aims.repository.LabelQcPhotoRepository;
 import com.cretas.aims.repository.LabelQcTaskRepository;
+import com.cretas.aims.repository.LabelQcTrayCropRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.event.LabelQcAnalysisRequestedEvent;
@@ -61,6 +62,7 @@ class LabelQcServiceTest {
     @Mock private LabelQcTaskRepository taskRepository;
     @Mock private LabelQcPhotoRepository photoRepository;
     @Mock private LabelQcAnnotationRepository annotationRepository;
+    @Mock private LabelQcTrayCropRepository trayCropRepository;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private AttachmentService attachmentService;
     @Mock private ApplicationEventPublisher eventPublisher;
@@ -76,6 +78,7 @@ class LabelQcServiceTest {
                 taskRepository,
                 photoRepository,
                 annotationRepository,
+                trayCropRepository,
                 productTypeRepository,
                 attachmentService,
                 eventPublisher,
@@ -134,6 +137,15 @@ class LabelQcServiceTest {
                 .thenReturn(List.of(aiCandidate));
         lenient().when(attachmentService.generateDownloadUrl(FACTORY_ID, "attachment-1"))
                 .thenReturn("https://example.invalid/signed");
+        lenient().when(attachmentService.getById(FACTORY_ID, "attachment-1"))
+                .thenReturn(Attachment.builder()
+                        .id("attachment-1")
+                        .factoryId(FACTORY_ID)
+                        .fileHash("a".repeat(64))
+                        .build());
+        lenient().when(trayCropRepository.findByFactoryIdAndCropSpecSha256(eq(FACTORY_ID), anyString()))
+                .thenReturn(Optional.empty());
+        lenient().when(trayCropRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -394,6 +406,36 @@ class LabelQcServiceTest {
         assertNotNull(photo.getObjectReviewedAt());
         assertEquals(LabelQcPresence.PRESENT,
                 result.photos().get(0).objectReview().trays().get(0).whitePresence());
+        verify(trayCropRepository).save(argThat(crop ->
+                crop.getPhotoId().equals(PHOTO_ID)
+                        && crop.getTrayIndex() == 0
+                        && crop.getSourceImageSha256().equals("a".repeat(64))
+                        && crop.getCropSpecSha256().length() == 64));
+    }
+
+    @Test
+    void reviewDoesNotCreateCropForEntirelyUnjudgeableTray() {
+        ObjectReviewPayload objectReview = new ObjectReviewPayload(
+                1,
+                true,
+                List.of(new TrayObjectReview(
+                        0,
+                        null,
+                        new BoundingBox(0.05, 0.05, 0.95, 0.95),
+                        LabelQcObjectDecision.ADDED,
+                        LabelQcPresence.UNJUDGEABLE,
+                        LabelQcPresence.UNJUDGEABLE,
+                        List.of(),
+                        List.of())),
+                List.of());
+        ReviewTaskRequest request = new ReviewTaskRequest(0L, "review-unjudgeable-tray", List.of(
+                new PhotoReviewRequest(PHOTO_ID, List.of(
+                        new AnnotationReviewRequest(
+                                aiCandidate.getId(), LabelQcLabel.NO_DEFECT, null, null)), objectReview)));
+
+        service.review(FACTORY_ID, TASK_ID, REVIEWER_ID, request);
+
+        verify(trayCropRepository, never()).save(any());
     }
 
     @Test

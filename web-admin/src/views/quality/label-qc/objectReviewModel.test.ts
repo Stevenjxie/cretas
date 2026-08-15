@@ -19,7 +19,7 @@ const photo = (screeningDetail: string): LabelQcPhoto => ({
 });
 
 describe('label QC object review model', () => {
-  it('hydrates every AI tray and label as an unconfirmed human-review draft', () => {
+  it('hydrates every AI tray and label as default-accepted human-review draft', () => {
     const draft = buildObjectReviewDraft(photo(JSON.stringify({
       trays: [{
         index: 0,
@@ -34,7 +34,7 @@ describe('label QC object review model', () => {
     expect(draft.trays).toHaveLength(1);
     expect(draft.trays[0]).toMatchObject({
       key: 'tray-0',
-      confirmed: false,
+      confirmed: true,
       whitePresence: 'PRESENT',
       colorPresence: 'PRESENT',
     });
@@ -56,10 +56,10 @@ describe('label QC object review model', () => {
 
     expect(tray.labels).toHaveLength(0);
     expect(tray.rejectedAiObjectKeys).toEqual(['label-0-0']);
-    expect(() => toObjectReviewPayload(draft)).toThrow('尚未确认');
+    expect(toObjectReviewPayload(draft).trays[0]?.whitePresence).toBe('MISSING');
   });
 
-  it('exports only after each tray is explicitly confirmed and presence matches boxes', () => {
+  it('exports a valid edited tray without requiring a separate confirmation click', () => {
     const draft = buildObjectReviewDraft(photo(JSON.stringify({
       trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], labels: [] }],
     })));
@@ -71,8 +71,6 @@ describe('label QC object review model', () => {
       'human-white-1',
     );
     setTrayPresence(tray, 'COLOR_LABEL', 'MISSING');
-    tray.confirmed = true;
-
     const payload = toObjectReviewPayload(draft);
     expect(payload.complete).toBe(true);
     expect(payload.trays[0]?.labels[0]).toMatchObject({
