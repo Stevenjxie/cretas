@@ -178,7 +178,20 @@ export function WHPutawayScreen() {
         onPress: async () => {
           setSubmitting(true);
           try {
-            // TODO: 调用上架 API（updateBatchStorageLocation 或类似接口）
+            // 🔴 这里原本是一句 `// TODO: 调用上架 API` + 直接弹「上架成功」——
+            //    **没有调用任何接口**。仓管选完库位、点确认、看到成功提示,
+            //    而系统里没有任何记录。这比死按钮更糟: 它是**假成功**。
+            //
+            //    后端接口一直是现成的: `PUT /material-batches/{batchId}` 支持 partial body,
+            //    且 service 明确写着「非库存字段 (storageLocation/notes/…) 仍放行」——
+            //    纯操作员改库位不受那条「不许改数量/单价」的红线限制。
+            const resp = await materialBatchApiClient.updateBatch(
+              batchId,
+              { storageLocation: selectedLocation },
+            );
+            if (!resp?.success) {
+              throw new Error(resp?.message || t('messages.putawayFailed'));
+            }
             Alert.alert(t('inbound.putaway.success'), t('inbound.putaway.successMessage'));
             navigation.goBack();
           } catch (error) {
