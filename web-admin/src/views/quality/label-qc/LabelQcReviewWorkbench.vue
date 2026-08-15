@@ -22,7 +22,9 @@ import {
 import type {
   LabelQcBoundingBox,
   LabelQcLabel,
+  LabelQcObjectType,
   LabelQcPhoto,
+  LabelQcPresence,
   LabelQcReviewRequest,
   LabelQcTaskDetail,
 } from '@/api/labelQc';
@@ -46,6 +48,16 @@ import {
   type LabelQcPhotoDraft,
   type LabelQcReviewDraft,
 } from './reviewModel';
+import {
+  addObjectLabel,
+  defaultLabelBox,
+  markObjectCorrected,
+  rejectObjectLabel,
+  setTrayPresence,
+  validateTrayObjectDraft,
+  type LabelQcObjectDraftItem,
+  type LabelQcTrayObjectDraft,
+} from './objectReviewModel';
 import { calculateImagePlaneStyle, resolveImageSize } from './imageViewport';
 
 const props = defineProps<{
@@ -67,10 +79,14 @@ const LABEL_TEXT: Record<LabelQcLabel, string> = {
   NO_DEFECT: '无问题',
   UNJUDGEABLE: '无法判断',
 };
+const OBJECT_TYPES: LabelQcObjectType[] = ['WHITE_LABEL', 'COLOR_LABEL'];
+const PRESENCE_OPTIONS: LabelQcPresence[] = ['PRESENT', 'MISSING', 'UNJUDGEABLE'];
 
 const drafts = ref<LabelQcPhotoDraft[]>([]);
 const activePhotoIndex = ref(0);
 const selectedKey = ref<string | null>(null);
+const selectedTrayKey = ref<string | null>(null);
+const selectedObjectKey = ref<string | null>(null);
 const viewportRef = ref<HTMLElement | null>(null);
 const planeRef = ref<HTMLElement | null>(null);
 const viewportSize = ref({ width: 800, height: 600 });
@@ -92,6 +108,8 @@ type PointerInteraction = {
   moved: boolean;
   startPan?: { x: number; y: number };
   itemKey?: string;
+  objectKey?: string;
+  trayKey?: string;
   startBox?: LabelQcBoundingBox;
 };
 
@@ -106,6 +124,18 @@ const activeDraft = computed<LabelQcPhotoDraft>(
 const selectedItem = computed<LabelQcReviewDraft | null>(
   () => activeDraft.value?.items.find((item) => item.key === selectedKey.value) ?? null,
 );
+const objectDraft = computed(() => activeDraft.value?.objectReview);
+const selectedTray = computed<LabelQcTrayObjectDraft | null>(() => (
+  objectDraft.value?.trays.find((tray) => tray.key === selectedTrayKey.value)
+    ?? objectDraft.value?.trays[0]
+    ?? null
+));
+const selectedObject = computed<LabelQcObjectDraftItem | null>(() => (
+  selectedTray.value?.labels.find((item) => item.key === selectedObjectKey.value) ?? null
+));
+const confirmedTrayCount = computed(() => (
+  objectDraft.value?.trays.filter((tray) => tray.confirmed).length ?? 0
+));
 const visibleItems = computed(() => (
   activeDraft.value?.items.filter((item) => (
     Boolean(item.bbox) && !(item.source === 'AI' && item.label === 'NO_DEFECT')
@@ -267,6 +297,8 @@ function resetMainImageState(): void {
 function selectPhoto(index: number): void {
   activePhotoIndex.value = index;
   selectedKey.value = null;
+  selectedTrayKey.value = drafts.value[index]?.objectReview?.trays[0]?.key ?? null;
+  selectedObjectKey.value = selectedTrayKey.value;
   resetView();
   resetMainImageState();
   scheduleViewportMeasurement();
@@ -350,6 +382,148 @@ function deleteHumanItem(): void {
   void nextTick(choosePreferredItem);
 }
 
+function selectTray(tray: LabelQcTrayObjectDraft): void {
+  selectedTrayKey.value = tray.key;
+  selectedObjectKey.value = tray.key;
+}
+
+function objectBoxStyle(bbox: LabelQcBoundingBox, color: string): Record<string, string> {
+  return {
+    left: `${bbox.xMin * 100}%`,
+    top: `${bbox.yMin * 100}%`,
+    width: `${(bbox.xMax - bbox.xMin) * 100}%`,
+    height: `${(bbox.yMax - bbox.yMin) * 100}%`,
+    borderColor: color,
+  };
+}
+
+function objectColor(type: LabelQcObjectType | 'TRAY'): string {
+  if (type === 'WHITE_LABEL') return '#0891b2';
+  if (type === 'COLOR_LABEL') return '#9333ea';
+  return '#2563eb';
+}
+
+function objectLabelText(type: LabelQcObjectType): string {
+  return type === 'WHITE_LABEL' ? '白标' : '彩标';
+}
+
+function presenceText(presence: LabelQcPresence): string {
+  return { PRESENT: '有', MISSING: '缺', UNJUDGEABLE: '看不清' }[presence];
+}
+
+function changePresence(type: LabelQcObjectType, presence: LabelQcPresence): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  setTrayPresence(tray, type, presence);
+  setDirty(true);
+}
+
+function addDefaultObjectLabel(type: LabelQcObjectType): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  const item = addObjectLabel(
+    tray,
+    type,
+    defaultLabelBox(tray),
+    `human-object-${tray.trayIndex}-${Date.now()}`,
+  );
+  selectedObjectKey.value = item.key;
+  setDirty(true);
+  ElMessage.info(`已在盒子 ${tray.trayIndex + 1} 中补一个${objectLabelText(type)}框，请在照片上拖动修正位置`);
+}
+
+function deleteObjectLabel(item: LabelQcObjectDraftItem): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  rejectObjectLabel(tray, item.key);
+  selectedObjectKey.value = tray.key;
+  setDirty(true);
+}
+
+function toggleObjectType(item: LabelQcObjectDraftItem): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  item.type = item.type === 'WHITE_LABEL' ? 'COLOR_LABEL' : 'WHITE_LABEL';
+  markObjectCorrected(item);
+  if (item.type === 'WHITE_LABEL') tray.whitePresence = 'PRESENT';
+  else tray.colorPresence = 'PRESENT';
+  tray.confirmed = false;
+  setDirty(true);
+}
+
+function toggleTruncated(item: LabelQcObjectDraftItem): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  item.truncated = !item.truncated;
+  markObjectCorrected(item);
+  tray.confirmed = false;
+  setDirty(true);
+}
+
+function confirmSelectedTray(): void {
+  const tray = selectedTray.value;
+  if (!tray || !props.canReview) return;
+  tray.confirmed = true;
+  const error = validateTrayObjectDraft(tray);
+  if (error) {
+    tray.confirmed = false;
+    ElMessage.warning(error);
+    return;
+  }
+  setDirty(true);
+  const next = objectDraft.value?.trays.find((candidate) => !candidate.confirmed);
+  if (next) selectTray(next);
+}
+
+function confirmAllObjectTrays(): void {
+  const trays = objectDraft.value?.trays ?? [];
+  if (!props.canReview || !trays.length) return;
+  for (const tray of trays) {
+    tray.confirmed = true;
+    const error = validateTrayObjectDraft(tray);
+    if (error) {
+      tray.confirmed = false;
+      selectTray(tray);
+      ElMessage.warning(error);
+      return;
+    }
+  }
+  setDirty(true);
+  ElMessage.success(`本图 ${trays.length} 个盒子的白标和彩标已确认`);
+}
+
+function addObjectTray(): void {
+  const draft = objectDraft.value;
+  if (!draft || !props.canReview) return;
+  const trayIndex = draft.trays.reduce((max, tray) => Math.max(max, tray.trayIndex), -1) + 1;
+  const tray: LabelQcTrayObjectDraft = {
+    key: `human-tray-${trayIndex}-${Date.now()}`,
+    trayIndex,
+    bbox: { xMin: 0.35, yMin: 0.35, xMax: 0.65, yMax: 0.65 },
+    decision: 'ADDED',
+    whitePresence: 'UNJUDGEABLE',
+    colorPresence: 'UNJUDGEABLE',
+    labels: [],
+    rejectedAiObjectKeys: [],
+    confirmed: false,
+  };
+  draft.trays.push(tray);
+  selectTray(tray);
+  setDirty(true);
+  ElMessage.info('已补一个盒子框，请拖动和缩放到正确位置');
+}
+
+function deleteSelectedTray(): void {
+  const draft = objectDraft.value;
+  const tray = selectedTray.value;
+  if (!draft || !tray || !props.canReview) return;
+  if (tray.aiTrayKey) draft.rejectedAiTrayKeys.push(tray.aiTrayKey);
+  draft.trays = draft.trays.filter((candidate) => candidate.key !== tray.key);
+  selectedTrayKey.value = draft.trays[0]?.key ?? null;
+  selectedObjectKey.value = selectedTrayKey.value;
+  setDirty(true);
+}
+
 function addHumanBoxAt(clientX: number, clientY: number): void {
   if (!props.canReview || !planeRef.value || !activeDraft.value) return;
   const rect = planeRef.value.getBoundingClientRect();
@@ -430,6 +604,29 @@ function startBoxPointer(
   };
 }
 
+function startObjectPointer(
+  event: PointerEvent,
+  tray: LabelQcTrayObjectDraft,
+  object: LabelQcObjectDraftItem | LabelQcTrayObjectDraft,
+  type: 'move' | 'resize',
+): void {
+  event.stopPropagation();
+  selectTray(tray);
+  selectedObjectKey.value = object.key;
+  if (!props.canReview) return;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  pointerInteraction.value = {
+    type,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    trayKey: tray.key,
+    objectKey: object.key,
+    startBox: { ...object.bbox },
+  };
+}
+
 function movePointer(event: PointerEvent): void {
   if (toolMode.value === 'brush') {
     cursorPoint.value = toPlanePoint(event.clientX, event.clientY);
@@ -459,6 +656,22 @@ function movePointer(event: PointerEvent): void {
     return;
   }
   const planeRect = planeRef.value?.getBoundingClientRect();
+  if (interaction.objectKey && interaction.trayKey) {
+    const tray = objectDraft.value?.trays.find((candidate) => candidate.key === interaction.trayKey);
+    const object = tray?.key === interaction.objectKey
+      ? tray
+      : tray?.labels.find((candidate) => candidate.key === interaction.objectKey);
+    if (!planeRect || !tray || !object || !interaction.startBox) return;
+    const normalizedDeltaX = deltaX / planeRect.width;
+    const normalizedDeltaY = deltaY / planeRect.height;
+    object.bbox = interaction.type === 'move'
+      ? moveBox(interaction.startBox, normalizedDeltaX, normalizedDeltaY)
+      : resizeBox(interaction.startBox, normalizedDeltaX, normalizedDeltaY);
+    markObjectCorrected(object);
+    tray.confirmed = false;
+    setDirty(true);
+    return;
+  }
   const item = activeDraft.value?.items.find((candidate) => candidate.key === interaction.itemKey);
   if (!planeRect || !item || !interaction.startBox) return;
   const normalizedDeltaX = deltaX / planeRect.width;
@@ -909,6 +1122,8 @@ watch(
     drafts.value = buildReviewDraft(detail);
     activePhotoIndex.value = 0;
     selectedKey.value = null;
+    selectedTrayKey.value = drafts.value[0]?.objectReview?.trays[0]?.key ?? null;
+    selectedObjectKey.value = selectedTrayKey.value;
     setDirty(false);
     resetView();
     resetMainImageState();
@@ -1075,6 +1290,50 @@ onBeforeUnmount(() => {
             >
               <span class="reference-tag">{{ ref.label }}</span>
             </div>
+            <!-- 人工最终对象层：可交互，AI 参考层仍保留在下方作为不可变证据。 -->
+            <template v-for="tray in objectDraft?.trays ?? []" :key="tray.key">
+              <div
+                class="object-final-box object-tray-box"
+                :class="{ selected: selectedObjectKey === tray.key, muted: selectedTray && selectedTray.key !== tray.key }"
+                :style="objectBoxStyle(tray.bbox, objectColor('TRAY'))"
+                @pointerdown="startObjectPointer($event, tray, tray, 'move')"
+              >
+                <button type="button" class="object-final-tag" @pointerdown.stop="selectTray(tray)">
+                  盒子 {{ tray.trayIndex + 1 }}{{ tray.confirmed ? ' ✓' : '' }}
+                </button>
+                <button
+                  v-if="canReview && selectedObjectKey === tray.key"
+                  type="button"
+                  class="resize-handle"
+                  aria-label="缩放盒子框"
+                  @pointerdown="startObjectPointer($event, tray, tray, 'resize')"
+                />
+              </div>
+              <div
+                v-for="label in tray.labels"
+                :key="label.key"
+                class="object-final-box object-label-box"
+                :class="{ selected: selectedObjectKey === label.key, muted: selectedTray && selectedTray.key !== tray.key }"
+                :style="objectBoxStyle(label.bbox, objectColor(label.type))"
+                @pointerdown="startObjectPointer($event, tray, label, 'move')"
+              >
+                <button
+                  type="button"
+                  class="object-final-tag"
+                  :style="{ backgroundColor: objectColor(label.type) }"
+                  @pointerdown.stop="selectedTrayKey = tray.key; selectedObjectKey = label.key"
+                >
+                  {{ objectLabelText(label.type) }}{{ label.truncated ? '·边缘' : '' }}
+                </button>
+                <button
+                  v-if="canReview && selectedObjectKey === label.key"
+                  type="button"
+                  class="resize-handle"
+                  aria-label="缩放标签框"
+                  @pointerdown="startObjectPointer($event, tray, label, 'resize')"
+                />
+              </div>
+            </template>
             <div
               v-for="item in visibleItems"
               :key="item.key"
@@ -1165,6 +1424,90 @@ onBeforeUnmount(() => {
 
       <aside class="decision-rail">
         <div class="decision-scroll">
+          <section v-if="objectDraft" class="object-review-card">
+            <div class="object-review-heading">
+              <div>
+                <span>第 1 步 · 逐盒核对</span>
+                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个盒子已确认</strong>
+              </div>
+              <button type="button" :disabled="!canReview" @click="addObjectTray">+ 漏了盒子</button>
+            </div>
+            <div v-if="objectDraft.trays.length" class="tray-chip-row">
+              <button
+                v-for="tray in objectDraft.trays"
+                :key="tray.key"
+                type="button"
+                :class="{ active: selectedTray?.key === tray.key, done: tray.confirmed }"
+                @click="selectTray(tray)"
+              >
+                {{ tray.trayIndex + 1 }}{{ tray.confirmed ? '✓' : '' }}
+              </button>
+            </div>
+            <div v-else class="empty-object-review">
+              模型没有识别到盒子。若照片里确实有盒子，请点“漏了盒子”补画；否则继续处理缺陷结论。
+            </div>
+
+            <template v-if="selectedTray">
+              <div class="tray-context-row">
+                <strong>盒子 {{ selectedTray.trayIndex + 1 }}</strong>
+                <span>白标 {{ presenceText(selectedTray.whitePresence) }} · 彩标 {{ presenceText(selectedTray.colorPresence) }}</span>
+                <button type="button" class="danger-link" :disabled="!canReview" @click="deleteSelectedTray">删错盒子</button>
+              </div>
+
+              <div class="presence-editor">
+                <div v-for="type in OBJECT_TYPES" :key="type">
+                  <strong>{{ objectLabelText(type) }}</strong>
+                  <button
+                    v-for="presence in PRESENCE_OPTIONS"
+                    :key="presence"
+                    type="button"
+                    :class="{ on: (type === 'WHITE_LABEL' ? selectedTray.whitePresence : selectedTray.colorPresence) === presence }"
+                    :disabled="!canReview"
+                    @click="changePresence(type, presence)"
+                  >
+                    {{ presenceText(presence) }}
+                  </button>
+                  <button type="button" class="add-label" :disabled="!canReview" @click="addDefaultObjectLabel(type)">
+                    + 补框
+                  </button>
+                </div>
+              </div>
+
+              <div class="object-list">
+                <button
+                  v-for="item in selectedTray.labels"
+                  :key="item.key"
+                  type="button"
+                  :class="{ active: selectedObjectKey === item.key }"
+                  @click="selectedObjectKey = item.key"
+                >
+                  <i :style="{ backgroundColor: objectColor(item.type) }" />
+                  {{ objectLabelText(item.type) }}
+                  <em>{{ item.decision === 'ADDED' ? '人工补' : item.decision === 'CORRECTED' ? '已修正' : 'AI' }}</em>
+                </button>
+              </div>
+
+              <div v-if="selectedObject" class="object-actions">
+                <button type="button" :disabled="!canReview" @click="toggleObjectType(selectedObject)">改为{{ selectedObject.type === 'WHITE_LABEL' ? '彩标' : '白标' }}</button>
+                <button type="button" :class="{ on: selectedObject.truncated }" :disabled="!canReview" @click="toggleTruncated(selectedObject)">{{ selectedObject.truncated ? '已标边缘可见' : '这是边缘残缺标' }}</button>
+                <button type="button" class="danger-link" :disabled="!canReview" @click="deleteObjectLabel(selectedObject)">删除错框</button>
+              </div>
+
+              <button type="button" class="confirm-tray" :disabled="!canReview" @click="confirmSelectedTray">
+                <Check /> 本盒已核对
+              </button>
+              <button
+                v-if="objectDraft.trays.length > 1 && confirmedTrayCount === 0"
+                type="button"
+                class="confirm-all-trays"
+                :disabled="!canReview"
+                @click="confirmAllObjectTrays"
+              >
+                我已看完本图，全部盒子按当前结果确认
+              </button>
+            </template>
+          </section>
+
           <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
           <div class="must-act-heading">
             <span>当前必须操作</span>
@@ -2433,4 +2776,83 @@ button:disabled {
     height: 620px;
   }
 }
+.object-final-box {
+  position: absolute;
+  z-index: 2;
+  border: 2px solid;
+  pointer-events: auto;
+  cursor: move;
+}
+
+.object-final-box.muted { opacity: .28; }
+.object-final-box.selected { z-index: 3; box-shadow: 0 0 0 3px rgb(255 255 255 / 80%); }
+.object-tray-box { border-style: dashed; }
+.object-final-tag {
+  position: absolute;
+  top: -26px;
+  left: -2px;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  color: #fff;
+  background: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.object-review-card {
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+.object-review-heading,
+.tray-context-row,
+.object-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.object-review-heading div { display: grid; gap: 2px; }
+.object-review-heading span { color: #1d4ed8; font-size: 11px; font-weight: 800; }
+.object-review-heading button,
+.tray-chip-row button,
+.presence-editor button,
+.object-actions button,
+.confirm-tray,
+.confirm-all-trays {
+  min-height: 36px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.tray-chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.tray-chip-row button { min-width: 42px; font-weight: 800; }
+.tray-chip-row button.active { border-color: #2563eb; background: #dbeafe; }
+.tray-chip-row button.done { color: #047857; border-color: #6ee7b7; }
+.tray-context-row { margin: 10px 0; }
+.tray-context-row span { color: #475569; font-size: 12px; }
+.danger-link { color: #b91c1c !important; }
+.presence-editor { display: grid; gap: 8px; }
+.presence-editor > div { display: grid; grid-template-columns: 42px repeat(4, 1fr); gap: 6px; align-items: center; }
+.presence-editor button.on { color: #fff; border-color: #2563eb; background: #2563eb; }
+.presence-editor .add-label { color: #1d4ed8; }
+.object-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.object-list button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; }
+.object-list button.active { border-color: #2563eb; box-shadow: 0 0 0 2px #bfdbfe; }
+.object-list i { width: 9px; height: 9px; border-radius: 50%; }
+.object-list em { color: #64748b; font-size: 10px; font-style: normal; }
+.object-actions { justify-content: flex-start; flex-wrap: wrap; }
+.object-actions button.on { color: #fff; background: #475569; }
+.confirm-tray { width: 100%; margin-top: 12px; color: #fff; border-color: #047857; background: #047857; font-weight: 800; }
+.confirm-all-trays { width: 100%; margin-top: 7px; color: #1d4ed8; }
+.empty-object-review { margin-top: 10px; color: #475569; font-size: 12px; line-height: 1.6; }
 </style>

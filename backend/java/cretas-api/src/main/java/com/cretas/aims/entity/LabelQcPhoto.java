@@ -6,6 +6,7 @@ import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Data
@@ -66,6 +67,19 @@ public class LabelQcPhoto extends BaseEntity {
      */
     @Column(name = "screening_detail", columnDefinition = "TEXT")
     private String screeningDetail;
+
+    /**
+     * 人工最终对象快照 JSON。与 screeningDetail 分离，保证 AI 原始提议不可被覆盖。
+     * 只有完成整单人工审核时写入；旧任务和旧客户端可为 null。
+     */
+    @Column(name = "object_review_detail", columnDefinition = "TEXT")
+    private String objectReviewDetail;
+
+    @Column(name = "object_reviewed_by")
+    private Long objectReviewedBy;
+
+    @Column(name = "object_reviewed_at")
+    private LocalDateTime objectReviewedAt;
 
     @PrePersist
     void prepare() {

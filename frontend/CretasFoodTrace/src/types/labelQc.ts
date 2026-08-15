@@ -30,6 +30,36 @@ export interface LabelQcBoundingBox {
   yMax: number;
 }
 
+export type LabelQcObjectDecision = 'CONFIRMED' | 'CORRECTED' | 'ADDED';
+export type LabelQcObjectType = 'WHITE_LABEL' | 'COLOR_LABEL';
+export type LabelQcPresence = 'PRESENT' | 'MISSING' | 'UNJUDGEABLE';
+
+export interface LabelQcObjectReviewItem {
+  aiObjectKey?: string;
+  type: LabelQcObjectType;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  truncated: boolean;
+}
+
+export interface LabelQcTrayObjectReview {
+  trayIndex: number;
+  aiTrayKey?: string;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  whitePresence: LabelQcPresence;
+  colorPresence: LabelQcPresence;
+  labels: LabelQcObjectReviewItem[];
+  rejectedAiObjectKeys: string[];
+}
+
+export interface LabelQcObjectReviewPayload {
+  version: 1;
+  complete: boolean;
+  trays: LabelQcTrayObjectReview[];
+  rejectedAiTrayKeys: string[];
+}
+
 export interface LabelQcAnnotation {
   id: string;
   source: 'AI' | 'HUMAN';
@@ -58,6 +88,7 @@ export interface LabelQcPhoto {
    * 后端整段透传, 前端只解析出来画参考层, 不当作契约字段依赖。
    */
   screeningDetail?: string;
+  objectReview?: LabelQcObjectReviewPayload;
   annotations: LabelQcAnnotation[];
 }
 
@@ -117,6 +148,7 @@ export interface LabelQcAnnotationReviewRequest {
 export interface LabelQcPhotoReviewRequest {
   photoId: string;
   annotations: LabelQcAnnotationReviewRequest[];
+  objectReview?: LabelQcObjectReviewPayload;
 }
 
 export interface LabelQcReviewTaskRequest {

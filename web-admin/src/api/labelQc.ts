@@ -33,6 +33,36 @@ export interface LabelQcBoundingBox {
   yMax: number;
 }
 
+export type LabelQcObjectDecision = 'CONFIRMED' | 'CORRECTED' | 'ADDED';
+export type LabelQcObjectType = 'WHITE_LABEL' | 'COLOR_LABEL';
+export type LabelQcPresence = 'PRESENT' | 'MISSING' | 'UNJUDGEABLE';
+
+export interface LabelQcObjectReviewItem {
+  aiObjectKey?: string | null;
+  type: LabelQcObjectType;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  truncated: boolean;
+}
+
+export interface LabelQcTrayObjectReview {
+  trayIndex: number;
+  aiTrayKey?: string | null;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  whitePresence: LabelQcPresence;
+  colorPresence: LabelQcPresence;
+  labels: LabelQcObjectReviewItem[];
+  rejectedAiObjectKeys: string[];
+}
+
+export interface LabelQcObjectReviewPayload {
+  version: 1;
+  complete: boolean;
+  trays: LabelQcTrayObjectReview[];
+  rejectedAiTrayKeys: string[];
+}
+
 export interface LabelQcAnnotation {
   id: string;
   source: 'AI' | 'HUMAN';
@@ -58,6 +88,7 @@ export interface LabelQcPhoto {
   analysisError?: string | null;
   /** AI 初筛明细原文 JSON：托盘框 + 每盒识别到的白标/彩标框。可能为 null（旧数据或 VL 模式）。 */
   screeningDetail?: string | null;
+  objectReview?: LabelQcObjectReviewPayload | null;
   annotations: LabelQcAnnotation[];
 }
 
@@ -119,6 +150,7 @@ export interface LabelQcAnnotationReview {
 export interface LabelQcPhotoReview {
   photoId: string;
   annotations: LabelQcAnnotationReview[];
+  objectReview?: LabelQcObjectReviewPayload;
 }
 
 export interface LabelQcReviewRequest {
@@ -150,6 +182,7 @@ export interface LabelQcTrainingPhoto {
   batchNumber: string;
   productionDate: string;
   reviewedAt: string;
+  objectReview?: LabelQcObjectReviewPayload | null;
   finalAnnotations: LabelQcAnnotation[];
 }
 

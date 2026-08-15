@@ -9,6 +9,9 @@ import com.cretas.aims.event.LabelQcAnalysisRequestedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.attachment.AttachmentService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
@@ -43,6 +46,7 @@ public class LabelQcService {
     private final ProductTypeRepository productTypeRepository;
     private final AttachmentService attachmentService;
     private final ApplicationEventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public TaskDetailResponse createTask(String factoryId, Long userId, CreateTaskRequest request) {
@@ -360,6 +364,12 @@ public class LabelQcService {
                 throw new BusinessException("同一张照片不能重复提交审核")
                         .withCode("LABEL_QC_REVIEW_PHOTO_DUPLICATE");
             }
+            if (photoReview.objectReview() != null) {
+                validateObjectReview(photo, photoReview.objectReview());
+                photo.setObjectReviewDetail(writeObjectReview(photoReview.objectReview()));
+                photo.setObjectReviewedBy(reviewerId);
+                photo.setObjectReviewedAt(LocalDateTime.now());
+            }
             for (AnnotationReviewRequest annotationReview : photoReview.annotations()) {
                 validateReviewAnnotation(annotationReview);
                 if (isDefect(annotationReview.label())) {
@@ -532,6 +542,7 @@ public class LabelQcService {
                         task.getBatchNumber(),
                         task.getProductionDate(),
                         task.getReviewedAt(),
+                        readObjectReview(photo.getObjectReviewDetail()),
                         byPhoto.getOrDefault(photo.getId(), List.of()).stream()
                                 .map(this::toAnnotation)
                                 .toList()));
@@ -639,6 +650,212 @@ public class LabelQcService {
                 task.getUpdatedAt());
     }
 
+    private void validateObjectReview(LabelQcPhoto photo, ObjectReviewPayload review) {
+        if (!Boolean.TRUE.equals(review.complete())) {
+            throw objectReviewError("本图的盒子与标签尚未全部确认");
+        }
+
+        ScreeningObjectIndex expected = parseScreeningObjectIndex(photo.getScreeningDetail());
+        Set<Integer> trayIndexes = new HashSet<>();
+        Set<String> usedAiTrayKeys = new HashSet<>();
+        Set<String> usedAiObjectKeys = new HashSet<>();
+        Set<String> rejectedAiTrayKeys = normalizedUniqueKeys(
+                review.rejectedAiTrayKeys(), "被删除的 AI 盒子");
+
+        for (TrayObjectReview tray : review.trays()) {
+            if (!trayIndexes.add(tray.trayIndex())) {
+                throw objectReviewError("同一个盒子编号不能重复提交");
+            }
+            validateBox(tray.bbox(), "盒子");
+            String aiTrayKey = normalizeKey(tray.aiTrayKey());
+            validateDecision(tray.decision(), aiTrayKey, "盒子");
+            if (aiTrayKey != null) {
+                Integer owner = expected.trayOwners().get(aiTrayKey);
+                if (owner == null || !owner.equals(tray.trayIndex())) {
+                    throw objectReviewError("盒子引用的 AI 原始框与当前照片不匹配");
+                }
+                if (!usedAiTrayKeys.add(aiTrayKey)) {
+                    throw objectReviewError("同一个 AI 盒子不能重复确认");
+                }
+            }
+
+            Set<String> rejectedInTray = normalizedUniqueKeys(
+                    tray.rejectedAiObjectKeys(), "被删除的 AI 标签");
+            for (String rejectedKey : rejectedInTray) {
+                Integer owner = expected.labelOwners().get(rejectedKey);
+                if (owner == null || !owner.equals(tray.trayIndex())) {
+                    throw objectReviewError("被删除的 AI 标签不属于当前盒子");
+                }
+                if (!usedAiObjectKeys.add(rejectedKey)) {
+                    throw objectReviewError("同一个 AI 标签不能重复处理");
+                }
+            }
+
+            long whiteCount = 0;
+            long colorCount = 0;
+            for (LabelObjectReview label : tray.labels()) {
+                validateBox(label.bbox(), "标签");
+                if (!boxContainsCenter(tray.bbox(), label.bbox())) {
+                    throw objectReviewError("标签中心必须位于所属盒子内，请先选择正确盒子");
+                }
+                String aiObjectKey = normalizeKey(label.aiObjectKey());
+                validateDecision(label.decision(), aiObjectKey, "标签");
+                if (aiObjectKey != null) {
+                    Integer owner = expected.labelOwners().get(aiObjectKey);
+                    if (owner == null || !owner.equals(tray.trayIndex())) {
+                        throw objectReviewError("标签引用的 AI 原始框不属于当前盒子");
+                    }
+                    if (!usedAiObjectKeys.add(aiObjectKey)) {
+                        throw objectReviewError("同一个 AI 标签不能重复确认");
+                    }
+                }
+                if (label.type() == LabelQcObjectType.WHITE_LABEL) whiteCount++;
+                if (label.type() == LabelQcObjectType.COLOR_LABEL) colorCount++;
+            }
+            validatePresence(tray.whitePresence(), whiteCount, "白标");
+            validatePresence(tray.colorPresence(), colorCount, "彩标");
+        }
+
+        if (!Collections.disjoint(usedAiTrayKeys, rejectedAiTrayKeys)) {
+            throw objectReviewError("同一个 AI 盒子不能既保留又删除");
+        }
+        Set<String> coveredTrayKeys = new HashSet<>(usedAiTrayKeys);
+        coveredTrayKeys.addAll(rejectedAiTrayKeys);
+        if (!coveredTrayKeys.equals(expected.trayOwners().keySet())) {
+            throw objectReviewError("仍有 AI 盒子未确认，或请求包含了当前照片不存在的盒子");
+        }
+
+        Set<String> labelsUnderRejectedTrays = rejectedAiTrayKeys.stream()
+                .flatMap(key -> expected.labelsByTray().getOrDefault(key, Set.of()).stream())
+                .collect(Collectors.toSet());
+        Set<String> expectedLabelKeys = new HashSet<>(expected.labelOwners().keySet());
+        expectedLabelKeys.removeAll(labelsUnderRejectedTrays);
+        if (!usedAiObjectKeys.equals(expectedLabelKeys)) {
+            throw objectReviewError("仍有 AI 白标或彩标未确认，或请求包含了当前照片不存在的标签");
+        }
+    }
+
+    private ScreeningObjectIndex parseScreeningObjectIndex(String screeningDetail) {
+        if (screeningDetail == null || screeningDetail.isBlank()) {
+            return new ScreeningObjectIndex(Map.of(), Map.of(), Map.of());
+        }
+        try {
+            JsonNode trays = objectMapper.readTree(screeningDetail).path("trays");
+            if (!trays.isArray()) {
+                return new ScreeningObjectIndex(Map.of(), Map.of(), Map.of());
+            }
+            Map<String, Integer> trayOwners = new HashMap<>();
+            Map<String, Integer> labelOwners = new HashMap<>();
+            Map<String, Set<String>> labelsByTray = new HashMap<>();
+            int order = 0;
+            for (JsonNode tray : trays) {
+                int trayIndex = tray.path("index").isInt() ? tray.path("index").asInt() : order;
+                String trayKey = "tray-" + trayIndex;
+                if (trayOwners.putIfAbsent(trayKey, trayIndex) != null) {
+                    throw objectReviewError("AI 初筛包含重复盒子编号，不能生成可靠人工真值");
+                }
+                Set<String> childKeys = new HashSet<>();
+                JsonNode labels = tray.path("labels");
+                if (labels.isArray()) {
+                    int labelOrder = 0;
+                    for (JsonNode ignored : labels) {
+                        String labelKey = "label-" + trayIndex + "-" + labelOrder;
+                        labelOwners.put(labelKey, trayIndex);
+                        childKeys.add(labelKey);
+                        labelOrder++;
+                    }
+                }
+                labelsByTray.put(trayKey, childKeys);
+                order++;
+            }
+            return new ScreeningObjectIndex(trayOwners, labelOwners, labelsByTray);
+        } catch (JsonProcessingException ex) {
+            throw objectReviewError("AI 初筛明细损坏，无法安全核对盒子归属");
+        }
+    }
+
+    private Set<String> normalizedUniqueKeys(List<String> keys, String subject) {
+        Set<String> normalized = new HashSet<>();
+        for (String key : keys) {
+            String value = normalizeKey(key);
+            if (value == null || !normalized.add(value)) {
+                throw objectReviewError(subject + "包含空值或重复项");
+            }
+        }
+        return normalized;
+    }
+
+    private void validateDecision(
+            LabelQcObjectDecision decision,
+            String aiObjectKey,
+            String subject) {
+        if (decision == LabelQcObjectDecision.ADDED && aiObjectKey != null) {
+            throw objectReviewError("人工新增" + subject + "不能引用 AI 原始框");
+        }
+        if (decision != LabelQcObjectDecision.ADDED && aiObjectKey == null) {
+            throw objectReviewError(subject + "确认或修正必须保留 AI 原始框标识");
+        }
+    }
+
+    private void validatePresence(LabelQcPresence presence, long objectCount, String labelName) {
+        if (presence == LabelQcPresence.PRESENT && objectCount == 0) {
+            throw objectReviewError(labelName + "选择“有”时必须保留或补画至少一个可见框");
+        }
+        if (presence == LabelQcPresence.MISSING && objectCount > 0) {
+            throw objectReviewError(labelName + "选择“缺少”时不能同时保留可见框");
+        }
+    }
+
+    private void validateBox(BoundingBox box, String subject) {
+        if (box.xMin() >= box.xMax() || box.yMin() >= box.yMax()) {
+            throw objectReviewError(subject + "框范围无效");
+        }
+    }
+
+    private boolean boxContainsCenter(BoundingBox tray, BoundingBox label) {
+        double centerX = (label.xMin() + label.xMax()) / 2.0;
+        double centerY = (label.yMin() + label.yMax()) / 2.0;
+        return centerX >= tray.xMin() && centerX <= tray.xMax()
+                && centerY >= tray.yMin() && centerY <= tray.yMax();
+    }
+
+    private String normalizeKey(String value) {
+        if (value == null || value.isBlank()) return null;
+        return value.trim();
+    }
+
+    private String writeObjectReview(ObjectReviewPayload payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException ex) {
+            throw new BusinessException(500, "对象级人工真值保存失败")
+                    .withCode("LABEL_QC_OBJECT_REVIEW_SERIALIZATION_FAILED")
+                    .withHint("当前审核尚未提交，请保留页面并联系技术管理员");
+        }
+    }
+
+    private ObjectReviewPayload readObjectReview(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return objectMapper.readValue(value, ObjectReviewPayload.class);
+        } catch (JsonProcessingException ex) {
+            throw new BusinessException(500, "对象级人工真值读取失败")
+                    .withCode("LABEL_QC_OBJECT_REVIEW_CORRUPT")
+                    .withHint("请联系技术管理员核对该照片的审核快照");
+        }
+    }
+
+    private BusinessException objectReviewError(String message) {
+        return new BusinessException(message)
+                .withCode("LABEL_QC_OBJECT_REVIEW_INVALID")
+                .withHint("返回当前照片，逐盒确认所有 AI 框和标签存在性");
+    }
+
+    private record ScreeningObjectIndex(
+            Map<String, Integer> trayOwners,
+            Map<String, Integer> labelOwners,
+            Map<String, Set<String>> labelsByTray) {}
+
     private PhotoResponse toPhoto(
             String factoryId,
             LabelQcPhoto photo,
@@ -658,6 +875,7 @@ public class LabelQcService {
                 photo.getPromptVersion(),
                 photo.getAnalysisError(),
                 photo.getScreeningDetail(),
+                readObjectReview(photo.getObjectReviewDetail()),
                 annotations.stream().map(this::toAnnotation).toList());
     }
 

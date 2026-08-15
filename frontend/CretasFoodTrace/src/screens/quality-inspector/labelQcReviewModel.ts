@@ -4,6 +4,11 @@ import {
   LabelQcReviewTaskRequest,
   LabelQcTaskDetail,
 } from '../../types/labelQc';
+import {
+  buildObjectReviewPayload,
+  hydrateObjectReviewDraft,
+  PhotoObjectReviewDraft,
+} from './labelQcObjectReviewModel';
 
 export interface LabelQcReviewAnnotationDraft {
   key: string;
@@ -19,6 +24,7 @@ export interface LabelQcReviewPhotoDraft {
   photoId: string;
   reviewed: boolean;
   annotations: LabelQcReviewAnnotationDraft[];
+  objectReview?: PhotoObjectReviewDraft;
 }
 
 const DEFECT_LABELS: LabelQcLabel[] = [
@@ -96,6 +102,9 @@ export const hydrateLabelQcReviewDrafts = (
     .map((photo) => ({
       photoId: photo.id,
       reviewed: photo.status === 'REVIEWED',
+      objectReview: photo.objectReview || photo.screeningDetail
+        ? hydrateObjectReviewDraft(photo)
+        : undefined,
       annotations: photo.annotations.map((annotation) => ({
         key: annotation.id,
         annotationId: annotation.source === 'AI' ? annotation.id : undefined,
@@ -155,7 +164,9 @@ export const pendingAnnotationCount = (
 
 export const isPhotoReviewComplete = (
   photo: LabelQcReviewPhotoDraft,
-): boolean => photo.reviewed && pendingAnnotationCount(photo) === 0;
+): boolean => photo.reviewed
+  && pendingAnnotationCount(photo) === 0
+  && (photo.objectReview?.trays.every((tray) => tray.confirmed) ?? true);
 
 export const nextIncompletePhotoIndex = (
   photos: LabelQcReviewPhotoDraft[],
@@ -172,6 +183,7 @@ export const markPhotoReviewed = (
   photo: LabelQcReviewPhotoDraft,
 ): LabelQcReviewPhotoDraft => {
   if (pendingAnnotationCount(photo) > 0) return photo;
+  if (photo.objectReview?.trays.some((tray) => !tray.confirmed)) return photo;
   return { ...photo, reviewed: true };
 };
 
@@ -215,6 +227,9 @@ export const buildLabelQcReviewRequest = (
 
       return {
         photoId: photo.photoId,
+        objectReview: photo.objectReview
+          ? buildObjectReviewPayload(photo.objectReview)
+          : undefined,
         annotations: annotations.length
           ? annotations
           : [{ label: 'NO_DEFECT' as const, notes: '人工确认整图无其他问题' }],

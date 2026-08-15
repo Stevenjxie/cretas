@@ -107,8 +107,13 @@ class LabelQcRepositoryQueryValidationTest {
                         PageRequest.of(0, 10))).hasSize(1);
         assertThat(taskRepository.countByFactoryIdAndArchivedAndStatus(
                 "F-LABEL-A", false, LabelQcTaskStatus.NEEDS_REVIEW)).isEqualTo(1);
-        assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
-                "F-LABEL-A", taskA.getId())).hasSize(1);
+        List<LabelQcPhoto> persistedPhotos = photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
+                "F-LABEL-A", taskA.getId());
+        assertThat(persistedPhotos).hasSize(1);
+        assertThat(persistedPhotos.get(0).getObjectReviewDetail())
+                .isEqualTo("{\"version\":1,\"complete\":true,\"trays\":[]}");
+        assertThat(persistedPhotos.get(0).getObjectReviewedBy()).isEqualTo(11L);
+        assertThat(persistedPhotos.get(0).getObjectReviewedAt()).isNotNull();
         assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
                 "F-LABEL-B", taskA.getId())).isEmpty();
         assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSource(
@@ -235,6 +240,9 @@ class LabelQcRepositoryQueryValidationTest {
                 .imageWidth(1000)
                 .imageHeight(2000)
                 .status(LabelQcPhotoStatus.ANALYZED)
+                .objectReviewDetail("{\"version\":1,\"complete\":true,\"trays\":[]}")
+                .objectReviewedBy(11L)
+                .objectReviewedAt(LocalDateTime.now())
                 .build();
         entityManager.persist(photo);
         return photo;

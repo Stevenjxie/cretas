@@ -6,6 +6,12 @@ import type {
   LabelQcPhotoReview,
   LabelQcTaskDetail,
 } from '@/api/labelQc';
+import {
+  buildObjectReviewDraft,
+  LabelQcPhotoObjectDraft,
+  toObjectReviewPayload,
+  validateTrayObjectDraft,
+} from './objectReviewModel';
 
 export interface LabelQcReviewDraft extends Omit<LabelQcAnnotationReview, 'label'> {
   key: string;
@@ -20,6 +26,7 @@ export interface LabelQcPhotoDraft {
   photoId: string;
   reviewed: boolean;
   items: LabelQcReviewDraft[];
+  objectReview?: LabelQcPhotoObjectDraft;
 }
 
 const isDefect = (label?: LabelQcLabel): boolean => (
@@ -50,6 +57,9 @@ export function buildReviewDraft(detail: LabelQcTaskDetail): LabelQcPhotoDraft[]
     photoId: photo.id,
     reviewed: photo.status === 'REVIEWED',
     items: candidateDefault(photo),
+    objectReview: photo.objectReview || photo.screeningDetail
+      ? buildObjectReviewDraft(photo)
+      : undefined,
   }));
 }
 
@@ -99,6 +109,10 @@ export function validatePhotoConclusion(photo: LabelQcPhotoDraft): string | null
   if (pending > 0) return `还有 ${pending} 个框未确认`;
   for (const item of photo.items) {
     if (isDefect(item.label) && !item.bbox) return '缺标结论缺少问题框';
+  }
+  for (const tray of photo.objectReview?.trays ?? []) {
+    const error = validateTrayObjectDraft(tray);
+    if (error) return error;
   }
   return null;
 }
@@ -176,6 +190,9 @@ export function toReviewRequest(drafts: LabelQcPhotoDraft[]): { photos: LabelQcP
       return {
         photoId: photo.photoId,
         annotations,
+        objectReview: photo.objectReview
+          ? toObjectReviewPayload(photo.objectReview)
+          : undefined,
       };
     }),
   };

@@ -2,7 +2,10 @@ package com.cretas.aims.dto.labelqc;
 
 import com.cretas.aims.entity.enums.LabelQcAnnotationSource;
 import com.cretas.aims.entity.enums.LabelQcLabel;
+import com.cretas.aims.entity.enums.LabelQcObjectDecision;
+import com.cretas.aims.entity.enums.LabelQcObjectType;
 import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
+import com.cretas.aims.entity.enums.LabelQcPresence;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
 import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import jakarta.validation.Valid;
@@ -44,10 +47,47 @@ public final class LabelQcDtos {
             @Size(max = 500) String notes
     ) {}
 
+    public record LabelObjectReview(
+            @Size(max = 100) String aiObjectKey,
+            @NotNull LabelQcObjectType type,
+            @NotNull @Valid BoundingBox bbox,
+            @NotNull LabelQcObjectDecision decision,
+            @NotNull Boolean truncated
+    ) {}
+
+    public record TrayObjectReview(
+            @NotNull @Min(0) @Max(999) Integer trayIndex,
+            @Size(max = 100) String aiTrayKey,
+            @NotNull @Valid BoundingBox bbox,
+            @NotNull LabelQcObjectDecision decision,
+            @NotNull LabelQcPresence whitePresence,
+            @NotNull LabelQcPresence colorPresence,
+            @NotNull @Size(max = 40) List<@Valid LabelObjectReview> labels,
+            @NotNull @Size(max = 40)
+            List<@NotBlank @Size(max = 100) String> rejectedAiObjectKeys
+    ) {}
+
+    /**
+     * Version 1 is the first object-truth contract. Keeping an explicit version lets
+     * training exporters reject a future incompatible shape instead of guessing.
+     */
+    public record ObjectReviewPayload(
+            @NotNull @Min(1) @Max(1) Integer version,
+            @NotNull Boolean complete,
+            @NotNull @Size(max = 100) List<@Valid TrayObjectReview> trays,
+            @NotNull @Size(max = 100)
+            List<@NotBlank @Size(max = 100) String> rejectedAiTrayKeys
+    ) {}
+
     public record PhotoReviewRequest(
             @NotBlank @Size(max = 36) String photoId,
-            @NotEmpty @Size(max = 100) List<@Valid AnnotationReviewRequest> annotations
-    ) {}
+            @NotEmpty @Size(max = 100) List<@Valid AnnotationReviewRequest> annotations,
+            @Valid ObjectReviewPayload objectReview
+    ) {
+        public PhotoReviewRequest(String photoId, List<AnnotationReviewRequest> annotations) {
+            this(photoId, annotations, null);
+        }
+    }
 
     public record ReviewTaskRequest(
             @Min(0) Long expectedVersion,
@@ -86,6 +126,8 @@ public final class LabelQcDtos {
             String analysisError,
             /** AI 初筛明细原文 JSON；复核台据此渲染盒子/白标/彩标三层框。可为 null。 */
             String screeningDetail,
+            /** 人工最终的每盒对象真值；旧任务或旧客户端审核可为 null。 */
+            ObjectReviewPayload objectReview,
             List<AnnotationResponse> annotations
     ) {}
 
@@ -141,6 +183,7 @@ public final class LabelQcDtos {
             String batchNumber,
             LocalDate productionDate,
             LocalDateTime reviewedAt,
+            ObjectReviewPayload objectReview,
             List<AnnotationResponse> finalAnnotations
     ) {}
 }
