@@ -100,7 +100,12 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install --use-deprecated=legacy-resolver -r requirements.txt || pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout
+          # ⚠️ flake8 是 `tests/test_no_undefined_names.py` 那道 **F821 窄闸**
+          #    需要的。⛔ 这里**不跑**全量 flake8(见本文件顶部: 299 条存量债),
+          #    只让那道闸能开火 —— 它 `--select=F821`, 全仓 0 条。
+          # 🔴 不装的后果实测过: 闸的「新增违规」那条会 skip(长得像绿),
+          #    只有阳性对照会红。**闸不跑 = 没有闸。**
+          pip install pytest pytest-asyncio pytest-timeout flake8
       - name: Run pytest
         # 没有 `|| true` —— 红就是红, 这是本 workflow 的全部意义。
         #
