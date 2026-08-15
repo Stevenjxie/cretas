@@ -119,12 +119,19 @@ def test_every_deepseek_model_on_a_chain_gets_the_thinking_switch():
     test_llm_router_aistore.py 上修掉的反模式: 型号改一个字母或新 SKU 漏登记时,
     `model in frozenset` 静默为 False, 而只认字面量的闸照绿。
 
-    🔴 2026-08-15 (A1) 订正: 原来断言「**任何**链上的 deepseek 都拿到开关」——
-       那编码的是「deepseek 只出现在关思考的槽上」这个当时成立、A1 之后不成立的
-       前提。A1 把 deepseek 加进了 `SLOT.REASONING`, 而那个槽的 profile 是 `{}`
-       (**思考故意开着**, 预算 30s) ⇒ 它**不该**拿到关思考开关。
-       ⇒ 判据抬成真正的不变式: **拿不拿开关, 由槽的 profile 决定**。
-         这样它同时也守住了反方向 —— reasoning **不许**被误关思考。
+    🔴 2026-08-15 订正两次, 记全过程 —— 因为中间那一版看起来完全正确:
+
+      ① 原版: 断言「**任何**链上的 deepseek 都拿到开关」。
+         A1 把 deepseek 加进 `SLOT.REASONING`(当时 profile 是 `{}`)后它红了。
+      ② 第一次订正: 抬成「拿不拿开关**由槽的 profile 决定**」, 并加 `assert on`
+         守「reasoning 不许被误关思考」。**这一版是对的**, 对当时的需求而言。
+      ③ 第二次订正(本版): 裁定把 REASONING 改成显式 `enable_thinking: False`
+         —— `{}` 从来不是「必须开思考」, 而是给 `_REASONING_ONLY`(关思考会 400)
+         留的位, 那一类随 A2 一起删了; 而思考开着时 deepseek/zhipu **返回空正文**
+         (A6 实测 `invalid_empty`)。⇒ `assert on` 随之变成恒假, 改成 `assert not on`。
+
+    ⚠️ ②→③ 不是「② 写错了」, 是**需求变了**(形态 C‴)。判据仍是同一条:
+       **拿不拿开关由槽的 profile 决定** —— 变的是那些 profile 的内容。
     """
     base = {"messages": [{"role": "user", "content": "return json"}]}
     off, on = [], []
@@ -138,16 +145,24 @@ def test_every_deepseek_model_on_a_chain_gets_the_thinking_switch():
             got = out.get("thinking") == {"type": "disabled"}
             assert got == wants_off, (
                 f"{slot.value}/{model}: profile 要求关思考={wants_off}, 实际注入={got}。"
-                f"实测不关思考时 7.26s/17.58s、reasoning=800、content=0、"
-                f"finish_reason=length —— 在 6.0s 预算的槽上会撞穿且返回空; "
-                f"而 reasoning 槽(profile {{}}, 预算 30s)**故意**开着思考。")
+                f"实测不关思考时 ct=800 rt=800 **content=0** finish=length "
+                f"—— ⚠️ 要害是**返回空正文**, 不是慢(7.26s 在 30s 预算内)。")
             # DashScope 的参数不该出现在 DeepSeek 的 payload 里
             assert "enable_thinking" not in out
             (off if wants_off else on).append(slot.value)
     assert off, ("一个「该关思考」的 deepseek 条目都没扫到 —— 闸空转了。"
                  "要么池没加上, 要么 SLOT_MODELS 的形状变了, 先查闸本身。")
-    assert on, ("一个「该开思考」的 deepseek 条目都没扫到 —— 那么本闸的反方向"
-                "(reasoning 不许被误关思考)其实没被验到。")
+    # 🔴 2026-08-15 二次订正: 原来还断言 `assert on`(必须存在「该开思考」的一侧),
+    #    那是上一次订正时为守「reasoning 不许被误关思考」加的。
+    #    **裁定把那条需求反过来了** —— REASONING 现在显式 enable_thinking: False
+    #    (理由见 _SLOT_PARAMS 里那段: `{}` 是为 _REASONING_ONLY 留的位, 而那一类
+    #    随 A2 一起删了; 不关思考时 deepseek/zhipu 返回**空正文**)。
+    #    ⇒ 仓里已经没有「该开思考」的槽, `assert on` 变成恒假。
+    #    ⛔ 这不是「断言没用」, 是**需求变了**(形态 C‴): 它红得理直气壮,
+    #      最容易被读成「我改错了」然后把裁定回退掉。
+    assert not on, (
+        f"出现了「该开思考」的槽 {sorted(set(on))} —— 裁定之后不该有。"
+        "若确实新增了这样的槽, 要连同 _REASONING_ONLY 的存活性一起重议。")
 
 
 def test_deepseek_thinking_switch_is_keyed_by_the_exact_model_string():

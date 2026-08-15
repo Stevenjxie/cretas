@@ -408,9 +408,20 @@ def test_fast_slots_disable_thinking_on_aliyun_hybrid():
     assert p["enable_thinking"] is False
 
 
-def test_reasoning_does_not_force_enable_thinking():
-    # deepseek-v3.1 400s on enable_thinking=true (only supports false/absent); forced
-    # deep thinking also times out call_chain. REASONING must NOT inject enable_thinking.
+# 🔴 2026-08-15: 下面四条原来拿 `SLOT.REASONING` 当「profile 不要求关思考」的
+#    样本。裁定把该槽改成显式 `enable_thinking: False` 之后, **仓里已经没有
+#    这样的槽了**(VL 也是 False)。
+#    ⇒ 它们守的**机制**没变、也仍然有价值:「profile 不要求关时, 各 provider
+#      分支不许自作主张注入关思考」。⇒ 把前提**显式构造出来**(monkeypatch 成
+#      `{}`), ⛔ 不再借用某个真实槽当时恰好是什么 profile ——
+#      那正是「阳性对照只在某个样本上成立」的老毛病。
+def _profile_that_does_not_ask_to_disable(monkeypatch):
+    monkeypatch.setitem(llm_router._SLOT_PARAMS, SLOT.REASONING, {})
+
+
+def test_reasoning_does_not_force_enable_thinking(monkeypatch):
+    # deepseek-v3.1 400s on enable_thinking=true (only supports false/absent)。
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(SLOT.REASONING, "aliyun_c", "deepseek-v3.1", {"messages": []})
     assert "enable_thinking" not in p
 
@@ -437,7 +448,8 @@ def test_tokenhub_common_models_get_the_documented_thinking_object(model):
     assert "enable_thinking" not in p
 
 
-def test_tokenhub_reasoning_slot_does_not_disable_thinking():
+def test_tokenhub_reasoning_slot_does_not_disable_thinking(monkeypatch):
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(
         SLOT.REASONING, "tencent", "deepseek-v4-pro-202606", {"messages": []},
     )
@@ -454,7 +466,8 @@ def test_zhipu_glm45_plus_gets_the_documented_thinking_object(model):
     assert "enable_thinking" not in p
 
 
-def test_zhipu_reasoning_slot_keeps_thinking_available():
+def test_zhipu_reasoning_slot_keeps_thinking_available(monkeypatch):
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     p = llm_router._apply_slot_params(
         SLOT.REASONING, "zhipu", "glm-4.5-air", {"messages": []},
     )
@@ -1119,8 +1132,9 @@ def test_ark_gets_arks_own_thinking_switch_not_dashscopes():
     assert "enable_thinking" not in out, "enable_thinking is a DashScope param"
 
 
-def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning():
-    """REASONING must not have its reasoning switched off."""
+def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning(monkeypatch):
+    """profile 不要求关思考时, ark 分支不许注入关。"""
+    _profile_that_does_not_ask_to_disable(monkeypatch)
     out = llm_router._apply_slot_params(
         SLOT.REASONING, "ark", "deepseek-v4-pro-260425",
         {"model": "deepseek-v4-pro-260425"},

@@ -1363,11 +1363,33 @@ _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
     SLOT.INSIGHTS:  {"enable_thinking": False},
     SLOT.CHART:     {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
     SLOT.MAPPER:    {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
-    SLOT.REASONING: {},  # NO enable_thinking: deepseek-v3.1 400s on true (only supports
-                          # false/absent, benchmark 2026-07-01); and forced deep thinking
-                          # (31-64s) times out call_chain's 30s budget → fallback. deepseek /
-                          # thinking-only models reason well by default in ~1s. Callers needing
-                          # extended thinking use call_chain_stream (45s) + pass it themselves.
+    # 🔴 2026-08-15: 由 `{}` 改成显式关思考。
+    #
+    # `{}` **从来不是「必须开思考」**, 是「不强制开、也不强制关」—— 上一版注释
+    # 自己就写着「forced deep thinking (31-64s) times out call_chain's 30s
+    # budget → fallback」。它之所以不强制**关**, 只有一个原因: `_REASONING_ONLY`
+    # (= {"MiniMax-M2.5"}) 那类模型**关思考会 400**。
+    # ⇒ 而那一类随 2026-08-15 账号收敛(A2)一起走了。实测本槽链上三个候选
+    #   aistore/DeepSeek-V4-Flash-A · deepseek/deepseek-v4-flash · zhipu/glm-4.5-air
+    #   **没有一个**在 `_REASONING_ONLY` 或 `_THINKING_ONLY` 里, 三个都接受关思考。
+    #
+    # 🔴 不改的后果是实测出来的(A6 悬崖模拟, 推 today 到 2026-09-14):
+    #     All providers exhausted for reasoning:
+    #       aistore/DeepSeek-V4-Flash-A: expired
+    #       deepseek/deepseek-v4-flash: **invalid_empty**
+    #       zhipu/glm-4.5-air:          **invalid_empty**
+    #   —— 不是超时, 是**返回空正文**: 思考开着时 deepseek 把整个 max_tokens
+    #   烧在 reasoning 上(ct=800 rt=800 content=0 finish=length), zhipu 同样。
+    #   ⇒ aistore 一到期(9-13), 这个槽**一个候选都答不出来**。
+    #
+    # ⛔ 判据是「能不能答」, ⛔ 不是延迟 —— 三个候选的延迟一直都在 30s 预算内,
+    #    而那正是上一轮读漏的那一格: 同一行读数里 `7.26s` 和 `content=0` 并排,
+    #    只取了前者。
+    #
+    # ⚠️ 上一版注释说「callers needing extended thinking use call_chain_stream
+    #    + pass it themselves」—— 本槽唯一的产品调用点 `detector.py:1496` 调的是
+    #    `call_chain` 且不传 thinking ⇒ 它不需要开思考。
+    SLOT.REASONING: {"enable_thinking": False},
     SLOT.VL:        {"enable_thinking": False},
     SLOT.REVIEW:    {"enable_thinking": False},
 }

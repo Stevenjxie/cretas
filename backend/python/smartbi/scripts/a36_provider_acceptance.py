@@ -20,9 +20,15 @@
 
 ## ⚠️ 预算按槽取, ⛔ 不是一律 6.0s
 
-`SLOT.REASONING` 的 profile 是 `{}`(思考开着), 它唯一的产品调用点
-`detector.py:1496` 不传 timeout ⇒ `call_chain` 默认 **30s**。
-拿 6.0s 判它会把「按契约正常」误判成「超预算」。
+`SLOT.REASONING` 唯一的产品调用点 `detector.py:1496` 不传 timeout
+⇒ `call_chain` 默认 **30s**。拿 6.0s 判它会把「按契约正常」误判成「超预算」。
+
+## 🔴 A3b —— 上一轮漏掉的那一格
+
+REASONING 的 profile 原为 `{}`(不强制关思考), A6 实测该槽三个候选里两个
+`invalid_empty`。裁定改成显式 `enable_thinking: False` 之后, 必须**逐个验
+「能不能答」**: 判据是 **content 非空**, ⛔ 不是延迟。
+▎上一轮正是只读了同一行读数里的 `7.26s`, 没读并排的 `content=0`。
 """
 import asyncio
 import datetime
@@ -111,6 +117,46 @@ async def main():
         print(f"    served={served!r}  {el:.2f}s  预算={budget_for(slot)}s  "
               f"{'✅ 在预算内' if within else '⚠️ 超预算'}  err={err}")
         a3.append(ok)
+
+    # ── A3b · REASONING 三候选逐个「能不能答」 ─────────────────────────
+    # 🔴 判据是 **content 非空**, ⛔ 不是延迟 —— 上一轮就是只读了同一行读数里的
+    #    `7.26s`, 没读并排的 `content=0`, 于是把「返回空」当成「在预算内」。
+    print("\n" + "=" * 74)
+    print("A3b · REASONING profile 下三个候选**逐个**验「能不能答」")
+    print("=" * 74)
+    from common.llm_client import get_llm_http_client
+    import json as _json
+    client = get_llm_http_client()
+    a3b_bad = []
+    for account, model in R.SLOT_MODELS[R.SLOT.REASONING]:
+        base, key = R._provider_config(account)
+        body = R._apply_slot_params(
+            R.SLOT.REASONING, account, model,
+            R._normalize_payload_for_provider({**payload, "model": model}, account))
+        t0 = time.monotonic()
+        try:
+            resp = await client.post(f"{base}/chat/completions",
+                                     headers={"Authorization": f"Bearer {key}"},
+                                     json=body, timeout=60.0)
+            j = resp.json()
+            content = (j["choices"][0]["message"].get("content") or "")
+            usage = j.get("usage") or {}
+            fin = j["choices"][0].get("finish_reason")
+            st = resp.status_code
+        except Exception as exc:                                # noqa: BLE001
+            content, usage, fin, st = "", {}, None, f"EXC {type(exc).__name__}"
+        el = time.monotonic() - t0
+        if account == "deepseek":
+            paid.append((f"A3b/{model}", f"{account}/{model}", round(el, 2)))
+        ok = len(content) > 0
+        a3b_bad.append(None if ok else f"{account}/{model}")
+        print(f"  {account}/{model}")
+        print(f"    thinking注入={body.get('thinking')!r}  HTTP={st}  {el:.2f}s")
+        print(f"    **content 长度={len(content)}**  finish={fin!r}  usage={_json.dumps(usage, ensure_ascii=False)}")
+        print(f"    {'✅ 能答' if ok else '🔴 空正文 —— 这个槽会 invalid_empty'}")
+    a3b_bad = [x for x in a3b_bad if x]
+    print(f"\n  空正文的候选: {a3b_bad or '(无)'} "
+          f"{'✅ 三个都能答' if not a3b_bad else '🔴 裁定没解决问题'}")
 
     # ── A6 悬崖模拟 ───────────────────────────────────────────────────
     print("\n" + "=" * 74)
