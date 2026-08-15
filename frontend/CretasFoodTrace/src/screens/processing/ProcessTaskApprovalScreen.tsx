@@ -3,7 +3,8 @@ import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { Text, Appbar, ActivityIndicator, Checkbox } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { processTaskApiClient } from '../../services/api/processTaskApiClient';
-import { NeoButton, NeoCard, ScreenWrapper, AppDialogHost, appAlert, appPrompt } from '../../components/ui';
+import { NeoButton, NeoCard, ScreenWrapper, AppDialogHost, appAlert, appPrompt, appChoose } from '../../components/ui';
+import type { AppChoice } from '../../components/ui';
 import { theme } from '../../theme';
 import { getUserFriendlyMessage } from '../../utils/errorHandler';
 
@@ -59,19 +60,45 @@ export default function ProcessTaskApprovalScreen() {
     }
   };
 
+  /**
+   * 驳回原因 —— 防呆 Rule 3: 标准选项 + 只有「其他」才展开自由文本。
+   *
+   * 自由文本对班组长是负担(要自己想措辞), 对统计也没价值 ——
+   * 同一个原因十个人能写出十种说法, 事后没法按原因归类看哪道工序总出问题。
+   */
+  const REJECT_REASONS: AppChoice[] = [
+    { value: 'QUANTITY_MISMATCH', label: '数量与实际不符', description: '报的产出/投入对不上现场' },
+    { value: 'WRONG_PROCESS', label: '工序报错了', description: '报到了别的工序上' },
+    { value: 'TIME_INVALID', label: '工时不实', description: '起止时间与实际不符' },
+    { value: 'QUALITY_ISSUE', label: '质量问题', description: '产出有质量异常, 需复核' },
+    { value: 'OTHER', label: '其他原因…', description: '以上都不是, 手动填写' },
+  ];
+
+  const submitReject = async (id: number, reason: string) => {
+    setActionLoading(id);
+    try {
+      await processTaskApiClient.rejectReport(id, reason);
+      setItems(prev => prev.filter(i => i.id !== id));
+    } catch (err) {
+      appAlert('驳回失败', getUserFriendlyMessage(err));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleReject = (id: number) => {
-    // ⛔ 原本用 Alert.prompt —— 那是 iOS 专有 API, Android 上这个按钮点了毫无反应。
-    appPrompt('驳回原因', '请说明驳回这条报工的原因', async (reason) => {
-      setActionLoading(id);
-      try {
-        await processTaskApiClient.rejectReport(id, reason);
-        setItems(prev => prev.filter(i => i.id !== id));
-      } catch (err) {
-        appAlert('驳回失败', getUserFriendlyMessage(err));
-      } finally {
-        setActionLoading(null);
+    // ⛔ 最早这里是 Alert.prompt(iOS 专有, Android 上点了毫无反应);
+    //    改成 appPrompt 后能用了, 但仍是一个空白文本框 —— 现在按 Rule 3 收敛成标准原因。
+    appChoose('驳回原因', '选一个原因, 班组长能一眼看懂为什么被退回', REJECT_REASONS, (choice) => {
+      if (choice.value !== 'OTHER') {
+        submitReject(id, choice.label);
+        return;
       }
-    }, { placeholder: '例如: 数量与实际不符', multiline: true });
+      appPrompt('其他原因', '请简单说明驳回原因', (reason) => submitReject(id, reason), {
+        placeholder: '例如: 与领料单批次对不上',
+        multiline: true,
+      });
+    });
   };
 
   const handleBatchApprove = async () => {

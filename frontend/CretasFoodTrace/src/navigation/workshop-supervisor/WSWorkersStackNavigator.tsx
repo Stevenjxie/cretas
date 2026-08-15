@@ -13,7 +13,6 @@ import WorkerDetailScreen from "../../screens/workshop-supervisor/workers/Worker
 import WorkerAssignScreen from "../../screens/workshop-supervisor/workers/WorkerAssignScreen";
 import ClockInScreen from "../../screens/workshop-supervisor/workers/ClockInScreen";
 import AttendanceHistoryScreen from "../../screens/workshop-supervisor/workers/AttendanceHistoryScreen";
-import EmployeeProcessSegmentScreen from "../../screens/workshop/EmployeeProcessSegmentScreen";
 
 const Stack = createNativeStackNavigator<WSWorkersStackParamList>();
 
@@ -56,11 +55,7 @@ export function WSWorkersStackNavigator() {
       />
 
       {/* 工序段管理 (P1-1) */}
-      <Stack.Screen
-        name="EmployeeProcessSegment"
-        component={EmployeeProcessSegmentScreen}
-        options={{ title: "工序段管理" }}
-      />
+      {/* EmployeeProcessSegment 已退役: 后端 employee_process_segments 表被 migration_*_segment_retire_20261029_* 删除, GET /workreport/segments/active 在生产上返回 500。屏与 API 客户端一并移除。 */}
     </Stack.Navigator>
   );
 }

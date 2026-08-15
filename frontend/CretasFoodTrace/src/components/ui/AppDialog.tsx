@@ -27,11 +27,17 @@ export type AppPromptOptions = {
 
 type PromptState = AppPromptOptions & { onSubmit: (value: string) => void };
 
+/** 单选项 —— 防呆 Rule 3: 「为什么」这类字段用受约束的选择, 不要自由文本。 */
+export type AppChoice = { value: string; label: string; description?: string };
+
+type ChooseState = { choices: AppChoice[]; onPick: (choice: AppChoice) => void };
+
 type DialogState = {
   title: string;
   message?: string;
   buttons: AppDialogButton[];
   prompt?: PromptState;
+  choose?: ChooseState;
 };
 
 let _show: ((s: DialogState) => void) | null = null;
@@ -95,6 +101,34 @@ export function appPrompt(
   }
 }
 
+/**
+ * 跨平台单选弹窗 —— 防呆设计 Rule 3:「取消原因 / 驳回原因 / 审批意见」这类
+ * 「为什么」字段要用**标准选项**, 不要让用户对着空白框自己编。
+ *
+ * <p>自由文本对使用者(仓管、操作员)是负担, 对统计也没有价值 ——
+ * 同一个原因十个人能写出十种说法。
+ */
+export function appChoose(
+  title: string,
+  message: string | undefined,
+  choices: AppChoice[],
+  onPick: (choice: AppChoice) => void,
+): void {
+  if (_show) {
+    _show({ title, message, buttons: [], choose: { choices, onPick } });
+    return;
+  }
+  // host 未挂载兜底
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const lines = choices.map((c, i) => `${i + 1}. ${c.label}`).join('\n');
+    const head = message ? `${title}\n${message}` : title;
+    // eslint-disable-next-line no-alert
+    const v = window.prompt(`${head}\n\n${lines}\n\n请输入序号:`, '1');
+    const idx = Number(v) - 1;
+    if (choices[idx]) onPick(choices[idx]);
+  }
+}
+
 export const AppDialogHost: React.FC = () => {
   const [state, setState] = useState<DialogState | null>(null);
   const [inputValue, setInputValue] = useState('');
@@ -109,6 +143,37 @@ export const AppDialogHost: React.FC = () => {
   }, []);
   if (!state) return null;
   const close = () => setState(null);
+
+  if (state.choose) {
+    const c = state.choose;
+    return (
+      <Modal transparent animationType="fade" visible onRequestClose={close}>
+        <View style={styles.overlay}>
+          <View style={styles.card}>
+            <Text style={styles.title}>{state.title}</Text>
+            {!!state.message && <Text style={styles.message}>{state.message}</Text>}
+            {c.choices.map((choice, i) => (
+              <TouchableOpacity
+                key={choice.value}
+                testID={`app-dialog-choice-${i}`}
+                style={styles.choiceRow}
+                onPress={() => {
+                  close();
+                  c.onPick(choice);
+                }}
+              >
+                <Text style={styles.choiceLabel}>{choice.label}</Text>
+                {!!choice.description && <Text style={styles.choiceDesc}>{choice.description}</Text>}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity testID="app-dialog-choice-cancel" style={[styles.btn, styles.btnCancel]} onPress={close}>
+              <Text style={[styles.btnText, styles.btnTextCancel]}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   if (state.prompt) {
     const p = state.prompt;
@@ -242,6 +307,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   inputMultiline: { minHeight: 88, textAlignVertical: 'top' },
+  choiceRow: {
+    borderWidth: 2,
+    borderColor: '#111',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    backgroundColor: '#fff',
+  },
+  choiceLabel: { fontSize: 16, fontWeight: '700', color: '#111' },
+  choiceDesc: { fontSize: 13, color: '#666', marginTop: 4 },
   btnCancel: { backgroundColor: '#fff' },
   btnDisabled: { backgroundColor: '#eee', borderColor: '#bbb' },
   btnTextDisabled: { color: '#999' },
