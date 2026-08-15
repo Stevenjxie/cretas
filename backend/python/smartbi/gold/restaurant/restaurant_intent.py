@@ -6298,6 +6298,24 @@ async def parse_restaurant_query(
         if not history:
             history = None
 
+    # 🔴 参数不全就抛, ⛔ 不静默不继承(owner 2026-08-15 判据四)。
+    #
+    # `history` 的**唯一消费点**(`contextualize_restaurant_followup`)在下面
+    # `if semantic_first:` 分支内。调用方传了 history 却没传 `semantic_first`
+    # 时, 它**一句话都不说地不继承** —— 而返回的 spec 看起来完全正常。
+    #
+    # ⚠️ 实测代价: 量「上下文串」的探针连着两轮读出 `0/7`, 而那两个 0 是
+    #    「history 压根没进编译」, 不是「没串」。函数不报错, 于是错读数
+    #    被当成结论写进了报告。
+    # ⇒ 这一类(「少一个参数 ⇒ 静默降级」)与 `COALESCE(x, 0)` 同族:
+    #    用一个合法的结果顶替一个本该被看见的故障。
+    if history and not semantic_first:
+        raise ValueError(
+            "parse_restaurant_query 收到 history 但 semantic_first=False —— "
+            "history 的消费点在 semantic_first 分支内, 这样调用它**不会生效**, "
+            "而返回的 spec 看起来完全正常。要么传 semantic_first=True, "
+            "要么别传 history。⛔ 不静默降级。")
+
     consumed_pending = False
     if session_key:
         pending = await _pending_pop(pool, factory_id, session_key)

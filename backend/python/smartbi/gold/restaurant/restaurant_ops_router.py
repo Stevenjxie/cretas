@@ -5146,6 +5146,10 @@ async def resolve_gross_margin(
         used_dimensions=_used_dims,
         meta_for_suppression={"rbac_masked": not can_view_prices},
         resolver_code="RESTAURANT_OPS_GROSS_MARGIN",
+        # 🔴 按钮携带**它长出来那一屏**的时间窗(owner 2026-08-15)。
+        #    ⛔ 不让它去 history 里猜: 实测那次串正是「一屏最近30天的数上
+        #       点按钮, 得到本月」。见 `follow_up_actions.contextualize`。
+        window_label=window_label,
     )
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -5219,7 +5223,8 @@ def _drilldown_note(metric_key, used_dimensions, resolver_code=None) -> str:
 
 
 def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
-                             meta_for_suppression=None, resolver_code=None):
+                             meta_for_suppression=None, resolver_code=None,
+                             window_label=""):
     """毛利问答的追问按钮。⛔ 逻辑在 `follow_up_actions`, 这里只接线。"""
     from smartbi.gold.restaurant.degrade_guard import degrade_on_error
     from smartbi.gold.restaurant.follow_up_actions import build_actions
@@ -5233,6 +5238,7 @@ def _build_follow_up_actions(*, offers, answer_text, used_dimensions,
             answer_text=answer_text,
             meta=meta_for_suppression,
             resolver_code=resolver_code,
+            window_label=window_label,
         ),
         what="追问按钮")
 

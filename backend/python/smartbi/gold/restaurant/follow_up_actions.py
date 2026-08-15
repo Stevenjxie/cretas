@@ -196,6 +196,44 @@ def is_exhausted(metric_key: str, used_dimensions: Sequence[str],
     return not _drillable_dimensions(metric_key, used_dimensions, resolver_code)
 
 
+#: 🔴 **按钮携带自己的上下文**(owner 2026-08-15 裁定)。
+#:
+#: ## 为什么不是「加强 prompt」也不是「改继承机制」
+#:
+#: 实测那次串发生在 **T1 按钮**上:
+#:
+#:     「按日期看毛利」  不带 history → 最近30天(默认)
+#:                       带 history   → 本月(来自更早的轮次)
+#:
+#: **他在一屏「最近30天」的数上点了个按钮, 得到「本月」。**
+#:
+#:   ❌ 加强 prompt 指令 —— 弱, 而且已经有一句「当前问题有新要求时以当前问题
+#:      为准」, 它没拦住这次
+#:   ❌ 改继承机制 —— 太宽, 会同时改掉「罗氏虾呢」那种**正确**的继承
+#:   ✅ 按钮是**我们生成的**, 我们知道它从哪一屏长出来 —— 让它自己带上
+#:
+#: ## 为什么写进问句正文, 而不是加一个字段
+#:
+#: 前端 `normalizeFollowUpActions` 只保留 `{label, question}` ——
+#: **额外字段活不过这一趟往返**。⇒ 上下文只能写进问句本身。
+#: 好处是它顺带让问句**自足**: 说全了就不需要继承, 串从源头消失,
+#: ⛔ 不是「降低概率」。
+#:
+#: 判据: **按下去到的, 必须是它长出来的那一屏。**
+def contextualize(question: str, window_label: str) -> str:
+    """给按钮问句补上它长出来那一屏的时间窗。
+
+    ⚠️ 窗口词已经在问句里就不重复加 —— 「本月毛利本月多少」读起来像坏了。
+    ⚠️ `window_label` 空着就原样返回: ⛔ 不编一个默认窗口塞进去,
+       那等于让按钮**声称**了一个我们并不知道的范围。
+    """
+    q = (question or "").strip()
+    w = (window_label or "").strip()
+    if not q or not w or w in q:
+        return q
+    return f"{w}{q}"
+
+
 def build_actions(
     *,
     metric_key: str,
@@ -205,6 +243,9 @@ def build_actions(
     meta: Optional[Dict[str, Any]] = None,
     resolver_code: Optional[str] = None,
     trace_subject: Optional[Dict[str, str]] = None,
+    #: 🔴 这一屏的时间窗。按钮问句带上它 ⇒ 按下去到的就是它长出来的那一屏,
+    #:    ⛔ 不去 history 里猜。见 `contextualize`。
+    window_label: str = "",
 ) -> Tuple[Dict[str, Any], ...]:
     """这次回答该给哪些按钮。**排好序、截好断**再送。
 
@@ -230,7 +271,7 @@ def build_actions(
         actions.append({
             "type": "T2",
             "label": label,                     # 正文里那一截, 逐字
-            "question": T2_FILL_QUESTION,
+            "question": contextualize(T2_FILL_QUESTION, window_label),
             "anchor": text,                     # 正文里那句话, 逐字
         })
         break                                   # 同一类只给一颗
@@ -247,7 +288,8 @@ def build_actions(
         actions.append({
             "type": "T1",
             "label": phrase,
-            "question": f"{phrase}看{metric_label}",
+            "question": contextualize(f"{phrase}看{metric_label}",
+                                      window_label),
             "anchor": head,
         })
 
