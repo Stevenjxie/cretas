@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolveApiBase, E2E_USER, E2E_PASS, E2E_USER_2, E2E_PASS_2 } from './e2e-auth-helper';
+import { fetchLoginToken, resolveTokenFromStorageState, injectRnSession, resolveApiBase, E2E_USER, E2E_PASS, E2E_USER_2, E2E_PASS_2, hasPasswordCredentials } from './e2e-auth-helper';
 
 /**
  * RN Expo Web E2E Tests — Playwright against localhost:3010
@@ -32,6 +32,8 @@ const SD = 'test-results/screenshots/rn-expo-web';
  */
 async function rnAuthOrInject(page: Page, username = E2E_USER, password = E2E_PASS) {
   try {
+    // 没配口令就别去打登录接口 —— 空口令只会换来一个 401 噪音, 直接走注入。
+    if (!hasPasswordCredentials()) throw new Error('未配置口令(TEST_FACTORY_ADMIN_PASS / E2E_PASS), 走会话注入');
     const r = await fetchLoginToken(username, password, API);
     RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
     await rnLogin(page, username, password);

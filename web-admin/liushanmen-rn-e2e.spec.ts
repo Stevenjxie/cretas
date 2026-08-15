@@ -13,7 +13,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { resolveApiBase, fetchLoginToken, resolveTokenFromStorageState, injectRnSession, E2E_USER, E2E_PASS } from './e2e-auth-helper';
+import { resolveApiBase, fetchLoginToken, resolveTokenFromStorageState, injectRnSession, E2E_USER, E2E_PASS, hasPasswordCredentials } from './e2e-auth-helper';
 
 let RN_FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
 let RN_TOKEN = '';
@@ -36,6 +36,8 @@ let TOKEN = '';
  */
 async function rnAuthOrInject(page: Page, username = E2E_USER, password = E2E_PASS) {
   try {
+    // 没配口令就别去打登录接口 —— 空口令只会换来一个 401 噪音, 直接走注入。
+    if (!hasPasswordCredentials()) throw new Error('未配置口令(TEST_FACTORY_ADMIN_PASS / E2E_PASS), 走会话注入');
     const r = await fetchLoginToken(username, password, API);
     RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
     await rnLogin(page, username, password);

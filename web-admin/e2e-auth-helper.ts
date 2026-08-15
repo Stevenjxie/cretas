@@ -47,23 +47,31 @@ export function resolveApiBase(): string {
 const DEFAULT_API = resolveApiBase();
 
 /**
- * 测试账号 —— 可用环境变量覆盖, 别再散落在各 spec 里硬编。
+ * 测试账号 —— 仓库里**只写用户名, 不写口令**(CLAUDE.md: 测试凭证不提交代码仓库)。
  *
- * ⚠️ 默认值 `factory_admin1` **在生产库里根本不存在**(2026-08-15 实测:
- * cretas_prod_db 130 个用户里只有 factory_admin2, 且已停用), 在测试库 cretas_db 里
- * 存在且启用, 但 :8086 仍返回 401。也就是说这对默认口令在任何一个环境都登不进去。
- * 套件靠 storageState 会话注入照常跑通(见 loginOrReuseSession / injectRnSession);
- * 要恢复口令登录, 传:
+ * 优先消费仓库既有约定 `.env.test.example` 里的 `TEST_FACTORY_ADMIN_*` /
+ * `TEST_WORKSHOP_SUP_*`; `E2E_USER`/`E2E_PASS` 作为一次性覆盖。
  *
- *     E2E_USER=<在目标环境真实存在的账号> E2E_PASS=<口令> npx playwright test ...
+ * ⛔ 原默认值 `factory_admin1 / 123456` 是**死值**: 迁移 V20261029_68 把工厂域收敛成
+ * 只剩 F006 + LIUSHANMEN, F001 连同 factory_admin1 / workshop_sup1 一并物理删除
+ * (`.env.test.example` 开头就记着这件事)。实测生产库 130 个用户里根本没有它,
+ * 两个登录端点都返回 401 —— 而整套 spec 一直硬编着它。
  *
- * 口令只从环境变量读, 不写进仓库。
+ * 没配口令时**不去打登录接口**(空口令只会换来一个 401 噪音), 直接走会话注入:
+ * 见 loginOrReuseSession / injectRnSession。配了就走真登录。
  */
-export const E2E_USER = process.env.E2E_USER || 'factory_admin1';
-export const E2E_PASS = process.env.E2E_PASS || '123456';
+export const E2E_USER =
+  process.env.E2E_USER || process.env.TEST_FACTORY_ADMIN_USER || 'f006_admin';
+export const E2E_PASS =
+  process.env.E2E_PASS || process.env.TEST_FACTORY_ADMIN_PASS || '';
 /** 第二个角色(车间主管), 用于角色可见性对比用例。 */
-export const E2E_USER_2 = process.env.E2E_USER_2 || 'workshop_sup1';
-export const E2E_PASS_2 = process.env.E2E_PASS_2 || E2E_PASS;
+export const E2E_USER_2 =
+  process.env.E2E_USER_2 || process.env.TEST_WORKSHOP_SUP_USER || E2E_USER;
+export const E2E_PASS_2 =
+  process.env.E2E_PASS_2 || process.env.TEST_WORKSHOP_SUP_PASS || E2E_PASS;
+
+/** 有没有配口令 —— 没配就别去打登录接口, 直接走注入。 */
+export const hasPasswordCredentials = (): boolean => E2E_PASS.length > 0;
 
 
 /**

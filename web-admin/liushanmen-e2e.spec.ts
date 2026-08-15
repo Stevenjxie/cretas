@@ -85,7 +85,7 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
       console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
     }
     TOKEN = authResult.token;
-    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
+    if (authResult.loginData?.factoryId) FACTORY_ID = String(authResult.loginData.factoryId);
     expect(TOKEN).toBeTruthy();
   });
 
@@ -137,8 +137,6 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
 
     const mt = typeList[0];
     const mtId = mt.id;
-    const tag = Date.now().toString(36);
-
     // 2. Record initial moving avg
     const before = await api(`/raw-material-types/${mtId}`);
     const avgBefore = before.data?.movingAvgPrice;
@@ -164,14 +162,17 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
     const openingResp = await api('/material-batches/opening', {
       method: 'POST',
       body: JSON.stringify({
-        batchKey: `E2E-W2-${tag}`,   // 幂等键: 重跑不会重复建账
+        // 幂等键按**天**固定, 不用 Date.now(): 后者每跑一次就在测试租户 F006 里多建
+        // 一个期初批次 + 一张会计凭证(实测一上午攒了 3 条 / V-2026-0001..0003)。
+        // 断言只看 success, 命中幂等路径同样为 true。
+        batchKey: `E2E-W2-${new Date().toISOString().slice(0, 10)}`,
         remark: 'E2E W2 移动均价验证',
         items: [{
           materialTypeId: mtId,
           quantity: 100,
           quantityUnit: mt.unit || 'kg',
           unitPrice: 99.0,
-          batchNumber: `E2E-W2-${tag}`,
+          batchNumber: `E2E-W2-${new Date().toISOString().slice(0, 10)}`,
         }],
       }),
     });
@@ -179,7 +180,13 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
       console.log(`W2: 期初建账失败: ${openingResp.message} / hint=${openingResp.actionHint}`);
     }
     expect(openingResp.success).toBeTruthy();
-    console.log(`W2: 期初建账 created=${openingResp.data?.createdCount} priced=${openingResp.data?.pricedCount} value=${openingResp.data?.totalOpeningValue}`);
+    // ⚠️ 幂等命中时 createdCount 回放的是**原始那次**的结果, 仍然是 1 ——
+    //    只看 created= 会误以为每跑一次都在建账。必须把 idempotentHit 一起打出来。
+    console.log(
+      `W2: 期初建账 idempotentHit=${openingResp.data?.idempotentHit} ` +
+      `created=${openingResp.data?.createdCount} priced=${openingResp.data?.pricedCount} ` +
+      `value=${openingResp.data?.totalOpeningValue}`,
+    );
 
     // 4. Verify moving avg updated
     const after = await api(`/raw-material-types/${mtId}`);
@@ -479,7 +486,7 @@ test.describe.serial('六扇门一期 新功能页面 E2E', () => {
       console.warn(`[liushanmen] 口令登录不可用, 改用 storageState token`);
     }
     TOKEN = authResult.token;
-    if (authResult.loginData?.factoryId) FACTORY_ID = authResult.loginData.factoryId;
+    if (authResult.loginData?.factoryId) FACTORY_ID = String(authResult.loginData.factoryId);
     expect(TOKEN).toBeTruthy();
   });
 
