@@ -11,7 +11,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult } from './e2e-auth-helper';
+import { fetchLoginToken, injectAuthCookie, resolveApiBase, resolveTokenFromStorageState, LoginResult, E2E_USER, E2E_PASS } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 const API = process.env.E2E_API_URL || resolveApiBase();
@@ -72,7 +72,7 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
   test.beforeAll(async () => {
     // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
     try {
-      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+      authResult = await fetchLoginToken(E2E_USER, E2E_PASS, API);
     } catch (e) {
       const tk = resolveTokenFromStorageState();
       if (!tk) throw e;
@@ -466,7 +466,7 @@ test.describe.serial('六扇门一期 新功能页面 E2E', () => {
   test.beforeAll(async () => {
     // 口令登录不可用时改用 vue-auth 产出的 storageState token(同 web-admin-e2e)。
     try {
-      authResult = await fetchLoginToken('factory_admin1', '123456', API);
+      authResult = await fetchLoginToken(E2E_USER, E2E_PASS, API);
     } catch (e) {
       const tk = resolveTokenFromStorageState();
       if (!tk) throw e;

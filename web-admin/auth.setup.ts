@@ -8,7 +8,7 @@
  * test projects that declare `dependencies: ['vue-auth']`.
  */
 import { test as setup, expect } from '@playwright/test';
-import { injectAuthCookie, resolveTokenFromStorageState } from './e2e-auth-helper';
+import { injectAuthCookie, resolveTokenFromStorageState, E2E_USER, E2E_PASS, E2E_USER_2, E2E_PASS_2 } from './e2e-auth-helper';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 
@@ -103,10 +103,10 @@ async function doLogin(page: import('@playwright/test').Page, username: string, 
     '口令登录失败且没有可用的兜底 token(设 E2E_TOKEN 或先跑一次能登录的账号)').toBeTruthy();
 }
 
-setup('factory_admin1 登录并保存状态', async ({ page }) => {
-  await doLogin(page, 'factory_admin1', '123456', '.auth/factory-admin.json');
+setup('主账号登录并保存状态', async ({ page }) => {
+  await doLogin(page, E2E_USER, E2E_PASS, '.auth/factory-admin.json');
 });
 
-setup('workshop_sup1 登录并保存状态', async ({ page }) => {
-  await doLogin(page, 'workshop_sup1', '123456', '.auth/workshop-sup.json');
+setup('第二角色登录并保存状态', async ({ page }) => {
+  await doLogin(page, E2E_USER_2, E2E_PASS_2, '.auth/workshop-sup.json');
 });

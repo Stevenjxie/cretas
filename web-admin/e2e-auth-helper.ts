@@ -47,6 +47,26 @@ export function resolveApiBase(): string {
 const DEFAULT_API = resolveApiBase();
 
 /**
+ * 测试账号 —— 可用环境变量覆盖, 别再散落在各 spec 里硬编。
+ *
+ * ⚠️ 默认值 `factory_admin1` **在生产库里根本不存在**(2026-08-15 实测:
+ * cretas_prod_db 130 个用户里只有 factory_admin2, 且已停用), 在测试库 cretas_db 里
+ * 存在且启用, 但 :8086 仍返回 401。也就是说这对默认口令在任何一个环境都登不进去。
+ * 套件靠 storageState 会话注入照常跑通(见 loginOrReuseSession / injectRnSession);
+ * 要恢复口令登录, 传:
+ *
+ *     E2E_USER=<在目标环境真实存在的账号> E2E_PASS=<口令> npx playwright test ...
+ *
+ * 口令只从环境变量读, 不写进仓库。
+ */
+export const E2E_USER = process.env.E2E_USER || 'factory_admin1';
+export const E2E_PASS = process.env.E2E_PASS || '123456';
+/** 第二个角色(车间主管), 用于角色可见性对比用例。 */
+export const E2E_USER_2 = process.env.E2E_USER_2 || 'workshop_sup1';
+export const E2E_PASS_2 = process.env.E2E_PASS_2 || E2E_PASS;
+
+
+/**
  * 从 storageState 文件里取出 access token。
  *
  * <p>为什么需要: 套件里有两套鉴权 —— 多数 project 靠 `storageState`(vue-auth 产出),

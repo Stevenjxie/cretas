@@ -13,7 +13,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { resolveApiBase, fetchLoginToken, resolveTokenFromStorageState, injectRnSession } from './e2e-auth-helper';
+import { resolveApiBase, fetchLoginToken, resolveTokenFromStorageState, injectRnSession, E2E_USER, E2E_PASS } from './e2e-auth-helper';
 
 let RN_FACTORY_ID = process.env.E2E_FACTORY_ID || 'F001';
 let RN_TOKEN = '';
@@ -34,7 +34,7 @@ let TOKEN = '';
  * 「登录页卡住 / 找不到 tab」, 很容易误读成 RN 应用本身坏了。
  * 这里复用 vue-auth 产出的 storageState token(与 web 侧同一个来源)。
  */
-async function rnAuthOrInject(page: Page, username = 'factory_admin1', password = '123456') {
+async function rnAuthOrInject(page: Page, username = E2E_USER, password = E2E_PASS) {
   try {
     const r = await fetchLoginToken(username, password, API);
     RN_FACTORY_ID = (r.loginData.factoryId as string) || RN_FACTORY_ID;
@@ -58,7 +58,7 @@ async function rnAuthOrInject(page: Page, username = 'factory_admin1', password 
   }
 }
 
-async function rnLogin(page: Page, username = 'factory_admin1', password = '123456') {
+async function rnLogin(page: Page, username = E2E_USER, password = E2E_PASS) {
   await page.goto(RN_BASE_URL, { waitUntil: 'commit', timeout: 60000 });
   await page.waitForTimeout(8000);
 
