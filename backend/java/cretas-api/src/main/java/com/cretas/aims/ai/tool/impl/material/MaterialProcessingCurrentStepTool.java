@@ -88,7 +88,7 @@ public class MaterialProcessingCurrentStepTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         if ("batchId".equals(paramName)) {
-            return "请问您要查询哪个批次的当前工序？请提供批次ID。";
+            return "请问您要查询哪个批次的当前工序？说批次号就行";
         }
         return super.getParameterQuestion(paramName);
     }

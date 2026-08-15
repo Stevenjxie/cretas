@@ -157,7 +157,7 @@ public class MaterialFifoRecommendTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "materialTypeId", "请问您需要哪种原材料？请提供原材料类型ID或名称。",
+                "materialTypeId", "请问您需要哪种原材料？说原料名称就行",
                 "requiredQuantity", "请问您需要多少数量？"
         );
         return questions.getOrDefault(paramName, super.getParameterQuestion(paramName));

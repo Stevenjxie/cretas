@@ -103,9 +103,9 @@ public class ProcessingBatchStartTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问要开始哪个生产批次？请提供批次ID或批次号。";
+                return "请问要开始哪个生产批次？说批次号就行";
             case "supervisorId":
-                return "请问谁负责这个批次的生产？请提供负责人ID。";
+                return "请问谁负责这个批次的生产？说负责人姓名就行";
             default:
                 return super.getParameterQuestion(paramName);
         }

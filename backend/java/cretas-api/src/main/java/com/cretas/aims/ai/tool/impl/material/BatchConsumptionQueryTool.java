@@ -58,7 +58,7 @@ public class BatchConsumptionQueryTool extends AbstractBusinessTool {
                         .map(ProductionBatch::getId)
                         .orElseThrow(() -> new IllegalArgumentException("找不到批次: " + batchNumber));
             } else {
-                throw new IllegalArgumentException("请提供批次号或批次ID");
+                throw new IllegalArgumentException("说批次号就行");
             }
         }
 

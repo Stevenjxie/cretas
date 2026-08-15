@@ -190,10 +190,11 @@ public abstract class AbstractBusinessTool extends AbstractTool {
     protected String getParameterQuestion(String paramName) {
         // 通用参数问题映射
         Map<String, String> commonQuestions = Map.of(
-            "batchId", "请问您要操作哪个批次？请提供批次ID或批次号。",
+            "batchId", "请问您要操作哪个批次？说批次号就行",
             "batchNumber", "请问您要操作哪个批次？请提供批次号。",
             "quantity", "请问数量是多少？",
-            "materialTypeId", "请问是哪种原材料类型？",
+            "materialTypeId", "请问是哪种原材料？说名称就行",
+            "supplierId", "请问是哪个供应商？说名称就行",
             "productionPlanId", "请问是哪个生产计划？",
             "reason", "请说明原因。",
             "status", "请问要设置为什么状态？"
@@ -210,14 +211,16 @@ public abstract class AbstractBusinessTool extends AbstractTool {
      */
     protected String getParameterDisplayName(String paramName) {
         Map<String, String> displayNames = Map.ofEntries(
-            Map.entry("batchId", "批次ID"),
+            Map.entry("batchId", "批次号"),
             Map.entry("batchNumber", "批次号"),
             Map.entry("quantity", "数量"),
-            Map.entry("materialTypeId", "原材料类型ID"),
-            Map.entry("productionPlanId", "生产计划ID"),
+            // ⚠️ 实体引用型参数一律用**人话**, 不带「ID」: 这些文案会原样发给手机端操作员,
+            // 而后端本来就接受名称(填槽续轮会解析成 ID)。管操作员要 UUID 是纯粹的自伤。
+            Map.entry("materialTypeId", "原材料"),
+            Map.entry("productionPlanId", "生产计划"),
             Map.entry("reason", "原因"),
             Map.entry("status", "状态"),
-            Map.entry("supplierId", "供应商ID"),
+            Map.entry("supplierId", "供应商"),
             Map.entry("warningDays", "预警天数"),
             Map.entry("page", "页码"),
             Map.entry("size", "每页数量")

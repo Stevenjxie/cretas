@@ -156,8 +156,8 @@ public class ProcessingWorkerCheckoutTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "batchId", "请问员工从哪个批次签出？请提供批次ID。",
-                "workerId", "请问是哪位员工要签出？请提供员工ID。",
+                "batchId", "请问员工从哪个批次签出？说批次号就行",
+                "workerId", "请问是哪位员工要签出？说员工姓名就行",
                 "workMinutes", "请问员工实际工作了多少分钟？（可选，不填则自动计算）",
                 "notes", "请问需要添加签出备注吗？（可选）"
         );

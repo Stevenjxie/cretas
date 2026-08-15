@@ -180,7 +180,7 @@ public class ProcessingBatchCreateTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "productTypeId":
-                return "请问要生产什么产品？请提供产品类型ID。";
+                return "请问要生产什么产品？说产品名称就行";
             case "batchNumber":
                 return "请问批次号是什么？";
             case "plannedQuantity":

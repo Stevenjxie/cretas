@@ -113,7 +113,7 @@ public class MaterialBatchReleaseTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = new HashMap<>();
-        questions.put("batchId", "请问您要释放哪个批次的预留材料？请提供批次ID。");
+        questions.put("batchId", "请问您要释放哪个批次的预留材料？说批次号就行");
         questions.put("quantity", "请问您要释放多少数量？");
         questions.put("productionPlanId", "请问是否针对某个特定生产计划释放？如有请提供计划ID。");
 

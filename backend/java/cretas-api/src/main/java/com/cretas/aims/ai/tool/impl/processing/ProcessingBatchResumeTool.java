@@ -92,7 +92,7 @@ public class ProcessingBatchResumeTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         switch (paramName) {
             case "batchId":
-                return "请问要恢复哪个暂停的生产批次？请提供批次ID或批次号。";
+                return "请问要恢复哪个暂停的生产批次？说批次号就行";
             default:
                 return super.getParameterQuestion(paramName);
         }

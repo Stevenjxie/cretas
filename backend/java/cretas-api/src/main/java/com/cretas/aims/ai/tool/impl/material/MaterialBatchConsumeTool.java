@@ -123,7 +123,7 @@ public class MaterialBatchConsumeTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "batchId", "请问您要消耗哪个批次的原材料？请提供批次ID或批次号。",
+                "batchId", "请问您要消耗哪个批次的原材料？说批次号就行",
                 "quantity", "请问要消耗多少数量？请提供具体数值（单位：kg）。",
                 "productionPlanId", "请问这次消耗关联哪个生产计划？（可选）"
         );

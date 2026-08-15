@@ -87,7 +87,7 @@ public class MaterialBatchWorkersTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         if ("batchId".equals(paramName)) {
-            return "请问您要查询哪个批次的工人信息？请提供批次ID。";
+            return "请问您要查询哪个批次的工人信息？说批次号就行";
         }
         return super.getParameterQuestion(paramName);
     }
