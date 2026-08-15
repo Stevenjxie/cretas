@@ -1806,11 +1806,24 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
 def _normalize_payload_for_provider(payload: Dict[str, Any], account: str) -> Dict[str, Any]:
     """Adjust payload per provider's accepted schema.
 
-    Currently a passthrough — all 4 chain providers (aliyun_b / aliyun_a /
-    zhipu / aliyun_a_deepseek) reach DashScope or Zhipu compatible-mode
-    endpoints, which handle thinking semantics natively. The earlier
-    DeepSeek-official `thinking.type=disabled` injection was removed when
+    Currently a passthrough. The earlier DeepSeek-official
+    `thinking.type=disabled` injection was removed from **this** function when
     deepseek-official was dropped from the chain (#580 Option 2).
+
+    ⛔ 「passthrough」只说明**这一个函数**不改 payload，⛔ 不代表「没有 provider
+       需要翻译」。thinking 语义的翻译在 `_apply_slot_params` 里（aistore /
+       zhipu / ark 用 `thinking` 对象，tencent 按模型分两种，aliyun 用
+       DashScope 的 `enable_thinking`）。
+
+    ⚠️ 2026-08-15 订正：本段原文写「all 4 chain providers (aliyun_b /
+       aliyun_a / zhipu / aliyun_a_deepseek)」。`DEFAULT_CHAIN` 实际是 **7**
+       个账号 —— 漏掉的 `aistore` / `tencent` **恰恰是唯二需要翻译的那两个**，
+       而 `aliyun_c` 也没列。
+       它没造成缺陷（翻译代码在 `_apply_slot_params`，是对的），但它造成过
+       一次**错误诊断**：照这段过期描述断言「aistore 不在任何 thinking 翻译表
+       里」，而它在 `_AISTORE_THINKING_OBJECT_MODELS` 里。
+       ⇒ 判据：**账号清单只有 `DEFAULT_CHAIN` 一个来源**，⛔ 不在 docstring
+          里另抄一份（形态 D：两份必漂，漂了就拿来当证据）。
     """
     return {**payload}
 
