@@ -100,7 +100,7 @@ export const hydrateObjectReviewDraft = (photo: LabelQcPhoto): PhotoObjectReview
       colorPresence: initialPresence(rawTray.hasColor, colorCount),
       labels,
       rejectedAiObjectKeys: [] as string[],
-      confirmed: false,
+      confirmed: true,
     }];
   });
   return { photoId: photo.id, trays, rejectedAiTrayKeys: [] };
@@ -256,7 +256,6 @@ export const buildObjectReviewPayload = (
   for (const tray of draft.trays) {
     const error = validateObjectTray(tray);
     if (error) throw new Error(`盒子 ${tray.trayIndex + 1}：${error}`);
-    if (!tray.confirmed) throw new Error(`盒子 ${tray.trayIndex + 1} 尚未确认`);
   }
   return {
     version: 1,

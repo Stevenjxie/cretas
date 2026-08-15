@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -39,10 +41,13 @@ public class LabelQcService {
     /** 生产日期筛选只给了一端时，用这两个哨兵把另一端放开，避免为单端再加一组派生查询。 */
     private static final LocalDate PRODUCTION_DATE_FLOOR = LocalDate.of(2000, 1, 1);
     private static final LocalDate PRODUCTION_DATE_CEILING = LocalDate.of(9999, 12, 31);
+    private static final double TRAY_CROP_PADDING_RATIO = 0.03;
+    private static final String TRAY_CROP_ALGORITHM_VERSION = "tray-union-pad-v1";
 
     private final LabelQcTaskRepository taskRepository;
     private final LabelQcPhotoRepository photoRepository;
     private final LabelQcAnnotationRepository annotationRepository;
+    private final LabelQcTrayCropRepository trayCropRepository;
     private final ProductTypeRepository productTypeRepository;
     private final AttachmentService attachmentService;
     private final ApplicationEventPublisher eventPublisher;
@@ -424,6 +429,7 @@ public class LabelQcService {
         annotationRepository.saveAll(existing);
         annotationRepository.saveAll(additions);
         photoRepository.saveAll(photos);
+        createTrayCropQueue(factoryId, taskId, photos);
         task.setStatus(LabelQcTaskStatus.REVIEWED);
         task.setFinalDefectCount(finalDefects);
         task.setReviewedBy(reviewerId);
@@ -549,6 +555,256 @@ public class LabelQcService {
             }
         }
         return result;
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<TrayCropResponse> listTrayCrops(
+            String factoryId,
+            LabelQcTrayCropStatus status,
+            int page,
+            int size) {
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        Pageable pageable = PageRequest.of(safePage - 1, safeSize);
+        Page<LabelQcTrayCrop> crops = status == null
+                ? trayCropRepository.findByFactoryIdOrderByCreatedAtAsc(factoryId, pageable)
+                : trayCropRepository.findByFactoryIdAndStatusOrderByCreatedAtAsc(factoryId, status, pageable);
+        List<TrayCropResponse> content = crops.getContent().stream()
+                .map(crop -> toTrayCropResponse(factoryId, crop))
+                .toList();
+        return PageResponse.of(content, safePage, safeSize, crops.getTotalElements());
+    }
+
+    @Transactional
+    public TrayCropResponse reviewTrayCrop(
+            String factoryId,
+            String cropId,
+            Long reviewerId,
+            ReviewTrayCropRequest request) {
+        requireUser(reviewerId);
+        LabelQcTrayCrop crop = trayCropRepository.findByFactoryIdAndId(factoryId, cropId)
+                .orElseThrow(() -> new BusinessException(404, "单盒标签精修任务不存在")
+                        .withCode("LABEL_QC_TRAY_CROP_NOT_FOUND"));
+        if (!Objects.equals(crop.getRowVersion(), request.expectedVersion())) {
+            throw new BusinessException(409, "这个单盒任务已被其他平台人员更新，当前修改未覆盖服务器结果")
+                    .withCode("LABEL_QC_TRAY_CROP_STALE")
+                    .withHint("刷新队列后继续处理");
+        }
+        validatePlatformTrayReview(request.review());
+        crop.setPlatformReviewDetail(writeJson(request.review(), "平台标签真值保存失败"));
+        crop.setStatus(Boolean.TRUE.equals(request.review().unjudgeable())
+                ? LabelQcTrayCropStatus.UNJUDGEABLE
+                : LabelQcTrayCropStatus.REVIEWED);
+        crop.setReviewedBy(reviewerId);
+        crop.setReviewedAt(LocalDateTime.now());
+        trayCropRepository.saveAndFlush(crop);
+        return toTrayCropResponse(factoryId, crop);
+    }
+
+    private void createTrayCropQueue(
+            String factoryId,
+            String taskId,
+            List<LabelQcPhoto> photos) {
+        for (LabelQcPhoto photo : photos) {
+            ObjectReviewPayload review = readObjectReview(photo.getObjectReviewDetail());
+            if (review == null || !Boolean.TRUE.equals(review.complete())) continue;
+            String reviewJson = writeObjectReview(review);
+            String reviewSha = sha256(reviewJson);
+            Attachment source = attachmentService.getById(factoryId, photo.getAttachmentId());
+            String sourceSha = normalizeSha256(source.getFileHash());
+            for (TrayObjectReview tray : review.trays()) {
+                if (tray.labels().isEmpty()
+                        && tray.whitePresence() == LabelQcPresence.UNJUDGEABLE
+                        && tray.colorPresence() == LabelQcPresence.UNJUDGEABLE) {
+                    continue;
+                }
+                BoundingBox cropBox = paddedUnionBox(tray);
+                String stableTrayIdentity = tray.aiTrayKey() == null || tray.aiTrayKey().isBlank()
+                        ? "human:" + tray.trayIndex()
+                        : "ai:" + tray.aiTrayKey().trim();
+                String specMaterial = String.join("|",
+                        photo.getId(),
+                        stableTrayIdentity,
+                        reviewSha,
+                        TRAY_CROP_ALGORITHM_VERSION,
+                        canonicalBox(cropBox));
+                String cropSpecSha = sha256(specMaterial);
+                if (trayCropRepository.findByFactoryIdAndCropSpecSha256(factoryId, cropSpecSha).isPresent()) {
+                    continue;
+                }
+                PlatformTrayReviewPayload proposals = toCropProposal(tray, cropBox);
+                LabelQcTrayCrop crop = LabelQcTrayCrop.builder()
+                        .factoryId(factoryId)
+                        .taskId(taskId)
+                        .photoId(photo.getId())
+                        .sourceAttachmentId(photo.getAttachmentId())
+                        .sourceImageSha256(sourceSha)
+                        .trayIndex(tray.trayIndex())
+                        .aiTrayKey(normalizeKey(tray.aiTrayKey()))
+                        .sourceDecision(tray.decision())
+                        .trayXMin(tray.bbox().xMin())
+                        .trayYMin(tray.bbox().yMin())
+                        .trayXMax(tray.bbox().xMax())
+                        .trayYMax(tray.bbox().yMax())
+                        .cropXMin(cropBox.xMin())
+                        .cropYMin(cropBox.yMin())
+                        .cropXMax(cropBox.xMax())
+                        .cropYMax(cropBox.yMax())
+                        .paddingRatio(TRAY_CROP_PADDING_RATIO)
+                        .cropAlgorithmVersion(TRAY_CROP_ALGORITHM_VERSION)
+                        .objectReviewSha256(reviewSha)
+                        .cropSpecSha256(cropSpecSha)
+                        .coordinateTransform(writeJson(coordinateTransform(cropBox), "裁切坐标变换保存失败"))
+                        .factoryLabelProposals(writeJson(proposals, "工厂标签提议保存失败"))
+                        .status(LabelQcTrayCropStatus.PENDING)
+                        .build();
+                trayCropRepository.save(crop);
+            }
+        }
+    }
+
+    private BoundingBox paddedUnionBox(TrayObjectReview tray) {
+        double xMin = tray.bbox().xMin();
+        double yMin = tray.bbox().yMin();
+        double xMax = tray.bbox().xMax();
+        double yMax = tray.bbox().yMax();
+        for (LabelObjectReview label : tray.labels()) {
+            xMin = Math.min(xMin, label.bbox().xMin());
+            yMin = Math.min(yMin, label.bbox().yMin());
+            xMax = Math.max(xMax, label.bbox().xMax());
+            yMax = Math.max(yMax, label.bbox().yMax());
+        }
+        double width = xMax - xMin;
+        double height = yMax - yMin;
+        return new BoundingBox(
+                Math.max(0, xMin - width * TRAY_CROP_PADDING_RATIO),
+                Math.max(0, yMin - height * TRAY_CROP_PADDING_RATIO),
+                Math.min(1, xMax + width * TRAY_CROP_PADDING_RATIO),
+                Math.min(1, yMax + height * TRAY_CROP_PADDING_RATIO));
+    }
+
+    private PlatformTrayReviewPayload toCropProposal(TrayObjectReview tray, BoundingBox cropBox) {
+        List<PlatformLabelReview> labels = tray.labels().stream()
+                .map(label -> new PlatformLabelReview(
+                        label.type(),
+                        originalToCrop(label.bbox(), cropBox),
+                        label.truncated()))
+                .toList();
+        boolean unjudgeable = labels.isEmpty()
+                && tray.whitePresence() == LabelQcPresence.UNJUDGEABLE
+                && tray.colorPresence() == LabelQcPresence.UNJUDGEABLE;
+        return new PlatformTrayReviewPayload(
+                1, true, unjudgeable,
+                tray.whitePresence(), tray.colorPresence(), labels);
+    }
+
+    private BoundingBox originalToCrop(BoundingBox value, BoundingBox crop) {
+        double width = crop.xMax() - crop.xMin();
+        double height = crop.yMax() - crop.yMin();
+        return new BoundingBox(
+                clamp01((value.xMin() - crop.xMin()) / width),
+                clamp01((value.yMin() - crop.yMin()) / height),
+                clamp01((value.xMax() - crop.xMin()) / width),
+                clamp01((value.yMax() - crop.yMin()) / height));
+    }
+
+    private Map<String, Object> coordinateTransform(BoundingBox crop) {
+        double width = crop.xMax() - crop.xMin();
+        double height = crop.yMax() - crop.yMin();
+        return Map.of(
+                "version", 1,
+                "originalToCrop", Map.of(
+                        "scaleX", 1.0 / width,
+                        "scaleY", 1.0 / height,
+                        "translateX", -crop.xMin() / width,
+                        "translateY", -crop.yMin() / height),
+                "cropToOriginal", Map.of(
+                        "scaleX", width,
+                        "scaleY", height,
+                        "translateX", crop.xMin(),
+                        "translateY", crop.yMin()));
+    }
+
+    private void validatePlatformTrayReview(PlatformTrayReviewPayload review) {
+        if (!Boolean.TRUE.equals(review.complete())) {
+            throw objectReviewError("平台单盒标签尚未完成精修");
+        }
+        if (Boolean.TRUE.equals(review.unjudgeable())) {
+            if (!review.labels().isEmpty()
+                    || review.whitePresence() != LabelQcPresence.UNJUDGEABLE
+                    || review.colorPresence() != LabelQcPresence.UNJUDGEABLE) {
+                throw objectReviewError("整盒无法判断时不能同时保留标签框或确定标签存在性");
+            }
+            return;
+        }
+        long white = 0;
+        long color = 0;
+        for (PlatformLabelReview label : review.labels()) {
+            validateBox(label.bbox(), "平台标签");
+            if (label.type() == LabelQcObjectType.WHITE_LABEL) white++;
+            if (label.type() == LabelQcObjectType.COLOR_LABEL) color++;
+        }
+        validatePresence(review.whitePresence(), white, "白标");
+        validatePresence(review.colorPresence(), color, "彩标");
+    }
+
+    private TrayCropResponse toTrayCropResponse(String factoryId, LabelQcTrayCrop crop) {
+        LabelQcPhoto photo = photoRepository.findByFactoryIdAndId(factoryId, crop.getPhotoId())
+                .orElseThrow(() -> new BusinessException(500, "单盒任务的来源照片不存在")
+                        .withCode("LABEL_QC_TRAY_CROP_SOURCE_MISSING"));
+        return new TrayCropResponse(
+                crop.getId(), crop.getRowVersion(), crop.getTaskId(), crop.getPhotoId(),
+                crop.getTrayIndex(), crop.getAiTrayKey(), crop.getSourceDecision(),
+                crop.getSourceImageSha256(), crop.getObjectReviewSha256(), crop.getCropSpecSha256(),
+                crop.getCropAlgorithmVersion(), crop.getPaddingRatio(),
+                new BoundingBox(crop.getTrayXMin(), crop.getTrayYMin(), crop.getTrayXMax(), crop.getTrayYMax()),
+                new BoundingBox(crop.getCropXMin(), crop.getCropYMin(), crop.getCropXMax(), crop.getCropYMax()),
+                crop.getCoordinateTransform(),
+                attachmentService.generateDownloadUrl(factoryId, crop.getSourceAttachmentId()),
+                photo.getImageWidth(), photo.getImageHeight(), crop.getStatus(),
+                readJson(crop.getFactoryLabelProposals(), PlatformTrayReviewPayload.class, "工厂标签提议损坏"),
+                readJson(crop.getPlatformReviewDetail(), PlatformTrayReviewPayload.class, "平台标签真值损坏"),
+                crop.getReviewedBy(), crop.getReviewedAt(), crop.getCreatedAt(), crop.getUpdatedAt());
+    }
+
+    private String canonicalBox(BoundingBox box) {
+        return String.format(Locale.ROOT, "%.12f,%.12f,%.12f,%.12f",
+                box.xMin(), box.yMin(), box.xMax(), box.yMax());
+    }
+
+    private double clamp01(double value) {
+        return Math.max(0, Math.min(1, value));
+    }
+
+    private String normalizeSha256(String value) {
+        if (value == null || !value.matches("(?i)[0-9a-f]{64}")) return null;
+        return value.toLowerCase(Locale.ROOT);
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+    }
+
+    private String writeJson(Object value, String message) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            throw new BusinessException(500, message).withCode("LABEL_QC_JSON_WRITE_FAILED");
+        }
+    }
+
+    private <T> T readJson(String value, Class<T> type, String message) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return objectMapper.readValue(value, type);
+        } catch (JsonProcessingException ex) {
+            throw new BusinessException(500, message).withCode("LABEL_QC_JSON_CORRUPT");
+        }
     }
 
     private LabelQcTask requireTask(String factoryId, String taskId) {

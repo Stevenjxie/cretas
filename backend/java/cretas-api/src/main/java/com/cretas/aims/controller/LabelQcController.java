@@ -2,10 +2,12 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.*;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import com.cretas.aims.entity.enums.LabelQcTrayCropStatus;
 import com.cretas.aims.service.LabelQcService;
 import com.cretas.aims.utils.SecurityUtils;
 import jakarta.servlet.http.HttpServletRequest;
@@ -198,6 +200,33 @@ public class LabelQcController {
         }
         return ApiResponse.success(
                 labelQcService.exportTrainingData(factoryId, from, to, limit));
+    }
+
+    @GetMapping("/tray-crops")
+    @RequirePermission({"system:read_write"})
+    @RequireRole({"platform_admin", "super_admin", "developer", "platform_super_admin"})
+    public ApiResponse<PageResponse<TrayCropResponse>> listTrayCrops(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) LabelQcTrayCropStatus status,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
+            HttpServletRequest servletRequest) {
+        trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(labelQcService.listTrayCrops(factoryId, status, page, size));
+    }
+
+    @PutMapping("/tray-crops/{cropId}/review")
+    @RequirePermission({"system:read_write"})
+    @RequireRole({"platform_admin", "super_admin", "developer", "platform_super_admin"})
+    public ApiResponse<TrayCropResponse> reviewTrayCrop(
+            @PathVariable String factoryId,
+            @PathVariable String cropId,
+            @Valid @RequestBody ReviewTrayCropRequest request,
+            HttpServletRequest servletRequest) {
+        Long reviewerId = trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(
+                "单盒标签精修已保存",
+                labelQcService.reviewTrayCrop(factoryId, cropId, reviewerId, request));
     }
 
     private Long trustedUser(String pathFactoryId, HttpServletRequest request) {

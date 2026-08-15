@@ -20,7 +20,7 @@ const photo = (screeningDetail: string): LabelQcPhoto => ({
 });
 
 describe('labelQcObjectReviewModel', () => {
-  it('hydrates all AI boxes and requires an explicit per-tray confirmation', () => {
+  it('hydrates all AI boxes as default accepted without an extra confirmation click', () => {
     const draft = hydrateObjectReviewDraft(photo(JSON.stringify({
       trays: [{
         index: 0,
@@ -31,11 +31,11 @@ describe('labelQcObjectReviewModel', () => {
 
     expect(draft.trays[0]).toMatchObject({
       key: 'tray-0',
-      confirmed: false,
+      confirmed: true,
       whitePresence: 'PRESENT',
       colorPresence: 'UNJUDGEABLE',
     });
-    expect(() => buildObjectReviewPayload(draft)).toThrow('尚未确认');
+    expect(buildObjectReviewPayload(draft).trays[0]?.labels).toHaveLength(1);
   });
 
   it('turns an AI false positive into an explicit rejected key', () => {

@@ -1366,6 +1366,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '蒸馏数据集', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
+            path: 'label-qc-tray-crops',
+            name: 'SystemLabelQcTrayCrops',
+            component: () => import('@/views/platform/label-qc-crops/index.vue'),
+            meta: { requiresAuth: true, title: '单盒标签精修', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
             // Sprint 4 Chat K C-LOG-AUDIT-1 (2026-05-16): 系统操作日志独立 menu.
             // Tracks entity-level CRUD via @Loggable AOP. backend: OperationLogController.
             path: 'operation-log',
