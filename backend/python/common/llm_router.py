@@ -49,6 +49,10 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from common.llm_client import get_llm_http_client
+# ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
+#    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
+#    llm_budget 不 import llm_router, 无循环依赖。
+from common.llm_budget import record_local
 
 logger = logging.getLogger(__name__)
 
@@ -590,9 +594,15 @@ def _refuse_reason(account: str, model: str,
 
 
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
-    """Parse usage from a successful response: log cache-hit ratio. Mirrors
-    the streaming path's [cache] log line so observability is uniform across
-    both paths.
+    """Parse usage from a successful response: log cache-hit ratio **and record
+    month-to-date DeepSeek spend**. Mirrors the streaming path's [cache] log
+    line so observability is uniform across both paths.
+
+    ⚠️ 2026-08-15 之前这个名字是**在说谎**: 它叫 `..._and_record_budget`, 而
+    函数体里只有 log —— `llm_budget.record_local` 一个生产调用点都没有。
+    docstring 当时是诚实的(只说 log), 于是**只有名字是假的**, 而名字正是下一个
+    人最先读到的东西。现在记账接上了, 名字才变真。
+    ⇒ 判据: 名字与函数体不一致时, **改哪一个都行, 但不许留着**。
 
     DashScope emits `prompt_tokens_details.cached_tokens`; we read it
     defensively along with the legacy `prompt_cache_hit_tokens` field that
@@ -614,6 +624,21 @@ def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body
                 f"[cache] slot={slot_value} via {account}/{model}: "
                 f"prompt={prompt_total} cached={cached} ({pct}%) completion={completion}"
             )
+        # ── 记账(2026-08-15 接上) ──────────────────────────────────────
+        # 🔴 在此之前, 这个函数的**名字**写着 record_budget, 而函数体里只有 log:
+        #    `common/llm_budget.record_local` 与 `deepseek_over_budget` **零生产
+        #    调用点**, 整个模块是死代码 —— 而它正是 $19.49/12 天那次事故之后建的。
+        #    上面已经把三个 token 数解析出来了, 记账只差这一行。
+        #
+        # ⛔ 只接 `record_local`(纯观测, 零行为改变), **不接 `deepseek_over_budget`**
+        #    (它会**拒绝调用**): 9-13 之后 deepseek 是五个槽的主力, 拒绝它 =
+        #    五个槽全黑。将来要做也必须是**告警而不是拒绝**, 或者带一个
+        #    「它是唯一活着的候选时永不拒绝」的逃生门。单独立项。
+        #
+        # ⚠️ `record_local` 内部只对 DeepSeek 计价(别的模型返回 0), 所以这里
+        #    无条件调用是安全的, ⛔ 不要在这里再写一遍「是不是 deepseek」的判断
+        #    —— 那就是第二份价格知识(形态 D)。
+        record_local(model, prompt_total, completion, cached)
     except Exception as e:
         logger.debug(f"[cache] parse failed (non-fatal): {e}")
 

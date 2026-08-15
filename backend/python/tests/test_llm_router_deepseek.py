@@ -163,3 +163,34 @@ def test_aistore_still_heads_every_slot_until_it_expires():
     """⛔ 不动 aistore 任何配置: 到期前它仍是链首, deepseek 只是第二位。"""
     for slot in FIVE_SLOTS:
         assert llm_router.SLOT_MODELS[slot][0][0] == "aistore"
+
+
+# ── 记账真的接上了吗(形态 B: 机制在、没接上) ────────────────────────────
+def test_budget_recording_is_actually_wired(monkeypatch):
+    """🔴 `llm_budget` 整个模块曾经是**死代码**: `record_local` 与
+    `deepseek_over_budget` 零生产调用点, 而它正是 $19.49/12 天那次事故之后建的。
+
+    ⛔ 这条不能只断言「函数存在」—— 那正是它坏掉时的样子。要断言**它被调用**,
+       且拿到的是从 usage 里解析出来的真数。
+    """
+    seen = []
+    monkeypatch.setattr(llm_router, "record_local",
+                        lambda *a: seen.append(a))
+    llm_router._log_cache_and_record_budget(
+        "review", "deepseek", "deepseek-v4-flash",
+        {"usage": {"prompt_tokens": 4000, "completion_tokens": 120,
+                   "prompt_tokens_details": {"cached_tokens": 3000}}})
+    assert seen == [("deepseek-v4-flash", 4000, 120, 3000)], (
+        f"记账没被调用或参数不对: {seen} —— "
+        "函数名写着 record_budget 而函数体只有 log, 就是它坏掉时的样子")
+
+
+def test_budget_recording_is_not_swallowed_when_the_module_is_missing():
+    """⛔ import 必须在模块级: 放函数里的话 import 失败会被那个
+    `except Exception: logger.debug(...)` 吞掉, 记账**静默停摆**而无任何信号。
+    """
+    import inspect
+    src = inspect.getsource(llm_router._log_cache_and_record_budget)
+    assert "import" not in src, (
+        "记账的 import 又被挪回函数体里了 —— 它会被 except 吞掉")
+    assert hasattr(llm_router, "record_local"), "模块级没有 record_local"
