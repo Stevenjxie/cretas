@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,6 +41,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PurchaseServiceImpl confirmReceive warehouse posting")
 class PurchaseServiceImplConfirmReceiveWarehouseTest {
+
+    @Mock private com.cretas.aims.repository.AttachmentRepository attachmentRepository;
 
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
@@ -74,13 +77,25 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
                 applicationEventPublisher,
                 materialBatchService);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
+        // 2026-08-15 补夹具: confirmReceive 后来加了「必须先有收货凭证」这道闸,
+        // attachmentRepository 是可选注入, 夹具没装 → null → 503「收货凭证服务暂不可用」。
+        // 这里装上并给 1 张凭证, 让用例回到它原本要验的那一段。
+        ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
+        // lenient: 有的用例在到达凭证闸之前就先抛(如重复确认), 严格模式会报 UnnecessaryStubbing
+        org.mockito.Mockito.lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                any(), eq(com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT), any()))
+                .thenReturn(1L);
+
     }
 
     @Test
     @DisplayName("confirmReceive creates MaterialBatch in receive record warehouse and writes materialBatchId")
     void confirmReceive_usesRecordWarehouseAndWritesMaterialBatchId() {
         PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        // 2026-08-15 修夹具: confirmReceive 已改用 findByIdAndFactoryIdForUpdate (悲观锁),
+        // 夹具还桩着旧的 findById → 查不到入库单 → 抛 ResourceNotFound(404),
+        // 于是这些用例从来没跑到自己要断言的那一段。
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);
@@ -114,7 +129,7 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
         PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
         record.getItems().get(0).setFactoryNumber("SC-321");
         record.getItems().get(0).setOriginPlace("四川成都");
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);
@@ -136,7 +151,7 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
     @DisplayName("confirmReceive without factoryNumber keeps MaterialBatch factoryNumber null")
     void confirmReceive_noFactoryNumber_batchNull() {
         PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);
@@ -156,9 +171,12 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
     @DisplayName("confirmReceive falls back to WH-LOG only when receive record has no warehouse")
     void confirmReceive_blankWarehouseFallsBackToLogisticsWarehouse() {
         PurchaseReceiveRecord record = draftRecord(" ");
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
-        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn("WH-LOG-ID");
+        // 2026-08-15 修夹具: 采购入库落点 2026-07-02 拆成独立的 resolvePurchaseInboundWh
+        // (PURCHASE_INBOUND_DEFAULT, 未配置时回退 WH-LOG), 夹具还桩着旧的 resolveLogisticsId
+        // → 新方法返 null → warehouseId 为 null。用例要守的「无仓时回退物流仓」语义不变。
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY)).thenReturn("WH-LOG-ID");
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);
             batch.setId("BATCH-QHJ-002");
@@ -178,7 +196,7 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
     void confirmReceive_duplicateConfirmedRecordRejectsBeforeBatchCreate() {
         PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
         record.setStatus(PurchaseReceiveStatus.CONFIRMED);
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY)).thenReturn(Optional.of(record));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.confirmReceive(FACTORY, RECEIVE_ID, USER_ID));
