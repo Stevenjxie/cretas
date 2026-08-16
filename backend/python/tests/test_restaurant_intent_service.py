@@ -264,9 +264,10 @@ def test_should_delegate_reviewed_exact_plan_without_java_reinterpretation():
 
 @pytest.mark.asyncio
 async def test_reviewed_exact_missing_time_returns_the_four_expected_buttons():
+    QUERY = "哪个菜卖得好"
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
-        "哪个菜卖得好",
+        QUERY,
         confidence=1.0,
         tier="exact",
         planner_authority="promoted_exact",
@@ -274,7 +275,7 @@ async def test_reviewed_exact_missing_time_returns_the_four_expected_buttons():
     )
 
     result = await tiered_answer(
-        "哪个菜卖得好",
+        QUERY,
         object(),
         "DEMO_REST",
         "restaurant_manager",
@@ -283,12 +284,16 @@ async def test_reviewed_exact_missing_time_returns_the_four_expected_buttons():
 
     assert result["kind"] == "clarification"
     assert result["answer_text"] == TIME_CLARIFICATION_QUESTION
-    assert result["suggested_followups"] == [
-        {"label": "本月", "question": "本月"},
-        {"label": "上个月", "question": "上个月"},
-        {"label": "最近7天", "question": "最近7天"},
-        {"label": "最近30天", "question": "最近30天"},
+    # ⚠️ `question` 从光秃秃的词改成了合成的完整问句 —— 那个词曾是全系统最高频的
+    # 计划缓存键, 而它的含义完全取决于上一轮(生产实测串话题, d5e8c2814c)。
+    # 这里守的是**性质**不是字面: 四个按钮 / label 不变 / question 自足(以原问句结尾)。
+    buttons = result["suggested_followups"]
+    assert [b["label"] for b in buttons] == ["本月", "上个月", "最近7天", "最近30天"]
+    assert [b["question"] for b in buttons] == [
+        f"{label}{QUERY}" for label in ("本月", "上个月", "最近7天", "最近30天")
     ]
+    # 阴性对照: 光秃秃的词不许回来 —— 这正是被修的缺陷本身。
+    assert all(b["question"] != b["label"] for b in buttons), buttons
 
 
 @pytest.mark.parametrize("authority", [
@@ -536,6 +541,7 @@ async def test_tiered_answer_clarification_skips_resolver(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_time_clarification_returns_four_continuation_buttons(monkeypatch):
+    QUERY = "招牌藤椒味(单人份)销量如何"
     spec = _spec(
         intent="RESTAURANT_OPS_GROSS_MARGIN",
         clarification_needed=True,
@@ -555,7 +561,7 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
     )
 
     result = await tiered_answer(
-        "招牌藤椒味(单人份)销量如何",
+        QUERY,
         object(),
         "QHJ01",
         "restaurant_manager",
@@ -563,12 +569,16 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
 
     assert result["kind"] == "clarification"
     assert result["answer_text"] == TIME_CLARIFICATION_QUESTION
-    assert result["suggested_followups"] == [
-        {"label": "本月", "question": "本月"},
-        {"label": "上个月", "question": "上个月"},
-        {"label": "最近7天", "question": "最近7天"},
-        {"label": "最近30天", "question": "最近30天"},
+    # ⚠️ `question` 从光秃秃的词改成了合成的完整问句 —— 那个词曾是全系统最高频的
+    # 计划缓存键, 而它的含义完全取决于上一轮(生产实测串话题, d5e8c2814c)。
+    # 这里守的是**性质**不是字面: 四个按钮 / label 不变 / question 自足(以原问句结尾)。
+    buttons = result["suggested_followups"]
+    assert [b["label"] for b in buttons] == ["本月", "上个月", "最近7天", "最近30天"]
+    assert [b["question"] for b in buttons] == [
+        f"{label}{QUERY}" for label in ("本月", "上个月", "最近7天", "最近30天")
     ]
+    # 阴性对照: 光秃秃的词不许回来 —— 这正是被修的缺陷本身。
+    assert all(b["question"] != b["label"] for b in buttons), buttons
     assert result["structured_context"]["topic_kind"] == "dish_ranking"
     assert result["structured_context"]["focus_entity"]["name"] == "招牌藤椒味(单人份)"
 
