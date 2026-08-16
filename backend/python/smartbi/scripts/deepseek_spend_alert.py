@@ -90,6 +90,27 @@ def scan(path: str, day: str, account: str):
     return rows, total_lines
 
 
+
+def _write_probe_out(payload):
+    """把读数落成 JSON —— 跑批的台账和「仪器还活着」的判据都读它。
+
+    🔴 硬约束 9: 跑批里「今天没告警」是阴性读数, 而**任何一种「根本没跑」
+    都长成它的样子**。⇒ 必须有一个**设计上必然出现**的产出配它。
+    这个文件就是那个产出: 它在则说明探针跑到了做决定那一步。
+
+    ⛔ 三态都要写: rc=2(没量到)也写, 否则「没量到」和「崩了」又分不开。
+    """
+    import json, os
+    path = os.environ.get("PROBE_OUT")
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except OSError:
+        pass   # ⛔ 写不出产出不许让主判定失败 —— 它是观测, 不是门禁
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default="/www/wwwroot/cretas/python-prod.log")
@@ -104,6 +125,7 @@ def main(argv=None) -> int:
         rows, total_lines = scan(args.log, day, args.account)
     except OSError as exc:
         print(f"DEEPSEEK SPEND INSTRUMENT DEAD {day} — 读不到日志: {exc}")
+        _write_probe_out({"rc": 2, "day": day, "reason": "log_unreadable"})
         return 2
 
     # 阳性对照(硬约束 9): 当天必须有人成功调用过**某个**模型
@@ -111,6 +133,7 @@ def main(argv=None) -> int:
         print(f"DEEPSEEK SPEND INSTRUMENT DEAD {day} — 当天 [cache] 行总数为 0, "
               f"分不清「没有付费调用」和「日志没写/读错文件」, 本次读数作废 "
               f"(log={args.log})")
+        _write_probe_out({"rc": 2, "day": day, "reason": "no_cache_lines"})
         return 2
 
     cost = 0.0
@@ -133,7 +156,9 @@ def main(argv=None) -> int:
         print(f"DEEPSEEK SPEND HIGH {day} — {kind}估算 ${cost:.4f} "
               f"超过阈值 ${_DAILY_SPEND_USD_THRESHOLD} ({len(rows)} 次调用)。"
               f"⇒ 先查 aistore 是不是在大面积失败。")
+        _write_probe_out({"rc": 1, "day": day, "total_usd": cost, "calls": len(rows)})
         return 1
+    _write_probe_out({"rc": 0, "day": day, "total_usd": cost, "calls": len(rows)})
     return 0
 
 
