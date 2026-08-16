@@ -31,6 +31,7 @@ from smartbi.gold.customer_text import (
 from smartbi.gold.restaurant import answer_contract as _contract
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS,
+    DIMENSIONS,
     canonical_dimensions as _canonical_dimensions,
     grouping_dimensions as _grouping_dimensions,
     non_grouping_dimensions as _non_grouping_dimensions,
@@ -484,6 +485,73 @@ def _store_scope_disclosure(spec: Any) -> str:
 _STORE_SCOPE_MISMATCH = "门店范围不能由全店或全门店 resolver 代答"
 
 
+def _supported_dimensions(plan: Tuple[str, ...]) -> set:
+    """这个计划选中的那些 resolver, 合起来能按什么分组。
+
+    ⛔ **只此一处定义。** 判据(`_execution_mismatch`)和拒答文案
+       (`_dimension_gap_advice`)必须读同一个集合 —— 各算一份迟早会漂成
+       「闸说不支持、文案却说支持」这种自相矛盾, 而那种不一致没有任何报错。
+    """
+    return set(_canonical_dimensions(sorted(set().union(
+        *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
+    ))))
+
+
+#: **管线内部**的维度名 → 给老板看的中文名。
+#:
+#: ⛔ 不手写第二张映射表 —— 从两个既有权威源**推导**出来:
+#:    `DIMENSIONS` 按**登记表键**建键(`product`)、`Dimension.label` 是中文名;
+#:    而 spec 里的维度是**管线名**(`dish`), 两者由 `canonical_dimensions` 相连。
+#: 🔴 第一版直接写 `DIMENSIONS[k].label`, 单测当场抓住: 查 `dish` 查不到,
+#:    于是文案原样吐出英文键「还要再按 dish 拆一层」—— 黑话直接漏给店长。
+_DIMENSION_LABEL: Dict[str, str] = {
+    _canonical_dimensions((key,))[0]: dim.label
+    for key, dim in DIMENSIONS.items()
+}
+
+
+def _dimension_gap_advice(spec: RestaurantQuerySpec,
+                          plan: Tuple[str, ...]) -> str:
+    """维度对不上时, 把**差在哪一层**说给老板听, 并告诉他改哪个字。
+
+    ## 为什么有这个函数（2026-08-17 冷启动实测）
+
+    以老板身份真跑 39 句, 有 5 句撞在维度闸上, 拿到的都是同一句通用反问:
+    「我不确定你要看的是哪一层的数…你是想看某道菜、某家门店，还是全店合计？」
+
+    而**服务端那一刻其实知道差在哪**——同一条路径的 warning 日志里写着:
+        目标 resolver 只服务 ['channel'], 服务不了本计划的 ['channel','dish']
+    差是**算出来的**, 只是没有投影到用户侧 ⇒ 形态 B 第 7 例(投影丢失):
+    产出端有了, 消费端收不到。老板看到那句通用反问, **无从知道该改哪个字**。
+
+    ⛔ 不降级去掉那一层硬答 —— 那就是「拿别的数据凑」, 本仓明令禁止。
+       这里只把**拒答**说清楚: 哪一层能算 / 哪一层不能 / 换个什么问法能拿到。
+    ⛔ 维度中文名取登记表自己的 `Dimension.label`, ⛔ 不新造一套(形态 D)。
+
+    返回空串 = 说不出具体的差, 上游沿用原来的通用反问。
+    """
+    asked = set(_canonical_dimensions(spec.dimensions))
+    supported = _supported_dimensions(plan)
+    extra = asked - supported
+    if not extra:
+        return ""
+
+    def _names(keys) -> str:
+        return "、".join(_DIMENSION_LABEL.get(k, k) for k in sorted(keys))
+
+    both = asked & supported
+    if both:
+        return (
+            f"按{_names(both)}我能算，但你这句还要求再按{_names(extra)}拆一层，"
+            f"这两层的数不在同一张表上，拆不出来。"
+            f"想看的话分开问，例如先问「按{_names(both)}怎么样」。"
+        )
+    return (
+        f"你这句要按{_names(extra)}来看，而这次选中的算法出不了{_names(extra)}"
+        f"这一层。换个问法我大概率能答，例如把{_names(extra)}换成门店或菜品。"
+    )
+
+
 def _execution_mismatch(
     spec: RestaurantQuerySpec,
     plan: Tuple[str, ...],
@@ -518,9 +586,7 @@ def _execution_mismatch(
     #    (dish/time), 而规格现在给的是登记表的键(product/date) —— 不归一就是
     #    「口径不同的两个集合做子集判断」, 结果是**恒不成立**: 2026-08-09 实测
     #    「本月米饭的销量」这种最基础的问句被判成「查询维度超出能力范围」。
-    supported_dimensions = set(_canonical_dimensions(sorted(set().union(
-        *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
-    ))))
+    supported_dimensions = _supported_dimensions(plan)
     asked_dimensions = set(_canonical_dimensions(spec.dimensions))
     # 🔴 `all` 不是一种分组, 是**不分组** —— 拿它去查「能按什么分组」的表是范畴错误。
     #
@@ -1885,9 +1951,19 @@ async def tiered_answer(
                     pool, factory_id, store_mention, action_warning, spec)
                 if ambiguous is not None:
                     return ambiguous
+            # 🔴 2026-08-17: 差在哪一层是**上面那行 warning 已经算出来的**,
+            #    只是从来没投影到用户侧(形态 B 第 7 例)。冷启动实测 5 句都撞在
+            #    这里, 老板拿到的是同一句通用反问, 无从知道该改哪个字。
+            #    ⛔ 不降级硬答, 只把拒答说清楚。说不出具体的差才沿用原文案。
+            gap_advice = _dimension_gap_advice(spec, plan)
             mismatch_result = {
                 "kind": "clarification",
                 "answer_text": _prepend_action_warning(
+                    (
+                        f"{mismatch}，所以这次我没敢算。{gap_advice}"
+                        f"{NO_SUBSTITUTION}。"
+                    )
+                    if gap_advice else
                     (
                         # 🔴 2026-08-13 去黑话 + 说人话。原文是
                         #    「这次没有开算：查询维度超出计划 resolver 的能力范围。」
