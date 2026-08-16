@@ -1,10 +1,15 @@
 <!doctype html>
 <!--
   B-5 载体验收页 —— 把**真实形状**的后端响应喂给真的 `normalizeFollowups`,
-  再用真的 style.css 渲染出芯片。
+  再用真的 style.css 渲染出芯片, 并像 App.vue 一样「点击发 question」。
 
   ⛔ 不重写归一化逻辑 —— 直接 import `src/api.ts` 里那一份(形态 D: 两份必漂)。
   ⚠️ 为此 `normalizeFollowups` 需要被导出; 它是纯函数, 导出只为可测。
+
+  2026-08-16 i3 回归修复: 后端把条目拆成 {label, question} 之后, 消费端
+  (App.vue) 曾经把两者塌成一个字符串 —— chip 上显示的是整句 question 而
+  不是短词 label。这份 harness 现在覆盖两条腿: 显示的文本(label) +
+  点击发出的值(question), 缺一条都测不出那次回归。
 -->
 <meta charset="utf-8">
 <title>B-5 · 「接下来可以问什么」在老板那个前端上的样子</title>
@@ -15,7 +20,7 @@
            border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
   .cap { color: #888; font-size: 12px; margin: 12px auto 4px; max-width: 420px; }
 </style>
-<div class="cap">① 后端给了 3 条（三种不同形状）</div>
+<div class="cap">① 后端给了 4 条（四种形状: 裸串 / {question} / {label}(旧协议) / {label,question}(新协议)）</div>
 <div class="frame">
   <div class="markdown-body"><p>今天营收 ¥12,480，比昨天少 18%。</p></div>
   <div class="answer-followups" id="with" aria-label="接下来可以问"></div>
@@ -25,34 +30,70 @@
   <div class="markdown-body"><p>今天营收 ¥12,480。</p></div>
   <div class="answer-followups" id="without" aria-label="接下来可以问"></div>
 </div>
+<div class="cap">③ 宽度压力测试：旧协议 {question} 没配 label 时退回整句(比①的更长) —— chip 不许被撑成近满宽的块</div>
+<div class="frame">
+  <div class="markdown-body"><p>（宽度压力测试专用，不代表真实回答内容）</p></div>
+  <div class="answer-followups" id="stress" aria-label="接下来可以问"></div>
+  <!-- 无约束的对照元素: 同字体同字号, 不套 .followup-chip 的 max-width,
+       用来证明③那句话本身足够长 —— 不然「chip 没超宽」可能只是因为
+       这句话本来就短, 测量器测不出超宽。 -->
+  <span id="stress-unbounded" style="font-size:13px; line-height:1.4; white-space:nowrap; position:absolute; visibility:hidden;"></span>
+</div>
 <script type="module">
   import { normalizeFollowups } from '/src/api.ts';
 
-  // 真实形状: Java 侧 `suggestedFollowups` 的条目历史上出现过这三种
+  // 真实形状: Java 侧 `suggestedFollowups` 的条目历史上出现过前三种,
+  // 第四种(新协议拆分)是这次要修的回归的根源。
   const backendGave = [
-    '为什么今天卖的这么少',              // 裸字符串
-    { question: '哪道菜拖了后腿' },       // {question}
-    { label: '跟上周比差在哪' },          // {label}
+    '为什么今天卖的这么少',                              // 裸字符串
+    { question: '哪道菜拖了后腿' },                       // {question}
+    { label: '跟上周比差在哪' },                          // {label}(旧协议, label 本身就是可发送的完整句)
+    { label: '本月', question: '本月哪个菜卖得好' },       // {label, question}(新协议)
   ];
+
+  // ③ 宽度压力: 没有 label 的旧协议条目, question 本身是一句长话 ——
+  // 这正是「label 退回 question」在生产上最容易撑爆 chip 的形状。
+  const stressGave = [
+    { question: '这个月复购率和上个月比是涨了还是跌了，具体涨跌了多少个百分点' },
+  ];
+
+  // 像 App.vue 一样: chip 显示 fu.label, 点击发送 fu.question。
+  const sentLog = [];
 
   function render(el, list) {
     el.innerHTML = '';
-    for (const q of list) {
+    for (const fu of list) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'followup-chip';
-      b.textContent = q;
+      b.textContent = fu.label;
+      b.dataset.question = fu.question;
+      b.addEventListener('click', () => sentLog.push(fu.question));
       el.appendChild(b);
     }
   }
 
   const withList = normalizeFollowups(backendGave);
   const withoutList = normalizeFollowups(undefined, [], null);
+  const stressList = normalizeFollowups(stressGave);
   render(document.getElementById('with'), withList);
   render(document.getElementById('without'), withoutList);
+  render(document.getElementById('stress'), stressList);
+
+  const unboundedEl = document.getElementById('stress-unbounded');
+  unboundedEl.textContent = stressList[0]?.label ?? '';
 
   window.__probe = {
-    withFollowups: [...document.querySelectorAll('#with .followup-chip')].map(b => b.textContent),
-    withoutFollowups: [...document.querySelectorAll('#without .followup-chip')].map(b => b.textContent),
+    withFollowups: withList.map((fu) => ({ label: fu.label, question: fu.question })),
+    displayedText: [...document.querySelectorAll('#with .followup-chip')].map((b) => b.textContent),
+    withoutFollowups: [...document.querySelectorAll('#without .followup-chip')].map((b) => b.textContent),
+    stressLabel: stressList[0]?.label ?? null,
+  };
+
+  // 供闸调用: 点第 index 个 chip, 返回这次点击实际发送的 question。
+  window.__clickFollowupAndGetSent = (index) => {
+    const buttons = [...document.querySelectorAll('#with .followup-chip')];
+    buttons[index].click();
+    return sentLog[sentLog.length - 1];
   };
 </script>

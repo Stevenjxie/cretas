@@ -941,7 +941,10 @@ svg {
 }
 
 /* 「接下来可以问什么」—— 后端一直在发, 这个前端 2026-08-16 才接上。
-   ⚠️ 触控目标 >= 40px: 老板是在店里单手用手机点这个。 */
+   ⚠️ 触控目标 >= 40px: 老板是在店里单手用手机点这个。
+   ⚠️ 2026-08-16 回归修复: chip 显示的是短词 label, 但兼容旧协议时
+   label 可能退回成整句 question —— max-width + 单行省略号防止
+   四个药丸被撑成四块近满宽的圆角块(见 fix-i3-report.md)。 */
 .answer-followups {
   display: flex;
   flex-wrap: wrap;
@@ -950,6 +953,7 @@ svg {
 }
 .followup-chip {
   min-height: 40px;
+  max-width: 220px;
   padding: 8px 14px;
   font-size: 13px;
   line-height: 1.4;
@@ -958,6 +962,9 @@ svg {
   border: 1px solid #d3e3f3;
   border-radius: 20px;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .followup-chip:disabled { opacity: .5; cursor: default; }
 .followup-chip:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
