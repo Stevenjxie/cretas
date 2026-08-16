@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ _MARK_PROMOTED_SQL = (
     "    SET promoted_at   = now(),"
     "        reviewed_by   = $3,"
     "        promoted_note = $4"
-    "  WHERE domain = $1 AND normalized_phrase = $2"
+    "  WHERE domain = $1 AND normalized_phrase = $2 AND promoted_at IS NULL"
 )
 
 _COUNTS_SQL = (
@@ -77,7 +78,27 @@ async def record_time_phrase(
     ⚠️ **fail-open 但要出声**: 记语料失败绝不能让一次问答失败, 但静默吞掉
     会让「语料一直是空的」和「没有这类问句」长得一模一样 —— 而这张表
     就是我们唯一的仪器。所以任何异常在这里全部吞掉, 只留一条 WARNING。
+
+    ## kill-switch: `TIME_PHRASE_CORPUS_OFF`
+
+    本函数的调用方 `parse_restaurant_query` 是**公开入口**, 与线上真实用户
+    流量走同一条路径。本仓 prod 探针/审计脚本(`scripts/restaurant_capability_audit.py`、
+    `scripts/restaurant_department_audit.py`、
+    `backend/python/smartbi/scripts/t6_time_resolver_probe.py`、
+    `local_d_diag.py`)调用的也是这同一个公开入口 —— 其中一个还会清缓存后
+    对同一句问句循环 `RUNS` 次。一次探针/审计跑批可以把 `hit_count`
+    灌成探针自己的重放次数, 足以让 `unpromoted` 假性越过积压阈值, 告出
+    一条**完全由探针流量构成**的 BACKLOG, 污染这张表本该承担的唯一信号。
+
+    ⛔ **kill-switch 不是自动的** —— 本函数分不清调用方是探针还是真实用户,
+    **操作者跑上述探针/审计脚本前必须自己 `export TIME_PHRASE_CORPUS_OFF=1`**。
+    这四个探针脚本本身不在本轮改动范围内, 谁也不会替操作者自动设置它。
+
+    ⚠️ 默认(不设置该变量)**必须是"记录开启"** —— 这是生产聊天热路径的
+    默认行为, ⛔ 不允许反过来(默认关闭、需要显式开启才记录)。
     """
+    if os.getenv("TIME_PHRASE_CORPUS_OFF"):
+        return False
     try:
         # 函数内导入(⛔ 不提到模块级): `restaurant_intent.py` 反过来要在模块级
         # `from time_phrase_corpus import record_time_phrase`(接线, Task 2),
@@ -120,7 +141,11 @@ async def mark_promoted(
     """登记一条语料已经人工晋升。⛔ 不许只写时间戳 —— `reviewed_by` 和
     `note` 一起写, 登记是留痕, 不是打勾。
 
-    返回是否真的更新了一行(该 `normalized_phrase` 在这个 `domain` 下存在)。
+    返回是否真的更新了一行(该 `normalized_phrase` 在这个 `domain` 下存在
+    **且尚未晋升过**)。SQL 的 WHERE 子句带 `promoted_at IS NULL` ——
+    对一条已经晋升过的短语再次调用本函数, 匹配 0 行、返回 `False`,
+    ⛔ 不覆盖原有的 `reviewed_by`/`promoted_note`/`promoted_at`(登记是
+    留痕, 不是打勾, 覆盖恰恰是在毁掉这条痕迹)。
     """
     async with pool.acquire() as conn:
         status = await conn.execute(

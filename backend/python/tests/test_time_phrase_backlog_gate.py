@@ -274,6 +274,11 @@ def main():
         sys.exit(0)
     total = os.environ.get("STUB_TOTAL", "0")
     unpromoted = os.environ.get("STUB_UNPROMOTED", "0")
+    if os.environ.get("STUB_MULTILINE_TOTAL"):
+        # M2 变异靶子: 往 stderr 里塞一条**也含** `total=` 的诊断行。跑批脚本
+        # 用 `OUT=$(... 2>&1)` 合并 stdout/stderr, 于是 grep -oP 会命中两行,
+        # `$total` 变成一个内嵌换行的多行字符串, 不是空串。
+        print("retry-log: total=999 (stale, ignored)", file=sys.stderr)
     print(f"domain=restaurant total={total} unpromoted={unpromoted}")
     sys.exit(0)
 
@@ -363,6 +368,30 @@ def test_state_instrument_dead_on_unparseable_output(tmp_path):
         tmp_path, extra_env={"STUB_GARBAGE_OUTPUT": "1"},
     )
     assert result.returncode == 2, (result.stdout, result.stderr)
+    assert "XXX INSTRUMENT DEAD" in alerts_text, alerts_text
+    assert "读数解析失败" in alerts_text, alerts_text
+
+
+def test_state_instrument_dead_on_multiline_total(tmp_path):
+    """态③没量到, M2 的场景: `OUT=$(... 2>&1)` 把 stdout/stderr 合并, 任何一行
+    stderr 诊断文本只要含 `total=` 子串, `grep -oP 'total=\\K[0-9]+'` 就会
+    命中两行, `$total` 变成一个内嵌换行的多行字符串 —— 既不是空串(旧版
+    `-z` 判据放过它), 也不是纯数字。
+
+    修复前(`-z` 判据): $total 非空 ⇒ 跳过「解析失败」分支; 随后
+    `[ "$total" -eq 0 ]` 对多行字符串报 `integer expression expected`、
+    `if` 读成 false, 积压比较同样报错读成 false, 脚本一路滑到 `exit 0` ——
+    **一次畸形读数被汇报成「健康」**, 正是三态设计要防的那种假绿。
+    修复后(`[[ "$total" =~ ^[0-9]+$ ]]`): 多行字符串不匹配纯数字整体锚定,
+    落入 INSTRUMENT DEAD、rc=2。
+    """
+    result, alerts_text = _run_cron_script(
+        tmp_path,
+        extra_env={
+            "STUB_MULTILINE_TOTAL": "1", "STUB_TOTAL": "7", "STUB_UNPROMOTED": "2",
+        },
+    )
+    assert result.returncode == 2, (result.stdout, result.stderr, alerts_text)
     assert "XXX INSTRUMENT DEAD" in alerts_text, alerts_text
     assert "读数解析失败" in alerts_text, alerts_text
 

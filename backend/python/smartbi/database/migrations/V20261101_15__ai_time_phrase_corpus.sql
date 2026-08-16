@@ -71,6 +71,8 @@ COMMENT ON COLUMN ai_time_phrase_corpus.llm_time_range IS
     'LLM 给出的结构化时间窗口 (spec.window_from_llm_phrase 的产出), 供人工晋升时参考, 不由本表重新计算。';
 COMMENT ON COLUMN ai_time_phrase_corpus.promoted_at IS
     '非空即表示已人工晋升进确定性规则; list_unpromoted 只返回此列为 NULL 的行。';
+COMMENT ON COLUMN ai_time_phrase_corpus.factory_id IS
+    '首次记录到这句话的租户; ON CONFLICT ⛔ 不刷新它 —— 不是「谁问的」的权威来源';
 
 -- Verification (run after apply):
 --   SELECT count(*) FROM ai_time_phrase_corpus;                      -- expect 0 (no seed)

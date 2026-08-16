@@ -132,6 +132,85 @@ async def test_mark_promoted_writes_who_and_why():
     assert "steve" in args and "加了「最近」分支" in args
 
 
+@pytest.mark.asyncio
+async def test_mark_promoted_on_already_promoted_phrase_does_not_overwrite():
+    """I2 承重: 已晋升过的短语再次 `--mark-promoted` 必须返回 `False`(CLI 侧
+    rc=1), ⛔ 不覆盖原有的 `reviewed_by`/`promoted_note`/`promoted_at` ——
+    登记是留痕, 不是打勾, 静默覆盖恰恰是在毁掉这条痕迹。
+
+    ⚠️ 这个假连接**分辨得出"匹配 0 行"和"匹配 1 行"**, 不是恒返回一个常量:
+    它模拟真实 Postgres 对"目标行 promoted_at 已非空"这一具体场景的判断 ——
+    是否匹配到这一行, 完全取决于 SQL 自己的 WHERE 子句里有没有
+    `promoted_at IS NULL` 这个谓词。带谓词(修复后) -> 0 行; 不带(变异去掉
+    它) -> 1 行 —— 与真库在这个场景下的行为一致。
+    """
+    class _AlreadyPromotedConn:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, sql, *args):
+            self.calls.append(("execute", sql, args))
+            guarded = "PROMOTED_AT IS NULL" in sql.upper()
+            return "UPDATE 0" if guarded else "UPDATE 1"
+
+    conn = _AlreadyPromotedConn()
+    ok = await mark_promoted(_FakePool(conn), domain="restaurant",
+                              normalized_phrase="最近损耗怎么样",
+                              reviewed_by="lisa", note="二次尝试")
+    assert ok is False, "已晋升过的短语再次标记应返回 False, 不应静默覆盖"
+    assert conn.calls, "一条 SQL 都没发 —— 上面的断言会恒真"
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_env_var_blocks_recording_and_sends_zero_sql(monkeypatch):
+    """I4 承重: prod 探针/审计脚本(`scripts/restaurant_capability_audit.py` 等
+    四个, 见 `record_time_phrase` docstring)复用的是公开入口
+    `parse_restaurant_query`, 与真实用户流量同一条写入路径 —— 批量探针
+    重放会把 `hit_count` 灌成探针自己的重放次数, 足以假性触发 BACKLOG 告警。
+
+    设置 kill-switch 后必须一条 SQL 都不发。⚠️ 不设置时仍要照常记录 ——
+    这半句是阳性对照: 没有它, 哪怕 kill-switch 整个失效(默认变成"关"),
+    这条测试也会通过, 拦不住那个更危险的反向 bug。
+    """
+    monkeypatch.setenv("TIME_PHRASE_CORPUS_OFF", "1")
+    conn = _FakeConn()
+    assert await record_time_phrase(_FakePool(conn), **ARGS) is False
+    assert conn.calls == [], f"kill-switch 打开时不该发任何 SQL: {conn.calls}"
+
+    monkeypatch.delenv("TIME_PHRASE_CORPUS_OFF", raising=False)
+    conn2 = _FakeConn()
+    assert await record_time_phrase(_FakePool(conn2), **ARGS) is True
+    assert conn2.calls, "阳性对照: 不设置该变量时必须照常记录"
+
+
+def test_wrapper_forwards_every_impl_parameter():
+    """I5 承重: `parse_restaurant_query` 是手写转发 `_parse_restaurant_query_impl`
+    8 个参数的薄壳。给 impl 新增一个参数只会显式 `TypeError`(吵), 但如果
+    两边签名都加了、转发调用里漏了一行, 是**静默的** —— impl 悄悄吃到默认值。
+    这条入口是每一次餐饮聊天请求必经的热路径, 漏转发 `session_summary` /
+    `session_key` 就是一次没有任何症状的语境丢失(本仓已经吃过这个亏,
+    见 `restaurant_intent.py` 里 `history` 与 `semantic_first` 那段注释)。
+
+    用 AST 量"转发调用里实际传了哪些实参名", ⛔ 不用字符串计数 —— 本仓有
+    硬约束: 闸要量结构, 不量文本。
+    """
+    import ast
+    import inspect
+
+    assert (
+        inspect.signature(RI.parse_restaurant_query)
+        == inspect.signature(RI._parse_restaurant_query_impl)
+    ), "包壳签名与 impl 签名不一致 —— 先把两边参数对齐, 再谈转发是否完整"
+
+    call = next(
+        n for n in ast.walk(ast.parse(inspect.getsource(RI.parse_restaurant_query)))
+        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_parse_restaurant_query_impl"
+    )
+    forwarded = {k.arg for k in call.keywords} | {a.id for a in call.args}
+    expected = set(inspect.signature(RI.parse_restaurant_query).parameters)
+    assert forwarded == expected, f"转发调用漏了参数: {expected - forwarded}"
+
+
 # ══════════════════════════════════════════════════════════════════
 # 接线: 走真实入口 parse_restaurant_query
 #

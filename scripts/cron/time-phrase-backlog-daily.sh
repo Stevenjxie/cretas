@@ -31,7 +31,12 @@ total=$(echo "$OUT" | grep -oP 'total=\K[0-9]+')
 unpromoted=$(echo "$OUT" | grep -oP 'unpromoted=\K[0-9]+')
 
 # ⚠️ 解析不出数字也是「没量到」, ⛔ 不是 0
-if [ -z "$total" ] || [ -z "$unpromoted" ]; then
+# 🔴 用 -z 只能拦住「空串」, 拦不住「多行」: OUT 用 2>&1 合并了 stdout/stderr,
+#    任何一行 stderr 诊断文本只要含 `total=` 子串, grep -oP 就会命中两行,
+#    $total 变成一个内嵌换行的多行字符串 —— 非空, 但也不是一个合法整数,
+#    随后的 -eq / -gt 会报错、被 if 读成 false, 一路滑到 exit 0 (假绿)。
+#    改用整体锚定的纯数字正则, 多行/非数字都能拦住。
+if ! [[ "$total" =~ ^[0-9]+$ ]] || ! [[ "$unpromoted" =~ ^[0-9]+$ ]]; then
     echo "XXX INSTRUMENT DEAD $(date '+%F %T') — 读数解析失败: $OUT" >> "$ALERTS"
     exit 2
 fi

@@ -74,10 +74,12 @@ on:
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
+      - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
   pull_request:
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
+      - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
 
 concurrency:
   group: python-gate-${{ github.ref }}
