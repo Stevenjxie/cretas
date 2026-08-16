@@ -78,6 +78,11 @@ class GateSelectorCoverageContractTest {
 
     /**
      * 存量欠账：会读 {@code src/main} 但类名进不了选择器的闸。<b>冻结于 2026-08-15，只许变短。</b>
+     *
+     * <p>已还清：{@code StringConstantStatusEqualityGuardTest}（2026-08-16 → 改名
+     * {@code …ContractTest} 进入选择器）。还清它的那一刻它就是<b>红</b>的 ——
+     * {@code FinishedGoodsFeedServiceImpl:431} 拿 {@code ==} 比 String 常量 holder。
+     * ⇒ 这份名单不是形式主义，29 条里至少有 1 条真的压着缺陷。
      */
     private static final Set<String> KNOWN_UNCOVERED = Set.of(
             "ApprovedToolSensitiveLoggingTest",
@@ -102,7 +107,6 @@ class GateSelectorCoverageContractTest {
             "RestaurantTenantDetectionTest",
             "SalesDeliveryProductFkAbsenceTest",
             "SkuImportUnitCanonicalizationTest",
-            "StringConstantStatusEqualityGuardTest",
             "ToolSimilarityGateRunsTest",
             "TransferVoucherGeneratedOnConfirmTest",
             "TransferVoucherVoidOnTerminationTest",

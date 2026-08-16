@@ -428,7 +428,12 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
             // ── #1214 静默漂移缺口修复: 子批整批退回归零 (REVERSED) → 连带把建它的 InternalTransfer 记录同步冲销 ──
             //   否则该 CONFIRMED 调拨记录悬空指向一个已作废的批次: 物流仓 FG 视图显示 0 (批次已冲销), 但调拨单
             //   仍是 CONFIRMED/quantity=40/targetBatchId→已冲销批次, 下次 FG 盘点会误判"盘盈"/拣货会误判"有货"。
-            if (child.getStatus() == FinishedGoodsBatch.Status.REVERSED) {
+            // ⚠️ FinishedGoodsBatch.Status 是 String 常量 holder(不是 enum) —— 必须 equals。
+            //   本次刚 setStatus(REVERSED) 时 == 恰好为真(同一个 interned 常量), 但当 cAvail > 0
+            //   没走进上面那个 setStatus、而库里状态已经是 REVERSED 时, JDBC 取出的 String 不 intern,
+            //   == 为 false ⇒ 下面这段 #1214 的补偿被静默跳过, 调拨单继续悬空指向已冲销批次。
+            //   常量在前, 顺带 null 安全。同类先例见 #1202/#1205。
+            if (FinishedGoodsBatch.Status.REVERSED.equals(child.getStatus())) {
                 String hint = reconcileTransferForRetiredChild(childBatchIdToItem.get(child.getId()), child, take);
                 if (hint != null) {
                     transferReconcileHints.add(hint);
