@@ -1198,6 +1198,12 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # planning, chart or restaurant-review prompts when a larger model fails.
     SLOT.SIMPLE_TEXT: [
         ("aistore", "Qwen3-32B"),
+        # 🔴 2026-08-16 补: A1「七槽统一 aistore→deepseek→zhipu」**漏了这一槽**。
+        #    接班人体检实测(推 today 到 9-14): 别的六个槽到期后还剩
+        #    `['deepseek','zhipu']` 两个, 而 SIMPLE_TEXT 只剩 `['zhipu']` ——
+        #    aistore 一到期它就是**单点无兜底**, 与那一轮的意图相反。
+        # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
+        ("deepseek", "deepseek-v4-flash"),
     ],
     # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
     SLOT.CHART: [

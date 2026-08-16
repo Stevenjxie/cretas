@@ -193,6 +193,91 @@ _DISH_TABLE_INTENTS = frozenset({
 _DISH_TABLE_TOP_N = 10
 
 
+#: 归因用的基线偏移：**上周同一天**。⛔ 不是昨天。
+#: 理由见 `attribution.py` 模块头「裁定一」——餐饮周内效应极强，
+#: 跟昨天比会把「周末结束了」报成「生意变差了」，那是一条方向就错的归因。
+_ATTRIBUTION_BASELINE_DAYS = 7
+_ATTRIBUTION_BASELINE_LABEL = "上周同一天"
+
+#: 哪些意图配归因。⛔ 只挂门店级经营概览 —— 归因拆的是**营收 = 单量 × 客单价**，
+#: 那是门店级的恒等式；挂到菜品级意图上会变成拿全店的拆解去解释一道菜。
+_ATTRIBUTION_INTENTS = frozenset({"RESTAURANT_OPS_SALES_SUMMARY"})
+
+
+async def _maybe_append_attribution(pool, factory_id: str, spec, answer_text: str) -> str:
+    """问「为什么」时，把营收变化拆成客流/客单价拼进正文。
+
+    ## ⛔ 这里不算指标
+
+    两个窗口的 (revenue, orders) 都走 `execute_cell`（唯一的结构化出数处），
+    拆解走 `attribution.decompose`，排版走 `attribution.render`。
+    本函数只做**接线**。
+
+    ## 为什么由代码渲染而不是喂给 LLM
+
+    见 `attribution.py`「裁定二」：LLM 输出没法逐格验收，而这段话里每个数
+    都必须能被闸钉住。⇒ 与 B-1 那张表同一条路子。
+
+    ## fail-open 但留痕
+
+    拆不出来 ⛔ 不许让一次问答失败；但**必须打 warning** —— 否则
+    「归因从来没出现过」会长得和「这个租户没有可比基线」一模一样。
+    """
+    if getattr(spec, "analysis_action", "") != "diagnose":
+        return answer_text
+    if getattr(spec, "intent", None) not in _ATTRIBUTION_INTENTS:
+        return answer_text
+
+    start, end = getattr(spec, "date_range", (None, None))
+    if not start or not end:
+        # 没有明确窗口就没有「今天 vs 基线」可言。⛔ 不默认成今天 ——
+        # 那会把「上半年为什么少」拿今天的数去归因。
+        logger.warning(
+            "[restaurant-intent] attribution skipped: no date_range "
+            f"(factory={factory_id} intent={getattr(spec, 'intent', None)})")
+        return answer_text
+
+    try:
+        import datetime
+
+        from smartbi.gold.restaurant.attribution import decompose, render
+        from smartbi.gold.restaurant.generic_executor import execute_cell
+
+        delta = datetime.timedelta(days=_ATTRIBUTION_BASELINE_DAYS)
+        windows = {"now": (start, end), "base": (start - delta, end - delta)}
+        vals = {}
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id)
+            for tag, rng in windows.items():
+                for metric in ("revenue", "orders"):
+                    cell = await execute_cell(
+                        conn, factory_id=factory_id, metric_key=metric,
+                        dimension_key="all", aggregation_key="summary",
+                        date_range=rng,
+                    )
+                    # ⛔ 取不到就是 None, **不兜底成 0** —— 「没取到」和「没营业」
+                    #    对归因是相反的意思，而 0 会被当成真实读数往下传。
+                    vals[f"{metric}_{tag}"] = (
+                        cell.rows[0].get(metric) if getattr(cell, "rows", None) else None)
+
+        d = decompose(
+            revenue_now=vals.get("revenue_now"), orders_now=vals.get("orders_now"),
+            revenue_base=vals.get("revenue_base"), orders_base=vals.get("orders_base"),
+        )
+        block = render(d, base_label=_ATTRIBUTION_BASELINE_LABEL)
+    except Exception as e:                                   # noqa: BLE001 — fail-open
+        logger.warning(f"[restaurant-intent] attribution failed: {e}")
+        return answer_text
+
+    if not d.get("ok"):
+        # ⚠️ 拆不出来**照样拼**那段话 —— 裁定三: 明说算不出，
+        #    ⛔ 不许静默退回「今天营收 X 元」把「我不知道为什么」伪装成回答。
+        logger.warning(
+            f"[restaurant-intent] attribution not computable: {d.get('reason')}")
+    return f"{answer_text}\n\n{block}"
+
+
 async def _maybe_append_dish_table(
     pool, factory_id: str, spec, answer_text: str, output_pref
 ) -> str:
@@ -2077,6 +2162,11 @@ async def tiered_answer(
         #   AIChatScreen.tsx:799), ⛔ 不新建数据通道、⛔ 不碰通知中心。
         output_pref = tuple(
             resolve_output_preference(spec, tenant_default=tenant_output_pref)
+        )
+        # ⚠️ 归因**在表格之前** —— 他问的是「为什么」，先回答为什么，
+        #    表格是支撑材料。⛔ 顺序反了会让他先读完一屏数字才看到结论。
+        answer_text = await _maybe_append_attribution(
+            pool, factory_id, spec, answer_text
         )
         answer_text = await _maybe_append_dish_table(
             pool, factory_id, spec, answer_text, output_pref
