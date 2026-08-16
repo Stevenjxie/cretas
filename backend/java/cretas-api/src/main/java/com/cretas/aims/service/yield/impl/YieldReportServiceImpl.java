@@ -492,7 +492,72 @@ public class YieldReportServiceImpl implements YieldReportService {
                     effByproducts, effWaste, effSampleRetain);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
         }
+
+        // 2026-08-17: 未配「半成品产出编号」时必须出声, ⛔ 不许静默。
+        // 设计卡 docs/decisions/2026-08-17-未配半成品产出编号必须出声.md
+        String semiGap = semiOutputNotConfiguredWarning(factoryId, t, saved);
+        if (semiGap != null) out.put("semiOutputNotConfigured", semiGap);
+
         return out;
+    }
+
+    /**
+     * 本道有产出、后面还有未完成的工序，而本道<b>没配半成品产出编号</b> —— 必须出声。
+     *
+     * <h3>为什么</h3>
+     *
+     * <p>2026-08-17 F006 走查实测：批次 {@code 10759} 三道工序<b>一道都没配</b>
+     * （全厂 42/186 配了）。后果链是静默的：
+     * {@code output-options} 返回空 → RN 报工屏<b>不显示</b>半成品产出栏 →
+     * 工人报完返回 200 → {@code postSemiOutputLedger} 静默跳过（DEBUG 级）→
+     * <b>下一道领不到料，没有任何人被告知</b>。
+     * 这就是客户「上工序报工、下工序没库存」的直接成因之一。
+     *
+     * <h3>为什么是警告不是拒绝</h3>
+     *
+     * <p>拒绝会把只报工时的合法场景一起挡死，且 144 道未配工序会瞬间全部报不了工
+     * —— 那是一道当天被关掉的闸。静默则是最坏的（用户以为成功了）。
+     * ⇒ 做完，但明说做了一半，并指出下一步。与 {@code balanceWarning} 同一档。
+     *
+     * <h3>⚠️ 判据必须窄</h3>
+     *
+     * <p>只在「后面还有未完成的工序」时出声 —— <b>末道产出的是成品，本来就不该进半成品库</b>，
+     * 对它报警是误报，而一道天天误报的提示最终会被无视，那时它的覆盖率归零。
+     */
+    private String semiOutputNotConfiguredWarning(String factoryId, WorkProcessTask task,
+                                                  ProductionReport saved) {
+        if (task == null || saved == null) {
+            return null;
+        }
+        // 本次没有产出 → 无所谓
+        BigDecimal produced = saved.getOutputQuantity() != null
+                ? saved.getOutputQuantity() : saved.getSemiOutputQuantity();
+        if (produced == null || produced.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        // 已经配了 → 安静
+        String code = Optional.ofNullable(task.getWorkProcessId())
+                .flatMap(processRepo::findById)
+                .map(WorkProcess::getSemiFinishedOutputCode)
+                .orElse(null);
+        if (code != null && !code.isBlank()) {
+            return null;
+        }
+        // 后面没有未完成的工序(末道) → 安静
+        List<WorkProcessTask> siblings = Optional.ofNullable(
+                taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                        factoryId, task.getProductionBatchId())).orElse(List.of());
+        Integer myOrder = task.getProcessOrder();
+        boolean hasDownstreamPending = myOrder != null && siblings.stream().anyMatch(s ->
+                s.getProcessOrder() != null && s.getProcessOrder() > myOrder
+                        && s.getStatus() != WorkProcessTask.Status.COMPLETED
+                        && s.getStatus() != WorkProcessTask.Status.SKIPPED
+                        && s.getStatus() != WorkProcessTask.Status.CANCELLED);
+        if (!hasDownstreamPending) {
+            return null;
+        }
+        return "本道未配「半成品产出编号」，产出没有进入半成品库，下一道领不到料。"
+                + "请在工序管理里配置后重新报工。";
     }
 
     private String yieldAlert(String workProcessId, BigDecimal yieldRate) {
