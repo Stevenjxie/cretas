@@ -74,17 +74,8 @@ def test_minimal_safe_set_is_a_subset_of_the_registry():
 
 
 def test_fast_non_dashscope_floor_precedes_the_slow_one():
-    """慢地板不能排在快地板前面, 且 zhipu 必须是**链的第一位**。
+    """慢地板不能排在快地板前面, 且 zhipu 必须是**链的最后一位**。
 
-    ── 2026-08-16 改了方向, 依据是当天实测 ───────────────────────────
-    owner 定「用 zhipu 的优先」。08-09 那条「zhipu 会稳定超时」的前提当天量过:
-    三个槽 × 8 轮 × 两次, zhipu **24/24 成功、零超时**, 中位 0.44-0.77s,
-    比 aistore(1.49-1.70s)与 deepseek(1.29-1.43s)都快。
-    ⚠️ 尾部如实记: zhipu 最坏 2.14s, 相对自己的中位偏重, 但离 12s 预算很远。
-    ⛔ 敢改还有第二个依据: 「慢的第一跳吃光预算」这个机制本身已被
-       `_reserve_for_fallback` 修掉 —— 排序钉死是叠在结构修复之上的第二道保险。
-
-    ── 下面这段历史保留, 它记的是「闸守错对象」这个教训, 与方向无关 ──
     判据来自 2026-08-09 的生产事故: 链是串行且共享同一个总预算, 把慢的排在前面
     会让后面本来 1s 就能答的候选因为分不到时间而跟着超时、连续 2 次即被熔断。
 
@@ -94,14 +85,13 @@ def test_fast_non_dashscope_floor_precedes_the_slow_one():
        书写顺序就完全不起作用。当天实测: zhipu 被算到链的**第 2 位**, 而这条闸
        全绿。**它守的东西和真正决定行为的东西不是同一个。**
        现在断言 `SLOT_MODELS`(真正被 call_chain 遍历的那个), 并由
-       `llm_router._ABSOLUTE_LAST` 这个结构键保证 zhipu 置底
-       (2026-08-16 起换成 `_ABSOLUTE_FIRST` 置顶, 同一个结构键机制, 方向相反)。
+       `llm_router._ABSOLUTE_LAST` 这个结构键保证 zhipu 置底。
     """
     for slot, chain in llm_router.SLOT_MODELS.items():
         if not chain:
             continue                      # VL 是空链, 见 spec §9.1
-        assert chain[0] == ("zhipu", "glm-4.5-air"), (
-            f"{slot.value}: zhipu 必须是链的第一位, 实际链头是 {chain[0]}"
+        assert chain[-1] == ("zhipu", "glm-4.5-air"), (
+            f"{slot.value}: zhipu 必须是链的最后一位, 实际链尾是 {chain[-1]}"
         )
         idx = {p: i for i, p in enumerate(chain)}
         slow = idx.get(("tencent", "minimax-m2.7"))
