@@ -939,3 +939,25 @@ svg {
     border-left: 1px solid rgba(0, 0, 0, 0.06);
   }
 }
+
+/* 「接下来可以问什么」—— 后端一直在发, 这个前端 2026-08-16 才接上。
+   ⚠️ 触控目标 >= 40px: 老板是在店里单手用手机点这个。 */
+.answer-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+.followup-chip {
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #1b65a8;
+  background: #f2f7fc;
+  border: 1px solid #d3e3f3;
+  border-radius: 20px;
+  cursor: pointer;
+}
+.followup-chip:disabled { opacity: .5; cursor: default; }
+.followup-chip:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }

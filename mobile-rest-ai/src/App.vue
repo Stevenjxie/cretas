@@ -103,6 +103,27 @@
                 />
               </div>
 
+              <!--
+                「接下来可以问什么」。后端(`suggested_followups`)一直在发,
+                web-admin 一直在渲染, ⛔ 唯独老板用的这个前端从来没读过。
+                ⚠️ 它直接服务「让老板打开之后能自己做出一个决定」——
+                   下一步该问什么, 比再多给一个数更接近「决定」。
+              -->
+              <div
+                v-if="!message.isStreaming && message.followups?.length"
+                class="answer-followups"
+                aria-label="接下来可以问"
+              >
+                <button
+                  v-for="q in message.followups"
+                  :key="`${message.id}-fu-${q}`"
+                  type="button"
+                  class="followup-chip"
+                  :disabled="!isReady || isAsking"
+                  @click="sendQuestion(q)"
+                >{{ q }}</button>
+              </div>
+
               <div class="answer-footer">
                 <span>回答生成于 {{ formatAnswerTime(message.createdAt) }}</span>
                 <button
@@ -503,6 +524,7 @@ async function sendQuestion(question: string): Promise<void> {
     if (!stillCurrent()) return
     assistantMessage.content = payload.answer
     assistantMessage.charts = payload.charts
+    assistantMessage.followups = payload.followups
     assistantMessage.source = payload.source
     assistantMessage.tokens = payload.tokens
     assistantMessage.isStreaming = false

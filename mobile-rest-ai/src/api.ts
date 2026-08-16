@@ -104,6 +104,35 @@ function normalizeOption(raw: Record<string, unknown>): Record<string, unknown> 
   return hasRenderableOption(candidate) ? candidate : null
 }
 
+/**
+ * 「接下来可以问什么」——后端一直在发，这个前端一直没读。
+ *
+ * ⚠️ 形状要与 web-admin 那份**保持一致**（`web-admin/src/api/smartbi/
+ * restaurant-chat.ts:32`）：条目可能是裸字符串，也可能是
+ * `{question|text|label}` 三种键之一；去重后取前 4 条。
+ * ⛔ 只认 `question` 一种键会静默丢掉另外两种——那正是「产出端有了、
+ * 消费端收不到」的下一层。
+ */
+export function normalizeFollowups(...sources: unknown[]): string[] {
+  const out: string[] = []
+  for (const value of sources) {
+    if (!Array.isArray(value)) continue
+    for (const item of value) {
+      let text = ''
+      if (typeof item === 'string') {
+        text = item
+      } else if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>
+        const q = rec.question ?? rec.text ?? rec.label
+        if (typeof q === 'string') text = q
+      }
+      text = text.trim()
+      if (text && !out.includes(text)) out.push(text)
+    }
+  }
+  return out.slice(0, 4)
+}
+
 function normalizeCharts(rawCharts: unknown): ChartPayload[] {
   if (!Array.isArray(rawCharts)) return []
 
@@ -243,6 +272,11 @@ export async function askIntent(
     success: true,
     answer,
     charts: normalizeCharts(resultData.charts ?? nestedData.charts),
+    followups: normalizeFollowups(
+      resultData.suggestedFollowups,
+      resultData.followUpSuggestions,
+      nestedData.suggestedFollowups,
+    ),
     source: typeof resultData.source === 'string'
       ? resultData.source
       : typeof nestedData.source === 'string' ? nestedData.source : undefined,
