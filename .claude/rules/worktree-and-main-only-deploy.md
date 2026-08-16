@@ -1,6 +1,6 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-08-07
+**最后更新**: 2026-08-16
 **触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
 
 ---
@@ -36,10 +36,39 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 | 变更类型 | 通道 |
 |---|---|
 | docs / `.claude/`(skills/rules) / 配置类, 零 CI 相关 | **fastlane 直推 main**: `./scripts/deploy/publish-main-fastlane.sh --base-sha <起点SHA> --confirm YES-DIRECT-MAIN`(先 `--dry-run` 预检)。脚本门禁: fast-forward only / 禁 force push / 推前 re-fetch 证明 origin/main 未前进。⚠️ 分支名硬性要求 `codex/*` 前缀 — Claude 侧统一用 `codex/claude-<task>` |
+| 碰 backend / web-admin 代码 | **PR** — `Python Gate` / `Web Admin Gate` / `Secret regression gate` 按 paths 在 PR 上跑; PR 号是台账/memory 的引用锚点 |
+| AGENTS.md / `.agents/skills/*` / `.codex/rules/*` / workflows / `scripts/deploy/*` / db 迁移 / entity / repository / security | **强制 PR** — fastlane 将这些列为高风险路径自动拒绝(除非 owner 显式 `YES-HIGH-RISK-REVIEWED` 覆盖, 默认不用) |
 
 ⚠️ **非 docs 批次必须带 `--task-id <任务ID>`**: ACTIVE 台账常驻 30+ 条他人在飞任务, 不传 `--task-id` 时门禁要求「全局零未完成任务」, 这个条件实际上永远不成立 → 任何非 docs 直推都会被拒。`--task-id` 把门禁收窄成「**你自己这条**已归档」, 与门禁本意一致(协调者在同一 commit 归档自己的批次), 不会放松对自己的要求 — 自己那条还挂着 `in-progress`/`review` 照样拦。
-| 碰 backend / web-admin 代码 | **PR** — `Python Gate` / `Web Admin Gate` / `Secret regression gate` 按 paths 在 PR 上跑; PR 号是台账/memory 的引用锚点 |
-| AGENTS.md / workflows / `scripts/deploy/*` / db 迁移 / entity / repository / security | **强制 PR** — fastlane 将这些列为高风险路径自动拒绝(除非 owner 显式 `YES-HIGH-RISK-REVIEWED` 覆盖, 默认不用) |
+
+#### 2b-1. 「docs 批次」在脚本里的**确切**定义(2026-08-16 补 —— 上面那一行不足以照着做)
+
+上表第一行写「docs / `.claude/` / 配置类」，但脚本
+(`publish-main-fastlane.sh` 的 `docs_only` 判定)认的是**另一张更窄的表**。
+四条实测差异，逐条用 `--dry-run` 在真脚本上跑过(见下方判据):
+
+| 你改的 | 上面那行读起来 | 脚本实际怎么判 |
+|---|---|---|
+| `docs/**.md`、`.claude/**`、根 `*.md`、`.gitignore` | fastlane | ✅ docs-only，**跳过 ACTIVE 闸** |
+| **`docs/dispatch/**`**(台账/交接件) | 「是 docs」 | 🔴 **不算 docs** —— 台账在这儿，改台账是协调者的常态动作 ⇒ 必须带 `--task-id` |
+| **「配置类」**(`jest.config.js`、`application.properties` …) | fastlane | 🔴 豁免面里**没有**「配置类」这一档，只有上面那四类 ⇒ 必须带 `--task-id` |
+| **`.agents/skills/*`、`.codex/rules/*`** | 与 `.claude/` 并列，像是 fastlane | ⛔ **高风险路径**，`--task-id` 也不够，要 `--allow-high-risk YES-HIGH-RISK-REVIEWED` |
+
+🔴 最后一条最容易踩：`.claude/` 豁免、`.agents/` 和 `.codex/` **高风险**，
+三个目录名长得几乎一样而档位相反。改 `.agents/skills/rules-maintenance/SKILL.md`
+这种「看起来就是改个 skill 文档」的动作会被当场拒。
+
+⚠️ `--task-id` 还有一道**存在性**校验：ID 必须在 `docs/dispatch/` 下
+`grep -rwqF` 得到(词边界，不是子串)，否则直接 `FASTLANE REJECTED: … appears
+nowhere under docs/dispatch/`。**打错 ID 会被拒，不会被静默放行** —— 这是好事，
+但别把这个拒绝读成「我的任务没归档」。
+
+**判据(别照这张表推，直接问脚本)**：拿你**真实的那个 commit** 跑一次
+```bash
+./scripts/deploy/publish-main-fastlane.sh --base-sha <起点SHA> --confirm YES-DIRECT-MAIN --dry-run
+```
+`--dry-run` 在 `git push` **之前**退出，只打 `FASTLANE_READY` / `FASTLANE_DRY_RUN`
+或 `FASTLANE REJECTED: <原因>`。**分档是脚本说了算，上面这张表只是让你知道会被拒。**
 
 ⚠️ **2026-08-07 订正**: 本表原写「CI `JPA repository query startup gate` 挂在 PR 上」——
 **已过期**。`e6d1fffe75 refactor(ci): JPA 检查改为合并后告警而非 PR 门禁` 删掉了
