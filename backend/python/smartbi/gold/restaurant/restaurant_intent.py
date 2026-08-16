@@ -4282,6 +4282,28 @@ def _trusted_context_dish_followup_spec(
     return spec
 
 
+def _button_answer_fragment(original_query: str, answer: str) -> str:
+    """澄清按钮发的是**合成的完整问句**, 把它还原成用户点的那一段。
+
+    2026-08-16: 按钮的 `question` 从光秃秃的词(`本月`)改成了合成句
+    (`本月哪个菜卖得好`) —— 那个词成了进程内计划缓存的键, 而键里不含会话
+    上下文, 生产实测一条对话的计划被另一条对话命中。
+
+    ⚠️ 而**这一侧**的判据全是按「答案是个片段」写的: 白名单是精确相等
+    (`answer_normalized in {本月, 上个月, ...}`), 拼接是
+    `f"{original_query} {answer}"`。改了发什么没改认什么 ⇒ 零 LLM 确定性
+    延续整条失效(实测 4/4 HIT → 0/4), 且拼接结果把原问句重复一遍。
+
+    ⇒ 判之前先还原。⚠️ 只在答案**恰好是** `<片段> + 原问句` 时还原,
+    其余原样返回 —— 用户手打的话不该被这个函数动到。
+    """
+    a = (answer or "").strip()
+    q = (original_query or "").strip()
+    if q and len(a) > len(q) and a.endswith(q):
+        return a[: -len(q)].strip()
+    return a
+
+
 def _approved_exact_continuation_route(
     original_query: str,
     answer: str,
@@ -4299,6 +4321,7 @@ def _approved_exact_continuation_route(
         return None
     matched_code, inherited_time, inherited_store = matched
 
+    answer = _button_answer_fragment(original_query, answer)
     answer_normalized = _normalize_exact_phrase(answer)
     slots = _slots_of_clarification(clarification_question)
 
@@ -4380,6 +4403,7 @@ def _trusted_named_dish_button_continuation(
     ):
         return None
 
+    answer = _button_answer_fragment(original_query, answer)
     answer_normalized = _normalize_exact_phrase(answer)
     slots = _slots_of_clarification(clarification_question)
     approved_windows = {
@@ -7194,7 +7218,10 @@ async def _parse_continuation(
     """
     original_query = pending.get("original_query") or ""
     clarification_question = pending.get("clarification_question")
-    concatenated = f"{original_query} {query}".strip()
+    # `query` 可能是按钮发来的**合成句**(`<片段>+original_query`) —— 直接拼接
+    # 会把 original_query 重复一遍(见 `_button_answer_fragment`)。手打的自由
+    # 文本不受影响, 该辅助函数只在确实是 <片段>+original_query 时才还原。
+    concatenated = f"{original_query} {_button_answer_fragment(original_query, query)}".strip()
 
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
