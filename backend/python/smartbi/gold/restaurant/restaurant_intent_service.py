@@ -49,6 +49,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _SERVICE_DISPATCHED_WINDOW_AWARE,
+    _resolve_sales_date_range,          # ← 新增
     _resolve_sales_query_spec,
     demo_data_factory_for_code,
     dish_catalogue_scope,
@@ -1040,6 +1041,63 @@ def _split_time_scope(seed: str) -> Tuple[str, str]:
     return "", text
 
 
+def _compose_clarification_question(
+    prefix: str,
+    seed: Optional[str],
+    *,
+    kind: str,
+    store_names: Sequence[str] = (),
+) -> str:
+    """澄清按钮的 `question`: 把用户点的那一段**前置**到原问句上。
+
+    ## 为什么要合成
+
+    发光秃秃的「本月」有两个后果, 都在生产上实测到了:
+
+    1. **计划缓存串话题** —— 缓存键是 `(factory_id, 归一化问句, 版本)`, 不含会话。
+       「本月」这种串的含义完全取决于上一轮, 而它是全系统最高频的键。
+    2. **飞轮语料没价值** —— 记下来的是「本月」「上个月」这几个无意义的串,
+       而语料的全部价值在于「完整、自足、下次能直接问的句子」。
+
+    ## 为什么**前置**是安全的
+
+    走到时间澄清的硬条件就是「LLM 没认出时间词 **且** 确定性层解不出窗口」
+    ⇒ seed 里按定义没有时间段要替换, ⛔ 不需要 `_split_time_scope` 定位。
+
+    ⚠️ 即使两层都漏了某个时间词(实测 `最近损耗怎么样` 在确定性层就是「全部历史」),
+    合成句解出的仍是**用户点的那个窗口**:
+    `本月最近损耗怎么样` → 「本月」。两条路都不产生坏结果。
+
+    ## 准入(任一不过就退回 `prefix`, ⛔ 不发一个更坏的串)
+
+    1. prefix 与 seed 都非空 —— 🔴 承重的是 **prefix 非空** 那一半:
+       `_split_store_scope` 切不出前缀时返回空串, 于是 `prefix=""` 时
+       `[0] == head` **恒成立** ⇒ 少了它, 门店按钮会把**原问句本身**
+       当成 question 发出去, 门店范围凭空消失。
+       ⚠️ `seed` 非空那一半**不承重**(准入 2 已覆盖), 它只在 prefix 带首尾
+       空格时改变输出。保留它是为了让「seed 为空」这个退化场景显式可读。
+    2. 合成句自足 —— 🔴 **按种类查不同的东西**:
+       - time: 解得出窗口
+       - store: 门店前缀能被 `_split_store_scope` 原样切回来
+
+       ⛔ 不要拿「解得出窗口」去查门店 —— `全部门店米饭的销量是多少` 的窗口
+       是「全部历史」, 那样**每一个**门店合成句都会退回光秃秃的词。
+    """
+    head = (prefix or "").strip()
+    body = (seed or "").strip()
+    if not head or not body:                       # 准入 1
+        return prefix
+    composed = f"{head}{body}"
+    if kind == "time":
+        ok = _resolve_sales_date_range(composed)[1] == head
+    elif kind == "store":
+        ok = _split_store_scope(composed, store_names)[0] == head
+    else:
+        # ⛔ 不兜底 —— 拼错的 kind 静默退回旧行为, 长得和「准入没过」一模一样。
+        raise ValueError(f"unknown clarification button kind: {kind!r}")
+    return composed if ok else prefix
+
+
 def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     """答案末尾的「换时间范围」按钮。
 
@@ -1230,21 +1288,33 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     return combined[:4]
 
 
-def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
-    """Render LLM-selected choices after they passed factual allowlists."""
+def _clarification_followups(
+    spec: RestaurantQuerySpec, seed: str = "",
+) -> List[Dict[str, str]]:
+    """Render LLM-selected choices after they passed factual allowlists.
+
+    `question` 是**合成的完整问句**, `label` 仍是短词。
+    ⚠️ 两者曾经相同 —— 那让「本月」成了全系统最高频的计划缓存键,
+    而它的含义完全取决于上一轮(生产实测串话题)。见
+    `_compose_clarification_question`。
+    """
     if spec.clarification_question == TIME_CLARIFICATION_QUESTION:
         return [
-            {"label": window, "question": window}
-            for window in ("本月", "上个月", "最近7天", "最近30天")
+            {"label": window,
+             "question": _compose_clarification_question(window, seed, kind="time")}
+            for window in _SWITCHABLE_WINDOWS       # ⛔ 不再抄一份字面量
         ]
     if spec.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
-        choices = [{"label": "全部门店", "question": "全部门店"}]
-        choices.extend(
-            {"label": name[:12], "question": name}
-            for name in spec.store_options[:3]
-        )
-        return choices
+        names = tuple(spec.store_options)
+        scopes = ["全部门店", *list(spec.store_options[:3])]
+        return [
+            {"label": scope[:12],
+             "question": _compose_clarification_question(
+                 scope, seed, kind="store", store_names=names)}
+            for scope in scopes
+        ]
     if spec.clarification_options:
+        # ⛔ 自撰选项不合成 —— 「先看营收」这种短语没有自足性可言。
         return [
             {"label": option[:12], "question": option}
             for option in spec.clarification_options[:6]
@@ -1665,7 +1735,22 @@ async def tiered_answer(
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
-            followups = _clarification_followups(spec)
+            # ⚠️ 种子用 `resolver_query_seed` 而不是原始 `query` —— 两个理由:
+            #
+            # 1. **它是这条答案里的权威完整问句**。同一个响应的
+            #    `structured_context["question_seed"]` 用的就是它, 换范围按钮
+            #    2026-07-31 已经为此栽过一次(发裸范围词 ⇒「查询维度超出计划
+            #    resolver 的能力范围」, 按钮等于哑弹)。
+            # 2. **接收侧按它对账**。多轮澄清时 `_maybe_register_pending` 存进
+            #    pending 的正是 `continued.resolver_query_seed`, 而接收侧要靠
+            #    「答案以 original_query 结尾」把合成句还原成片段。用原始
+            #    `query` 合成 ⇒ 第二轮那次 `endswith` 不成立 ⇒ 还原静默 no-op
+            #    ⇒ 整句撞上精确相等白名单, 零 LLM 延续又断一次。
+            #
+            # ⚠️ 时间澄清那一支行为不变: 它的触发条件本身就含 `not time_phrase`,
+            #    而 `effective_query` 只在 `time_phrase` 非空时才与 `query` 不同。
+            followups = _clarification_followups(
+                spec, str(getattr(spec, "resolver_query_seed", "") or "") or query)
             if followups:
                 clarification_result["suggested_followups"] = followups
             if action_warning:

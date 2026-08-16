@@ -4282,6 +4282,28 @@ def _trusted_context_dish_followup_spec(
     return spec
 
 
+def _button_answer_fragment(original_query: str, answer: str) -> str:
+    """澄清按钮发的是**合成的完整问句**, 把它还原成用户点的那一段。
+
+    2026-08-16: 按钮的 `question` 从光秃秃的词(`本月`)改成了合成句
+    (`本月哪个菜卖得好`) —— 那个词成了进程内计划缓存的键, 而键里不含会话
+    上下文, 生产实测一条对话的计划被另一条对话命中。
+
+    ⚠️ 而**这一侧**的判据全是按「答案是个片段」写的: 白名单是精确相等
+    (`answer_normalized in {本月, 上个月, ...}`), 拼接是
+    `f"{original_query} {answer}"`。改了发什么没改认什么 ⇒ 零 LLM 确定性
+    延续整条失效(实测 4/4 HIT → 0/4), 且拼接结果把原问句重复一遍。
+
+    ⇒ 判之前先还原。⚠️ 只在答案**恰好是** `<片段> + 原问句` 时还原,
+    其余原样返回 —— 用户手打的话不该被这个函数动到。
+    """
+    a = (answer or "").strip()
+    q = (original_query or "").strip()
+    if q and len(a) > len(q) and a.endswith(q):
+        return a[: -len(q)].strip()
+    return a
+
+
 def _approved_exact_continuation_route(
     original_query: str,
     answer: str,
@@ -4299,6 +4321,7 @@ def _approved_exact_continuation_route(
         return None
     matched_code, inherited_time, inherited_store = matched
 
+    answer = _button_answer_fragment(original_query, answer)
     answer_normalized = _normalize_exact_phrase(answer)
     slots = _slots_of_clarification(clarification_question)
 
@@ -4380,6 +4403,7 @@ def _trusted_named_dish_button_continuation(
     ):
         return None
 
+    answer = _button_answer_fragment(original_query, answer)
     answer_normalized = _normalize_exact_phrase(answer)
     slots = _slots_of_clarification(clarification_question)
     approved_windows = {
@@ -7194,7 +7218,16 @@ async def _parse_continuation(
     """
     original_query = pending.get("original_query") or ""
     clarification_question = pending.get("clarification_question")
-    concatenated = f"{original_query} {query}".strip()
+    # `query` 可能是按钮发来的**合成句**(`<片段>+original_query`) —— 直接拼接
+    # 会把 original_query 重复一遍(见 `_button_answer_fragment`)。手打的自由
+    # 文本不受影响, 该辅助函数只在确实是 <片段>+original_query 时才还原。
+    #
+    # ⚠️ 算成**一个局部**再用, ⛔ 不在每个需要它的地方各内联一次 ——
+    # 本函数下面还有两处 `_is_pure_store_scope_answer(...)` 要用同一个还原值,
+    # 内联会让它们悄悄漏掉(第一版就漏了: 门店按钮的合成句在那两处判为 False,
+    # 于是落回 T3)。由 `test_button_answer_roundtrip` 里的 AST 闸钉住。
+    answer_fragment = _button_answer_fragment(original_query, query)
+    concatenated = f"{original_query} {answer_fragment}".strip()
 
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
@@ -7322,14 +7355,20 @@ async def _parse_continuation(
     ):
         if (
             "store" in _slots_of_clarification(clarification_question)
-            and _is_pure_store_scope_answer(query)
+            and _is_pure_store_scope_answer(answer_fragment)
         ):
             # Store-scope buttons are syntactically trailing answers, while
             # the dish extractor's trusted grammar accepts scope prefixes.
             # Reorder only this already-validated pure scope answer ahead of
             # the sealed named-dish seed; no user semantics are invented.
+            # ⚠️ 用 `answer_fragment` 而不是 `query`: 上面那道闸判的就是片段,
+            # 载荷再用原始 `query` 就等于**闸和载荷不是同一个东西** ——
+            # 门店按钮发合成句时拼出 `全部门店米饭的销量是多少 米饭的销量是多少`,
+            # 抽取器返回 None, 34/34 全部落回 T3(实测)。
+            # 🔴 这一处曾经漏掉过: 上一版只改了闸的实参没改载荷, 而当时的 AST 闸
+            # 只钉实参 ⇒ **半吊子上它是绿的**。现在闸同时钉载荷。
             scoped_named_dish_spec = _explicit_named_dish_metric_spec(
-                f"{query} {original_query}".strip(),
+                f"{answer_fragment} {original_query}".strip(),
                 is_continuation=True,
             )
             if scoped_named_dish_spec is not None:
@@ -7445,7 +7484,7 @@ async def _parse_continuation(
 
     if (
         "store" in _slots_of_clarification(clarification_question)
-        and _is_pure_store_scope_answer(query)
+        and _is_pure_store_scope_answer(answer_fragment)
     ):
         explicit_comparison_spec = _explicit_sales_period_comparison_spec(
             concatenated,

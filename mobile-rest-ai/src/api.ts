@@ -1,4 +1,4 @@
-import type { ChartPayload, DemoLoginResponse, SynthesisResponse } from './types'
+import type { ChartPayload, DemoLoginResponse, FollowupItem, SynthesisResponse } from './types'
 
 const TOKEN_STORAGE_KEY = 'cretas_rest_ai_token'
 const FACTORY_ID_STORAGE_KEY = 'cretas_rest_ai_factory_id'
@@ -109,25 +109,43 @@ function normalizeOption(raw: Record<string, unknown>): Record<string, unknown> 
  *
  * ⚠️ 形状要与 web-admin 那份**保持一致**（`web-admin/src/api/smartbi/
  * restaurant-chat.ts:32`）：条目可能是裸字符串，也可能是
- * `{question|text|label}` 三种键之一；去重后取前 4 条。
+ * `{question|text|label}` 键的组合；去重后取前 4 条。
  * ⛔ 只认 `question` 一种键会静默丢掉另外两种——那正是「产出端有了、
  * 消费端收不到」的下一层。
+ *
+ * 2026-08-16: 返回值从 `string[]` 换成 `FollowupItem[]`（第二层问题：
+ * 消费端把 label/question 塌成一个字符串, 见 `types.ts` 里的注释）。
+ * `label` 给人看，`question` 是要发送的完整句 —— 两者不再合并。
+ * ⚠️ 兼容三种旧形状（不变）：
+ *   - 裸字符串           → label = question = 该字符串
+ *   - `{question}`(无 label) → label 退回 question
+ *   - `{label}`(无 question, 旧协议把 label 当成可发送的完整句) →
+ *     question 退回 label
+ * 新形状 `{label, question}` 两者都存在时各自取值。
+ * ⚠️ 去重键是 `question` 不是 `label`——两个不同的 label 如果指向同一个
+ * question，是同一个动作（例如同义短词换皮）。
  */
-export function normalizeFollowups(...sources: unknown[]): string[] {
-  const out: string[] = []
+export function normalizeFollowups(...sources: unknown[]): FollowupItem[] {
+  const out: FollowupItem[] = []
+  const seenQuestions = new Set<string>()
   for (const value of sources) {
     if (!Array.isArray(value)) continue
     for (const item of value) {
-      let text = ''
+      let question = ''
+      let label = ''
       if (typeof item === 'string') {
-        text = item
+        question = item.trim()
       } else if (item && typeof item === 'object') {
         const rec = item as Record<string, unknown>
         const q = rec.question ?? rec.text ?? rec.label
-        if (typeof q === 'string') text = q
+        if (typeof q === 'string') question = q.trim()
+        if (typeof rec.label === 'string') label = rec.label.trim()
       }
-      text = text.trim()
-      if (text && !out.includes(text)) out.push(text)
+      if (!question) continue
+      if (!label) label = question
+      if (seenQuestions.has(question)) continue
+      seenQuestions.add(question)
+      out.push({ label, question })
     }
   }
   return out.slice(0, 4)

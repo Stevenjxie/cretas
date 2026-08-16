@@ -108,6 +108,9 @@
                 web-admin 一直在渲染, ⛔ 唯独老板用的这个前端从来没读过。
                 ⚠️ 它直接服务「让老板打开之后能自己做出一个决定」——
                    下一步该问什么, 比再多给一个数更接近「决定」。
+                2026-08-16: 条目是 {label, question} —— chip 显示 label
+                (给人看的短词), 点击发 question(可独立发送的完整句,
+                裸词会撞服务端计划缓存)。⛔ 不要把两者合并回一个字符串。
               -->
               <div
                 v-if="!message.isStreaming && message.followups?.length"
@@ -115,13 +118,13 @@
                 aria-label="接下来可以问"
               >
                 <button
-                  v-for="q in message.followups"
-                  :key="`${message.id}-fu-${q}`"
+                  v-for="fu in message.followups"
+                  :key="`${message.id}-fu-${fu.question}`"
                   type="button"
                   class="followup-chip"
                   :disabled="!isReady || isAsking"
-                  @click="sendQuestion(q)"
-                >{{ q }}</button>
+                  @click="sendQuestion(fu.question)"
+                >{{ fu.label }}</button>
               </div>
 
               <div class="answer-footer">

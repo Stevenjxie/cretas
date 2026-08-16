@@ -18,42 +18,193 @@
  *
  * ⛔ 不量「api.ts 里有没有 normalizeFollowups」（那是读代码）。
  * 量的是：喂一个**真实形状**的后端响应，页面上能不能点出那几个追问。
- * 三种条目形状（裸串 / {question} / {label}）都要出得来 —— 只认一种键
- * 会静默丢掉另外两种。
+ * 四种条目形状（裸串 / {question} / {label}旧协议 / {label,question}新协议）
+ * 都要出得来 —— 只认一种键会静默丢掉另外几种。
+ *
+ * ## 2026-08-16 i3 回归 · 第二层守卫
+ *
+ * 后端把条目拆成 {label, question}（label 给人看的短词, question 是
+ * 可独立发送的完整句 —— 裸词会撞服务端计划缓存, 见 fix-i3-report.md）。
+ * `normalizeFollowups` 一度把两者塌成一个字符串, 结果 chip 上显示的是
+ * 整句 question 而不是短词 label。⇒ 这条闸必须同时守两条腿, 缺一条都
+ * 测不出这次回归:
+ *   (a) chip **显示的文本** 是 label
+ *   (b) 点击 chip **实际发送** 的值是 question
+ * 只守 (a) 不守 (b)：可能显示对了但点击仍然发全句（撞缓存的那个缺陷复发）。
+ * 只守 (b) 不守 (a)：可能发送对了但界面仍然显示整句（视觉回归复发）。
  *
  * ## 阳性/阴性对照（硬约束 9）
  *
- * · 阳性：后端给了 3 条 ⇒ 页面上必须**恰好**出现 3 个按钮
+ * · 阳性：后端给了 4 条 ⇒ 页面上必须**恰好**出现 4 个按钮
  * · 阴性：后端一条都不给 ⇒ 页面上**一个都不许有**（否则是我写死的假芯片）
+ * · label≠question 的对照（第 4 条）：断言两者**不相等**——否则「显示的是
+ *   label」这条断言可能只是巧合过（label 和 question 恰好长得一样）。
  */
 import { chromium } from 'playwright';
 
-const URL = 'http://localhost:5211/mobile-ai/rest/followup-preview.html';
+// ⚠️ 端口可配。第一版把 5211 写死, 而本机那个端口上跑着**别的服务**
+//    (根路径 302 / 目标页 404) ⇒ 闸提交之后一次都没跑起来过。
+//    起服务: `npm run build && npx vite preview --port <PORT>`
+const PORT = process.env.FOLLOWUP_GATE_PORT || '5199';
+const URL = `http://localhost:${PORT}/mobile-ai/rest/followup-preview.html`;
+
+// 🔴 三态的第三态 (硬约束 4): **这次没量到** ⇒ rc=2,
+//    ⛔ 不是「没问题」(rc=0) 也不是「有问题」(rc=1)。
+//
+//    两种「没量到」都要接住, 实测两种都出现过:
+//    (a) 服务根本没起 —— `page.goto` 直接抛。第一版没接, rc=1, 与「闸红了」
+//        混在一起。
+//    (b) 页面起来了但没有 `window.__probe` —— vite preview 的 SPA fallback
+//        会把 index.html 顶上来, HTTP **200**。第一版直接读
+//        `probe.withFollowups` ⇒ `TypeError`, 「没能做决定」被伪装成崩溃。
+//
+//    ⚠️ 起服务要用 **dev server**: `followup-preview.html` 在项目根,
+//    ⛔ 不在 `dist` 里, `vite preview` 拿不到它。
+const HOWTO = [
+  `   起服务: cd mobile-rest-ai && npx vite --port ${PORT} --strictPort`,
+  '   ⚠️ 必须是 dev server —— followup-preview.html 在项目根, 不在 dist',
+  '   换端口: FOLLOWUP_GATE_PORT=<port> node followup-gate.mjs',
+].join('\n');
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
-await page.goto(URL, { waitUntil: 'networkidle' });
 
-const got = await page.evaluate(() => window.__probe);
-console.log('[读数]', JSON.stringify(got, null, 0));
+let probe;
+try {
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  probe = await page.evaluate(() => window.__probe);
+} catch (err) {
+  console.log(`⛔ INSTRUMENT DEAD — 打不开 ${URL}`);
+  console.log(`   ${err.message.split('\n')[0]}`);
+  console.log('   这次**没量到**任何东西, 本次读数作废 (⛔ 不等于「通过」)。');
+  console.log(HOWTO);
+  await browser.close();
+  process.exit(2);
+}
+
+if (!probe || !Array.isArray(probe.withFollowups)) {
+  console.log(`⛔ INSTRUMENT DEAD — ${URL} 打得开, 但页面上没有 window.__probe。`);
+  console.log('   (多半是 SPA fallback 把 index.html 顶上来了 —— HTTP 200 也会这样)');
+  console.log('   这次**没量到**任何东西, 本次读数作废 (⛔ 不等于「通过」)。');
+  console.log(HOWTO);
+  await browser.close();
+  process.exit(2);
+}
+
+console.log('[读数·结构化条目]', JSON.stringify(probe.withFollowups, null, 0));
+console.log('[读数·显示文本]', JSON.stringify(probe.displayedText, null, 0));
+console.log('[读数·阴性]', JSON.stringify(probe.withoutFollowups, null, 0));
+
+let failed = false;
+let instrumentDead = false;
+
+// --- 阴性对照 (先跑, 见 B-1 闸同款先后顺序) ---
+if (probe.withoutFollowups.length !== 0) {
+  console.log('⛔ 后端没给却出了芯片 ⇒ 那是写死的假芯片，主读数无意义。');
+  instrumentDead = true;
+}
+
+// --- 阳性对照: 恰好 4 条, 四种形状都归一化成功 ---
+const expected = [
+  { label: '为什么今天卖的这么少', question: '为什么今天卖的这么少' },
+  { label: '哪道菜拖了后腿', question: '哪道菜拖了后腿' },
+  { label: '跟上周比差在哪', question: '跟上周比差在哪' },
+  { label: '本月', question: '本月哪个菜卖得好' },
+];
+if (probe.withFollowups.length !== 4) {
+  console.log(`🔴 四种条目形状没有全部归一化成功: 期望 4 条, 实得 ${probe.withFollowups.length} 条`);
+  failed = true;
+} else {
+  expected.forEach((exp, i) => {
+    const got = probe.withFollowups[i];
+    if (got.label !== exp.label || got.question !== exp.question) {
+      console.log(`🔴 第 ${i} 条不匹配: 期望 ${JSON.stringify(exp)}, 实得 ${JSON.stringify(got)}`);
+      failed = true;
+    }
+  });
+}
+
+// --- (a) chip 显示的文本是 label, 不是 question ---
+const expectedDisplay = expected.map((e) => e.label);
+const displayOk = JSON.stringify(probe.displayedText) === JSON.stringify(expectedDisplay);
+if (!displayOk) {
+  console.log(`🔴 chip 显示文本不是 label: 期望 ${JSON.stringify(expectedDisplay)}, 实得 ${JSON.stringify(probe.displayedText)}`);
+  failed = true;
+}
+
+// --- 对照: 第 4 条 label ≠ question, 否则上一条断言可能是巧合过 ---
+const fourth = expected[3];
+if (fourth.label === fourth.question) {
+  console.log('⛔ 第 4 条 label 与 question 相同 —— 显示断言测不出回归, 对照本身失效。');
+  instrumentDead = true;
+} else {
+  console.log(`[对照] 第 4 条 label(${fourth.label}) ≠ question(${fourth.question}): 能测出「显示成 question」这类回归`);
+}
+
+// --- (b) 点击 chip 实际发送的值是 question, 不是 label ---
+const sent = await page.evaluate((i) => window.__clickFollowupAndGetSent(i), 3);
+console.log(`[读数·点击发送] 点第 4 个 chip(label=本月) -> 实际发送 "${sent}"`);
+if (sent !== fourth.question) {
+  console.log(`🔴 点击发送的不是 question: 期望 "${fourth.question}", 实得 "${sent}"`);
+  failed = true;
+}
+
+// --- chip 不能被撑成近满宽的块 ---
+// ⚠️ ①里四条 label 现在全是短词/短句, 天然不会撑爆 —— 用它们做宽度对照
+// 是恒真式(测不出"没加 max-width"这类回归)。真正会撑爆的形状是③:
+// 旧协议 {question} 没配 label 时, label 退回一整句长话。
+const widths = await page.evaluate(() => {
+  return [...document.querySelectorAll('#with .followup-chip')].map((b) => Math.round(b.getBoundingClientRect().width));
+});
+const stress = await page.evaluate(() => {
+  const chip = document.querySelector('#stress .followup-chip');
+  const unbounded = document.getElementById('stress-unbounded');
+  return {
+    chipWidth: chip ? Math.round(chip.getBoundingClientRect().width) : null,
+    unboundedWidth: unbounded ? Math.round(unbounded.getBoundingClientRect().width) : null,
+    text: chip ? chip.textContent : null,
+  };
+});
+console.log(`[读数·chip 宽度①]`, JSON.stringify(widths));
+console.log(`[读数·chip 宽度③压力]`, JSON.stringify(stress));
+const FRAME_WIDTH = 420 - 32; // .frame 左右各 16px padding
+const MAX_PILL_WIDTH = 225; // style.css max-width:220px + 1px 边框*2, 留 3px 容差
+
+// 阳性对照: ③那句话本身必须长到「不加约束就会超宽」, 否则下面「chip 没超宽」
+// 这条断言可能只是因为文本本来就短, 测量器根本没被逼出超宽的情况。
+if (stress.unboundedWidth === null || stress.unboundedWidth <= MAX_PILL_WIDTH) {
+  console.log(`⛔ ③压力文本无约束宽度只有 ${stress.unboundedWidth}px, 不够长, 测不出"没加 max-width"这类回归。`);
+  instrumentDead = true;
+} else {
+  console.log(`[对照] ③压力文本无约束会有 ${stress.unboundedWidth}px (> ${MAX_PILL_WIDTH}px) —— 长度足以暴露"没加 max-width"`);
+}
+
+widths.forEach((w, i) => {
+  if (w > MAX_PILL_WIDTH) {
+    console.log(`🔴 第 ${i} 个 chip 宽 ${w}px > ${MAX_PILL_WIDTH}px —— 被撑成近满宽的块了(不再像药丸)`);
+    failed = true;
+  }
+});
+if (stress.chipWidth === null) {
+  console.log('🔴 ③压力 chip 没渲染出来');
+  failed = true;
+} else if (stress.chipWidth > MAX_PILL_WIDTH) {
+  console.log(`🔴 ③压力 chip 宽 ${stress.chipWidth}px > ${MAX_PILL_WIDTH}px —— 长句 label 撑爆了 chip(缺 max-width/ellipsis)`);
+  failed = true;
+} else if (stress.chipWidth >= FRAME_WIDTH - 4) {
+  console.log(`🔴 ③压力 chip 宽 ${stress.chipWidth}px 已接近整行 ${FRAME_WIDTH}px —— 这正是修复要消灭的形状`);
+  failed = true;
+}
 
 await browser.close();
 
-const expected = ['为什么今天卖的这么少', '哪道菜拖了后腿', '跟上周比差在哪'];
-const ok =
-  got.withFollowups.length === 3 &&
-  expected.every((q) => got.withFollowups.includes(q)) &&
-  got.withoutFollowups.length === 0;
-
 console.log('='.repeat(70));
-console.log(`[阳性对照] 给 3 条 -> 页面出 ${got.withFollowups.length} 个按钮`);
-console.log(`[阴性对照] 一条不给 -> 页面出 ${got.withoutFollowups.length} 个按钮（必须 0）`);
-if (got.withoutFollowups.length !== 0) {
-  console.log('⛔ 后端没给却出了芯片 ⇒ 那是写死的假芯片，主读数无意义。');
+if (instrumentDead) {
+  console.log('⛔ 仪器自身对照未通过 —— 主读数作废。');
   process.exit(2);
 }
-if (!ok) {
-  console.log('🔴 三种条目形状没有全部渲染出来:', got.withFollowups);
+if (failed) {
+  console.log('🔴 至少一条断言失败 —— 见上方 🔴 标记的行。');
   process.exit(1);
 }
-console.log('✅ 三种形状（裸串 / {question} / {label}）都渲染出来了');
+console.log('✅ 四种形状都归一化成功；chip 显示 label、点击发 question；chip 宽度未被撑成满宽块。');
