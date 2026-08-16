@@ -70,6 +70,24 @@ def test_empty_seed_falls_back_to_the_bare_word(seed):
     assert _compose_clarification_question("本月", seed, kind="time") == "本月"
 
 
+def test_an_empty_prefix_does_not_turn_the_seed_into_the_question():
+    """🔴 准入 1 的 `not head` 这一半**是承重的** —— 而它差点没有测试。
+
+    `_split_store_scope(x, names)[0]` 在切不出前缀时返回**空串**, 于是
+    `prefix=""` 时 `[0] == head` **恒成立** ⇒ 没有准入 1 就会把**原问句本身**
+    当成门店按钮的 question 发出去, 门店范围凭空消失。
+
+    ⚠️ 生产上 `spec.store_options` 混进一个空串就会走到这里。
+
+    ⚠️ 另一半 (`not body`) 不承重: 它只在 `prefix` 带首尾空格时改变输出,
+    而那时它返回的是**未 strip 的** prefix。⇒ 它是防御性的, 不是判据。
+    """
+    assert _compose_clarification_question(
+        "", SEED, kind="store", store_names=STORE_NAMES) == ""
+    assert _compose_clarification_question(
+        "   ", SEED, kind="store", store_names=STORE_NAMES) == "   "
+
+
 # ── 准入 2：自足性，**按种类分**────────────────────────────────────
 def test_a_time_word_the_parser_does_not_know_falls_back():
     """🔴 让准入 2（时间）真的红一次。

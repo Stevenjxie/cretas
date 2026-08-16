@@ -1070,8 +1070,12 @@ def _compose_clarification_question(
 
     ## 准入(任一不过就退回 `prefix`, ⛔ 不发一个更坏的串)
 
-    1. seed 非空 —— ⚠️ **不能靠下面那条兜**: seed 为空时合成句就是 `prefix`,
-       而 `prefix` 自己解得出窗口, 自足性检查会放行一个不是完整句子的串。
+    1. prefix 与 seed 都非空 —— 🔴 承重的是 **prefix 非空** 那一半:
+       `_split_store_scope` 切不出前缀时返回空串, 于是 `prefix=""` 时
+       `[0] == head` **恒成立** ⇒ 少了它, 门店按钮会把**原问句本身**
+       当成 question 发出去, 门店范围凭空消失。
+       ⚠️ `seed` 非空那一半**不承重**(准入 2 已覆盖), 它只在 prefix 带首尾
+       空格时改变输出。保留它是为了让「seed 为空」这个退化场景显式可读。
     2. 合成句自足 —— 🔴 **按种类查不同的东西**:
        - time: 解得出窗口
        - store: 门店前缀能被 `_split_store_scope` 原样切回来
@@ -1120,7 +1124,7 @@ def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
         ],
     )
     current_window, body = _split_time_scope(remainder)
-    if not body:
+    if not head or not body:
         # 整句就是一个时间词, 换掉之后什么都不剩。
         return []
     # 当前窗口不再给一遍。两个来源都要排除: 规划层的 window_label, 以及问句里
