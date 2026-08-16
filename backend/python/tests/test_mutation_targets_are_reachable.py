@@ -64,6 +64,51 @@ def _from_imported_names(src: str):
     return out
 
 
+
+def _setattr_calls(src: str):
+    """扫出真正的 `monkeypatch.setattr(mod, "NAME", ...)` **调用**。
+
+    🔴 2026-08-16 换成 AST —— 原来是正则扫**原始源码**, 于是**注释和 docstring
+    里提到这个写法的那一行也被数进去**。实测: 一条只在 `#:` 注释里出现的
+    `monkeypatch.setattr(R, "_provider_config", ...)` 让棘轮从 25 涨到 26,
+    而那个文件里一行 setattr 代码都没有。
+
+    ⚠️ 这是本仓同形第四次(数注解不剥注释 / grep 数进 docstring / 闸把自己的
+       输出也数了进去)。仓里自己的结论就是「这类闸一律走 AST, 不再收窄正则」——
+       字符串计数量的是**文本**, AST 量的是**结构**, 而闸要守的从来是结构。
+
+    ⛔ 只认字符串字面量的第二个参数(与原正则同口径), 动态名字不在本闸射程内。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not (isinstance(fn, ast.Attribute) and fn.attr == "setattr"):
+            continue
+        if not (isinstance(fn.value, ast.Name) and fn.value.id == "monkeypatch"):
+            continue
+        if len(node.args) < 2:
+            continue
+        tgt, nm = node.args[0], node.args[1]
+        if not (isinstance(nm, ast.Constant) and isinstance(nm.value, str)):
+            continue
+        # 目标可能是 `R` 或 `pkg.mod` —— 还原成点号串, 与原正则的捕获同形
+        parts = []
+        cur = tgt
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        else:
+            continue
+        yield ".".join(reversed(parts)), nm.value
+
+
 def _iter_test_files():
     for d in _TEST_DIRS:
         base = _PY_ROOT / d
@@ -99,7 +144,7 @@ def test_monkeypatched_names_are_module_attributes_not_from_imports():
     for test_file in _iter_test_files():
         src = test_file.read_text(encoding="utf-8", errors="ignore")
         aliases = {a[2]: (a[0] or a[1]) for a in _ALIAS.findall(src)}
-        for target, name in _SETATTR.findall(src):
+        for target, name in _setattr_calls(src):
             scanned += 1
             dotted = aliases.get(target, target)
             if _module_file(dotted) is None:
