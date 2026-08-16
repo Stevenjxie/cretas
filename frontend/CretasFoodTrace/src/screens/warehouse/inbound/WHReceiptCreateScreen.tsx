@@ -13,9 +13,10 @@
  *
  * 提交流程:
  *   1. POST /purchase/receives  (创建草稿入库单, 含全部 items)
- *   2. POST /purchase/receives/{id}/confirm  (确认 → 触发 material_batches 创建)
- *   3. 对每个抄码品行: POST /material/abaca-log (用 batchNumber 自动解析 batchId)
- *   4. Issue #794: 把预先拍的照片上传到 OSS, 注册 entityType=PURCHASE_RECEIPT, entityId=receive.id
+ *   2. Issue #794: 把拍好的照片上传到 OSS, 注册 entityType=PURCHASE_RECEIPT, entityId=receive.id
+ *      ⛔ 必须在 confirm 【之前】—— 后端 confirm 会校验该入库单已有凭证, 否则 409
+ *   3. POST /purchase/receives/{id}/confirm  (确认 → 触发 material_batches 创建)
+ *   4. 对每个抄码品行: POST /material/abaca-log (用 batchNumber 自动解析 batchId)
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -80,7 +81,7 @@ interface RowDraft {
   factor: number;
 }
 
-// Issue #794: 收货拍照 — 提交前拍, 提交后批量上传到 entity=PURCHASE_RECEIPT
+// Issue #794: 收货拍照 — 提交前拍, 建完草稿后【确认之前】批量上传到 entity=PURCHASE_RECEIPT
 interface PendingPhoto {
   uri: string;
   fileName: string;
@@ -107,7 +108,7 @@ export default function WHReceiptCreateScreen() {
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  // Issue #794: 提交前 stash 照片, 提交成功后批量上传
+  // Issue #794: 提交前 stash 照片, 草稿建好后、confirm 之前批量上传
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
   // SP4: 可选录入厂号/产地 (入库时记录, 提交后写入批次)
   const [factoryNumber, setFactoryNumber] = useState('');
@@ -305,6 +306,23 @@ export default function WHReceiptCreateScreen() {
       }
     }
 
+    /*
+     * 🔴 2026-08-16: 没有凭证就别让他填完再被拒。
+     *
+     * 后端 PurchaseServiceImpl 在 confirmReceive 里【无条件】要求该入库单已有
+     * PURCHASE_RECEIPT 附件, 否则 409「确认收货前必须上传供应商供货单或收货凭证」
+     * (该闸 2026-07-22 #1577 加入, 没有工厂级开关)。
+     * web-admin 一直是对的 —— 附件数为 0 时直接禁用「确认收货入库」按钮。
+     * 这里同口径地在提交前拦住, 并说清该做什么。
+     */
+    if (photos.length === 0) {
+      Alert.alert(
+        '请先拍收货凭证',
+        '确认入库前必须有供应商供货单或收货凭证。\n请在上方「收货照片」处拍照或选图后再提交。',
+      );
+      return;
+    }
+
     setSubmitting(true);
     try {
       // 1. createReceive (草稿)
@@ -331,7 +349,44 @@ export default function WHReceiptCreateScreen() {
       const receive: PurchaseReceiveRecord = createRes.data;
       if (!receive?.id) throw new Error('createReceive 返回缺 id');
 
-      // 2. confirmReceive (触发 material_batches 创建)
+      /*
+       * 2. Issue #794 + 2026-08-16 顺序修正: 凭证必须在 confirm 【之前】上传。
+       *
+       * 此前这一步排在 confirm 之后(原第 4 步), 而后端从 2026-07-22 (#1577) 起
+       * 在 confirm 里要求附件已存在 ⇒ 第 2 步必然 409, 抛异常后第 4 步根本执行不到,
+       * 照片永远传不上去。**RN 扫码入库因此 100% 失败, 持续 25 天** ——
+       * 没人发现是因为这条链在生产上没人走(2026-08-16 端到端走查时撞出来的)。
+       *
+       * 附件要挂在入库单上, 所以必须在 createReceive 拿到 id 之后、confirm 之前。
+       */
+      let photosUploaded = 0;
+      const photoErrors: string[] = [];
+      for (const p of photos) {
+        try {
+          await attachmentApi.uploadAndRegister(
+            { uri: p.uri, name: p.fileName, type: p.mimeType, size: p.size },
+            'PURCHASE_RECEIPT',
+            receive.id,
+            { businessTag: 'RECEIVE_PHOTO', fileCategory: 'PHOTO' },
+            factoryId,
+          );
+          photosUploaded += 1;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : '照片上传失败';
+          photoErrors.push(`${p.fileName}: ${msg}`);
+        }
+      }
+      // 一张都没传上去就别去 confirm —— 那一定是 409, 而且草稿会停在半路。
+      // 说清「草稿已建、去哪继续」, 不要只报一句失败。
+      if (photosUploaded === 0) {
+        throw new Error(
+          `收货凭证一张都没上传成功，未执行入库确认。\n`
+          + `入库单草稿 ${receive.receiveNumber || receive.id} 已创建，可在仓储收货任务里补传凭证后确认。\n`
+          + photoErrors.join('\n'),
+        );
+      }
+
+      // 3. confirmReceive (触发 material_batches 创建)
       const confirmRes = await purchaseApiClient.confirmReceive(receive.id, factoryId);
       const confirmed: PurchaseReceiveRecord = confirmRes.data;
 
@@ -392,24 +447,7 @@ export default function WHReceiptCreateScreen() {
         }
       }
 
-      // 4. Issue #794: 上传所有 stash 的照片到 PURCHASE_RECEIPT/{receive.id}
-      let photosUploaded = 0;
-      const photoErrors: string[] = [];
-      for (const p of photos) {
-        try {
-          await attachmentApi.uploadAndRegister(
-            { uri: p.uri, name: p.fileName, type: p.mimeType, size: p.size },
-            'PURCHASE_RECEIPT',
-            receive.id,
-            { businessTag: 'RECEIVE_PHOTO', fileCategory: 'PHOTO' },
-            factoryId,
-          );
-          photosUploaded += 1;
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : '照片上传失败';
-          photoErrors.push(`${p.fileName}: ${msg}`);
-        }
-      }
+      // (凭证已在 confirm 之前上传, 见上方第 2 步 —— ⛔ 不要再挪回这里)
 
       const summary = [
         `入库单 ${confirmed.receiveNumber || receive.id} 创建并确认成功`,
@@ -681,7 +719,7 @@ export default function WHReceiptCreateScreen() {
             </Card.Content>
           </Card>
 
-          {/* Issue #794: 收货拍照附件 — 提交后随入库单一起上传 */}
+          {/* Issue #794: 收货拍照附件 — 必填; 建完草稿后、确认入库前上传 */}
           <Card style={styles.card}>
             <Card.Content>
               <Text style={styles.sectionTitle}>
