@@ -123,7 +123,16 @@ public class FuturePlanMatchingServiceImpl implements FuturePlanMatchingService 
             plan.setAllocatedQuantity(newAllocatedQty);
 
             // 检查是否完全匹配
-            boolean isFullyMatched = newAllocatedQty.compareTo(plan.getPlannedQuantity()) >= 0;
+            // ⛔ plannedQuantity = 0 是「不知道计划多少」的编码(planned_quantity 列在 prod 是
+            //    NOT NULL, 存货生产把 null 存成 0, 见 `373d3dbb6d`), 不是「计划 0 个」。
+            //    不加这道守卫时 newAllocatedQty >= 0 恒真 ⇒ 任何一次分配都判「完全匹配」,
+            //    计划再也不会出现在缺料/待分配里。
+            //    与 WorkReportingServiceImpl.checkAndCompleteBatch 同一个根因;
+            //    由 PlannedQuantityZeroGuardContractTest 钉住。
+            BigDecimal plannedQty = plan.getPlannedQuantity();
+            boolean isFullyMatched = plannedQty != null
+                    && plannedQty.compareTo(BigDecimal.ZERO) > 0
+                    && newAllocatedQty.compareTo(plannedQty) >= 0;
             plan.setIsFullyMatched(isFullyMatched);
             productionPlanRepository.save(plan);
 

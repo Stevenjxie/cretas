@@ -395,12 +395,33 @@ public class WorkReportingServiceImpl {
 
     /**
      * 检查并完成批次：若 actualQuantity >= plannedQuantity 且状态非 COMPLETED，则自动完成
+     *
+     * <p>⚠️ {@code plannedQuantity == 0} 必须<b>不</b>触发自动完成。
+     * {@code planned_quantity} 列在 prod 是 {@code NOT NULL}，于是存货生产把
+     * 「没有计划数量」<b>存成了 0</b>（`373d3dbb6d`）—— 这里的 0 表示
+     * <b>「不知道计划多少」，不是「计划产 0 个」</b>。不加这道守卫时
+     * {@code actual >= 0} 恒真，<b>第一次报工就把整个批次关掉</b>，
+     * 而批次下面还挂着未完成的工序 → 后续报工一律 409「批次已完成, 不可报工」。
+     *
+     * <p>实测（2026-08-16 F006 受控走查）：批次 `10759` {@code planned_quantity=0.00}，
+     * 报一次 3 盒 → `IN_PROGRESS` 直接变 `COMPLETED`，而 w2/w3 两道工序仍是 `PENDING`。
+     *
+     * <p>同一个根因此前已在<b>调拨单</b>那条路修过（`02c2777d33` / #1239），
+     * 全仓另有 10 处比较都带了 {@code > 0} 守卫 —— <b>只有这里和
+     * {@code FuturePlanMatchingServiceImpl} 漏了</b>。现由
+     * {@code PlannedQuantityZeroGuardContractTest} 钉住，不再靠人记得。
      */
     private void checkAndCompleteBatch(ProductionBatch batch) {
         if (batch.getStatus() == ProductionBatchStatus.COMPLETED) {
             return; // 幂等：已完成不重复触发
         }
         if (batch.getPlannedQuantity() == null || batch.getActualQuantity() == null) {
+            return;
+        }
+        // ⛔ planned = 0 是「未知」的编码, 不是「一报就完工」。读不到计划数量就不替用户收口。
+        if (batch.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("批次无有效计划数量, 不自动完成: batchId={}, planned={}",
+                    batch.getId(), batch.getPlannedQuantity());
             return;
         }
         if (batch.getActualQuantity().compareTo(batch.getPlannedQuantity()) >= 0) {
