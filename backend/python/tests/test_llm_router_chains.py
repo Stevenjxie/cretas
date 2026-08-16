@@ -68,8 +68,14 @@ def test_every_text_slot_has_a_floor():
         chain = llm_router.SLOT_MODELS[slot]
         assert chain, f"{slot.value} 链为空"
         floors = [p for p in chain if llm_router._expiry_of(*p) == llm_router._FAR_FUTURE]
+        # 🔑 承重的是这一句 —— docstring 里那个事故("全部过期那天整槽变空")
+        #    要的是「链里**有**一个永不过期的条目」, 与它排第几无关。
         assert floors, f"{slot.value} 没有永不过期的地板条目, 全部 aliyun 过期那天会整槽变空"
-        assert chain[-1] in floors, f"{slot.value} 末位不是地板: {chain[-1]}"
+        # ⛔ 2026-08-16 改的是位置那一句, 不是上面那句。
+        #    owner 定「zhipu 优先」⇒ 地板从末位挪到首位(见 _ABSOLUTE_FIRST 的实测)。
+        #    ⚠️ 位置断言**没有删掉**, 只是换了一端 —— 删掉的话,
+        #      「地板到底在不在一个确定的位置上」就没人守了。
+        assert chain[0] in floors, f"{slot.value} 首位不是地板: {chain[0]}"
 
 
 @pytest.mark.parametrize(
