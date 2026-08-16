@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  *
  * @since 2026-07-04 (same-cause sweep for #1202 / #1205)
  */
-class StringConstantStatusEqualityGuardTest {
+class StringConstantStatusEqualityContractTest {
 
     /**
      * 已确认的 "String 常量 holder 类" (非 enum) 前缀。全仓库 grep 逐一人工核实
