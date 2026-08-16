@@ -148,6 +148,12 @@ jest.mock('@react-navigation/native', () => ({
     const React = require('react');
     React.useEffect(() => { cb(); }, []);
   },
+  // 2026-08-16: 补 useNavigationState。ProcessTaskListScreen:33 用它算 canGoBack,
+  // 而这份局部 mock【覆盖】了 setup.ts 的全局 mock ⇒ 必须在这里也补, 否则渲染期抛
+  //   "Couldn't get the navigation state. Is your component inside a navigator?"
+  // ⚠️ 这类红是【测试过期】不是屏幕回归 —— 判错方向就会去改屏幕。
+  useNavigationState: (selector: (state: unknown) => unknown) =>
+    selector({ index: 0, routes: [{ key: 'test-0', name: 'Test' }] }),
 }));
 
 const mockedProcessTaskApi = processTaskApiClient as jest.Mocked<typeof processTaskApiClient>;

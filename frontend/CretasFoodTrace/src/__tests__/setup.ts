@@ -137,13 +137,42 @@ jest.mock('@react-navigation/native', () => ({
     params: {},
   }),
   useFocusEffect: jest.fn(),
+  // 2026-08-16: 补 useNavigationState。屏幕(如 ProcessTaskListScreen 的 canGoBack)
+  // 在这份 mock 写好之后才用上它, 而 mock 没跟上 ⇒ 渲染期直接抛
+  //   "Couldn't get the navigation state. Is your component inside a navigator?"
+  // ⚠️ 这类红是【测试过期】不是屏幕回归 —— 判错方向就会去改屏幕。
+  // 返回单路由栈: 语义 = 「当前在栈底」, 于是 canGoBack 为 false, 不凭空造出返回按钮。
+  useNavigationState: (selector: (state: unknown) => unknown) =>
+    selector({ index: 0, routes: [{ key: 'test-0', name: 'Test' }] }),
 }));
 
 // Mock React Native Paper
 jest.mock('react-native-paper', () => {
   const RealModule = jest.requireActual('react-native-paper');
+  const React = require('react');
+  const { View } = require('react-native');
+  // 2026-08-16: 补 Appbar。整个 integration/screens 目录解禁后, ProcessTaskListScreen:225
+  // 的 <Appbar.Header> 抛 "Cannot read properties of undefined (reading 'Header')"
+  // —— RealModule 在本 jest 环境下拿不到 Appbar。⚠️ 这是 mock 缺口(测试过期),
+  // 不是屏幕回归; 判错方向就会去改屏幕。
+  const passthrough = (name: string) => {
+    const C = ({ children }: any) => React.createElement(View, null, children);
+    C.displayName = name;
+    return C;
+  };
+  // ⚠️ 必须【构造新对象】, 不能往 RealModule.Appbar 上赋值:
+  //    jest.requireActual 返回的是冻结的命名空间对象, `Appbar.Header = x` 会
+  //    【静默失败】(非严格模式下不抛错), 于是 mock 看起来写了却没生效 —— 实测踩过一次。
+  const real: any = RealModule.Appbar ?? {};
+  const Appbar: any = Object.assign(passthrough('Appbar'), {
+    Header: real.Header ?? passthrough('Appbar.Header'),
+    Content: real.Content ?? passthrough('Appbar.Content'),
+    Action: real.Action ?? passthrough('Appbar.Action'),
+    BackAction: real.BackAction ?? passthrough('Appbar.BackAction'),
+  });
   return {
     ...RealModule,
+    Appbar,
     // Portal需要特殊处理
     Portal: ({ children }: any) => children,
   };
