@@ -1,5 +1,16 @@
 """澄清按钮的 `question` 合成成完整问句。
 
+Task 3（2026-08-16, scope revision）: `tests/test_restaurant_intent_service.py`
+里 51 处 `tiered_answer` 调用已经覆盖了**时间**澄清走真实入口的情形
+（`test_reviewed_exact_missing_time_returns_the_four_expected_buttons` /
+`test_time_clarification_returns_four_continuation_buttons`）—— 独立验证过：
+把调用点改回 `_clarification_followups(spec)`（不传 seed），那两条会红。
+
+**门店**澄清走真实入口一条都没有覆盖 —— 本文件原有的
+`test_store_clarification_buttons_carry_the_whole_question` 直接调
+`_clarification_followups`，绕过了「谁调它」（`tiered_answer` 里
+`_clarification_followups(spec, query)` 那一行）。补在文件末尾。
+
 ## 为什么
 
 生产日志实测（2026-08-16）：
@@ -19,6 +30,8 @@
 
 按钮发的 `question` 必须是一句**自足**的话 —— 单独拿去问也能得到同一个答案。
 """
+from unittest.mock import AsyncMock
+
 import pytest
 
 from smartbi.gold.restaurant.restaurant_intent_service import (
@@ -243,3 +256,59 @@ def test_the_window_list_has_exactly_one_definition():
                 if isinstance(n, ast.Constant) and isinstance(n.value, str)}
     assert not (set(_SWITCHABLE_WINDOWS) & literals), (
         f"窗口词又被抄进函数体了: {set(_SWITCHABLE_WINDOWS) & literals}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# Task 3：门店澄清走真实入口 (`tiered_answer`)，不直接调 `_clarification_followups`
+# ══════════════════════════════════════════════════════════════════
+import smartbi.gold.restaurant.restaurant_intent_service as svc  # noqa: E402
+from smartbi.gold.restaurant.restaurant_intent_service import tiered_answer  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_store_scope_clarification_via_tiered_answer_composes_full_questions(
+    monkeypatch,
+):
+    """门店澄清走真实入口 `tiered_answer` —— 时间那支已由
+    `tests/test_restaurant_intent_service.py` 的 51 处 `tiered_answer` 调用覆盖
+    （变异下会红，见本文件顶部说明），门店那支此前一条都没有。
+
+    桩掉的东西：只有 `svc.parse_restaurant_query`（同
+    `tests/test_restaurant_intent_service.py:test_read_only_action_warning_
+    survives_store_scope_clarification` 的做法），直接返回一个
+    `clarification_needed=True` 的门店范围澄清 spec。`pool=object()` ——
+    `_known_data_gap` 拿它查表会抛异常，`tiered_answer` 自己 catch 掉退回
+    `_gap=None`，是既有测试已经验证过的路径，这里不重复验。
+
+    ⛔ 不 mock `_clarification_followups` 本身 —— mock 掉它这条断言就恒真了。
+    """
+    spec = _spec(
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=list(STORE_NAMES),
+    )
+    monkeypatch.setattr(
+        svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+
+    result = await tiered_answer(SEED, object(), "DEMO_REST", None)
+
+    assert result["kind"] == "clarification"
+
+    # ── 阳性对照: 确实拿到了按钮 ──────────────────────────────────
+    # 少了它，下面「question 不许等于光秃秃的门店词」在「一个按钮都没有」
+    # 时恒成立。
+    followups = result.get("suggested_followups")
+    assert followups, f"没拿到任何按钮: {result}"
+
+    # `_clarification_followups` 按 `["全部门店", *store_options[:3]]` 的
+    # 固定顺序构造 scopes —— 用这个顺序反查预期值, ⛔ 不用 label 反拼
+    # (label 是 scope[:12], 会截断长店名; question 用的是未截断的 scope,
+    # 两者不能互推)。
+    scopes = ["全部门店", *STORE_NAMES]
+    assert len(followups) == len(scopes), followups
+    bare_words = set(scopes)
+
+    for button, scope in zip(followups, scopes):
+        assert button["label"] == scope[:12], button
+        assert button["question"] == f"{scope}{SEED}", button
+        # ── 阴性对照: question 不许等于光秃秃的门店词 ─────────────
+        assert button["question"] not in bare_words, button
