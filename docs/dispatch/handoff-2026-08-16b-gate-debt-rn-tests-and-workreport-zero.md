@@ -122,6 +122,77 @@ owner 当晚把重心改成「报工 + 仓储实时关联」。照「判某功�
 
 ---
 
+## 三之二、🔴 真走了一遍报工链 —— 4 个缺陷，其中 2 个让客户那条诉求**当前不可能成立**
+
+owner 授权受控写入。走的是 **RN 真实端点 + RN 客户端的真实 payload 形状**
+（端点取自 `processTaskApiClient` / `workReportingApiClient`，⛔ 没有手拼字段名）。
+**全部写入已冲销**，事务内带硬断言，见 §3-4 账目。
+
+### 现成的场景（不是我造的）
+
+批次 `10759`（叮咚好食光卤猪蹄 200g，`IN_PROGRESS`）挂 3 道工序：
+**w1 `COMPLETED` 实际产出 6 kg** · w2 `PENDING` · w3 `PENDING`。
+正是客户描述的「上工序做完了，下工序等着」。
+
+### ⚠️ 先记我自己错的一次
+
+R1 我传 `reportType: "PROCESSING"` → 400「不支持的报工类型」，差点写成「报工打不通」。
+**那是我的 payload 错**：RN 的 `ReportType` 只有 `'PROGRESS' | 'HOURS'`。
+⇒ **判「产品坏了」之前，先去读真实客户端发的是什么。**（半成品库存那个 404 同理，
+真实路径是 `/semi-finished/inventory`。）
+
+### 走查结果
+
+| # | 现象 | 判据 |
+|---|---|---|
+| 1 | 🔴 **一次产量报工把整个批次关掉了** | 报工前 `10759` = `IN_PROGRESS`；报 `outputQuantity:3` 后 = **`COMPLETED`**，而 **w2/w3 仍是 `PENDING`**。再报工 → **409「批次已已完成, 不可报工」** ⇒ **下面两道工序永远报不了工** |
+| 2 | 🔴 **报工不产生任何库存** | 报工成功（id 23797）后 `semi_finished_inventory_transactions` **仍是 0**，`semi_finished_inventory` **仍只有那 1 行旧的**。我报的 3 kg 没有变成任何库存 |
+| 3 | 🔴 **`workerId` 参数被忽略** | 传 `?workerId=1311`（操作员 f006_worker1），落库 `worker_id=**1310**`（登录的车间主管）⇒ 主管代报工，产量/工时记在自己名下。**对计件工资是错的** |
+| 4 | 🔴 **报工不带工序** | `production_reports.work_process_task_id` = **NULL**。报工只挂 `batchId`，不挂工序 ⇒ 即使将来写了库存，也不知道是**哪道工序**产出的 |
+| 5 | ⚠️ 文案 | 「批次**已已**完成, 不可报工」重复字 |
+| 6 | ⚠️ 分页 1-indexed | `?page=0` → 400「Page index must not be less than zero」；`page=1` 才拿到第 0 页。RN 客户端**原样透传** `page` |
+| 7 | ⚠️ 签到不挂批次 | `process_checkin_records.batch_id` = NULL（只有 `process_task_id`）⇒ `GET /work-reporting/checkin/batch/{id}` 查不到刚签到的人，返回 `[]` |
+
+### 🔑 对客户那句话的结论
+
+客户说「上工序不报工，下工序就没有库存；而且经常漏报工」。走完之后：
+
+▎ **缺陷 1 + 缺陷 2 意味着：就算他们不漏报，这条链现在也走不通。**
+▎ 报第一道工序 → 批次直接完工 → 后两道工序被 409 挡死；
+▎ 而且报工产出**根本不进半成品库存**，下工序无从领用。
+
+⇒ 「**把报工和库存实时关联**」不是接一根线的事，前面这两条得先修。
+
+### 还有一条：`/work-process-tasks/{id}/start|complete` **前端零调用方**
+
+后端有这两个端点，但 `frontend/` 和 `web-admin/` 里**没有任何调用**（在最新 `origin/main` 上查的，
+⛔ 不是在落后 1497 commit 的主目录上）。工序任务实际是被
+`WorkflowTaskProgressWriter` / `YieldReportServiceImpl`（**文员工序录入**那条路）置成 COMPLETED 的
+—— 这解释了为什么 w1 是 `COMPLETED` 而 `completed_by` / `completed_at` 都是 NULL。
+
+⇒ **报工有两条路，移动端这条和文员那条产出的东西不一样**：
+文员那条写出了 `semi_finished_inventory`（`CLK-SEMI-…`，2.00 kg），
+但那行的 `source_work_process_task_id` 和 `batch_id **都是 NULL**，
+且数量 **2.00 kg** 与任务记的 `actual_quantity` **6.0000 kg** 对不上。
+`semi_finished_inventory_transactions` 全程 0 行 ⇒ **这 2 kg 是怎么来的没有流水可查。**
+
+### 走查的写入与冲销（账目）
+
+| 造的 | 冲销 |
+|---|---|
+| `production_reports` 23797（PROGRESS，3 kg）| ✅ 软删除 |
+| `process_checkin_records` 3（f006_worker1 签到 w2）| ✅ 软删除 |
+| `production_batches` 10759 `IN_PROGRESS→COMPLETED`（**被报工自动改的**）| ✅ 改回 `IN_PROGRESS` |
+
+事务内硬断言：待冲销报工/签到**必须各恰好 1 条**，批次**必须当前是 COMPLETED**（否则说明被别人改过，
+整体 `RAISE EXCEPTION` 回滚）。**阴性对照**：断言「`factory_id <> 'F006'` 的报工/签到必须为 0」。
+冲销后逐项核对回基线：报工 0 / 签到 0 / `semi_fin_inventory` 1 / `txns` 0 /
+批次 `IN_PROGRESS` / 三道工序 `COMPLETED,PENDING,PENDING`。
+
+⛔ **`production_batches.updated_at` 无法还原**（现在是走查时间）。这是唯一没能复原的痕迹。
+
+---
+
 ## 四、B1 `FIX-F006-PRESTOCKED-SHIPMENT-E2E-20260809`：台账过期了
 
 owner 已同意转交（全套）。查下来**不需要合并、也不需要部署**：
@@ -169,8 +240,11 @@ owner 当晚口头已给了方向（**采购订单可以无所谓，主要是仓
 
 ## 六、下一个人接着做的（按 owner 当晚给的优先级）
 
-1. 🔴 **按顺序真走一遍报工链**（工序任务 → 签到 → 报工 → 半成品库存 → 下一道工序领用）。
-   F006 现成有 2 个 `PENDING` 工序任务可用。**走之前先读 §3 的「零实例」定性。**
+1. 🔴 **修 §3-2 的缺陷 1 和 2** —— 这两条不修，「报工↔库存实时关联」做不出来：
+   - **一次报工就把批次置 COMPLETED**（后续工序被 409 挡死）。要按**工序**收口，不是按批次。
+   - **报工产出不进半成品库存**（`semi_finished_inventory_transactions` 全程 0 行）。
+   ⚠️ 顺带把 3（`workerId` 被忽略）和 4（报工不挂工序）一起看 —— 4 是 2 的前提：
+   不知道是哪道工序产出的，写进库存也没法给下一道工序领用。
 2. **A2 剩的 35 条**：逐条判「测试过期 vs 屏幕回归」，尤其 `NfcCheckinScreen` 的
    `isProcessMode()` 分支。⛔ 不许把 ignore 加回去。
 3. **B1 的 F006 受控 E2E**（需新建一张 PRESTOCKED 订单）。
