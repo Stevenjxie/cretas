@@ -434,8 +434,19 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         taskRepo.save(t);
 
-        // WIP 正式消耗/产出统一在 Web 审批通过后由 WipInventoryService.postApprovedOutput 过账。
-        // PENDING 报工只作为待审批占用参与后续可领余额计算, 避免驳回时库存已被提前扣减。
+        // ── 2026-08-16 实时入库: WIP 消耗/产出在【提交时】同事务过账 ──
+        //
+        // 此前是「Web 审批通过后」才过账, 而领用在提交时就已即时扣 —— 这个不对称造成:
+        // 第②道报完工, 料已经扣了、产出还没进库, 【第③道永远领不到】。
+        // 客户把它描述成「上工序不报工, 下工序就没有库存」, 而 2026-08-16 F006 受控走查
+        // 实测表明: 就算他不漏报也一样领不到。
+        //
+        // ⛔ 这里不新建过账逻辑 —— postApprovedOutput 本身已是完整事务(消耗源 WIP + 产出入 SFI),
+        //    且读 customFields.wipPosted 幂等, 重复调用是 no-op。只是把【调用点】搬过来。
+        //
+        // 设计: docs/superpowers/specs/2026-08-16-工序报工实时入库-design.md §四
+        // 闸:   RealtimeWipPostingContractTest (钉住过账只出现在本提交路径上)
+        wipInventoryService.postApprovedOutput(factoryId, saved, t, workerId);
 
         Map<String, Object> out = new HashMap<>();
         out.put("reportId", saved.getId());
