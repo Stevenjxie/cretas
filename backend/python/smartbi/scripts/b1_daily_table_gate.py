@@ -128,7 +128,16 @@ def main() -> int:
     check("3a 不出现毛利率 0.68", "0.68" not in out)
     check("3b 不出现 68%", "68%" not in out and "68.0%" not in out)
     check("4 套餐披露在", COMBO_DISCLOSURE in out)
-    check("5 份数最多的那道标了「推断」", "推断" in out and "份数最多" in out)
+    # 🔴 这条原本写的是 `"份数最多" in out` —— 守**字面**。
+    #    而那个字面正是要从菜名格里拿掉的东西(它在 420px 手机上把菜品列撑到 55%,
+    #    把毛利列挤出屏外)。⇒ 断言从「守字面」抬到「守性质」+ 补一条阴性对照。
+    _table_part = out.split("\n\n", 1)[0]
+    check(
+        "5 份数最多的那道标了「推断」，且份数**不在表格单元格里**",
+        "推断" in out and "份数" in out          # 性质: 推断被标出来了
+        and "份" not in _table_part,             # 阴性: 份数注记不许留在表格里撑宽
+        "份数注记已移出表格",
+    )
 
     check(
         "7 覆盖率限定语在（客户读的正是这一层，删了就是普通 BI 报表）",
