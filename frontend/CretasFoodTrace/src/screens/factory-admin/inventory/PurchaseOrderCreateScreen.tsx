@@ -19,7 +19,12 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, CreatePurchaseOrderRequest } from '../../../services/api/purchaseApiClient';
 import { todayIso } from '../../../utils/orderDate';
-import { supplierApiClient, Supplier, SupplierMaterialRelation } from '../../../services/api/supplierApiClient';
+import {
+  supplierApiClient,
+  Supplier,
+  SupplierMaterialRelation,
+  SupplierPurchaseSpec,
+} from '../../../services/api/supplierApiClient';
 import {
   materialTypeApiClient,
   MaterialType,
@@ -35,6 +40,12 @@ import {
   schemaService,
   purchaseOrderSchema,
 } from '../../../formily';
+import {
+  resolvePurchaseSpecState,
+  canSubmitPurchaseSpecState,
+  buildPurchaseOrderItemPayload,
+  type PurchaseSpecState,
+} from './purchaseOrderItemPayload';
 import { useAuthStore } from '../../../store/authStore';
 import { logger } from '../../../utils/logger';
 import { formatNumberWithCommas } from '../../../utils/formatters';
@@ -51,6 +62,10 @@ interface DraftItem {
   quantity: string;
   unit: string; // 实际下单单位 (可能是 1/2/3 级)
   materialPackagingSpecId: string;
+  /** 该行所属的供应关系 id —— 取采购包装规格要用它 */
+  supplierMaterialId: string;
+  /** 供应商采购包装规格 id。与 materialPackagingSpecId 互斥, 见 handleSubmit 的说明。 */
+  purchasePackagingSpecId: string;
   unitPrice: string;
   remark?: string;
 }
@@ -63,6 +78,8 @@ const blankItem = (): DraftItem => ({
   quantity: '',
   unit: '',
   materialPackagingSpecId: '',
+  supplierMaterialId: '',
+  purchasePackagingSpecId: '',
   unitPrice: '',
   remark: '',
 });
@@ -78,6 +95,16 @@ export default function PurchaseOrderCreateScreen() {
   const [supplierRelations, setSupplierRelations] = useState<SupplierMaterialRelation[] | null>(null);
   const [relationsLoading, setRelationsLoading] = useState(false);
   const [packagingByMaterial, setPackagingByMaterial] = useState<Record<string, MaterialPackagingHierarchy | null>>({});
+  /**
+   * 供应关系 id → 该关系上【启用中】的采购包装规格。
+   *
+   * ⚠️ 三态, 不是两态。`undefined` = 还没取; `null` = **取失败**; `[]` = 确认没有。
+   * `null` 与 `[]` 必须分开: 后端只要该关系有启用规格就强制要求 `purchasePackagingSpecId`,
+   * 把「不知道」当成「没有」就会照常放行, 提交时撞 422 ——
+   * 而那正是这次要修的缺陷本身(界面提供了走不通的路)。
+   */
+  const [purchaseSpecsByRelation, setPurchaseSpecsByRelation] =
+    useState<Record<string, SupplierPurchaseSpec[] | null>>({});
 
   // 头部表单 (DynamicForm) — supplier/expectedDate/remark; Canvas 可加自定义字段
   const headerFormRef = useRef<DynamicFormRef>(null);
@@ -86,7 +113,7 @@ export default function PurchaseOrderCreateScreen() {
   const [headerValues, setHeaderValues] = useState<Record<string, any>>({});
 
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
-  const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'material' | 'unit'; key: string } | null>(null);
+  const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'material' | 'unit' | 'purchaseSpec'; key: string } | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
 
   const selectedSupplierId = String(headerValues?.supplierId ?? '').trim();
@@ -194,6 +221,24 @@ export default function PurchaseOrderCreateScreen() {
     }
   };
 
+  /**
+   * 取某条供应关系上启用中的采购包装规格。失败留 `null`(不知道), ⛔ 不要退化成 `[]`(没有)。
+   */
+  const ensurePurchaseSpecsLoaded = async (relationId: string): Promise<SupplierPurchaseSpec[] | null> => {
+    if (purchaseSpecsByRelation[relationId] !== undefined) return purchaseSpecsByRelation[relationId];
+    const rows = await supplierApiClient.getSupplierPurchaseSpecs(selectedSupplierId, relationId, factoryId);
+    setPurchaseSpecsByRelation((prev) => ({ ...prev, [relationId]: rows }));
+    if (rows === null) log.error('加载采购包装规格失败', new Error(`relationId=${relationId}`));
+    return rows;
+  };
+
+  /** 判定逻辑在 purchaseOrderItemPayload.ts —— 那里是纯函数, 能被真的跑一遍。 */
+  const purchaseSpecState = (item: DraftItem): PurchaseSpecState =>
+    resolvePurchaseSpecState(item, purchaseSpecsByRelation);
+
+  const specsForItem = (item: DraftItem): SupplierPurchaseSpec[] =>
+    (item.supplierMaterialId ? purchaseSpecsByRelation[item.supplierMaterialId] : null) || [];
+
   const updateItem = (key: string, patch: Partial<DraftItem>) => {
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
   };
@@ -206,7 +251,7 @@ export default function PurchaseOrderCreateScreen() {
     setItems((prev) => [...prev, blankItem()]);
   };
 
-  const openPicker = (kind: 'material' | 'unit', key: string) => {
+  const openPicker = (kind: 'material' | 'unit' | 'purchaseSpec', key: string) => {
     setPickerSearch('');
     setOpenMenuFor({ kind, key });
   };
@@ -216,20 +261,62 @@ export default function PurchaseOrderCreateScreen() {
     setPickerSearch('');
   };
 
+  /**
+   * 选中一条采购包装规格 —— 单位与单价都由规格决定, 前端只搬数。
+   *
+   * ⛔ 同时清空 `materialPackagingSpecId`: 后端在两个都收到时会比对二者的换算系数,
+   * 不一致就抛 409「供应商包装规格与原料包装换算不一致」。web-admin 的口径是
+   * 「要么发采购规格, 要么发原料规格, 从不同时发」—— 这里照它做。
+   */
+  const applyPurchaseSpec = (itemKey: string, spec: SupplierPurchaseSpec) => {
+    // 后端要求数量单位与规格的包装单位【逐字相等】, 否则 400。
+    const patch: Partial<DraftItem> = {
+      purchasePackagingSpecId: spec.id,
+      materialPackagingSpecId: '',
+      unit: spec.purchasePackageUnit,
+    };
+    // ⛔ 不做单位换算 —— derivedPrice 已经是后端按本规格折算好的, 前端只搬数。
+    const price = spec.quotedPrice ?? spec.derivedPrice;
+    if (price !== null && price !== undefined) patch.unitPrice = String(price);
+    updateItem(itemKey, patch);
+  };
+
   const selectMaterial = (item: DraftItem, material: MaterialType) => {
     // 抄码品锁单位为 abacaDefaultUnit (默认 kg), 防止用户选成箱级
     const forcedUnit = material.isAbacaPackaging
       ? (material.abacaDefaultUnit || 'kg')
       : (item.unit || material.unit);
+    const relation = (supplierRelations || []).find((r) => r.materialTypeId === material.id);
     updateItem(item.key, {
       materialTypeId: material.id,
       materialName: material.name,
       materialUnit: material.unit,
       unit: forcedUnit,
       materialPackagingSpecId: '',
+      supplierMaterialId: relation?.id || '',
+      purchasePackagingSpecId: '',
     });
     closePicker();
-    void ensurePackagingLoaded(material.id).then((pkg) => {
+
+    /*
+     * 两条路互斥, 且【供应商采购规格优先】—— 这是后端的口径:
+     * 该供应关系有启用中的采购规格时, 请求必须带 purchasePackagingSpecId,
+     * 否则 422; 没有时才走原料包装那条。
+     * 见 PurchaseServiceImpl.applySupplierPurchaseContract。
+     */
+    void (async () => {
+      const specs = relation ? await ensurePurchaseSpecsLoaded(relation.id) : null;
+      if (specs && specs.length > 0) {
+        // 只有一条或有默认项时自动选上; 多条无默认则留空, 由用户显式选(下方会拦提交)
+        const preferred = specs.find((s) => s.defaultSpec) || (specs.length === 1 ? specs[0] : undefined);
+        if (preferred) applyPurchaseSpec(item.key, preferred);
+        return;
+      }
+      // specs === null(取失败) 时也不走原料包装那条 —— 我们不知道要不要选规格,
+      // 提交前的校验会拦住并说明原因, 而不是让用户填完才被 422 拒。
+      if (specs === null) return;
+
+      const pkg = await ensurePackagingLoaded(material.id);
       if (material.isAbacaPackaging) return;
       const active = (pkg?.packagingSpecs || []).filter((spec) => spec.active !== false);
       const selected = active.find((spec) => spec.defaultSpec) || (active.length === 1 ? active[0] : undefined);
@@ -239,7 +326,7 @@ export default function PurchaseOrderCreateScreen() {
           materialPackagingSpecId: selected.id,
         });
       }
-    });
+    })();
   };
 
   const handleSubmit = async () => {
@@ -256,19 +343,47 @@ export default function PurchaseOrderCreateScreen() {
       return;
     }
 
+    /*
+     * 提交前把「后端一定会拒」的行拦在这里, 并说清该做什么。
+     *
+     * 后端 PurchaseServiceImpl.applySupplierPurchaseContract 的口径:
+     * 该供应关系只要有【启用中】的采购包装规格, 请求就必须带 purchasePackagingSpecId,
+     * 否则 422「该供应关系已配置采购包装规格，必须选择具体规格」。
+     * 此前本屏根本不发这个字段 —— 用户填完整张单才被拒, 而屏上没有任何地方能满足它。
+     * (当时全库 0 条规格所以撞不到; 任何人给某个物料点一次「新增规格」就会激活。)
+     */
+    // ⚠️ 用 items 的下标而不是 cleanedItems 的 —— 后者被过滤过, 序号会与界面上的
+    //    「第 N 行」对不上, 那样的提示会把人支到错误的一行去。
+    for (const [idx, it] of items.entries()) {
+      if (!cleanedItems.includes(it)) continue;
+      const state = purchaseSpecState(it);
+      // 能不能提交由纯函数说了算; 下面几段只负责把原因说清楚
+      if (canSubmitPurchaseSpecState(state)) continue;
+      if (state === 'loading') {
+        Alert.alert('稍候', `第 ${idx + 1} 行的采购包装规格还在加载，请稍后再提交`);
+        return;
+      }
+      if (state === 'unknown') {
+        Alert.alert(
+          '无法提交',
+          `第 ${idx + 1} 行读取采购包装规格失败，暂时无法确认是否需要选择规格。\n请重新选择一次该行的原料；若仍失败，请检查网络后重试。`,
+        );
+        return;
+      }
+      if (state === 'required') {
+        Alert.alert('请选择采购包装规格', `第 ${idx + 1} 行该供应商配置了采购包装规格，必须选定一种后才能下单。`);
+        return;
+      }
+    }
+
     const payload: CreatePurchaseOrderRequest = {
       supplierId,
       // 后端 @NotNull —— 不送就是 400「下单日期不能为空」。与销售建单口径一致(那边一直在送)。
       orderDate: todayIso(),
       expectedDeliveryDate: header.expectedDeliveryDate || undefined,
       remark: header.remark || undefined,
-      items: cleanedItems.map((it) => ({
-        materialTypeId: it.materialTypeId,
-        materialPackagingSpecId: it.materialPackagingSpecId || undefined,
-        quantity: Number(it.quantity),
-        unitPrice: Number(it.unitPrice),
-        unit: it.unit,
-      })),
+      // 两个规格字段互斥的口径在 buildPurchaseOrderItemPayload 里, 有单测钉着
+      items: cleanedItems.map(buildPurchaseOrderItemPayload),
     };
 
     try {
@@ -350,6 +465,7 @@ export default function PurchaseOrderCreateScreen() {
         || material.code.toLowerCase().includes(normalizedPickerSearch))
     : suppliedMaterials;
   const activeUnitOptions = activePickerItem ? getUnitOptionsFor(activePickerItem) : [];
+  const activePickerSpecs = activePickerItem ? specsForItem(activePickerItem) : [];
 
   if (loading) {
     return (
@@ -407,6 +523,10 @@ export default function PurchaseOrderCreateScreen() {
 
         {items.map((item, idx) => {
           const subtotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+          const specState = purchaseSpecState(item);
+          const chosenSpec = specsForItem(item).find((s) => s.id === item.purchasePackagingSpecId);
+          // 规格定了单位, 后端要求二者逐字相等 —— 这时不让用户再改单位, 否则必被 400 拒
+          const unitLocked = isAbacaItem(item) || specState === 'selected';
           return (
             <Card key={item.key} style={styles.itemCard}>
               <Card.Content>
@@ -444,6 +564,36 @@ export default function PurchaseOrderCreateScreen() {
                   </View>
                 )}
 
+                {/*
+                  * 采购包装规格 —— 只在【该供应关系确实配了规格】时出现。
+                  * 后端此时强制要求 purchasePackagingSpecId, 不给这个入口就等于
+                  * 让用户填完整张单再被 422 拒, 而屏上没有任何地方能满足它。
+                  */}
+                {specState === 'required' || specState === 'selected' ? (
+                  <TextInput
+                    label="采购包装规格 *"
+                    value={chosenSpec
+                      ? `${chosenSpec.name}（1${chosenSpec.purchasePackageUnit}=${chosenSpec.factor}${chosenSpec.inventoryBaseUnit}）`
+                      : ''}
+                    placeholder="该供应商配置了包装规格，请选择"
+                    mode="outlined"
+                    editable={false}
+                    error={specState === 'required'}
+                    style={styles.field}
+                    right={<TextInput.Icon icon="menu-down" onPress={() => openPicker('purchaseSpec', item.key)} />}
+                    onPressIn={() => openPicker('purchaseSpec', item.key)}
+                    testID={`purchase-spec-select-${idx}`}
+                  />
+                ) : specState === 'loading' ? (
+                  <Text style={styles.specHint} testID={`purchase-spec-loading-${idx}`}>
+                    正在读取该供应商的采购包装规格…
+                  </Text>
+                ) : specState === 'unknown' ? (
+                  <Text style={[styles.specHint, styles.specHintError]} testID={`purchase-spec-unknown-${idx}`}>
+                    采购包装规格读取失败，暂时无法确认这一行是否需要选规格。请重新选择一次原料；仍失败请检查网络。
+                  </Text>
+                ) : null}
+
                 {/* 数量 + 单位 (宽行) */}
                 <View style={styles.row}>
                   <TextInput
@@ -462,11 +612,11 @@ export default function PurchaseOrderCreateScreen() {
                     editable={false}
                     style={[styles.field, styles.flex1]}
                     right={
-                      isAbacaItem(item)
+                      unitLocked
                         ? <TextInput.Icon icon="lock" />
                         : <TextInput.Icon icon="menu-down" onPress={() => openPicker('unit', item.key)} />
                     }
-                    onPressIn={isAbacaItem(item)
+                    onPressIn={unitLocked
                       ? undefined
                       : () => openPicker('unit', item.key)}
                     testID={`purchase-unit-select-${idx}`}
@@ -475,6 +625,12 @@ export default function PurchaseOrderCreateScreen() {
                 {item.unit && Number(item.quantity) > 0 && (
                   <Text style={styles.packagingPreview}>
                     {(() => {
+                      // 供应商采购规格优先 —— 后端就是按它算 inventoryQuantitySnapshot
+                      // (quantity × spec.conversionFactor)。这里若仍按原料包装算,
+                      // 「1 箱」会被显示成「1 kg」, 是个会误导人的读数。
+                      if (chosenSpec) {
+                        return `折合库存：${Number(item.quantity) * Number(chosenSpec.factor)} ${chosenSpec.inventoryBaseUnit}`;
+                      }
                       const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
                         .find((candidate) => candidate.id === item.materialPackagingSpecId);
                       const baseQuantity = spec
@@ -539,7 +695,9 @@ export default function PurchaseOrderCreateScreen() {
           <View style={styles.pickerContent} accessibilityViewIsModal>
             <View style={styles.pickerHeader}>
               <Text variant="titleMedium" style={styles.pickerTitle}>
-                {openMenuFor?.kind === 'material' ? '选择原料' : '选择单位'}
+                {openMenuFor?.kind === 'material'
+                  ? '选择原料'
+                  : openMenuFor?.kind === 'purchaseSpec' ? '选择采购包装规格' : '选择单位'}
               </Text>
               <IconButton
                 icon="close"
@@ -630,6 +788,51 @@ export default function PurchaseOrderCreateScreen() {
                             </Text>
                             <Text style={styles.pickerOptionMeta} numberOfLines={1}>
                               {material.code} · 基本单位 {material.unit || 'kg'}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableRipple>
+                    );
+                  })
+                )
+              ) : openMenuFor?.kind === 'purchaseSpec' ? (
+                activePickerSpecs.length === 0 ? (
+                  <View style={styles.pickerEmpty} testID="purchase-spec-empty">
+                    <Text style={styles.pickerEmptyTitle}>该供应商没有配置采购包装规格</Text>
+                    <Text style={styles.pickerEmptyHint}>这一行按原料自身的包装单位下单即可。</Text>
+                  </View>
+                ) : (
+                  activePickerSpecs.map((spec) => {
+                    const selected = activePickerItem?.purchasePackagingSpecId === spec.id;
+                    const price = spec.quotedPrice ?? spec.derivedPrice;
+                    return (
+                      <TouchableRipple
+                        key={spec.id}
+                        onPress={() => {
+                          if (!activePickerItem) return;
+                          applyPurchaseSpec(activePickerItem.key, spec);
+                          closePicker();
+                        }}
+                        style={[styles.pickerOption, selected && styles.pickerOptionSelected]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        testID={`purchase-spec-option-${spec.id}`}
+                      >
+                        <View style={styles.pickerOptionContent}>
+                          <Icon
+                            source={selected ? 'radiobox-marked' : 'radiobox-blank'}
+                            size={22}
+                            color={selected ? '#1890ff' : '#6b7280'}
+                          />
+                          <View style={styles.pickerOptionTextBlock}>
+                            <Text style={styles.pickerOptionTitle} numberOfLines={1}>
+                              {spec.name}{spec.defaultSpec ? ' · 默认' : ''}
+                            </Text>
+                            <Text style={styles.pickerOptionMeta} numberOfLines={1}>
+                              1{spec.purchasePackageUnit}={spec.factor}{spec.inventoryBaseUnit}
+                              {price !== null && price !== undefined
+                                ? ` · ¥${price}/${spec.purchasePackageUnit}`
+                                : ' · 未配置单价'}
                             </Text>
                           </View>
                         </View>
@@ -851,4 +1054,10 @@ const styles = StyleSheet.create({
     marginTop: -4,
     marginBottom: 10,
   },
+  specHint: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginBottom: 10,
+  },
+  specHintError: { color: '#b91c1c' },
 });
