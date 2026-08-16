@@ -34,6 +34,12 @@ VERDICT_OK = "CLEAR"
 VERDICT_MISSING_WHITE = "MISSING_WHITE_LABEL"
 VERDICT_MISSING_COLOR = "MISSING_COLOR_LABEL"
 VERDICT_MISSING_BOTH = "BOTH_MISSING"
+VERDICT_UNJUDGEABLE = "UNJUDGEABLE"
+_MISSING_VERDICTS = frozenset({
+    VERDICT_MISSING_WHITE,
+    VERDICT_MISSING_COLOR,
+    VERDICT_MISSING_BOTH,
+})
 
 
 @dataclass(frozen=True)
@@ -49,9 +55,13 @@ class ScreeningParams:
     label_conf: float = 0.25
     pad_ratio: float = 0.14
     crop_width: int = 640
-    min_crop_px: int = 120
+    # Protected real-photo replay showed that 120-149 px tray slivers can
+    # invent BOTH_MISSING claims.  Keep them reviewable, but do not infer
+    # absence until the tray crop reaches 150 px on both axes.
+    min_crop_px: int = 150
     own_labels_only: bool = True
     max_trays: int = 60
+    capture_trace: bool = False
 
 
 @dataclass
@@ -73,6 +83,35 @@ class DetectedLabel:
 
 
 @dataclass
+class RawLabelTrace:
+    """One raw per-crop label prediction retained for offline diagnosis.
+
+    The production verdict still uses only ``TrayResult.labels``.  This trace
+    records both accepted and ownership-dropped predictions so a replay can
+    distinguish label-model misses from assignment/filtering misses.
+    """
+
+    class_id: int
+    confidence: float
+    crop_box: List[float]
+    source_box: List[float]
+    owned: bool
+
+
+@dataclass
+class TrayScreeningTrace:
+    """Geometry and raw predictions for one tray screening stage."""
+
+    index: int
+    tray_box: List[float]
+    crop_rect: List[float]
+    crop_shape: List[int]
+    resized_shape: List[int]
+    raw_labels: List[RawLabelTrace] = field(default_factory=list)
+    skipped_reason: Optional[str] = None
+
+
+@dataclass
 class TrayResult:
     index: int
     box: List[float]
@@ -87,6 +126,12 @@ class TrayResult:
 
     @property
     def is_suspect(self) -> bool:
+        """Whether this tray makes an actual missing-label claim."""
+        return self.verdict in _MISSING_VERDICTS
+
+    @property
+    def needs_review(self) -> bool:
+        """Whether factory review is needed, including unjudgeable slivers."""
         return self.verdict != VERDICT_OK
 
 
@@ -96,10 +141,15 @@ class ScreeningResult:
     image_width: int
     image_height: int
     params: ScreeningParams
+    trace: List[TrayScreeningTrace] = field(default_factory=list)
 
     @property
     def suspects(self) -> List[TrayResult]:
         return [t for t in self.trays if t.is_suspect]
+
+    @property
+    def review_candidates(self) -> List[TrayResult]:
+        return [t for t in self.trays if t.needs_review]
 
 
 def _verdict_for(has_white: bool, has_color: bool) -> str:
@@ -152,13 +202,24 @@ def screen_image(
         trays = trays[: params.max_trays]
 
     results: List[TrayResult] = []
+    traces: List[TrayScreeningTrace] = []
     for index, tray in enumerate(trays):
         crop, rect = crop_with_padding(image, tray.as_xyxy(), params.pad_ratio)
         if crop.shape[0] < params.min_crop_px or crop.shape[1] < params.min_crop_px:
-            # Too small to judge -- do not silently call it OK.
+            # Too small to judge.  Keep it visible for factory review without
+            # inventing a missing-label defect from a crop we never classified.
+            if params.capture_trace:
+                traces.append(TrayScreeningTrace(
+                    index=index,
+                    tray_box=tray.as_xyxy(),
+                    crop_rect=list(rect),
+                    crop_shape=list(crop.shape),
+                    resized_shape=[],
+                    skipped_reason="crop_below_minimum",
+                ))
             results.append(TrayResult(
                 index=index, box=tray.as_xyxy(), confidence=tray.confidence,
-                has_white=False, has_color=False, verdict=VERDICT_MISSING_BOTH,
+                has_white=False, has_color=False, verdict=VERDICT_UNJUDGEABLE,
             ))
             continue
 
@@ -167,16 +228,42 @@ def screen_image(
 
         own: List[Detection] = []
         detected: List[DetectedLabel] = []
+        raw_trace: List[RawLabelTrace] = []
         dropped = 0
         for label in labels:
-            if params.own_labels_only and not _owns(tray.as_xyxy(), label, rect, resized.shape):
+            is_owned = not params.own_labels_only or _owns(
+                tray.as_xyxy(), label, rect, resized.shape,
+            )
+            source_box = (
+                _to_source_box(label, rect, resized.shape)
+                if is_owned or params.capture_trace else []
+            )
+            if params.capture_trace:
+                raw_trace.append(RawLabelTrace(
+                    class_id=label.class_id,
+                    confidence=label.confidence,
+                    crop_box=label.as_xyxy(),
+                    source_box=source_box,
+                    owned=is_owned,
+                ))
+            if not is_owned:
                 dropped += 1
                 continue
             own.append(label)
             detected.append(DetectedLabel(
                 class_id=label.class_id,
                 confidence=label.confidence,
-                box=_to_source_box(label, rect, resized.shape),
+                box=source_box,
+            ))
+
+        if params.capture_trace:
+            traces.append(TrayScreeningTrace(
+                index=index,
+                tray_box=tray.as_xyxy(),
+                crop_rect=list(rect),
+                crop_shape=list(crop.shape),
+                resized_shape=list(resized.shape),
+                raw_labels=raw_trace,
             ))
 
         has_white = any(d.class_id == CLASS_WHITE_LABEL for d in own)
@@ -194,5 +281,10 @@ def screen_image(
             labels=detected,
         ))
 
-    return ScreeningResult(trays=results, image_width=width, image_height=height,
-                           params=params)
+    return ScreeningResult(
+        trays=results,
+        image_width=width,
+        image_height=height,
+        params=params,
+        trace=traces,
+    )

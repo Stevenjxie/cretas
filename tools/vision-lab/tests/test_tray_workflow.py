@@ -25,6 +25,7 @@ class TrayWorkflowTests(unittest.TestCase):
         self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
         self.assertIn("pretrained=False", source)
         self.assertIn("amp=False", source)
+        self.assertIn("rect=False, verbose=False", source)
 
     def test_build_dataset_accumulates_multiple_reviewed_queues(self):
         with tempfile.TemporaryDirectory() as temporary:

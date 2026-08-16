@@ -9,7 +9,6 @@ from __future__ import annotations
 import io
 import json
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -22,6 +21,7 @@ from label_qc.services.screening import (
     VERDICT_MISSING_COLOR,
     VERDICT_MISSING_WHITE,
     VERDICT_OK,
+    VERDICT_UNJUDGEABLE,
 )
 
 
@@ -159,6 +159,38 @@ async def test_clean_photo_reports_no_defect(monkeypatch):
     assert result["verdict"] == "NO_DEFECT_FOUND"
     assert result["candidates"] == []
     assert result["screening"]["suspectCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_unjudgeable_tray_is_reviewable_without_claiming_missing_label(monkeypatch):
+    tray = _tray(0, VERDICT_UNJUDGEABLE)
+    monkeypatch.setattr(
+        hybrid, "screen_image", lambda image, models, params: _screening([tray]),
+    )
+    monkeypatch.setenv("LABEL_QC_VL_REVIEW", "0")
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+
+    result = await analyzer.analyze(_image_bytes())
+
+    assert result["verdict"] == "SUSPECTED"
+    assert [item["label"] for item in result["candidates"]] == [VERDICT_UNJUDGEABLE]
+    assert result["screening"]["suspectCount"] == 0
+    assert result["screening"]["reviewCandidateCount"] == 1
+    assert "无法可靠判断" in result["candidates"][0]["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_vl_clear_keeps_unjudgeable_without_calling_it_missing(monkeypatch):
+    tray = _tray(0, VERDICT_UNJUDGEABLE)
+    _install(monkeypatch, [tray], [(VERDICT_OK, 0.9)])
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+
+    result = await analyzer.analyze(_image_bytes())
+
+    candidate = result["candidates"][0]
+    assert candidate["label"] == VERDICT_UNJUDGEABLE
+    assert "无法可靠判断" in candidate["evidence"]
+    assert "标签疑似缺失" not in candidate["evidence"]
 
 
 @pytest.mark.asyncio

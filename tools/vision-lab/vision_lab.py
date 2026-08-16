@@ -24,7 +24,7 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 
 VERSION = "vision-lab-v1"
@@ -715,7 +715,10 @@ def mine_next_queue(config: dict[str, Any], state: State) -> dict[str, Any]:
         raise RuntimeError(f"miner returned invalid receipt: {result.stdout[-1000:]}") from exc
 
 
-def evaluate_gate(config: dict[str, Any], model: dict[str, Any], metrics_path: Path) -> dict[str, Any]:
+def evaluate_gate(
+    config: dict[str, Any], model: dict[str, Any], metrics_path: Path,
+    output_path: Path | None = None,
+) -> dict[str, Any]:
     metrics = load_json(metrics_path)
     artifact = Path(model["artifact"])
     errors: list[str] = []
@@ -738,7 +741,9 @@ def evaluate_gate(config: dict[str, Any], model: dict[str, Any], metrics_path: P
     baseline_fp = int(baseline.get("false_flags", 0))
     candidate_fp = int(candidate.get("false_flags", baseline_fp + 1))
     required_improvement = float(gate.get("min_false_flag_improvement", 0.05))
-    if baseline_fp <= 0 or candidate_fp > baseline_fp * (1.0 - required_improvement):
+    if baseline_fp == 0 and candidate_fp > 0:
+        errors.append("false flags regressed from a zero baseline")
+    elif baseline_fp > 0 and candidate_fp > baseline_fp * (1.0 - required_improvement):
         errors.append("false-flag improvement gate not met")
     if int(metrics.get("onnx_parity_mismatches", -1)) != 0:
         errors.append("PT/ONNX parity gate failed")
@@ -755,7 +760,7 @@ def evaluate_gate(config: dict[str, Any], model: dict[str, Any], metrics_path: P
         "version": VERSION, "model_id": model["model_id"], "evaluated_at": utc_now(),
         "passed": not errors, "errors": errors, "metrics": metrics,
     }
-    write_json(artifact.parent / "promotion-gate.json", result)
+    write_json(output_path or artifact.parent / "promotion-gate.json", result)
     return result
 
 
