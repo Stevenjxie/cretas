@@ -31,6 +31,7 @@ import java.time.LocalDate;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
@@ -139,6 +140,40 @@ class PurchaseServiceImplConfirmReceiveQcQuarantineTest {
     @DisplayName("qcResult=null (QC not recorded) → batch AVAILABLE (safe default, not quarantined)")
     void nullQc_available() {
         assertEquals(MaterialBatchStatus.AVAILABLE, confirmWithQcResult(null).getStatus());
+    }
+
+    /**
+     * 🔴 2026-08-16: 采购入库建出来的批次必须回写来源单据。
+     *
+     * <p>prod 实测（端到端走查 PO-20260816-0001 → RCV-20260816-4564 → MT-20260816-7814）：
+     * {@code source_doc_type} / {@code source_doc_id} <b>全空</b> —— 在一个溯源系统里，
+     * 从批次追不回采购单/供应商。
+     *
+     * <p>成因：本路径直接 {@code new MaterialBatch + repo.save}，绕开了
+     * {@code MaterialBatchService.createMaterialBatch}；而对来源的强校验
+     * （必填 + 校验单据存在）恰恰在被绕开的那条路上 ——
+     * <b>手工入库被严格校验来源，自动化的采购主路径反而一个字不写。</b>
+     */
+    @Test
+    @DisplayName("🔴 采购入库的批次必须回写 sourceDocType/sourceDocId（否则从批次追不回采购单）")
+    void purchaseReceive_writesSourceDoc() {
+        MaterialBatch batch = confirmWithQcResult("PASS");
+
+        // 取值与 MaterialBatch#sourceDocType 的 javadoc 一致, 也与应付挂账传的那个值同源
+        assertEquals("PURCHASE_RECEIVE", batch.getSourceDocType(),
+                "来源单类型必须是 PURCHASE_RECEIVE —— MaterialBatchServiceImpl 有对应的 case 分支在等它");
+        assertEquals(RECEIVE_ID, batch.getSourceDocId(),
+                "来源单 id 必须指回这张收货单, 否则溯源断在这一环");
+    }
+
+    @Test
+    @DisplayName("阳性对照: 同一批次的其它来源字段本来就在写(证明不是整个对象都没填)")
+    void purchaseReceive_otherFieldsStillWritten() {
+        MaterialBatch batch = confirmWithQcResult("PASS");
+        // 没有这一条, 上面那两个断言红了也分不清「来源没写」还是「批次根本没建起来」
+        assertEquals(FACTORY, batch.getFactoryId());
+        assertNotNull(batch.getBatchNumber(), "批次号应当已生成");
+        assertNotNull(batch.getReceiptQuantity(), "入库数量应当已写入");
     }
 
     private PurchaseReceiveRecord draftRecord(String qcResult) {

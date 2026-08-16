@@ -963,6 +963,16 @@ public class PurchaseServiceImpl implements PurchaseService {
     private static final String FINANCE_ROLE = "finance_manager";
 
     /**
+     * 采购收货这条入库路径的来源单类型。取值见 {@link com.cretas.aims.entity.MaterialBatch#getSourceDocType()}
+     * 的 javadoc（{@code PURCHASE_RECEIVE} 列在第一个），消费方是
+     * {@code MaterialBatchServiceImpl} 的 {@code case "PURCHASE_RECEIVE"} 校验分支。
+     *
+     * <p>⚠️ 一处定义两处用（批次来源 + 应付挂账的幂等来源），别再写字面量 ——
+     * 同一个值散成两份就一定会漂。
+     */
+    private static final String SOURCE_DOC_TYPE_PURCHASE_RECEIVE = "PURCHASE_RECEIVE";
+
+    /**
      * 审批历史里有没有**财务角色的通过动作**。
      *
      * <p>判据取 {@code actorRole} 而不是去解析工作流 JSON 里的 {@code approverRoles} ——
@@ -2129,7 +2139,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                 BigDecimal receivedValue = record.getTotalAmount();
                 if (order != null && order.getSupplierId() != null) {
                     ArApTransaction ap = arApService.recordPayableIfAbsent(factoryId, order.getSupplierId(), order.getId(),
-                            "PURCHASE_RECEIVE", record.getId(),
+                            SOURCE_DOC_TYPE_PURCHASE_RECEIVE, record.getId(),
                             receivedValue, LocalDate.now().plusDays(30), userId,
                             "采购入库自动挂账-" + record.getReceiveNumber());
                     if (ap != null) {
@@ -3185,6 +3195,21 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setContractNumber(item.getContractNumber());
         batch.setSupplierBatchNumber(item.getSupplierBatchNumber());
         batch.setBoxCount(item.getBoxCount());
+        // 🔴 2026-08-16: 回写来源单据 —— 此前这条主路径【一个字都不写】, prod 实测
+        // 采购入库建出来的批次 source_doc_type / source_doc_id 全空, 从批次追不回采购单/供应商。
+        //
+        // 成因: 本方法直接 new MaterialBatch + repo.save, 绕开了 MaterialBatchService.createMaterialBatch
+        // (见 confirmReceive 里那条注释)。而强校验恰恰在被绕开的那条路上 ——
+        // MaterialBatchServiceImpl 对 sourceDocType 是必填 + 校验单据存在(400/404),
+        // 于是「手工入库被严格校验来源, 自动化的采购主路径反而不写」。
+        //
+        // 取值就是 MaterialBatch#sourceDocType 的 javadoc 里列在第一个的 PURCHASE_RECEIVE,
+        // 且同一个 confirmReceive 里给应付挂账传的也正是 ("PURCHASE_RECEIVE", record.getId()) ——
+        // 值和 id 一直都在手上, 只是没往批次上放。
+        // ⚠️ 现有查询只按 sourceDocType <> 'PRODUCTION_BATCH' 过滤, 写入 PURCHASE_RECEIVE
+        //    不改变任何既有行为(NULL 与 PURCHASE_RECEIVE 都满足该条件)。
+        batch.setSourceDocType(SOURCE_DOC_TYPE_PURCHASE_RECEIVE);
+        batch.setSourceDocId(record.getId());
         // 🔒🔒 QC 入库门 (食品安全, 2026-07-04): 质检结果非 PASS 的收货行不得直接进可用库存,
         // 自动隔离为 DEFECTIVE (不良品) — FEFO/领料/销售查询均过滤 status='AVAILABLE', 自动排除
         // DEFECTIVE。质检经理后续用 ReleaseDecisionTool 复核放行(→AVAILABLE)/退货(→保持DEFECTIVE)。
