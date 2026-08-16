@@ -4,12 +4,31 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 半成品<b>领用必须写一条 OUT 流水</b>，不能只改余额。
@@ -86,6 +105,78 @@ class SemiConsumptionWritesLedgerTest {
                         new BigDecimal("2.00"), BigDecimal.ZERO, input, BigDecimal.ZERO));
         assertThat(out.getReportId()).isEqualTo(23799L);
         assertThat(out.getSemiFinishedId()).isEqualTo(331L);
+    }
+
+    /**
+     * 🔴 接线断言 —— 上面两条只证明「这一行【构造】得对」，不证明「它被【保存】了」。
+     *
+     * <p>2026-08-17 实测：把 {@code WipInventoryServiceImpl} 里的
+     * {@code txnRepo.save(outTxn)} 变异掉（包成 {@code if (false)}），
+     * 上面两条<b>依然 2/2 全绿</b> —— 因为它们直接调纯函数，绕过了「谁调它」。
+     * 这正是本仓反复记的那条：<b>测了 helper 不是测接线</b>。
+     *
+     * <p>所以必须有一条走真实 service 的断言。
+     */
+    @Test
+    @DisplayName("🔴 接线: 走真实 service 领用后, txnRepo 必须收到一条 OUT 行")
+    void serviceActuallyPersistsTheOutRow() {
+        SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
+        SemiFinishedInventoryTransactionRepository txnRepo =
+                mock(SemiFinishedInventoryTransactionRepository.class);
+        ProductionReportRepository reportRepo = mock(ProductionReportRepository.class);
+        WorkProcessTaskRepository taskRepo = mock(WorkProcessTaskRepository.class);
+
+        SemiFinishedInventory sfi = new SemiFinishedInventory();
+        sfi.setId(331L);
+        sfi.setFactoryId("F006");
+        sfi.setIntermediateBatchNo("CLK-SEMI-d0c18d36-2f00956d");
+        sfi.setProducedQuantity(new BigDecimal("2.00"));
+        sfi.setConsumedQuantity(BigDecimal.ZERO);
+        sfi.setAvailableQuantity(new BigDecimal("2.00"));
+        sfi.setAdjustmentQuantity(BigDecimal.ZERO);
+        sfi.setUnit("kg");
+        sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                eq("F006"), eq("CLK-SEMI-d0c18d36-2f00956d"))).thenReturn(Optional.of(sfi));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.findYieldReportsByTask(anyString(), any())).thenReturn(List.of());
+
+        WipInventoryServiceImpl svc = new WipInventoryServiceImpl(
+                wipRepo, txnRepo, reportRepo,
+                mock(BatchLineageEdgeRepository.class), taskRepo,
+                mock(WorkProcessRepository.class), mock(ProductTypeRepository.class),
+                mock(ProductFamilyResolver.class), mock(ApplicationEventPublisher.class));
+
+        ProductionReport report = new ProductionReport();
+        report.setId(23799L);
+        report.setFactoryId("F006");
+        report.setSourceWipNo("CLK-SEMI-d0c18d36-2f00956d");
+        report.setInputQuantity(new BigDecimal("2.00"));
+        report.setInputUnit("kg");
+        report.setOutputKind("FINISHED");   // 只验领用侧, 不触发半成品入账分支
+
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(1786L);
+        task.setFactoryId("F006");
+        task.setProductionBatchId(10759L);
+        task.setProcessOrder(2);
+
+        svc.postApprovedOutput("F006", report, task, 1311L);
+
+        ArgumentCaptor<SemiFinishedInventoryTransaction> cap =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(txnRepo, atLeastOnce()).save(cap.capture());
+
+        SemiFinishedInventoryTransaction out = cap.getAllValues().stream()
+                .filter(t -> SemiFinishedInventoryTransaction.TxnType.OUT.equals(t.getTxnType()))
+                .findFirst().orElse(null);
+        assertThat(out)
+                .as("走真实 service 领用之后, 必须有一条 OUT 流水被保存 —— "
+                        + "只改余额不记流水 = 半成品只有进账没有出账")
+                .isNotNull();
+        assertThat(out.getQuantity()).isEqualByComparingTo(new BigDecimal("-2.00"));
+        assertThat(out.getReportId()).isEqualTo(23799L);
     }
 
     @Test
