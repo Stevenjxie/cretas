@@ -55,4 +55,60 @@ describe('闸: OA 待办审批走活着的端点', () => {
     expect(code).toContain('expectedNodeId');
     expect(code).toContain('idempotencyKey');
   });
+
+  /*
+   * 2026-08-16 加固。上面守的是「那两个屏不调它」，而当时仍有**第二条**同样的死路：
+   * `PurchaseOrderFinanceReviewScreen` 也在打 410 的 `/finance-approve`。它双重不可达
+   * （喂它的列表查 PENDING_FINANCE_REVIEW = 全库 0 行；且没有任何地方 navigate 到那个列表屏），
+   * 所以两个月没人撞到 —— 但只要有人加个入口或回填那个状态，它立刻变成活的死按钮。
+   *
+   * ⇒ 守的东西从「某两个屏不调它」抬到「**全仓不许再有采购侧的这三个死端点**」。
+   * ⛔ 退货单与销售单的 finance-approve/reject 是另外两组**仍然活着**的端点，不在此列。
+   */
+  describe('全仓不许再出现采购侧的已停用(410)端点', () => {
+    const DEAD_PURCHASE_SEGMENTS = ['finance-approve', 'finance-reject', 'submit-for-finance-review'];
+
+    it('purchaseApiClient 不再构造这三个端点', () => {
+      const code = readCode('services/api/purchaseApiClient.ts');
+      expect(code.length).toBeGreaterThan(1000);              // 仪器自检
+      expect(code).toContain('purchaseApiClient');            // 确实是这个文件
+      for (const seg of DEAD_PURCHASE_SEGMENTS) {
+        expect(code).not.toContain(seg);
+      }
+    });
+
+    it('myTodoApiClient 不再构造 purchase 侧的财审端点, 但 sales/return 两组仍在', () => {
+      const code = readCode('services/api/myTodoApiClient.ts');
+
+      // 阴性: 采购那两条没了
+      expect(code).not.toMatch(/purchase\/orders\/\$\{orderId\}\/finance-(approve|reject)/);
+      expect(code).not.toContain('purchaseFinanceApprove');
+      expect(code).not.toContain('purchaseFinanceReject');
+
+      // 🔴 阳性对照: 扫描器确实看得见「这一类字符串」——
+      //    否则上面那几条 not.toContain 无论如何都会通过(恒真式)。
+      // ⚠️ 末尾的 ` 不能省: 不锚定收尾时 /…finance-approve/ 会把 `finance-approve-XX`
+      //    也匹配上, 端点被改名它照样绿 —— 实测变异时就是这么发现这条对照原本是松的。
+      expect(code).toMatch(/sales\/orders\/\$\{orderId\}\/finance-approve`/);
+      expect(code).toMatch(/return-orders\/\$\{returnOrderId\}\/finance-approve`/);
+    });
+
+    it('那两块死屏已经不在仓里, 也不在导航与路由类型里', () => {
+      for (const rel of [
+        'screens/factory-admin/inventory/PurchaseOrderFinanceReviewScreen.tsx',
+        'screens/factory-admin/inventory/PurchaseOrderFinanceReviewListScreen.tsx',
+      ]) {
+        expect(fs.existsSync(path.join(SRC, rel))).toBe(false);
+      }
+      // 阳性对照: 同目录别的屏还在, 证明这个路径拼得对(不是把不存在的目录测成了 false)
+      expect(fs.existsSync(path.join(SRC, 'screens/factory-admin/inventory/PurchaseOrderCreateScreen.tsx'))).toBe(true);
+
+      for (const rel of [
+        'navigation/factory-admin/FAManagementStackNavigator.tsx',
+        'types/navigation.ts',
+      ]) {
+        expect(readCode(rel)).not.toContain('PurchaseOrderFinanceReview');
+      }
+    });
+  });
 });

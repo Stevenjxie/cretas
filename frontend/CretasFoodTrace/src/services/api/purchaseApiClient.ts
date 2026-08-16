@@ -247,22 +247,19 @@ class PurchaseApiClient {
     return apiClient.get(this.getPath(factoryId) + '/orders/by-status', { params: { status, ...params } });
   }
 
-  // ========== Sprint2-J P-FIN-1: 财务审核 ==========
-
-  /** 提交财务审核 (从 APPROVED → PENDING_FINANCE_REVIEW; approveOrder 自动触发条件满足时也会直达此状态) */
-  async submitForFinanceReview(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
-    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/submit-for-finance-review`);
-  }
-
-  /** 财务审核通过 (PENDING_FINANCE_REVIEW → FINANCE_APPROVED) */
-  async financeApprove(orderId: string, notes?: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
-    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/finance-approve`, { notes });
-  }
-
-  /** 财务驳回 (PENDING_FINANCE_REVIEW → FINANCE_REJECTED). notes 必填. */
-  async financeReject(orderId: string, notes: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
-    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/finance-reject`, { notes });
-  }
+  /*
+   * ========== 已移除: Sprint2-J P-FIN-1 采购财务审核三件套 (2026-08-16) ==========
+   *
+   * submitForFinanceReview / financeApprove / financeReject 打的三个端点
+   * 在 2026-07-21 (#1557) 全部停用, 后端无条件抛 410
+   * 「采购审批只能在 OA 审批中心处理」(PurchaseController.legacyApprovalEndpointDisabled)。
+   *
+   * 采购的财务节点现在由同一条 OA 流程推进: 走 /workflow/instances/{id}/actions,
+   * 待办从 my-todos 取 (见 myTodoApiClient + OA 待办屏)。
+   *
+   * ⛔ 别再加回来 —— oaTodoUsesLiveApprovalEndpointContract 会红。
+   * 退货单与销售单的 finance-approve/reject 是**另外两个仍然活着的端点**, 不受影响。
+   */
 
   /** 采购单三价对比 (priceAlert=true → 红行) */
   async getOrderPriceComparison(orderId: string, factoryId?: string): Promise<{ success: boolean; data: MaterialPriceComparison[] }> {

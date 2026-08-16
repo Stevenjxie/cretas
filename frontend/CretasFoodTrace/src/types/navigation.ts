@@ -461,9 +461,6 @@ export type FAManagementStackParamList = {
   PurchaseOrderList: undefined;
   PurchaseOrderCreate: undefined;
   PurchaseOrderDetail: { orderId: string };
-  // Sprint2-J P-FIN-1: 财务审核 (PENDING_FINANCE_REVIEW 列表 + 详情审核页)
-  PurchaseOrderFinanceReviewList: undefined;
-  PurchaseOrderFinanceReview: { orderId: string };
   ProcessTaskApproval: undefined;
   SalesOrderList: undefined;
   SalesOrderCreate: undefined;
