@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-              <span class="stamp code">origin/main · SOP sync 2026-08-15</span>
+              <span class="stamp code">origin/main · SOP sync 2026-08-16</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -347,7 +347,7 @@
           <tr><td><strong>销售经理</strong><br><code>f006_sales_mgr</code><br><small>sales_manager</small></td><td><strong>电脑 Web：</strong>客户、销售订单、销售退货、价格表和应收应付概览；<code>sales=rw</code>。</td><td>不能替生产报工、替仓库发货扣库或替财务确认收款。</td><td>有效需求交调度/生产；缺料交采购；发货交仓储；开票收款依据交财务。</td></tr>
           <tr><td><strong>采购经理</strong><br><code>f006_procurement_mgr</code><br><small>procurement_manager</small></td><td><strong>电脑 Web：</strong>采购订单/退货、价格、供应商、供应商送货、到货确认和采购异常；<code>procurement=rw</code>。</td><td>供应商到货不等于库存入账；不能替仓管入库、替 QC 判定或替财务付款。</td><td>审批后的到货任务交仓储，品质交 QC，发票/收货/应付依据交财务。</td></tr>
           <tr><td><strong>调度员</strong><br><code>f006_dispatcher</code><br><small>dispatcher</small></td><td><strong>电脑 Web：</strong>计划、路线、任务/人员分配、插单重排、预警、车间状态、生产线和工序运行；生产/排程/报工域可写。</td><td>不能替仓储收发、替 QC 判定、替财务审批或替操作员填写现场实际值。</td><td>接销售/生产需求和 HR 人员信息；计划下发车间主管，偏差回收后重排。</td></tr>
-          <tr><td><strong>QC / 质量检验员</strong><br><code>f006_quality_insp</code><br><small>quality_inspector</small></td><td><strong>电脑 Web：</strong>待检、批次、扫码、表单、语音、拍照、标签人工审核、结果、记录、趋势和报告；<code>quality=rw</code>。</td><td>不能改采购、库存、计划或财务；AI 初筛不能替人工结论，采购/仓储/生产也不能代填 QC 结论。</td><td>来料结论交仓储并同步采购；过程/成品结论交车间和生产经理。</td></tr>
+          <tr><td><strong>QC / 质量检验员</strong><br><code>f006_quality_insp</code><br><small>quality_inspector</small></td><td><strong>RN + 电脑 Web：</strong>待检、批次、扫码、表单、语音、拍照、标签人工审核、结果、记录、趋势和报告；<code>quality=rw</code>。普通质检照片走附件回读，标签对象复核另形成工厂人工真值。</td><td>不能改采购、库存、计划或财务；AI 初筛不能替人工结论，采购/仓储/生产也不能代填 QC 结论。</td><td>来料结论交仓储并同步采购；过程/成品结论交车间和生产经理。</td></tr>
           <tr><td><strong>仓储主管</strong><br><code>f006_warehouse_mgr</code><br><small>warehouse_manager</small></td><td><strong>RN 仓储入口：</strong>仓储首页、入库、出库、库存、批次、调拨和盘点；<code>warehouse=rw</code>、<code>inventory=rw</code>。</td><td>不能创建采购/销售订单、替 QC 判定、替操作员报工或替财务确认金额。</td><td>接到货任务与 QC 结论后入库；向生产领料/调拨；接完工入库；按销售任务发货。</td></tr>
           <tr><td><strong>生产经理</strong><br><code>f006_production_mgr</code><br><small>production_manager</small></td><td><strong>电脑 Web：</strong>生产、销售、排程、工作报工、分析和看板可写，关联模块多为只读。</td><td>宽权限不等于可替车间确认、替操作员填实际值，或在仓储、质量、财务制造事实。</td><td>统筹优先级与主数据；执行交车间/操作员，缺料交采购/仓储，完工交仓储。</td></tr>
           <tr><td><strong>车间主管</strong><br><code>f006_workshop</code><br><small>workshop_supervisor</small></td><td><strong>电脑 Web：</strong>车间首页、批次、人员和 AI 对话；生产、质量与工作报工域可写。</td><td>不能替销售、采购、财务或仓储建单，也不能凭估计替操作员填写现场投入产出。</td><td>接调度计划、安排班组；缺料/设备/质量/工时异常分别交仓储采购、设备、QC、HR/生产经理。</td></tr>
@@ -355,7 +355,8 @@
         </tbody></table></div>
         <div class="callout warning"><strong>关键交接链</strong>销售需求 → 财审 → 调度/生产计划 → 车间安排 → 操作员报工 → QC 检查 → 仓储入库/发货 → 财务核销；缺料支线为采购 → QC → 仓储，付款支线为财务经理批准 → 出纳执行。任何岗位都不能用老板账号代做来“证明链路通过”。</div>
         <div class="callout blue"><strong>AI 表单入口只生成待确认草稿</strong>当前支持按表单类型解析产品、生产计划、采购单、销售单、盘点、仓库入库和工序任务等字段；必须登录并具备目标页面权限。自然语言只用于回填当前表单，用户仍要逐字段核对并手动提交，助手不会代替审批、报工或库存入账。</div>
-        <div class="callout blue"><strong>RN 仓储页与 Web 生产页不要混说</strong>AI 智能入库加载 schema 后只取一次供应商候选并进入草稿；“库存记录”显示当前已加载页面，顶部总数是批次数，不是今日/全部数量。只有同为 kg 的行汇总 kg 小计，箱/袋/瓶按真实单位展示；换算只读该物料包装层级，缺少规格显示“未设规格”。物料需求单、生产工作台和非仓储角色的业务动作都在电脑 Web 完成。</div>
+        <div class="callout blue"><strong>RN 仓储页与 Web 生产页不要混说</strong>旧“AI 智能入库”、空白“新建入库”和生产看板“原料入库”已退役，因为它们调用的是停用的无来源建批次接口。仓库现在从“仓储待收货 / 采购收货列表”选择真实采购单、来货通知或其它登记来源；上架只有实际更新并刷新回读库位后才成功。“库存记录”仍只表示当前已加载页面，顶部总数是批次数；只有同为 kg 的行汇总 kg 小计，箱/袋/瓶按真实单位展示。物料需求单、生产工作台和非仓储角色的业务动作在电脑 Web 完成。</div>
+        <div class="callout blue"><strong>普通质检照片与标签对象真值分开</strong>普通质检记录成功后，手机照片逐张登记为 <code>QUALITY_CHECK</code> 附件，详情必须能回读原图；单张上传失败与质检记录成功分别报告。标签拍检另按盒子核对白标/彩标，切换盒子或照片时自动校验保存；工厂认可盒子才进入幂等单盒裁切，平台精修不能覆盖工厂整图真值。</div>
       </section>
 
       <section id="map">
@@ -632,7 +633,7 @@
         <div class="path">业务详情 <b>›</b> 提交审批　→　工作台 / 个人 OA <b>›</b> 我的待办 / 我发起的　→　原业务详情回读状态</div>
         <div class="callout blue"><strong>统一原则</strong>采购、销售、报工、调拨、盘点、开票、付款等需要审批的业务，都应创建同一套 OA 实例。业务详情不应要求反复“提交下一阶段审批”，也不应向无审批权限角色直接暴露“审批通过”。</div>
         <div class="table-wrap"><table><thead><tr><th>业务动作</th><th>发起后去哪里看</th><th>谁处理</th><th>业务页应如何表现</th></tr></thead><tbody>
-          <tr><td>提交采购单 / 销售单</td><td>个人 OA → 我发起的</td><td>我的待办中的采购/销售主管、财务</td><td>只读显示当前节点、待处理角色/人员和“前往 OA”</td></tr>
+          <tr><td>提交采购单 / 销售单</td><td>个人 OA → 我发起的</td><td>我的待办中的采购/销售主管、财务；待办按 OA 实例当前节点筛选</td><td>列表与详情使用同一 OA 实例 ID；财务真实批准才显示“财务已审核”，不需财审则显示“无需财务审核”</td></tr>
           <tr><td>报工、调拨、盘点提交审批</td><td>个人 OA → 我发起的</td><td>生产主管、仓管或规则指定审批人</td><td>审批前不得提前生效；审批后回读同一实例结果</td></tr>
           <tr><td>开票、付款审批</td><td>个人 OA → 我的待办 / 我发起的</td><td>财务角色</td><td>销售/采购页只显示财务状态，不代替财务执行</td></tr>
           <tr><td>会计期间关账</td><td>个人 OA → 我的待办 / 我发起的</td><td>会计期间关账节点授权人</td><td>申请成功不等于关账；APPROVE 后才变为 CLOSED，REJECT 保持 OPEN</td></tr>
@@ -690,7 +691,7 @@
         <div class="callout warning"><strong>当前真实边界</strong>销售订单中的“转采购”不会自动生成采购单；系统会引导到订单详情。采购员须在“采购订单”手动新建，并选择“关联销售订单”。如果页面静默生成了无供应商、无单价或无销售单关联的采购数据，判失败。</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-1"><span></span></span><span><h4>确认供应商与价格前置</h4><p>在“供应商管理 / 价格表管理”确认本轮原料、辅料、包材存在可用供应商和计价单位；供应商档案可维护简称、多联系人、多地址和银行账户。价格未知时不得伪造 0 元为真实采购价。</p><span class="expect">采购订单的供应商、物料和计价单位下拉有真实选项；供应商扩展资料回读正确且不等于已采购、收货或付款；无权限看价时显示脱敏，不显示假 0。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-2"><span></span></span><span><h4>手动创建并关联销售订单</h4><p>新建采购订单，选择供应商、预计到货日和关联销售订单；逐行添加缺口原料/辅料/包材，填写采购数量、数量单位、单价、计价单位和税率。</p><span class="expect">采购单详情和销售订单“关联采购订单”页签都能互相追溯；每行数量大于 0，税率在 0–100。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-2"><span></span></span><span><h4>手动创建并关联销售订单</h4><p>新建采购订单，先选择供应商；物料选择器只展示该供应商当前有效供应关系中的缺口原料/辅料/包材，再填写预计到货日、关联销售订单、采购数量、数量单位、单价、计价单位和税率。</p><span class="expect">没有可供物料时明确提示先维护供应关系，不让用户选择服务端必然以 409 拒绝的组合。采购单详情和销售订单“关联采购订单”页签互相可追溯；每行数量大于 0，税率在 0–100。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-3"><span></span></span><span><h4>提交采购审批</h4><p>提交采购单；需要财审时由“财务管理 → 待审采购单”或“采购管理 → 财务待审采购单”审核，采购员不能替财务完成审批。</p><span class="expect">驳回时保留原因并回到可修正状态；通过后状态可继续收货，审批人与时间可追溯。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-4"><span></span></span><span><h4>创建并确认采购入库</h4><p>到“采购入库”新建，选择采购单后系统带入待收物料，默认实收=待收；仓管核对实际数量、目标仓、厂号/产地和质检结果，先创建 DRAFT，再上传供应商供货单或收货凭证。</p><span class="expect">附件为 0、仍在上传或存在上传失败时，“确认收货入库”按钮禁用并显示原因；附件加载失败按无凭证处理。确认后才生成原料批次并增加目标仓库存，照片/凭证可在详情回看。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-5"><span></span></span><span><h4>回读缺口并返回生产</h4><p>在库存批次查询核对新批次，再回到物料需求单/生产计划刷新缺料信息。</p><span class="expect">缺口按实际入库减少；单位与批次正确；未确认的采购入库草稿不能被生产仓当作可用库存。</span></span></label>
@@ -746,7 +747,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="report-9"><span></span></span><span><h4>R09 · 双出成率总览表头排序与筛选</h4><p>展开计划级双出成率总览，逐列核对表头与数据列边界。点击带 ↕ 的表头切换升/降序，再用 Tab 聚焦后按 Enter 或 Space；工序和状态使用表头漏斗筛选。</p><span class="expect">表头与内容线对线；鼠标和键盘排序结果一致、焦点可见；筛选后列宽和行对齐不跳动。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-unit-contract"><span></span></span><span><h4>R10 · 配置报工单位、单选自动选中与跨单位成品率</h4><p>分别验证唯一投入/产出和多候选场景。页面按配置单位显示：kg/g 只在同量纲内换算，盒、袋、只按字面量匹配；手工批次也不得强制转 kg。逐道录入（clerk）的 RawInput 没有独立单位字段，数量直接按所选批次库存单位填写。再用 kg 投入、盒产出验证跨量纲成品率。</p><span class="expect">clerk 路径服务端原样记账，不二次做 g↔kg 换算；操作员先核对批次单位再填数。其它报工单位不兼容时明确指出物料和两侧单位并停止；未填每单位重量时成品率显示不可比。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-frozen-batch-contract"><span></span></span><span><h4>R10A · 核对冻结 Workflow 的多批开关、过期库存与调料 BOM</h4><p>同一上游物料是否可选多个批次，以计划冻结节点 JSON 的 <code>allowMultipleUpstreamSources</code> 为准；只有旧快照缺字段或解析失败时才兼容回落端口数。唯一候选可自动选中，数量仍由操作员填写；包装单位库存和其它仓库的过期批次可以显示为证据，但不计入当前生产仓可用量。中间工序的调料配方沿计划读取终端成品 BOM，不为半成品重复建 BOM。</p><span class="expect">开关为 true 可选同物料多批，false 保持单批；不可用证据不选中、不扣减。BOM Family 的主产品仍须完整主投入，纯副产成员不因缺少重复主投入而被拦截；Workflow 物料节点缺 <code>skuId</code> 时返回 <code>WORKFLOW_MATERIAL_SKU_MISSING</code>，不按名称猜测。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="label-qc-review"><span></span></span><span><h4>R11 · 包装标签拍检与三层人工复核</h4><p>管理员按真实手机号邀请质量检验员，由员工本人设置密码。质检员填写 SKU、批次号和生产日期并提交 1–6 张标签照片；生产日期最多可选当前日期后 3 天。AI 只提供初筛，所有照片都会进入人工审核。复核台可按生产日期筛选并切换每页 200/500 条；逐图核对盒子、白标、彩标三层参考框后只提交一次。</p><span class="expect">AI 为 0 候选也不能直接判合格。单张可下载原图；批量下载按批次建目录并生成 ZIP，任一选中照片缺失时整批失败。备份时间与审核结论分别回读，下载或备份成功不冒充审核通过；训练批准也不会自动训练或发布模型。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="label-qc-review"><span></span></span><span><h4>R11 · 包装标签拍检、对象真值与单盒精修</h4><p>管理员按真实手机号邀请质量检验员，由员工本人设置密码。质检员填写 SKU、批次号和生产日期并提交 1–6 张标签照片；所有照片都会进入人工审核，AI 只提供盒子、白标、彩标三层参考框与提议。人工按盒子确认白标/彩标“有、缺、看不清”，可移动、改类、删除或补框；切换盒子/照片即校验保存，矛盾状态阻止切换并保留草稿。整图提交后，只有工厂最终认可盒子按审核 SHA 与算法版本幂等进入平台单盒精修。</p><span class="expect">AI 为 0 候选也不能直接判合格；拒绝/无法判断盒子不裁切。平台精修切换队列项即保存并保留回原图坐标变换，但不覆盖工厂盒子真值。单张下载、批量 ZIP、备份时间与审核结论分别回读；训练批准也不会自动训练或发布模型。</span></span></label>
         </div>
         <h4 data-min-depth="full" style="margin:22px 0 10px;font-size:17px">报错与冲突等价类（逐项故意触发）</h4>
         <div class="table-wrap" data-min-depth="full"><table><thead><tr><th>编号</th><th>触发方式</th><th>必须出现的结果</th></tr></thead><tbody>
