@@ -73,6 +73,16 @@ from smartbi.gold.restaurant.restaurant_ops_router import (
     ranking_limit,
     store_dish_split_dish,
 )
+# 时间词语料的写入(Task 2 接线, 2026-08-16)。`time_phrase_corpus.py` 只在
+# **函数内**反向 import 本模块的 `_normalize_exact_phrase`(见该文件顶部注释),
+# 所以这里可以放心做模块级 import —— 不会互相在模块级 import 造成 ImportError。
+#
+# ⚠️ 必须是模块级(⛔ 不要挪成函数内导入): 承重测试要
+# `monkeypatch.setattr(RI, "record_time_phrase", spy)`, 只有名字挂在
+# `restaurant_intent` 模块的 globals 里, 模块内那句裸调用
+# `record_time_phrase(...)` 才会解析到被打的桩。函数内导入每次调用都从源模块
+# 重新取, 桩打不进去(本仓形态 B⁶ 的原形)。
+from smartbi.gold.restaurant.time_phrase_corpus import record_time_phrase
 
 logger = logging.getLogger(__name__)
 
@@ -6351,7 +6361,7 @@ async def _t3_llm_parse(
 
 # ─── Public entry point ────────────────────────────────────────────────
 
-async def parse_restaurant_query(
+async def _parse_restaurant_query_impl(
     query: str,
     pool,
     *,
@@ -7185,6 +7195,66 @@ async def parse_restaurant_query(
         clarification_needed=True, clarification_question=clarification_question,
     )
     await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
+    return spec
+
+
+# ─── Time-phrase corpus wiring (Task 2, 2026-08-16) ───────────────────────
+
+async def parse_restaurant_query(
+    query: str,
+    pool,
+    *,
+    factory_id: str,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    session_key: Optional[str] = None,
+    trusted_followup_context: bool = False,
+    semantic_first: bool = False,
+    session_summary: Optional[str] = None,
+) -> Optional[RestaurantQuerySpec]:
+    """Public entry point. Thin wrapper around `_parse_restaurant_query_impl`
+    that records a "the deterministic parser could not resolve this time
+    phrase, but the LLM did" sample for later human promotion.
+
+    ⛔ **不要把这段逻辑塞回 impl 里再逐个 return 接一遍** —— impl 内部有
+    24 处 `return`(`grep -n "^\\s*return" ` 逐一核对过), 没有一处是「所有
+    产出 spec 的分支都经过」的位置。这层薄壳把「所有分支都经过一次出口」
+    从**要在 24 个地方各接一次、还得保证没漏**，改成**由函数调用结构保证**
+    —— impl 返回什么, 这里就看到什么, 不存在"漏掉某个分支"的可能。
+
+    入库条件是产品**已经算好**的 `spec.window_from_llm_phrase`
+    (`_build_spec` 里的 `:2266` 附近, 见该处注释) —— 这里不重算、不新增判据。
+
+    `llm_phrase` 取 `spec.window_label`(唯一可取的字段; `time_phrase` 只是
+    `_build_spec` 的局部形参, 不落在 `RestaurantQuerySpec` 上)。
+    `window_from_llm_phrase=True` 而 `window_label == "全部历史"` 是可能的
+    (LLM 给的短语自己也没解出窗口)——⛔ 不过滤这一行, 它的价值恰恰在
+    `raw_query`: 里面有一个规则接不住的时间词, 正是人工晋升最该看的样本。
+
+    `raw_query` 是用户原话(本函数收到的 `query` 形参, 未经 `_normalize_query`
+    改写); `llm_time_range` 传 `None`(与计划一致, T3 的结构化 time_range
+    不在本轮范围内)。
+
+    `record_time_phrase` fail-open(内部吞异常只留 WARNING), 所以这里不用
+    try/except 包一层 —— 包了反而会把它的失败语义改成「静默」的第二层。
+    """
+    spec = await _parse_restaurant_query_impl(
+        query,
+        pool,
+        factory_id=factory_id,
+        history=history,
+        session_key=session_key,
+        trusted_followup_context=trusted_followup_context,
+        semantic_first=semantic_first,
+        session_summary=session_summary,
+    )
+    if spec is not None and spec.window_from_llm_phrase:
+        # ⚠️ 入库条件是产品**已经算好**的那个标记(`:2266` 附近), ⛔ 不在这里
+        #    重算一遍 ——「同一个判据两处实现」在本仓漂过太多次。
+        await record_time_phrase(
+            pool, domain="restaurant", factory_id=factory_id,
+            raw_query=query, llm_phrase=spec.window_label,
+            llm_time_range=None,
+        )
     return spec
 
 

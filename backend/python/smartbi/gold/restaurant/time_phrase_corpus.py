@@ -28,8 +28,6 @@ import json
 import logging
 from typing import Any, Dict, List
 
-from smartbi.gold.restaurant.restaurant_intent import _normalize_exact_phrase
-
 logger = logging.getLogger(__name__)
 
 _UPSERT_SQL = (
@@ -81,6 +79,12 @@ async def record_time_phrase(
     就是我们唯一的仪器。所以任何异常在这里全部吞掉, 只留一条 WARNING。
     """
     try:
+        # 函数内导入(⛔ 不提到模块级): `restaurant_intent.py` 反过来要在模块级
+        # `from time_phrase_corpus import record_time_phrase`(接线, Task 2),
+        # 两边都在模块级互相 import 会 `ImportError`。全仓 15+ 处引用
+        # `restaurant_intent` 私有符号的地方都是这个约定(函数内导入避免回环)。
+        from smartbi.gold.restaurant.restaurant_intent import _normalize_exact_phrase
+
         normalized = _normalize_exact_phrase(raw_query)
         if not normalized or not llm_phrase:
             return False

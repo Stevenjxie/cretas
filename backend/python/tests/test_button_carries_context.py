@@ -125,9 +125,17 @@ def test_history_without_semantic_first_raises():
     import asyncio
     import inspect
 
-    from smartbi.gold.restaurant.restaurant_intent import parse_restaurant_query
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _parse_restaurant_query_impl,
+        parse_restaurant_query,
+    )
 
-    src = inspect.getsource(parse_restaurant_query)
+    # 🔴 2026-08-16 时间词语料接线(Task 2): `parse_restaurant_query` 现在是一层
+    # 薄壳(调 `_parse_restaurant_query_impl` 再判断要不要记语料), 这条守卫的
+    # 源码仍在 impl 上 —— 源码字面量检查要跟着搬, 否则它查的是薄壳的源码,
+    # 而薄壳里本来就不含这句判据。**运行时行为**(下面 `pytest.raises`)不变:
+    # 走的仍是公共入口 `parse_restaurant_query`, 守卫照样通过 impl 生效。
+    src = inspect.getsource(_parse_restaurant_query_impl)
     assert "history and not semantic_first" in src, (
         "参数不全那条守卫不在了 —— 它会重新变成静默不继承")
 
