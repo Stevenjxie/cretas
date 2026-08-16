@@ -42,13 +42,55 @@
  */
 import { chromium } from 'playwright';
 
-const URL = 'http://localhost:5211/mobile-ai/rest/followup-preview.html';
+// ⚠️ 端口可配。第一版把 5211 写死, 而本机那个端口上跑着**别的服务**
+//    (根路径 302 / 目标页 404) ⇒ 闸提交之后一次都没跑起来过。
+//    起服务: `npm run build && npx vite preview --port <PORT>`
+const PORT = process.env.FOLLOWUP_GATE_PORT || '5199';
+const URL = `http://localhost:${PORT}/mobile-ai/rest/followup-preview.html`;
+
+// 🔴 三态的第三态 (硬约束 4): **这次没量到** ⇒ rc=2,
+//    ⛔ 不是「没问题」(rc=0) 也不是「有问题」(rc=1)。
+//
+//    两种「没量到」都要接住, 实测两种都出现过:
+//    (a) 服务根本没起 —— `page.goto` 直接抛。第一版没接, rc=1, 与「闸红了」
+//        混在一起。
+//    (b) 页面起来了但没有 `window.__probe` —— vite preview 的 SPA fallback
+//        会把 index.html 顶上来, HTTP **200**。第一版直接读
+//        `probe.withFollowups` ⇒ `TypeError`, 「没能做决定」被伪装成崩溃。
+//
+//    ⚠️ 起服务要用 **dev server**: `followup-preview.html` 在项目根,
+//    ⛔ 不在 `dist` 里, `vite preview` 拿不到它。
+const HOWTO = [
+  `   起服务: cd mobile-rest-ai && npx vite --port ${PORT} --strictPort`,
+  '   ⚠️ 必须是 dev server —— followup-preview.html 在项目根, 不在 dist',
+  '   换端口: FOLLOWUP_GATE_PORT=<port> node followup-gate.mjs',
+].join('\n');
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
-await page.goto(URL, { waitUntil: 'networkidle' });
 
-const probe = await page.evaluate(() => window.__probe);
+let probe;
+try {
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  probe = await page.evaluate(() => window.__probe);
+} catch (err) {
+  console.log(`⛔ INSTRUMENT DEAD — 打不开 ${URL}`);
+  console.log(`   ${err.message.split('\n')[0]}`);
+  console.log('   这次**没量到**任何东西, 本次读数作废 (⛔ 不等于「通过」)。');
+  console.log(HOWTO);
+  await browser.close();
+  process.exit(2);
+}
+
+if (!probe || !Array.isArray(probe.withFollowups)) {
+  console.log(`⛔ INSTRUMENT DEAD — ${URL} 打得开, 但页面上没有 window.__probe。`);
+  console.log('   (多半是 SPA fallback 把 index.html 顶上来了 —— HTTP 200 也会这样)');
+  console.log('   这次**没量到**任何东西, 本次读数作废 (⛔ 不等于「通过」)。');
+  console.log(HOWTO);
+  await browser.close();
+  process.exit(2);
+}
+
 console.log('[读数·结构化条目]', JSON.stringify(probe.withFollowups, null, 0));
 console.log('[读数·显示文本]', JSON.stringify(probe.displayedText, null, 0));
 console.log('[读数·阴性]', JSON.stringify(probe.withoutFollowups, null, 0));
