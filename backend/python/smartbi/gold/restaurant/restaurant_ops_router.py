@@ -963,6 +963,59 @@ def _closing(pool_name: str, query: Optional[str]) -> str:
     return phrasing.pick_variant(variants, f"{pool_name}|{query or ''}")
 
 
+def window_scope_text(
+    window_label: str,
+    requested: Tuple[Any, Any],
+    actual: Tuple[Any, Any],
+) -> str:
+    """把「他问的窗口」和「实际有数据的范围」拼成一句**不说谎**的话。
+
+    🔴 2026-08-16: 原来内嵌在 resolver 里, 写的是
+    ``f"{window_label}（{实际范围}）"``。实测长相:
+
+        上个季度（2026-06-29 至 2026-06-30）经营能看：覆盖 2 天
+
+    标签是**请求窗口**(上个季度 = 91 天), 括号里是**实际有数据的范围**(2 天)
+    —— 两个口径拼成一句, 读起来是「系统认为上个季度就是这 2 天」。
+    ⚠️ 更糟的是它**把真正该被看见的那件事盖住了**: 那个季度 97.8% 的日子
+    没有数据, 而这句话让它看起来只是个短窗口。
+
+    ⇒ 窄了就**明说**两个口径; 铺满时不啰嗦。
+    ⛔ 只留实际范围会丢「他问的是什么」; 只留标签会丢「实际只有这些天」。
+
+    ⚠️ **抽成具名函数是为了让闸咬得住**: 它原本内嵌在一个几百行的 resolver 里,
+    测试只能**复刻**一份逻辑 —— 那样改产品测试不会红(形态 D, 实测变异两条都没红)。
+    """
+    a_start, a_end = actual
+    r_start, r_end = requested
+    if not (a_start and a_end):
+        return window_label
+    actual_txt = _range_text(a_start, a_end)
+
+    # 🔴 「窄了」不等于「值得说」。第一版写的是「端点动了就说」, 实测把
+    #    **正常的 ETL 末端滞后**也念了出来:
+    #        本月（请求 2026-07-01 至 2026-07-26，实际有数据的只有 …07-25）
+    #    今天的数据还没入库是常态, 把它写进每一句话 = 一句天天出现的噪音,
+    #    而天天出现的提示等于没有提示(形态 E)。
+    #    ⚠️ 仓里那两条测试(`aligns_partial_month_to_primary_actual_end` /
+    #      `aligns_week_when_ingestion_trails_sunday`)守的正是「末端对齐、别啰嗦」——
+    #      它们守的是**需求**不是历史。
+    #
+    # ⇒ 只在**实质性缺失**时说, 两种:
+    #    ① 起点被截 —— 请求窗口的**前面一整段根本没数据**(上个季度 2/91 天那种)
+    #    ② 覆盖不到一半 —— 即使起点没动, 少一半也不该被一个短括号盖过去
+    # ⛔ 不用「端点动了」当判据, 也⛔ 不用 90% 这种会误伤一周缺一天(86%)的阈值。
+    _start_truncated = bool(r_start and a_start > r_start)
+    _req_days = (r_end - r_start).days + 1 if (r_start and r_end) else 0
+    _act_days = (a_end - a_start).days + 1
+    _mostly_missing = bool(_req_days and _act_days * 2 < _req_days)
+    narrowed = _start_truncated or _mostly_missing
+    if narrowed:
+        return (f"{window_label}（请求 {_range_text(r_start, r_end)}，"
+                f"实际有数据的只有 {actual_txt}）")
+    return f"{window_label}（{actual_txt}）"
+
+
 def _range_text(start_date: Any, end_date: Any) -> str:
     """Render a date range; a single-day range reads as one date, not "X 至 X"."""
     if start_date and end_date and _date_text(start_date) == _date_text(end_date):
@@ -7425,11 +7478,13 @@ async def resolve_sales_summary(
         if sales_scope_start is not None and sales_scope_end is not None
         else (None, None)
     )
-    actual_window = (
-        f"{window_label}（{_range_text(sales_scope_start, sales_scope_end)}）"
-        if sales_scope_start and sales_scope_end else window_label
+    # 标签与括号里的日期是两个口径, 拼错会说谎 —— 见 `window_scope_text` 的
+    # docstring(它抽成具名函数正是为了让闸咬得住, ⛔ 别再内联回来)。
+    actual_window = window_scope_text(
+        window_label,
+        (date_range[0], date_range[1]),
+        (sales_scope_start, sales_scope_end),
     )
-
     comparison_meta: Optional[Dict[str, Any]] = None
     if (
         resolved_comparison_label
