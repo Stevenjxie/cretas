@@ -145,6 +145,32 @@ def test_failure_is_fail_open_but_leaves_a_trace(monkeypatch, caplog):
     assert any("attribution failed" in r.message for r in caplog.records)
 
 
+def test_long_window_is_skipped_because_baseline_would_overlap(stub_cells, caplog):
+    """🔴 基线是 -7 天平移 —— 窗口一长, 它就与主窗口**重叠**。
+
+    实测重叠量:
+        今天(1 天)    重叠 0 天
+        本月(16 天)   重叠 9 天 / 16
+        上半年(181天) 重叠 **174** 天 / 181
+
+    ⇒ 那种「对比」的两边几乎是同一批数据, 拆出来的主因是噪音假装成洞察,
+      而且**带着一个精确的数字** —— 比不归因更糟。
+    """
+    long_range = (datetime.date(2026, 1, 1), datetime.date(2026, 6, 30))
+    with caplog.at_level(logging.WARNING):
+        out = _run(_Spec(date_range=long_range))
+    assert out == BASE, "⛔ 长窗口不许硬算归因"
+    assert stub_cells == [], "⛔ 也不该白查四次库"
+    assert any("window too long" in r.message for r in caplog.records)
+
+
+def test_seven_day_window_still_attributes(stub_cells):
+    """阳性对照: 7 天窗口(基线恰好不重叠)**仍然**归因 —— 上面那条不是「一刀切关掉」。"""
+    week = (TODAY - datetime.timedelta(days=6), TODAY)
+    out = _run(_Spec(date_range=week))
+    assert out != BASE, "7 天窗口被误伤了 ⇒ 上面那条断言不区分好坏"
+
+
 def test_the_helper_is_actually_called_and_its_result_is_kept():
     """🔴 上面七条**全都直接调** helper —— 接线被删掉它们照样绿。
 

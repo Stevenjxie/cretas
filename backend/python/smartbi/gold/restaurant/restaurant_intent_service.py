@@ -199,6 +199,21 @@ _DISH_TABLE_TOP_N = 10
 _ATTRIBUTION_BASELINE_DAYS = 7
 _ATTRIBUTION_BASELINE_LABEL = "上周同一天"
 
+#: 🔴 归因只支持 **窗口 ≤ 7 天**。
+#:
+#: 基线是把窗口整体往前挪 7 天。对**单日**窗口这没问题（今天 vs 上周同一天，
+#: 两个窗口不相交）；窗口一长, 基线就会**与主窗口重叠**:
+#:
+#:     今天(1 天)    基线 08-09~08-09      重叠 **0** 天
+#:     本月(16 天)   基线 07-25~08-09      重叠 **9** 天 / 16
+#:     上半年(181天) 基线 2025-12-25~06-23 重叠 **174** 天 / 181
+#:
+#: ⚠️ 重叠 174/181 意味着「对比」的两边几乎是同一批数据 —— 拆出来的任何主因
+#:    都是噪音假装成洞察。**比不归因更糟**: 它带着一个精确的数字。
+#: ⇒ 长窗口需要的是另一套基线（上月同期 / 去年同期），那是另一条规则,
+#:   ⛔ 现在不建。够不着的窗口**明说跳过**并留痕。
+_ATTRIBUTION_MAX_WINDOW_DAYS = 7
+
 #: 哪些意图配归因。⛔ 只挂门店级经营概览 —— 归因拆的是**营收 = 单量 × 客单价**，
 #: 那是门店级的恒等式；挂到菜品级意图上会变成拿全店的拆解去解释一道菜。
 _ATTRIBUTION_INTENTS = frozenset({"RESTAURANT_OPS_SALES_SUMMARY"})
@@ -235,6 +250,16 @@ async def _maybe_append_attribution(pool, factory_id: str, spec, answer_text: st
         logger.warning(
             "[restaurant-intent] attribution skipped: no date_range "
             f"(factory={factory_id} intent={getattr(spec, 'intent', None)})")
+        return answer_text
+
+    span_days = (end - start).days + 1
+    if span_days > _ATTRIBUTION_MAX_WINDOW_DAYS:
+        # ⛔ 不硬算 —— 基线会与主窗口重叠, 归因就成了拿窗口跟它自己比。
+        logger.warning(
+            "[restaurant-intent] attribution skipped: window too long "
+            f"({span_days} 天 > {_ATTRIBUTION_MAX_WINDOW_DAYS}), "
+            f"-{_ATTRIBUTION_BASELINE_DAYS}天基线会与主窗口重叠 "
+            f"(factory={factory_id})")
         return answer_text
 
     try:
