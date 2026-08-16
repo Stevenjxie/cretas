@@ -58,6 +58,65 @@ def collect(today=None):
     return sorted(rows, key=lambda r: r["days_left"])
 
 
+def successor_readiness(today):
+    """到期那天**接班的那个，今天能不能真的答**。
+
+    🔴 2026-08-16 prod 实测，这条不是理论风险：
+
+        aistore 2026-09-13 到期（还剩 28 天），五个槽的链首都是它。
+        把时钟推到 9-14 后逐条问：
+          aistore   refuse='expired'  ⇒ 调用时正确跳过 ✅
+          deepseek  refuse=None       key **长度 0**  ⇒ 调用即 NO_API_KEY
+          zhipu     refuse=None       key 有          ⇒ **唯一还能答的**
+
+    ⇒ 「拒绝机制работает」和「接班人能答」是两件事。台账里写的
+      「9-13 自动接手，当天无需人工操作」只有前半句是真的。
+
+    ⚠️ 这个缺口**在到期前一天都不会有任何症状** —— 今天一切正常。
+       所以它必须由一条**带倒计时**的闸来喊，⛔ 不能等那天再发现。
+
+    判据：到期后每个槽的链里，**第一个既不被 refuse、又有 key 的**是谁。
+    只剩一个能答的 ⇒ 单点，没有兜底。
+    """
+    import common.llm_router as R
+
+    original = R._today
+    try:
+        rows = []
+        for slot in R.SLOT:
+            chain = R._build_chain(slot)
+            if not chain:
+                continue
+            # ⚠️ 推的是**时钟**(`_today`, 仓里自带的注入缝)，
+            #    ⛔ 不是改 `_SAFE_MODELS` 里的到期日 —— 那样量的是我改过的东西。
+            usable_now, usable_after = [], []
+            for when, bucket in ((today, usable_now), (_after_cliff(today), usable_after)):
+                R._today = lambda w=when: w
+                for account, model in chain:
+                    if R._refuse_reason(account, model):
+                        continue
+                    _, key = R._provider_config(account)
+                    if key:
+                        bucket.append(account)
+            rows.append({
+                "slot": slot.name,
+                "usable_now": usable_now,
+                "usable_after_cliff": usable_after,
+            })
+        return rows
+    finally:
+        R._today = original
+
+
+def _after_cliff(today):
+    """最近的一个**真到期**日的次日。没有到期日就用今天(此时两侧应当一致)。"""
+    import common.llm_router as R
+
+    dates = [d for (a, _m), d in R._SAFE_MODELS.items()
+             if a in HARD_EXPIRY_ACCOUNTS and isinstance(d, datetime.date) and d >= today]
+    return (min(dates) + datetime.timedelta(days=1)) if dates else today
+
+
 def main(argv=None) -> int:
     today = datetime.date.today()
     if argv:
@@ -84,10 +143,44 @@ def main(argv=None) -> int:
         print(f"{mark} {r['account']}/{r['model']:<28} {r['date']} "
               f"剩 {r['days_left']:>4} 天  [{r['kind']}]")
 
+    # ── 接班人体检 ────────────────────────────────────────────────────
+    # ⚠️ 这一段与上面的「还剩几天」是**两个不同的问题**:
+    #    上面问「日期到了没」, 这里问「到了那天还有谁能答」。
+    #    前者绿不代表后者绿 —— 实测就是这样(日期还早, 而接班人已经空着 key)。
+    cliff = _after_cliff(today)
+    starving = []
+    try:
+        ready = successor_readiness(today)
+    except Exception as exc:                       # noqa: BLE001
+        print(f"PROVIDER REMINDER INSTRUMENT DEAD {today} — 接班人体检跑不起来: {exc}")
+        _write({"rc": 2, "reason": "successor_probe_failed"})
+        return 2
+
+    print(f"\n=== 到期后({cliff})每个槽还剩几个能答的 ===")
+    for r in ready:
+        n_now, n_after = len(r["usable_now"]), len(r["usable_after_cliff"])
+        mark = "🔴" if n_after <= 1 else "  "
+        print(f"{mark} {r['slot']:<12} 现在 {n_now} 个 -> 到期后 {n_after} 个 "
+              f"{r['usable_after_cliff']}")
+        if n_after <= 1:
+            starving.append(r)
+
     due = [r for r in rows if r["due"]]
-    _write({"rc": 1 if due else 0, "total": len(rows), "due": len(due),
-            "nearest_days": rows[0]["days_left"]})
-    if not due:
+    _write({"rc": 1 if (due or starving) else 0, "total": len(rows), "due": len(due),
+            "nearest_days": rows[0]["days_left"],
+            "slots_single_point_after_cliff": [r["slot"] for r in starving]})
+
+    for r in starving:
+        left = r["usable_after_cliff"]
+        if not left:
+            print(f"PROVIDER SUCCESSOR MISSING — 槽 {r['slot']} 在 {cliff} 之后"
+                  f"**一个能答的都不剩**。⇒ 那天该槽全黑。")
+        else:
+            print(f"PROVIDER SUCCESSOR THIN — 槽 {r['slot']} 在 {cliff} 之后只剩 "
+                  f"{left[0]} 一个能答, **没有兜底**。"
+                  f"⚠️ 常见成因是接班账号的 key 是空的 —— 「在链上」不等于「能答」。")
+
+    if not due and not starving:
         return 0
 
     # 🔴 三态, ⛔ 不是两态。第一版把「已经过期」和「即将到期」写成同一句,
