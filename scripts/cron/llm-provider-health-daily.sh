@@ -72,7 +72,12 @@ LEDGER=/www/wwwroot/cretas/logs/llm-provider-health-ledger.jsonl
 
   # 提醒行单独进告警文件 —— 它不是「系统坏了」, 是「有个日期该看了」,
   # ⛔ 与降级/没量到用不同前缀, 免得三件事挤在一个措辞里。
-  echo "$rem_out" | grep -E '^PROVIDER (EXPIRY|REVIEW|REMINDER)' | while IFS= read -r line; do
+  # 🔴 2026-08-16 实测: 第一版这里写的是 `(EXPIRY|REVIEW|REMINDER)`, 而接班人体检
+  #    打出的是 `PROVIDER SUCCESSOR THIN/MISSING` —— **闸产出了, 这一行把它滤掉了**。
+  #    在 prod 上跑完之后数 `grep -c SUCCESSOR` 得 0 才发现。
+  #    ⇒ 白名单式过滤每加一种消息都要回来改, 而漏改**不报错**。
+  #    改成「所有 PROVIDER 开头的行都进」—— 探针那边本来就只在该说话时才打这些行。
+  echo "$rem_out" | grep -E '^PROVIDER ' | while IFS= read -r line; do
     echo "$line $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
   done
 
@@ -112,6 +117,7 @@ def load(path):
         return None
 
 spend, live = load('/tmp/llm_spend.json'), load('/tmp/llm_liveness.json')
+rem = load('/tmp/llm_reminder.json')
 print(json.dumps({
     "date": datetime.date.today().isoformat(),
     "spend_rc": int(sys.argv[1]),
@@ -123,6 +129,10 @@ print(json.dumps({
     "spend_usd": (spend or {}).get("total_usd"),
     "alive": (live or {}).get("alive"),
     "checked": (live or {}).get("checked"),
+    # 倒计时关键数: 到期后哪些槽只剩一个能答的。⛔ 读不到写 None 不写 [],
+    # 「我没读到」和「一个都没有」对下游完全不同。
+    "nearest_expiry_days": (rem or {}).get("nearest_days"),
+    "single_point_after_cliff": (rem or {}).get("slots_single_point_after_cliff"),
 }, ensure_ascii=False))
 PY
 } >> "$LOG" 2>&1
