@@ -575,7 +575,7 @@ public class AIIntentConfigController {
 
     /**
      * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
-     * public static 因为测试 {@code RestaurantTenantDetectionTest} 在
+     * public static 因为测试 {@code RestaurantTenantDetectionContractTest} 在
      * {@code com.cretas.aims.service.execution} 包, 与本类不同包不可见 package-private。
      */
     public static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {

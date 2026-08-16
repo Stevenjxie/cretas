@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
  * 范围澄清: 从未执行的是**启动闸**这条路; {@code ToolHealthMonitor} 的定时扫描一直是通的。
  */
 @DisplayName("Tool 相似度治理闸")
-class ToolSimilarityGateRunsTest {
+class ToolSimilarityGateRunsContractTest {
 
     /** 构造期 registry 还没就绪 —— 用「取一次就抛」的 provider 模拟这个时刻。 */
     private static ObjectProvider<ToolRegistry> notReadyYet(AtomicInteger calls) {

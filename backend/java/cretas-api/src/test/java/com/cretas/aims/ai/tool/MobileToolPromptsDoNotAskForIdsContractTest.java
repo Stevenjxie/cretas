@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>只看字符串字面量，不看注释 —— 否则闸会把自己的说明文档也测进去。</li>
  * </ul>
  */
-class MobileToolPromptsDoNotAskForIdsTest {
+class MobileToolPromptsDoNotAskForIdsContractTest {
 
     /** 追问文案里出现「请提供…ID」的字面量。 */
     private static final Pattern ASK_FOR_ID =

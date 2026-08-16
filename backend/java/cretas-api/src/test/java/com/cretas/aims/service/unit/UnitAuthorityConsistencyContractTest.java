@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>⚠️ 判据故意扫<b>源码</b>而不是跑几个样例：风险是「以后又加了一组别名却忘了加定义」，
  * 逐个样例永远追不上新增。
  */
-class UnitAuthorityConsistencyTest {
+class UnitAuthorityConsistencyContractTest {
 
     private static final Path SOURCE = Path.of(
             "src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java");

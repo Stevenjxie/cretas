@@ -43,13 +43,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>这里要守的性质是「{@code startProduction} 必须走到建批次那条路」，
  * 它是<b>结构性</b>的，所以直接对源码断言。同类做法见
- * {@code BlockingErrorsCarryActionHintTest}。
+ * {@code BlockingErrorsCarryActionHintContractTest}。
  *
  * <p>⚠️ 本文件本身可被验伪：把 {@code startProduction} 里那行
  * {@code createBatchFromPlan(...)} 删掉，{@link #startProductionMustCreateBatch()} 立刻变红。
  */
 @DisplayName("两个「开工」入口必须收敛 —— 开工不建批次 = 计划当场死锁")
-class ProductionStartEntryPointsConvergeTest {
+class ProductionStartEntryPointsConvergeContractTest {
 
     private static final Path SERVICE = Paths.get(
             "src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java");

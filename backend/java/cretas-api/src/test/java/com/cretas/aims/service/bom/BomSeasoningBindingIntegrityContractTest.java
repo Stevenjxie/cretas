@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("BOM seasoning binding integrity")
-class BomSeasoningBindingIntegrityTest {
+class BomSeasoningBindingIntegrityContractTest {
 
     private static final String FACTORY = "F-BINDING";
     private static final String OTHER_FACTORY = "F-OTHER";

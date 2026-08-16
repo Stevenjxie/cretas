@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 而 {@code isCanonical} 本身也是树比较，这里与它同口径。
  */
 @DisplayName("V20261029_47 迁移的 nodes_json 必须与 Provisioner 常量等价")
-class RestaurantAgentWorkflowLabelMigrationParityTest {
+class RestaurantAgentWorkflowLabelMigrationParityContractTest {
 
     private static final Path MIGRATION = Paths.get(
             "src/main/resources/db/flyway/V20261029_47__restaurant_agent_workflow_labels_to_chinese.sql");

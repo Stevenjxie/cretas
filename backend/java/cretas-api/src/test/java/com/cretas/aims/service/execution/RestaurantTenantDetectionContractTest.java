@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * factories.type='RESTAURANT' 解析出的 domain 认出来。这组断言钉住
  * 「ID 认不出时必须回落到 domain」, 防止再退回纯前缀判定。
  */
-class RestaurantTenantDetectionTest {
+class RestaurantTenantDetectionContractTest {
 
     private static final String MOCK = "MOCK_REST";
     private static final String RESTAURANT_DOMAIN = "RESTAURANT";

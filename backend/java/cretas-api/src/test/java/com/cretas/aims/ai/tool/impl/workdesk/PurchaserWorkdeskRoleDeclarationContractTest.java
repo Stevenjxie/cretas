@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>第 2 条是必需的：只断言「这 5 个有」抓不住「第 6 个也偷偷声明了」，
  * 而多标一个的后果是采购员的工作台里混进不属于他的活。
  */
-class PurchaserWorkdeskRoleDeclarationTest {
+class PurchaserWorkdeskRoleDeclarationContractTest {
 
     /** 与 impl 目录同步的相对路径；surefire 的工作目录是 Maven 模块根。 */
     private static final Path TOOL_IMPL_DIR =
@@ -64,7 +64,7 @@ class PurchaserWorkdeskRoleDeclarationTest {
         try (Stream<Path> paths = Files.walk(TOOL_IMPL_DIR)) {
             actual = paths
                     .filter(p -> p.toString().endsWith(".java"))
-                    .filter(PurchaserWorkdeskRoleDeclarationTest::declaresPurchaser)
+                    .filter(PurchaserWorkdeskRoleDeclarationContractTest::declaresPurchaser)
                     .map(p -> p.getFileName().toString())
                     .collect(Collectors.toCollection(TreeSet::new));
         }

@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>判据分两层：真值表（行为）+ 源码扫描（防止再长出第八张私有表）。
  */
-class SkuImportUnitCanonicalizationTest {
+class SkuImportUnitCanonicalizationContractTest {
 
     // ==================== 1. 行为: 真值表 ====================
 

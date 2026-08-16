@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       —— 名单只能变短，不能变长。</li>
  * </ul>
  */
-class BlockingErrorsCarryActionHintTest {
+class BlockingErrorsCarryActionHintContractTest {
 
     static final int KNOWN_DEBT_SIZE = 18;
 

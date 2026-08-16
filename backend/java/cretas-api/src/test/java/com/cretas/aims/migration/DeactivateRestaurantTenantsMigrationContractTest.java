@@ -8,7 +8,7 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-class DeactivateRestaurantTenantsMigrationTest {
+class DeactivateRestaurantTenantsMigrationContractTest {
 
     private static final Path MIGRATION = Path.of(
         "src/main/resources/db/flyway/V20261029_53__deactivate_nonmock_restaurant_tenants.sql");

@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 直接读声明更强。真正的端到端由 prod E2E 覆盖 (建单→无凭证→确认→有凭证)。
  */
 @DisplayName("凭证生成时点 = 确认入库")
-class TransferVoucherGeneratedOnConfirmTest {
+class TransferVoucherGeneratedOnConfirmContractTest {
 
     private static final Path LISTENER = Path.of(
             "src/main/java/com/cretas/aims/listener/voucher/TransferVoucherListener.java");

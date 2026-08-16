@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 起 Spring + 造六种业务单据的代价远大于收益, 真实行为由 prod 审计 SQL 复核。
  */
 @DisplayName("批量补凭证 — 调拨单取数范围")
-class VoucherBackfillScopeTest {
+class VoucherBackfillScopeContractTest {
 
     private String transferBranch() throws IOException {
         Path p = Path.of("src/main/java/com/cretas/aims/service/voucher/impl/VoucherServiceImpl.java");

@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 人工/均摊不在 BOM 归集：这两列必须留空，不能写 0。
  * 0 会被下游读成「这项成本是零」，null 才表示「此处不归集」。
  */
-class BomRecipeCostNullCaliberTest {
+class BomRecipeCostNullCaliberContractTest {
 
     private static final Path SOURCE = Path.of(
             "src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java");
