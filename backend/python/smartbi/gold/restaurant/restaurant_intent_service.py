@@ -1735,7 +1735,22 @@ async def tiered_answer(
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
-            followups = _clarification_followups(spec, query)
+            # ⚠️ 种子用 `resolver_query_seed` 而不是原始 `query` —— 两个理由:
+            #
+            # 1. **它是这条答案里的权威完整问句**。同一个响应的
+            #    `structured_context["question_seed"]` 用的就是它, 换范围按钮
+            #    2026-07-31 已经为此栽过一次(发裸范围词 ⇒「查询维度超出计划
+            #    resolver 的能力范围」, 按钮等于哑弹)。
+            # 2. **接收侧按它对账**。多轮澄清时 `_maybe_register_pending` 存进
+            #    pending 的正是 `continued.resolver_query_seed`, 而接收侧要靠
+            #    「答案以 original_query 结尾」把合成句还原成片段。用原始
+            #    `query` 合成 ⇒ 第二轮那次 `endswith` 不成立 ⇒ 还原静默 no-op
+            #    ⇒ 整句撞上精确相等白名单, 零 LLM 延续又断一次。
+            #
+            # ⚠️ 时间澄清那一支行为不变: 它的触发条件本身就含 `not time_phrase`,
+            #    而 `effective_query` 只在 `time_phrase` 非空时才与 `query` 不同。
+            followups = _clarification_followups(
+                spec, str(getattr(spec, "resolver_query_seed", "") or "") or query)
             if followups:
                 clarification_result["suggested_followups"] = followups
             if action_warning:

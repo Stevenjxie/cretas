@@ -318,3 +318,55 @@ def test_the_fstring_gate_can_actually_fire():
         }
     ]
     assert len(found) == 1, "闸的判别式本身失效了"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 多轮澄清: 产出侧合成用的种子, 必须与接收侧对账用的那个串一致
+# ══════════════════════════════════════════════════════════════════
+def test_buttons_compose_from_the_same_seed_the_receiver_reconciles_against():
+    """🔴 承重: 产出侧用什么合成, 接收侧就得能拿它还原。
+
+    `_maybe_register_pending` 在多轮场景下存进 pending 的是
+    `continued.resolver_query_seed`(restaurant_intent.py:6486), 而接收侧靠
+    「答案以 `pending.original_query` 结尾」把合成句还原成片段。
+
+    ⇒ 产出侧若用原始 `query` 合成, 第二轮那次 `endswith` 不成立,
+      还原**静默 no-op**, 整句撞上精确相等白名单 —— 零 LLM 延续又断一次。
+      而它不报错、不变红, 只是悄悄多花一次 T3。
+
+    ⚠️ 这一条不测「按钮长什么样」, 测的是**两侧用的是同一个串**。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        STORE_SCOPE_CLARIFICATION_QUESTION,
+    )
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _clarification_followups,
+    )
+
+    # 第二轮的形状: 上一轮已经把时间并进了 resolver_query_seed
+    carried = f"{SEED} 本月"
+    spec = _spec(
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=["青花椒南方百联店"],
+        resolver_query_seed=carried,
+    )
+    seed_used = str(getattr(spec, "resolver_query_seed", "") or "") or SEED
+    assert seed_used == carried, "前置事实变了"
+
+    for b in _clarification_followups(spec, seed_used):
+        # pending.original_query 存的就是 carried ⇒ 还原必须成立
+        fragment = _button_answer_fragment(carried, b["question"])
+        assert fragment != b["question"], f"还原 no-op 了: {b['question']!r}"
+        assert fragment == b["label"] or b["question"].startswith(fragment), (
+            fragment, b)
+
+
+def test_composing_from_the_raw_query_would_break_the_roundtrip():
+    """阴性对照: 证明上面那条不是恒真式 —— 用原始 query 合成时它会坏。
+
+    ⛔ 少了这一条,「还原成立」在「还原函数对任何输入都返回片段」时也成立。
+    """
+    carried = f"{SEED} 本月"
+    composed_from_raw = f"全部门店{SEED}"          # 产出侧若用原始 query
+    assert _button_answer_fragment(carried, composed_from_raw) == composed_from_raw, (
+        "用原始 query 合成时还原**应当** no-op —— 前置事实变了")
