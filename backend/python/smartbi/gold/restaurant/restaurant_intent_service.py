@@ -1124,7 +1124,7 @@ def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
         ],
     )
     current_window, body = _split_time_scope(remainder)
-    if not head or not body:
+    if not body:
         # 整句就是一个时间词, 换掉之后什么都不剩。
         return []
     # 当前窗口不再给一遍。两个来源都要排除: 规划层的 window_label, 以及问句里
