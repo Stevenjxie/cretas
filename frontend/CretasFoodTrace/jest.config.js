@@ -16,12 +16,19 @@ module.exports = {
   ],
   testPathIgnorePatterns: [
     '/node_modules/',
-    '/src/test/', // 忽略现有的测试目录
-    // PR-2 (May 9 2026) — 3 integration tests fail on @react-navigation/native ESM
-    // due to insufficient transformIgnorePatterns. Pre-existing infra debt unrelated
-    // to PR-2 jest binary fix. Defer to dedicated jest-config cleanup follow-up so
-    // we can enforce the 44 passing suites (880 tests) NOW via removed continue-on-error.
-    '/__tests__/integration/screens/'
+    '/src/test/' // 忽略现有的测试目录
+    // 2026-08-16: 摘掉 '/__tests__/integration/screens/'。
+    //
+    // 它是 PR-2 (May 9 2026) 留下的债: 那时 transformIgnorePatterns 不够宽,
+    // @react-navigation/native 的 ESM 进不了转译, 于是把整个目录排除掉先把
+    // 44 个 suite 的 continue-on-error 摘了。注释写的是「3 个」, 实际是 4 个文件。
+    //
+    // ⚠️ 排除的后果不是「少跑几个测试」, 而是【断言红了看不见】—— 这 4 个文件
+    // 三个月来只被 tsc 编译, 从没执行过。与 Java 侧 GateSelectorCoverageContractTest
+    // 守的是同一个形状: 编译得到 ≠ 会被执行。
+    //
+    // 解法是把 transformIgnorePatterns 配对(见下), 不是继续排除。
+    // ⛔ 不要为了让 CI 变绿再把这一行加回来 —— 那等于把闸关掉。
   ],
   collectCoverageFrom: [
     'src/**/*.{js,jsx,ts,tsx}',
@@ -74,7 +81,42 @@ module.exports = {
     // 宽泛匹配：react-native 本体 + 子路径 + react-native-xxx 三方包 → __mocks__/react-native.js
     'react-native': 'react-native'
   },
+  // 默认值是 ['/node_modules/'] —— 即 node_modules 里一律不转译。RN 生态里大量包
+  // 只发 ESM 源码(@react-navigation/*, expo-*, react-native 本体…), 不转译就会在
+  // `import` 那一行 SyntaxError。下面这条是标准的「除了这些包之外都不转译」写法:
+  // (?!…) 里列出的包会被 babel-jest 处理。
+  //
+  // ⚠️ 这一条和 testPathIgnorePatterns 里被摘掉的那一行是配对的 —— 少了它,
+  //    integration/screens 下的用例会在 import @react-navigation 时当场炸。
+  // ⚠️ 括号要自己数一遍: 外层 (?! 一个、白名单 ( 一个, 结尾 '/)' 里的 ')' 关的是 (?!。
+  //    写成 '(?!(?:' + 'jest-)?…' 会让 '(?:' 被 '(jest-)' 的右括号提前关掉,
+  //    多出来的那个 ')' 直接 SyntaxError —— 实测踩过一次(好在它是当场炸, 不是静默失效)。
+  // ⚠️ Windows 上 jest 会把这里的 '/' 换成 '\\' 再编译成正则, 所以只能写 '/'。
+  transformIgnorePatterns: [
+    'node_modules/(?!('
+      + '(jest-)?react-native'
+      + '|@react-native(-community)?/.*'
+      + '|@react-navigation/.*'
+      + '|expo(nent)?'
+      + '|@expo(nent)?/.*'
+      + '|expo-.*'
+      + '|react-native-.*'
+      + '|@sentry/react-native'
+      + '|native-base'
+      + ')/)'
+  ],
+  // ⚠️ 顺序有意义: jest 取【第一条匹配上的】规则, 所以 node_modules 那条必须排最前。
+  //
+  // 放开 transformIgnorePatterns 之后, node_modules 里的三方 .ts 源码也会进 transform
+  // 链(expo-modules-core 直接发 .ts)。落到 ts-jest 就会去【类型检查三方源码】——
+  // expo-modules-core 自带 5 个 TS2532, 于是 3 个 suite 在【加载期】就崩,
+  // 一条断言都没跑到。⚠️ 那 3 条红看起来像「存量欠账」, 其实是这条配置造出来的。
+  //
+  // 三方代码要的是【转译】不是【类型检查】⇒ 交给 babel-jest。
+  // ⛔ 不要改成 diagnostics:false 去消这些错 —— 那会把我们自己代码的类型检查一起关掉,
+  //    而那是真信号。
   transform: {
+    'node_modules[\\\\/].+\\.(js|jsx|ts|tsx)$': 'babel-jest',
     '^.+\\.(js|jsx)$': 'babel-jest',
     '^.+\\.(ts|tsx)$': ['ts-jest', {
       tsconfig: {

@@ -179,6 +179,73 @@ jest.mock('expo-camera', () => ({
 // Mock react-native-vector-icons
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'MaterialCommunityIcons');
 
+// Mock @expo/vector-icons —— 注意它和上面那行是【两个不同的包】。
+//
+// 2026-08-16: integration/screens 解禁后, 3 个 suite 在加载期崩在
+//   @expo/vector-icons -> expo-font -> expo-modules-core/NativeModule.ts
+//   TypeError: Cannot read properties of undefined (reading 'NativeModule')
+// 因为 expo-modules-core 要拿 native 运行时对象, jest 的 node 环境里没有。
+//
+// src/ 下有 197 个文件 import 它, 所以这条属于全局 setup, 与上面已有的
+// expo-secure-store / expo-camera / expo-haptics 同一档。此前只有
+// AIChatScreenRestaurantAgent.test.tsx 自己写了一份局部 mock —— 那也正是
+// 4 个解禁文件里唯一一开始就绿的那个。
+//
+// ⚠️ 用 createElement 不用 JSX: 本文件是 .ts, 不是 .tsx。
+jest.mock('@expo/vector-icons', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  const makeIcon = (family: string) => {
+    const Icon = (props: Record<string, unknown>) =>
+      React.createElement(Text, { ...props, testID: props.testID ?? `icon-${family}` },
+        String(props.name ?? ''));
+    Icon.displayName = family;
+    return Icon;
+  };
+  return new Proxy({}, {
+    get: (_target, key: string) =>
+      key === '__esModule' ? true : makeIcon(key),
+  });
+});
+
+// Mock react-native-safe-area-context —— 解禁后 16 条报
+//   TypeError: (0 , react_native_safe_area_context_1.useSafeAreaInsets) is not a function
+// 插值给 0, 布局断言不依赖具体安全区高度。
+jest.mock('react-native-safe-area-context', () => {
+  const React = require('react');
+  const inset = { top: 0, right: 0, bottom: 0, left: 0 };
+  return {
+    __esModule: true,
+    SafeAreaProvider: ({ children }: { children?: unknown }) =>
+      React.createElement(React.Fragment, null, children),
+    SafeAreaView: ({ children }: { children?: unknown }) =>
+      React.createElement(React.Fragment, null, children),
+    useSafeAreaInsets: () => inset,
+    useSafeAreaFrame: () => ({ x: 0, y: 0, width: 390, height: 844 }),
+    initialWindowMetrics: { frame: { x: 0, y: 0, width: 390, height: 844 }, insets: inset },
+  };
+});
+
+// Mock expo-av —— DynamicReportScreen 依赖的语音识别 import { Audio } from 'expo-av',
+// 同样走 expo-modules-core 的 native 运行时, 在 jest 里加载期就崩。
+jest.mock('expo-av', () => ({
+  __esModule: true,
+  Audio: {
+    Recording: class {
+      prepareToRecordAsync = jest.fn();
+      startAsync = jest.fn();
+      stopAndUnloadAsync = jest.fn();
+      getURI = jest.fn(() => 'file:///mock-recording.m4a');
+    },
+    Sound: { createAsync: jest.fn(async () => ({ sound: { playAsync: jest.fn(), unloadAsync: jest.fn() } })) },
+    requestPermissionsAsync: jest.fn(async () => ({ status: 'granted', granted: true })),
+    setAudioModeAsync: jest.fn(),
+    RecordingOptionsPresets: { HIGH_QUALITY: {} },
+  },
+  InterruptionModeAndroid: { DoNotMix: 1 },
+  InterruptionModeIOS: { DoNotMix: 1 },
+}));
+
 // Mock expo-haptics
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(),
