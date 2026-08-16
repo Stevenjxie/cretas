@@ -312,3 +312,39 @@ async def test_store_scope_clarification_via_tiered_answer_composes_full_questio
         assert button["question"] == f"{scope}{SEED}", button
         # ── 阴性对照: question 不许等于光秃秃的门店词 ─────────────
         assert button["question"] not in bare_words, button
+
+
+@pytest.mark.asyncio
+async def test_real_entry_point_composes_from_resolver_query_seed(monkeypatch):
+    """🔴 承重: 调用点必须用 `spec.resolver_query_seed`, ⛔ 不是原始 `query`。
+
+    多轮澄清时 `_maybe_register_pending` 存进 pending 的是
+    `continued.resolver_query_seed`(`restaurant_intent.py:6486`), 而接收侧靠
+    「答案以 `pending.original_query` 结尾」把合成句还原成片段。产出侧若用
+    原始 `query` 合成, 第二轮那次 `endswith` 不成立 ⇒ 还原**静默 no-op**
+    ⇒ 整句撞上精确相等白名单, 零 LLM 延续又断一次。
+
+    ⚠️ 这一条必须走 `tiered_answer`。我第一版把它写成「自己算出种子再调
+    `_clarification_followups`」—— 那绕过了「谁调它」, 变异下 19 条**全绿**。
+    本仓形态 B, 同一个错我在这个分支上犯了第二次。
+    """
+    carried = f"{SEED} 本月"                       # 上一轮已并进 seed 的形状
+    spec = _spec(
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=list(STORE_NAMES),
+        resolver_query_seed=carried,
+    )
+    monkeypatch.setattr(
+        svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+
+    # ⚠️ 传给 tiered_answer 的 query 与 resolver_query_seed **故意不同** ——
+    #    两者相同的话这条断言分不出用的是哪一个。
+    result = await tiered_answer(SEED, object(), "DEMO_REST", None)
+
+    followups = result.get("suggested_followups")
+    assert followups, f"没拿到任何按钮: {result}"
+    for b in followups:
+        assert b["question"].endswith(carried), (
+            f"用的不是 resolver_query_seed: {b['question']!r}")
+        assert not b["question"].endswith(f"店{SEED}"), (
+            f"用的是原始 query: {b['question']!r}")
