@@ -69,20 +69,8 @@ describe('todoApprovalApiClient', () => {
   });
 
   it.each([
-    [
-      'purchase finance approve',
-      () => todoApprovalApiClient.purchaseFinanceApprove('PO-1', 'ok', 'F123'),
-      'post',
-      '/api/mobile/F123/purchase/orders/PO-1/finance-approve',
-      { notes: 'ok' },
-    ],
-    [
-      'purchase finance reject',
-      () => todoApprovalApiClient.purchaseFinanceReject('PO-1', 'missing invoice', 'F123'),
-      'post',
-      '/api/mobile/F123/purchase/orders/PO-1/finance-reject',
-      { notes: 'missing invoice' },
-    ],
+    // 采购的两条已于 2026-08-16 移除 —— 它们打的端点自 #1557 起无条件抛 410,
+    // #2674 之后零调用方。下面销售与退货两组仍然活着, 别一起清。
     [
       'sales finance approve',
       () => todoApprovalApiClient.salesFinanceApprove('SO-1', 'ok', 'F123'),

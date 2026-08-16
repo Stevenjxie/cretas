@@ -129,31 +129,13 @@ class TodoApprovalApiClient {
     );
   }
 
-  // ─── 采购财务审核 ───────────────────────────────────────────────────────────
-
-  /** 采购单财务审核通过 */
-  async purchaseFinanceApprove(
-    orderId: string,
-    notes?: string,
-    factoryId?: string,
-  ): Promise<{ success: boolean; data: unknown; message?: string }> {
-    return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/purchase/orders/${orderId}/finance-approve`,
-      { notes },
-    );
-  }
-
-  /** 采购单财务驳回（notes 必填） */
-  async purchaseFinanceReject(
-    orderId: string,
-    notes: string,
-    factoryId?: string,
-  ): Promise<{ success: boolean; data: unknown; message?: string }> {
-    return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/purchase/orders/${orderId}/finance-reject`,
-      { notes },
-    );
-  }
+  /*
+   * ─── 已移除: 采购财务审核 (2026-08-16) ─────────────────────────────────────
+   * purchaseFinanceApprove / purchaseFinanceReject 打的端点自 2026-07-21 (#1557)
+   * 无条件抛 410。#2674 已把 OA 待办的采购审批改走 /workflow/instances/{id}/actions,
+   * 这两个方法自此零调用方。
+   * ⛔ 下面的销售与退货两组是**仍然活着的**端点, 不要一起清掉。
+   */
 
   // ─── 销售财务审核 ───────────────────────────────────────────────────────────
 
