@@ -180,6 +180,22 @@ async def main() -> int:
     for a, m in orphans:
         print(f"    {a}/{m}")
     print("=" * 76)
+    # 见 deepseek_spend_alert._write_probe_out 的理由: 跑批需要一个
+    # **设计上必然出现**的产出, 才能把「决定不告警」和「根本没跑到那一步」分开。
+    import json as _json
+    import os as _os
+    _out = _os.environ.get("PROBE_OUT")
+    if _out:
+        try:
+            with open(_out, "w", encoding="utf-8", newline="") as _f:
+                _json.dump({
+                    "rc": 1 if dead or partial else 0,
+                    "alive": sum(v[0] for v in acct.values()),
+                    "checked": sum(v[1] for v in acct.values()),
+                    "dead": len(dead), "partial": len(partial),
+                }, _f, ensure_ascii=False)
+        except OSError:
+            pass
     return 1 if dead or partial else 0
 
 
