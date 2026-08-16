@@ -231,6 +231,65 @@ class VisionLabTests(unittest.TestCase):
             result = vision_lab.evaluate_gate(config(root), model, metrics_path)
             self.assertTrue(result["passed"], result["errors"])
 
+    def test_promotion_gate_accepts_preserved_zero_false_flag_baseline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            digest = vision_lab.sha256_file(artifact)
+            model = {"model_id": "zero-fp", "artifact": str(artifact), "artifact_sha256": digest}
+            metrics = {
+                "artifact_sha256": digest,
+                "production_pipeline_replay": True,
+                "onnx_parity_mismatches": 0,
+                "baseline": {
+                    "defect_hits": 2, "false_flags": 0, "p95_latency_ms": 1000,
+                },
+                "candidate": {
+                    "defect_total": 2, "defect_hits": 2,
+                    "false_flags": 0, "p95_latency_ms": 1000,
+                    "groups": {
+                        "new_blind_defect": {"defect_total": 1, "defect_hits": 1},
+                    },
+                },
+            }
+            metrics_path = root / "metrics.json"
+            metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+
+            result = vision_lab.evaluate_gate(config(root), model, metrics_path)
+
+            self.assertTrue(result["passed"], result["errors"])
+
+    def test_promotion_gate_can_write_an_evaluation_scoped_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            digest = vision_lab.sha256_file(artifact)
+            model = {"model_id": "scoped", "artifact": str(artifact), "artifact_sha256": digest}
+            metrics = {
+                "artifact_sha256": digest,
+                "production_pipeline_replay": True,
+                "onnx_parity_mismatches": 0,
+                "baseline": {"defect_hits": 2, "false_flags": 0, "p95_latency_ms": 1000},
+                "candidate": {
+                    "defect_total": 2, "defect_hits": 2,
+                    "false_flags": 0, "p95_latency_ms": 1000,
+                    "groups": {"new_blind_defect": {"defect_total": 1, "defect_hits": 1}},
+                },
+            }
+            metrics_path = root / "metrics.json"
+            metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+            receipt = root / "evaluation" / "gate.json"
+
+            result = vision_lab.evaluate_gate(
+                config(root), model, metrics_path, output_path=receipt,
+            )
+
+            self.assertTrue(result["passed"], result["errors"])
+            self.assertTrue(receipt.is_file())
+            self.assertFalse((root / "promotion-gate.json").exists())
+
     def test_failed_gate_still_refuses_deployment_without_explicit_override(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

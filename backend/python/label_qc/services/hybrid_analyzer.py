@@ -44,6 +44,7 @@ from label_qc.services.screening import (
     VERDICT_MISSING_COLOR,
     VERDICT_MISSING_WHITE,
     VERDICT_OK,
+    VERDICT_UNJUDGEABLE,
     screen_image,
 )
 from label_qc.services.yolo_detector import (
@@ -96,6 +97,7 @@ _SUSPICION_TEXT = {
     VERDICT_MISSING_WHITE: "缺白标",
     VERDICT_MISSING_COLOR: "缺彩标",
     VERDICT_MISSING_BOTH: "白标和彩标都缺",
+    VERDICT_UNJUDGEABLE: "画面只露窄边，暂时无法判断",
 }
 
 
@@ -134,6 +136,8 @@ def _screen_evidence(tray: TrayResult) -> str:
         detail = "已识别到白色称重/条码标签，未识别到彩色品牌标签"
     elif tray.verdict == VERDICT_MISSING_BOTH:
         detail = "未识别到白色称重/条码标签，也未识别到彩色品牌标签"
+    elif tray.verdict == VERDICT_UNJUDGEABLE:
+        detail = "盒体只露窄边或区域过小，无法可靠判断标签"
     else:
         detail = "标签识别异常"
 
@@ -155,7 +159,10 @@ def _screen_confidence(tray: TrayResult) -> float:
       - BOTH_MISSING is the likeliest screening artefact (a bad crop loses both
         labels at once), so it is discounted relative to a single missing label.
     """
-    base = 0.45 if tray.verdict == VERDICT_MISSING_BOTH else 0.75
+    if tray.verdict == VERDICT_UNJUDGEABLE:
+        base = 0.25
+    else:
+        base = 0.45 if tray.verdict == VERDICT_MISSING_BOTH else 0.75
     return round(max(0.05, min(0.9, base * max(tray.confidence, 0.0))), 4)
 
 
@@ -217,6 +224,7 @@ class HybridLabelQcAnalyzer:
         self._params = params or ScreeningParams(
             tray_conf=_env_float("LABEL_QC_TRAY_CONF", 0.60),
             label_conf=_env_float("LABEL_QC_LABEL_CONF", 0.25),
+            min_crop_px=_env_int("LABEL_QC_MIN_CROP_PX", 150, 32, 1024),
         )
         self._review_enabled = _env_flag("LABEL_QC_VL_REVIEW", True)
         self._review_concurrency = _env_int(
@@ -308,6 +316,7 @@ class HybridLabelQcAnalyzer:
             },
             "trayCount": len(screening.trays),
             "suspectCount": len(screening.suspects),
+            "reviewCandidateCount": len(screening.review_candidates),
             "trays": [
                 {
                     "index": t.index,
@@ -359,17 +368,20 @@ class HybridLabelQcAnalyzer:
 
         image = np.array(source)
         screening = await asyncio.to_thread(screen_image, image, self._models, self._params)
-        suspects = screening.suspects
+        review_candidates = screening.review_candidates
 
         # Review the least certain trays first, and cap how many go to the VL:
         # BOTH_MISSING is the most likely screening artefact, and a low tray
         # confidence means the crop itself is shakier.
         ordered = sorted(
-            suspects,
-            key=lambda t: (t.verdict != VERDICT_MISSING_BOTH, t.confidence),
+            review_candidates,
+            key=lambda t: (
+                t.verdict not in {VERDICT_MISSING_BOTH, VERDICT_UNJUDGEABLE},
+                t.confidence,
+            ),
         )
         to_review = ordered[: self._max_review_trays] if self._review_enabled else []
-        screen_only = [t for t in suspects if t not in to_review]
+        screen_only = [t for t in review_candidates if t not in to_review]
 
         reviews: List[Tuple[TrayResult, Optional[Dict[str, Any]], str]] = []
         if to_review:
@@ -408,7 +420,16 @@ class HybridLabelQcAnalyzer:
                     rejected += 1
                     verdict = tray.verdict
                     confidence = round(min(0.25, max(0.05, 1.0 - confidence)), 4)
-                    evidence = f"AI 识别：该盒标签疑似缺失，但复核后判断可能正常（{evidence}）。请人工确认。"
+                    if tray.verdict == VERDICT_UNJUDGEABLE:
+                        evidence = (
+                            "AI 识别：该盒区域过小，暂时无法可靠判断；"
+                            f"复核后判断可能正常（{evidence}）。请人工确认。"
+                        )
+                    else:
+                        evidence = (
+                            "AI 识别：该盒标签疑似缺失，"
+                            f"但复核后判断可能正常（{evidence}）。请人工确认。"
+                        )
                 elif verdict == "UNJUDGEABLE":
                     # Not a defect claim, but must not be treated as clean.
                     unreviewed += 1

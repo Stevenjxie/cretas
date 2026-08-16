@@ -413,7 +413,14 @@ def verify_export_parity(best: Path, onnx: Path, validation_dir: Path, repo_root
     onnx_model = _OnnxDetector(onnx, imgsz=960)
     mismatches = 0
     for image in images:
-        result = pt_model.predict(str(image), imgsz=960, conf=0.60, iou=0.70, device=0, verbose=False)[0]
+        # The production ONNX wrapper always letterboxes to a fixed 960x960
+        # canvas.  Ultralytics otherwise uses minimal rectangular padding for a
+        # single image, which compares two different inputs and creates false
+        # parity failures near the confidence threshold.
+        result = pt_model.predict(
+            str(image), imgsz=960, conf=0.60, iou=0.70, device=0,
+            rect=False, verbose=False,
+        )[0]
         pt_boxes = result.boxes.xyxy.cpu().tolist() if result.boxes is not None else []
         with Image.open(image) as opened:
             frame = np.array(ImageOps.exif_transpose(opened).convert("RGB"))
@@ -485,6 +492,10 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: 
         "dataset_sha256": dataset["dataset_sha256"], "base_model": str(base),
         "base_model_sha256": sha256(base), "best_pt": str(best), "best_pt_sha256": sha256(best),
         "artifact": str(artifact), "artifact_sha256": sha256(artifact),
+        "training": {
+            key: training.get(key)
+            for key in ("epochs", "patience", "batch", "workers", "device", "seed", "lr0", "freeze", "export_floor")
+        },
         "status": "candidate",
         "production_writes": 0, "deployment": False,
     }

@@ -15,6 +15,7 @@ from label_qc.services.screening import (
     VERDICT_MISSING_COLOR,
     VERDICT_MISSING_WHITE,
     VERDICT_OK,
+    VERDICT_UNJUDGEABLE,
     _owns,
     _verdict_for,
     screen_image,
@@ -157,8 +158,15 @@ def test_screen_image_never_silently_clears_an_unjudgeably_small_tray():
     tiny = [Detection(10, 10, 30, 30, 0.9, 0)]
     models = _StubModels(tiny, [[]])
     result = screen_image(image, models, ScreeningParams(min_crop_px=200))
-    assert result.trays[0].verdict == VERDICT_MISSING_BOTH
-    assert result.trays[0].is_suspect is True
+    assert result.trays[0].verdict == VERDICT_UNJUDGEABLE
+    assert result.trays[0].is_suspect is False
+    assert result.trays[0].needs_review is True
+    assert result.suspects == []
+    assert result.review_candidates == result.trays
+
+
+def test_protected_replay_minimum_is_the_default():
+    assert ScreeningParams().min_crop_px == 150
 
 
 def test_screen_image_respects_tray_cap():
@@ -197,7 +205,41 @@ def test_labels_dropped_by_ownership_are_not_reported():
     far_left = Detection(2, 2, 20, 20, 0.9, CLASS_WHITE_LABEL)   # in padding
     models = _StubModels([tray], [[far_left]])
 
-    result = screen_image(image, models, ScreeningParams(own_labels_only=True))
+    result = screen_image(
+        image, models, ScreeningParams(own_labels_only=True, capture_trace=True),
+    )
 
     assert result.trays[0].labels == []
     assert result.trays[0].dropped_neighbour_labels == 1
+    assert len(result.trace) == 1
+    trace = result.trace[0]
+    assert trace.index == 0
+    assert trace.skipped_reason is None
+    assert trace.resized_shape[1] == 640
+    assert len(trace.raw_labels) == 1
+    assert trace.raw_labels[0].owned is False
+    assert trace.raw_labels[0].crop_box == far_left.as_xyxy()
+    assert trace.raw_labels[0].source_box != far_left.as_xyxy()
+
+
+def test_small_tray_trace_records_fail_closed_reason():
+    image = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    tiny = [Detection(10, 10, 30, 30, 0.9, 0)]
+    models = _StubModels(tiny, [[]])
+
+    result = screen_image(
+        image, models, ScreeningParams(min_crop_px=200, capture_trace=True),
+    )
+
+    assert result.trace[0].skipped_reason == "crop_below_minimum"
+    assert result.trace[0].raw_labels == []
+
+
+def test_trace_is_disabled_by_default_for_production_path():
+    image = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    tray = [Detection(100, 100, 500, 500, 0.9, 0)]
+    models = _StubModels(tray, [[]])
+
+    result = screen_image(image, models)
+
+    assert result.trace == []
