@@ -926,6 +926,20 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     private void consumeSourceWip(SemiFinishedInventory sourceWip, BigDecimal input,
                                   ProductionReport report, WorkProcessTask task, Long operatorId) {
+        // 🔴 必须在改字段【之前】构造流水行 —— consumptionRow 用的是【扣减前】状态。
+        //    2026-08-17 实测踩过: 我第一版把这一行放在字段已改之后, 于是
+        //    consumed 已经是 2.00, 算出 balanceAfter = 2.00 - (2.00+2.00) = -2.00,
+        //    生产上真的落了一条 balance_after=-2.000000 的流水。
+        //    ⚠️ 单测没抓到(它自己 new 了个 consumed=0 的对象), 接线测试也没抓到
+        //      (只断言了 quantity 和 reportId, 漏了派生出来的 balanceAfter)——
+        //      是生产 E2E 抓到的。
+        //
+        //    这条流水为什么必须写: 走查发现整条链走通后流水里只有 IN 没有 OUT,
+        //    余额扣了却查不到是谁领走的。OUT 的语义早就写在实体 javadoc 里, 只是没人写。
+        //    由 SemiConsumptionWritesLedgerTest 钉住(含 balanceAfter 断言)。
+        SemiFinishedInventoryTransaction outTxn = com.cretas.aims.service.wip.WipLedgerEntries
+                .consumptionRow(sourceWip, input, report, task, operatorId);
+
         BigDecimal consumed = nz(sourceWip.getConsumedQuantity()).add(input);
         BigDecimal produced = nz(sourceWip.getProducedQuantity());
         sourceWip.setConsumedQuantity(consumed);
@@ -933,13 +947,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (sourceWip.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             sourceWip.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }
-        // ⚠️ 先记流水再改余额: consumptionRow 用【扣减前】状态算余额快照, 顺序不能换。
-        //    2026-08-17 F006 生产走查实测: 整条链走通后流水里只有 1 行 IN、一行 OUT 都没有,
-        //    而那一轮发生过两次领用 —— 余额扣了, 但查不到是谁领走的。
-        //    OUT 的语义早就写在 SemiFinishedInventoryTransaction 的 javadoc 里, 只是没人写。
-        //    由 SemiConsumptionWritesLedgerTest 钉住。
-        SemiFinishedInventoryTransaction outTxn = com.cretas.aims.service.wip.WipLedgerEntries
-                .consumptionRow(sourceWip, input, report, task, operatorId);
 
         wipRepo.save(sourceWip);
         if (outTxn != null) {

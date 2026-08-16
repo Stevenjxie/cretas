@@ -177,6 +177,14 @@ class SemiConsumptionWritesLedgerTest {
                 .isNotNull();
         assertThat(out.getQuantity()).isEqualByComparingTo(new BigDecimal("-2.00"));
         assertThat(out.getReportId()).isEqualTo(23799L);
+
+        // 🔴 这一条是补上来的。第一版只断言了 quantity 和 reportId, 漏了【派生出来的】
+        //    balanceAfter —— 而真正错的就是它: 流水行在字段已被修改【之后】构造,
+        //    consumed 已经是 2.00, 算出 -2.00, 生产上真落了一条 balance_after=-2.000000。
+        //    「修复要按最不显眼的那个验收」—— 显眼的 quantity 早就对了。
+        assertThat(out.getBalanceAfter())
+                .as("领用 2.00 之后余额应当是 0.00 —— 若为负说明流水行是在字段改完之后构造的")
+                .isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test
