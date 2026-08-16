@@ -160,10 +160,20 @@ def test_qwen32_is_confined_to_the_simple_text_slot():
 
 
 def test_restaurant_slots_prefer_aistore_deepseek_and_confine_qwen235():
+    """2026-08-16: 链头换成 owner 置顶的 zhipu, aistore 顺位第二。
+
+    ⛔ 改的只有「谁是第 0 位」这一句。这条闸真正承重的是**下半段** ——
+       Qwen3-235B 只许出现在 CHART, 且必须排在 DeepSeek-V4-Flash-A 之后。
+       那部分一个字没动。
+    """
     deepseek = ("aistore", "DeepSeek-V4-Flash-A")
     qwen = ("aistore", "Qwen3-235B-A22B")
     for slot in (SLOT.CHAT, SLOT.INSIGHTS, SLOT.CHART, SLOT.MAPPER, SLOT.REVIEW):
-        assert llm_router.SLOT_MODELS[slot][0] == deepseek
+        chain = llm_router.SLOT_MODELS[slot]
+        assert chain[0] == ("zhipu", "glm-4.5-air"), (
+            f"{slot.value}: 链头不是 zhipu, 实际 {chain[0]}")
+        assert chain[1] == deepseek, (
+            f"{slot.value}: zhipu 之后不是 aistore/DeepSeek-V4-Flash-A, 实际 {chain[1]}")
     chart_chain = llm_router.SLOT_MODELS[SLOT.CHART]
     assert chart_chain.index(qwen) > chart_chain.index(deepseek)
     for slot in (SLOT.CHAT, SLOT.INSIGHTS, SLOT.MAPPER, SLOT.REVIEW):

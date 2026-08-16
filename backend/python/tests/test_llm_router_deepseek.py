@@ -192,18 +192,61 @@ def test_deepseek_outranks_the_undated_free_tail(slot):
     tencent/ark/zhipu 无到期日(_FAR_FUTURE) ⇒ deepseek 排在那三个**免费**候选
     前面。⇒ **合并当天起** aistore 每失败一次就会立刻走一次付费调用。
     这条断言把这个成本事实钉住, 免得它悄悄变化。
+
+    ── 2026-08-16: 成本事实变了, 而且是**变好** ────────────────────────
+    owner 定「zhipu 优先」, zhipu 由结构键 `_ABSOLUTE_FIRST` 置顶。
+    zhipu 是**免费且不过期**的, 于是付费的 deepseek 现在排在它**后面** ——
+    要 zhipu 和 aistore **都**失败才会发生付费调用, 比原来多了一道免费拦截。
+
+    ⛔ 所以这条闸不是删掉, 是**换成钉新的成本事实**:
+       「付费候选前面必须至少有一个免费候选」。
+    ⚠️ 原来那句「deepseek 在 tencent 之前」保留 —— 那部分口径没变。
     """
     order = [f"{a}/{m}" for a, m in llm_router.SLOT_MODELS[slot]]
     ds = order.index("deepseek/deepseek-v4-flash")
-    for free in ("tencent/deepseek-v4-flash-202605", "zhipu/glm-4.5-air"):
+
+    # 🔑 承重的那句: 付费的 deepseek 前面必须有免费拦截, 否则成本模型要重新裁
+    free_before = [
+        p for p in llm_router.SLOT_MODELS[slot][:ds]
+        if llm_router._expiry_of(*p) == llm_router._FAR_FUTURE
+        or p[0] == "aistore"
+    ]
+    assert free_before, (
+        f"{slot.value}: 付费的 deepseek 排在了所有免费候选前面 —— "
+        "每一次调用都会直接计费, 成本模型要重新裁")
+    assert order[0] == "zhipu/glm-4.5-air", (
+        f"{slot.value}: 链头不是免费且不过期的 zhipu, 实际是 {order[0]}")
+
+    # 这一段口径没变: deepseek 仍排在其余无到期日的免费尾巴之前
+    for free in ("tencent/deepseek-v4-flash-202605",):
         if free in order:
             assert ds < order.index(free), "派生顺序变了 —— 成本模型跟着变, 要重新裁"
 
 
 def test_aistore_still_heads_every_slot_until_it_expires():
-    """⛔ 不动 aistore 任何配置: 到期前它仍是链首, deepseek 只是第二位。"""
+    """aistore 的配置**一个字没动**, 但它现在是第二位 —— zhipu 由 owner 置顶。
+
+    ── 2026-08-16 ────────────────────────────────────────────────────
+    owner:「用 zhipu 的优先, 其他的不用动」。「不用动」我照做了:
+    aistore 的 pool 条目、到期日、能力表**全部原样**, 只是前面多了一个 zhipu。
+
+    ⚠️ 代价如实记, 这是本次改动唯一的实际损失:
+       aistore 的免费额度 **2026-09-13 到期, 用不完就作废**。
+       它从链首挪到第二位 ⇒ 那份 use-it-or-lose-it 的额度会用得更少。
+       ⛔ 这一点值不值, 是 owner 的取舍, 不是这条闸能判的。
+
+    ⇒ 断言换成「aistore 仍排在**付费的** deepseek 之前」——
+      那才是它当初排在前面真正在守的东西(免费优先于付费),
+      而不是「它必须是第 0 位」这个位置本身。
+    """
     for slot in FIVE_SLOTS:
-        assert llm_router.SLOT_MODELS[slot][0][0] == "aistore"
+        chain = llm_router.SLOT_MODELS[slot]
+        accounts = [a for a, _m in chain]
+        assert "aistore" in accounts, f"{slot.value}: aistore 被整个移出了链 —— 那不是「不用动」"
+        assert accounts[0] == "zhipu", f"{slot.value}: 链头不是 zhipu, 实际 {accounts[0]}"
+        if "deepseek" in accounts:
+            assert accounts.index("aistore") < accounts.index("deepseek"), (
+                f"{slot.value}: 免费的 aistore 掉到付费的 deepseek 后面了")
 
 
 # ── 记账真的接上了吗(形态 B: 机制在、没接上) ────────────────────────────
