@@ -29,10 +29,8 @@ public class PurchaseOrderApproveTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "审批采购订单。支持操作：提交(submit)、运营审批通过(approve)、" +
-                "财务审核通过(finance_approve)、财务审核驳回(finance_reject)、取消(cancel)。" +
-                "适用场景：提交采购单审批、审批采购订单、通过采购申请、财务复核、" +
-                "财务驳回采购单、退回采购单、取消采购单。";
+        return "审批采购订单。支持操作：提交(submit)、运营审批通过(approve)、取消(cancel)。" +
+                "采购财务通过或驳回必须在工作台的待我审批中处理。";
     }
 
     @Override
@@ -49,15 +47,9 @@ public class PurchaseOrderApproveTool extends AbstractBusinessTool {
 
         Map<String, Object> action = new HashMap<>();
         action.put("type", "string");
-        action.put("description", "操作类型: submit=提交; approve=运营审批; " +
-                "finance_approve=财务审核通过; finance_reject=财务驳回; cancel=取消");
-        action.put("enum", Arrays.asList("submit", "approve", "finance_approve", "finance_reject", "cancel"));
+        action.put("description", "操作类型: submit=提交; approve=运营审批; cancel=取消");
+        action.put("enum", Arrays.asList("submit", "approve", "cancel"));
         properties.put("action", action);
-
-        Map<String, Object> notes = new HashMap<>();
-        notes.put("type", "string");
-        notes.put("description", "审核备注 (财务审核动作时建议填写, 其他动作可忽略)");
-        properties.put("notes", notes);
 
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("orderId", "action"));
@@ -73,8 +65,7 @@ public class PurchaseOrderApproveTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "orderId" -> "请提供采购订单ID或订单编号。";
-            case "action" -> "请选择操作：submit/approve/finance_approve/finance_reject/cancel。";
-            case "notes" -> "请输入审核备注 (财务驳回时必填, 通过时可选)。";
+            case "action" -> "请选择操作：submit/approve/cancel。财务审批请前往工作台 → 待我审批。";
             default -> super.getParameterQuestion(paramName);
         };
     }
@@ -83,22 +74,19 @@ public class PurchaseOrderApproveTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         String orderId = getString(params, "orderId");
         String action = getString(params, "action");
-        String notes = getString(params, "notes");
         Long userId = getUserId(context);
 
-        // 财务驳回必须有 notes — 业务要求 (财务必须说明驳回原因, 退回采购员修改)
-        if ("finance_reject".equalsIgnoreCase(action) && (notes == null || notes.isBlank())) {
-            throw new IllegalArgumentException("财务驳回必须填写备注说明驳回原因");
+        // 旧模型或缓存仍可能发出已从 schema 删除的动作；这里必须再次 fail closed，
+        // 不能只依赖 LLM 遵守 enum。等运行时调用日志确认旧动作归零后可删这段兼容守卫。
+        if ("finance_approve".equalsIgnoreCase(action) || "finance_reject".equalsIgnoreCase(action)) {
+            throw PurchaseFinanceApproveTool.oaOnly();
         }
 
-        log.info("采购订单审批 - factoryId={}, orderId={}, action={}, hasNotes={}",
-                factoryId, orderId, action, notes != null && !notes.isBlank());
+        log.info("采购订单审批 - factoryId={}, orderId={}, action={}", factoryId, orderId, action);
 
         PurchaseOrder result = switch (action.toLowerCase()) {
             case "submit" -> purchaseService.submitOrder(factoryId, orderId);
             case "approve" -> purchaseService.approveOrder(factoryId, orderId, userId);
-            case "finance_approve" -> purchaseService.financeApproveOrder(factoryId, orderId, userId, notes);
-            case "finance_reject" -> purchaseService.financeRejectOrder(factoryId, orderId, userId, notes);
             case "cancel" -> purchaseService.cancelOrder(factoryId, orderId);
             default -> throw new IllegalArgumentException("不支持的操作: " + action);
         };
@@ -106,8 +94,6 @@ public class PurchaseOrderApproveTool extends AbstractBusinessTool {
         String actionName = switch (action.toLowerCase()) {
             case "submit" -> "提交";
             case "approve" -> "运营审批";
-            case "finance_approve" -> "财务审核通过";
-            case "finance_reject" -> "财务审核驳回";
             case "cancel" -> "取消";
             default -> action;
         };

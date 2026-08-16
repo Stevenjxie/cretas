@@ -1,0 +1,5 @@
+# Dispatch 完成记录 — 2026-08-17
+
+## 已完成
+
+- `AUDIT-PURCHASE-FINANCE-OA-BOUNDARY-20260817` — `review` — Owner: Codex automation `/root` — Base SHA: `23c38804b478cdac7922d6f49ca9c9975d0002a2`。当天跨层审计确认 Web/RN 已删除采购财审死入口并统一改走 OA，但后端 `purchase_finance_approve` 和通用 `purchase_order_approve` 的旧 finance 动作仍直接调用 `PurchaseService.financeApproveOrder/financeRejectOrder`，可绕过 controller 的 OA-only 410 边界。现将独立 legacy Tool 收敛为零参数兼容 sentinel，只返回“工作台 → 待我审批”指引且业务 service 零注入；通用 Tool 的 schema 仅保留 submit/approve/cancel，并对旧模型或缓存发来的 finance 动作二次 fail closed。保留 legacy tool name 仅为避免生产既有 intent 配置变成 tool-not-found；等运行时 intent、descriptor 和历史迁移均不再引用后整体删除。新增合同测试证明两个 finance 动作零 service 调用、三个非财务动作继续委托；`PurchaseApprovalToolOaBoundaryTest` + `PurchaseControllerOaOnlyTest` 7/7、Tool access-mode 目标方法 1/1、`ToolDescriptorInventoryDriftTest` 4/4、`ToolRegistryStartupGateTest` 4/4、完整 Java 主/测试编译与 `git diff --check` 通过。全量 `ToolAccessModeDeclarationTest` 另有当天 diff 之外的既有 `RestaurantPeakHoursGoldTool` 缺显式声明，未跨 scope 修改。无 Repository/Entity/JPQL/`@Query`/Flyway 改动，JPA startup gate 不适用；未部署、生产业务写入 0，scope 锁已释放。
