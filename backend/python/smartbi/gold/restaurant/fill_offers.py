@@ -259,6 +259,27 @@ def offers_for_cost_gaps(
     if (after - coverage_ratio) * 100 < 0.1:
         return []
     names = "、".join(str(g.get("name") or "") for g in picked)
+    # 🔴 2026-08-16 B-3: 加**后果表述**。
+    #
+    # 客户原话:「45.1 到 53.9 **不是特别直观**…**你要告诉他如果不做的后果是什么,
+    # 以及做的好处是什么**, 不是说一个数字再去给大家」
+    # (owner 口述转录, ⛔ 非逐字稿)。
+    #
+    # ⛔ 底层那两个百分数**保留** —— 它是后果表述的输入, 三租户已验一位不差。
+    #    要改的不是数, 是「只给数」。
+    # ⚠️ 后果用**金额**说, ⛔ 不用百分比: 「54.9%」是个比例, 「¥407,832 算不出
+    #    毛利」才是他店里的钱。「能不能让他做出决定 > 数字准不准」。
+    uncovered_revenue = max(0.0, (1.0 - coverage_ratio) * coverage_denominator)
+    # ⛔ 这里**不许**再写一句「你看到的毛利只代表另外那 {coverage}%」——
+    #    第一版写了, 被 `test_screen_says_each_thing_once` 当场拦下:
+    #    同一个 40.2% 在一句话里出现两次(一次在这, 一次在下面的开价里),
+    #    而 100 − 59.8 本来就等于它, 纯冗余。
+    #    ⚠️ 那条断言守的是**需求**(一屏上同一个数只说一次), ⛔ 不是历史 ——
+    #      所以改的是文案不是断言。
+    consequence = (
+        f"现在有 ¥{uncovered_revenue:,.0f}（{(1 - coverage_ratio) * 100:.1f}%）的营收"
+        f"算不出毛利。"
+    )
     return [{
         "kind": "fill_dishes",
         # 结构化字段原样带出去, 前端要自己排版时不用再解析正文
@@ -269,7 +290,16 @@ def offers_for_cost_gaps(
         "gap_total": len(cost_gaps),
         # ⚠️ 「约」不是谦虚 —— 补卡之后那道菜可能被判成异常卡而重新排除,
         #    所以这是上界不是承诺。⛔ 但**不许**因此就不给数。
-        "text": (f"先补这 {len(picked)} 道的成本卡（{names}）——"
+        # 结构化出口, 前端要自己排版时不用从正文里抠
+        "consequence": consequence,
+        "uncovered_revenue": uncovered_revenue,
+        "gained_revenue": gained,
+        # ⚠️ `text` 必须**保持单行** —— 它在正文里被当成 `> ` 引用块塞进去
+        #    (见 tests/test_margin_parity.py:1147)。多行会让第二行掉出引用块。
+        #    ⇒ 后果与开价拼成一句, ⛔ 不用换行分段。
+        "text": (f"{consequence}"
+                 f"先补这 {len(picked)} 道的成本卡（{names}），"
+                 f"这 ¥{gained:,.0f} 的营收就能算进来——"
                  f"能算进毛利的营收会从 {coverage_ratio * 100:.1f}% "
                  f"提到约 {after * 100:.1f}%"),
     }]

@@ -975,6 +975,24 @@ _FUTURE_WINDOW_LABEL = "未来时间"
 # Explicit dish mentions ("米饭的毛利率"). The candidate is only trusted after
 # it matches the tenant's own dish rows — an unmatched candidate produces a
 # targeted "没有找到该菜品" decline instead of the all-dish ranking.
+#: 日历/相对时间词 —— **一份定义, 两处消费**:
+#:   ① `_requires_python_window_resolution`：判「要不要把窗口交给 Python 解析」
+#:   ② `_DISH_GENERIC_TOKENS`：判「这个候选根本不可能是菜名」
+#:
+#: 🔴 2026-08-16 B-0: 抽成一份之前, 这两处各写各的, 于是
+#:    「上半年营业额怎么样」-> `dish='上半年'` -> 被「菜品范围不能由全店汇总
+#:    resolver 代答」拦成反问。⚠️ 而「上半年」在**别处都认识**
+#:    (`restaurant_intent.py:1618`、本文件 :2731) —— 只有菜名抽取这条不认。
+#:    ⇒ 典型的形态 D: 同一个概念两份, 补一处漏一处。
+#: ⛔ 只放**纯时间词**。「对比/比较/环比」是比较词不是时间词, 留在调用处。
+_CALENDAR_PERIOD_TOKENS = frozenset({
+    "今天", "今日", "昨天", "昨日", "前天", "前日", "前一天", "前一日",
+    "本周", "这周", "本星期", "这星期", "这个星期", "上周", "上星期", "上个星期",
+    "本月", "这个月", "上个月", "上月", "上上个月", "上上月",
+    "本季度", "这个季度", "上季度", "上个季度",
+    "今年", "去年", "前年", "半年", "上半年", "下半年", "全年",
+})
+
 _DISH_GENERIC_TOKENS = frozenset({
     "整体", "总体", "全部", "所有", "各", "菜品", "菜", "什么菜", "哪道菜",
     "哪个菜", "哪些菜", "单品", "产品", "本店", "门店", "今天", "昨天", "上月",
@@ -1083,6 +1101,24 @@ def parse_absolute_date_range(
         return None
     return start, end, match.group(0)
 
+
+#: 半年 / 季度 —— **只给 `_is_pure_time_expression` 的整体匹配用**。
+#: ⛔ 故意**不**并进 `_DISH_LEADING_TIME_RE`：那个是**前缀剥离器**，
+#:    往里加词会改掉剥离行为 —— 实测「半年陈花雕的销量」会从 `'半年陈花雕'`
+#:    变成 `'陈花雕'`（一个查不到的半截菜名）。⚠️ 加词的地方不对，
+#:    受害的是另一个功能。
+#: ⚠️ 时间表达是**闭集**(枚举得完)，所以在这里用词表成立；
+#:    菜名不是闭集，所以 `_DISH_GENERIC_TOKENS` 那条棘轮拒绝加词是对的。
+_HALF_YEAR_QUARTER_RE = re.compile(
+    r"(?:今年|去年|前年)?(?:上半年|下半年)"
+    r"|(?:本|这个|上|上个)季度|第[一二三四1-4]季度"
+)
+
+#: 「今天到现在 / 今日截至目前」—— 今天在「到」之前, 是给**今天**定界,
+#: ⛔ 不是累计。「到今天为止 / 截至今天」不匹配(今天在「到」之后), 那些是真累计。
+_TODAY_SO_FAR_RE = re.compile(
+    r"(?:今天|今日|本日)(?:一直)?(?:到|至|截至|截止)?(?:现在|目前|此刻|这会儿|这时候)"
+)
 
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月|上上个月|上上月|上个月|上月"
@@ -1435,9 +1471,39 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
         if not segment:
             continue
         candidate = _extract_dish_candidate_single(segment)
-        if candidate:
+        if candidate and not _is_pure_time_expression(candidate):
             return candidate
     return None
+
+
+def _is_pure_time_expression(candidate: str) -> bool:
+    """候选**整体**就是一个时间表达 ⇒ 它是时间词, ⛔ 不是菜名。
+
+    🔴 2026-08-16 B-0: 实测「上半年营业额怎么样」-> `dish='上半年'`,
+    然后被「菜品范围不能由全店汇总 resolver 代答」拦成反问。
+
+    ⛔ **不往 `_DISH_GENERIC_TOKENS` 加词** —— 那条棘轮
+    (`test_no_new_blacklist_words`) 问得对:
+        「加词之前先回答: 菜单/食材目录为什么没拦住它?
+         黑名单只能拦住有人想到过的词, 目录能拦住全部。」
+    而这里连目录都不需要: **本模块自己就有一个权威的时间解析器**。
+    候选丢给它, 能解析出窗口就说明它是时间表达 —— 覆盖它认识的全部写法,
+    ⛔ 不用我去想「还有哪些时间词」(那正是黑名单的病)。
+
+    ⚠️ 判据是**整体**匹配(`m.end() == len(candidate)`), ⛔ 不是「候选里含时间词」。
+       🔴 第一版写的是「丢给 `_resolve_sales_date_range`, 解析得出窗口就算时间词」——
+          而那个解析器做的是**子串**匹配, 于是「半年陈花雕」(一道真菜)当场被误伤成
+          时间词, 返回 None。实测抓到的。
+       ⇒ 改成对时间**语法**做整体匹配: 「半年陈花雕」只匹配掉前两个字, `end()=2 != 5`,
+         照样是菜名; 「上半年」被整体吃掉, 判为时间词。
+    """
+    if not candidate:
+        return False
+    for pattern in (_DISH_LEADING_TIME_RE, _HALF_YEAR_QUARTER_RE):
+        m = pattern.match(candidate)
+        if m and m.end() == len(candidate):
+            return True
+    return False
 
 
 def _asks_store_revenue_then_dish_sales(
@@ -2653,6 +2719,21 @@ def _resolve_sales_date_range(
         # 日期就会渲染出「X（X）」的重复。契约校验只要求答案里含该标签, 满足。
         return (start, end), "指定区间"
 
+    # 🔴 2026-08-16 B-4: 「**今天**到现在」= 今天, ⛔ 不是开业至今。
+    #
+    # 客户原话:「中午也会问一次…把**今天到中午的目前的所有信息**整理出来」
+    # (owner 口述转录, ⛔ 非逐字稿)。
+    # 实测原来: '今天到现在的经营情况' -> (2000-01-01, 今天) 标「截至目前」
+    #          = **开业至今**, 一个完全不同的问题, 而且不吭声。
+    #
+    # ⚠️ 判别是「今天」出现在「到/截至」**之前**:
+    #      「今天到现在」  -> 今天      (今天 在前, 是在给范围定界)
+    #      「到今天为止」  -> 截至目前  (今天 在后, 是累计的右端点)
+    #      「截至今天」    -> 截至目前  (同上)
+    #    ⛔ 不能简单地「含今天就当今天」—— 那会把真·累计问句也吞掉。
+    if _TODAY_SO_FAR_RE.search(text):
+        return (anchor, anchor), "今天"
+
     # “截至目前/到现在” is an explicit cumulative range, not a missing time
     # slot.  A concrete lower bound keeps every downstream resolver on the
     # same all-history-to-today scope instead of letting store-margin silently
@@ -2726,10 +2807,31 @@ def _resolve_sales_date_range(
             label = "最近一年" if count == 1 else f"最近{count}年"
             return (anchor - timedelta(days=days - 1), anchor), label
 
-    # 半年 = 滚动 ~183 天 (2026-07-08 时间词汇加硬)。上半年/下半年是日历半年
-    # 不是滚动窗口, 不在此猜测 —— 落到全部历史, 诚实回退好过错窗口。
+    # 半年 = 滚动 ~183 天 (2026-07-08 时间词汇加硬)。
     if "半年" in text and "上半年" not in text and "下半年" not in text:
         return (anchor - timedelta(days=182), anchor), "最近半年"
+
+    # 🔴 2026-08-16 B-0: 上半年/下半年 = **日历半年**, 直接算出来。
+    #
+    # 原来这里写的是「不在此猜测 —— 落到全部历史, 诚实回退好过错窗口」。
+    # ⚠️ 但落到全部历史**不是回退, 是回答了另一个问题** —— 而且不吭声。
+    #    仓里自己的规则(T6②, 06a70f9a8d)就是「静默换窗口必须披露」。
+    #    日历半年没有歧义(1-1~6-30 / 7-1~12-31), ⛔ 没有什么要猜的。
+    #
+    # ⚠️ 实测原来的两个坏法:
+    #      '上半年营业额怎么样' -> (None,None) 全部历史   ← 换成了另一个问题
+    #      '今年上半年营收'     -> 1/1~8/16 标「今年」    ← **比问的更宽**, 标签也不对
+    if "上半年" in text or "下半年" in text:
+        year_offset = -1 if "去年" in text else (-2 if "前年" in text else 0)
+        year_num = anchor.year + year_offset
+        prefix = {0: "", -1: "去年", -2: "前年"}[year_offset]
+        if "上半年" in text:
+            start, end, label = date(year_num, 1, 1), date(year_num, 6, 30), f"{prefix}上半年"
+        else:
+            start, end, label = date(year_num, 7, 1), date(year_num, 12, 31), f"{prefix}下半年"
+        # ⛔ 历史窗口右端点不许越今天(T6④)。整段都在未来时不认, 落回后面的分支。
+        if start <= anchor:
+            return (start, min(end, anchor)), label
 
     # 命名窗口优先级 (2026-07-08 audit fix A-1): 周/月窗口检查必须在 "今天"
     # 之前 —— 老板问句常见形态是「<周/月窗口>怎么样，今天先做什么」，行动子句
@@ -2923,13 +3025,10 @@ def _uses_relative_sales_window(query: Optional[str]) -> bool:
     text = (query or "").strip()
     return bool(
         _relative_period_match(text)
-        or any(token in text for token in (
-            "今天", "今日", "本周", "这周", "本星期", "这星期", "这个星期",
-            "本月", "这个月",
-            "昨天", "昨日", "前天", "前日", "前一天", "前一日", "上周", "上星期", "上个星期",
-            "上个月", "上月", "上上个月", "上上月", "半年", "对比", "比较", "相比", "环比",
-            "最近", "今年", "去年", "上半年", "下半年",
-        ))
+        # ⚠️ 时间词走**共用的** `_CALENDAR_PERIOD_TOKENS`(菜名抽取的排除表读同一份),
+        #    比较词/「最近」留在这里 —— 它们不是时间词, ⛔ 不该混进那个集合。
+        or any(token in text for token in _CALENDAR_PERIOD_TOKENS)
+        or any(token in text for token in ("对比", "比较", "相比", "环比", "最近"))
     )
 
 
