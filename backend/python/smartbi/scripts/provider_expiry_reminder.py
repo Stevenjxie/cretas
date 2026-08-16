@@ -77,6 +77,16 @@ def successor_readiness(today):
 
     判据：到期后每个槽的链里，**第一个既不被 refuse、又有 key 的**是谁。
     只剩一个能答的 ⇒ 单点，没有兜底。
+
+    ⚠️ **本函数的已知盲区（2026-08-16 实测发现，登记而非豁免）**：
+    它只看「key 在不在」，⛔ 看不出「key 在但**已失效**」。
+    实测：服务器上那把 DeepSeek key 存在（35 字符，13 份 unit 备份里同一把），
+    而官方直接回 `401 Authentication Fails, ... is invalid`。
+    ⇒ 只要有人把一把**废 key** 填进配置，这道闸就会变绿而系统照样答不了。
+    补位的是同一次跑批里的 **liveness 探针**（它真发请求），
+    两个读数必须**一起看** —— 这也是它们挂在同一个 cron 里的原因。
+    ⛔ 不在这里调 liveness 去补：那会让一道「读注册表」的闸变成要发网络请求的闸，
+       慢十倍且多一个失败源；两个探针各自单一职责、结果并排落台账，更稳。
     """
     import common.llm_router as R
 
@@ -178,7 +188,10 @@ def main(argv=None) -> int:
         else:
             print(f"PROVIDER SUCCESSOR THIN — 槽 {r['slot']} 在 {cliff} 之后只剩 "
                   f"{left[0]} 一个能答, **没有兜底**。"
-                  f"⚠️ 常见成因是接班账号的 key 是空的 —— 「在链上」不等于「能答」。")
+                  f"⚠️ 「在链上」不等于「能答」, 两种成因**修法不同**: "
+                  f"① key 是空的 ⇒ 填进配置; "
+                  f"② key 有但**失效** ⇒ 得去供应商控制台**重新签发**。"
+                  f"⇒ 看同一次跑批的 liveness 读数分辨: NO_API_KEY 是①, http401 是②。")
 
     if not due and not starving:
         return 0
