@@ -7361,8 +7361,14 @@ async def _parse_continuation(
             # the dish extractor's trusted grammar accepts scope prefixes.
             # Reorder only this already-validated pure scope answer ahead of
             # the sealed named-dish seed; no user semantics are invented.
+            # ⚠️ 用 `answer_fragment` 而不是 `query`: 上面那道闸判的就是片段,
+            # 载荷再用原始 `query` 就等于**闸和载荷不是同一个东西** ——
+            # 门店按钮发合成句时拼出 `全部门店米饭的销量是多少 米饭的销量是多少`,
+            # 抽取器返回 None, 34/34 全部落回 T3(实测)。
+            # 🔴 这一处曾经漏掉过: 上一版只改了闸的实参没改载荷, 而当时的 AST 闸
+            # 只钉实参 ⇒ **半吊子上它是绿的**。现在闸同时钉载荷。
             scoped_named_dish_spec = _explicit_named_dish_metric_spec(
-                f"{query} {original_query}".strip(),
+                f"{answer_fragment} {original_query}".strip(),
                 is_continuation=True,
             )
             if scoped_named_dish_spec is not None:

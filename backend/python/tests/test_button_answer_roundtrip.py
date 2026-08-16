@@ -261,3 +261,60 @@ def test_parse_continuation_feeds_every_store_check_the_fragment():
     assert args, "一个调用点都没找到 —— 解析类的闸「什么都没找到」最像「一切正常」"
     bad = [a.id for a in args if not (isinstance(a, ast.Name) and a.id == "answer_fragment")]
     assert not bad, f"{len(bad)}/{len(args)} 处仍在用原始 query: {bad}"
+
+
+def test_no_fstring_in_parse_continuation_mixes_raw_query_with_original():
+    """🔴 闸和载荷必须是**同一个东西**。
+
+    上一版只把 `_is_pure_store_scope_answer` 的实参换成了 `answer_fragment`,
+    而两行之下的载荷仍是 `f"{query} {original_query}"` ——
+    门店按钮发合成句时拼出 `全部门店米饭的销量是多少 米饭的销量是多少`,
+    抽取器返回 None, **34/34 全部落回 T3**(实测)。
+
+    ⚠️ 而当时那道 AST 闸只钉实参 ⇒ **它在半吊子上是绿的**, 还声称 C1 已修。
+    本仓硬约束 8 的原形: 我数的是「那个名字出现几次」, 不是
+    「这个结构涉及的所有地方」。
+
+    ⇒ 判据抬到结构本身: `_parse_continuation` 里**任何**同时引用
+    `query` 和 `original_query` 的 f-string 都是错的 —— 要拼就拼
+    `answer_fragment`(它就是为此存在的)。
+    """
+    import ast
+    import inspect
+
+    import smartbi.gold.restaurant.restaurant_intent as RI
+
+    tree = ast.parse(inspect.getsource(RI._parse_continuation))
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        names = {
+            n.id for n in ast.walk(node)
+            if isinstance(n, ast.Name)
+        }
+        if "query" in names and "original_query" in names:
+            offenders.append(ast.unparse(node))
+    assert not offenders, (
+        "这些 f-string 把原始 query 和 original_query 拼在一起, "
+        f"应当用 answer_fragment: {offenders}"
+    )
+
+
+def test_the_fstring_gate_can_actually_fire():
+    """阳性对照: 上面那道闸不是恒真式 —— 它认得出违例的形状。
+
+    ⛔ 少了这一条,「offenders 为空」在「AST 遍历压根没找到 JoinedStr」时
+    也成立(例如将来有人把那段改写成 str.join)。
+    """
+    import ast
+
+    bad = ast.parse('x = f"{query} {original_query}"')
+    found = [
+        n for n in ast.walk(bad)
+        if isinstance(n, ast.JoinedStr)
+        and {"query", "original_query"} <= {
+            m.id for m in ast.walk(n) if isinstance(m, ast.Name)
+        }
+    ]
+    assert len(found) == 1, "闸的判别式本身失效了"
