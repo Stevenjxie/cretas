@@ -47,6 +47,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
     _RESTAURANT_DAILY_CLOSE_ANSWER,
+    _RESTAURANT_DAILY_PRESENTATION_ANSWER,
     _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER,
     _RESTAURANT_STAFFING_SCOPE_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
@@ -91,6 +92,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
     _needs_restaurant_daily_close_guard,
+    _needs_restaurant_daily_presentation_guard,
     _needs_restaurant_default_time_provenance_guard,
     _needs_restaurant_staffing_scope_guard,
     _needs_workflow_actual_io_guard,
@@ -132,6 +134,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "当前 BOM 成本摘要只汇总包材" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
     assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
+    assert "普通质检照片" in FACTORY_SYSTEM_PROMPT
+    assert "平台精修不覆盖工厂真值" in FACTORY_SYSTEM_PROMPT
     assert "“归属对象”只表示存放位置" in FACTORY_SYSTEM_PROMPT
     assert "“本图产出”按画布终端生产节点计算" in FACTORY_SYSTEM_PROMPT
     assert "原料分流才把整条版本谱系自动重锚" in FACTORY_SYSTEM_PROMPT
@@ -140,6 +144,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
     assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
+    assert "旧 AI/空白新建入库与生产侧原料入库已退役" in FACTORY_SYSTEM_PROMPT
+    assert "回读 `storageLocation` 后才成功" in FACTORY_SYSTEM_PROMPT
     assert "`allowMultipleUpstreamSources`" in FACTORY_SYSTEM_PROMPT
     assert "会计期间关账申请只创建 OA" in FACTORY_SYSTEM_PROMPT
 
@@ -158,6 +164,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "明确起止日期按自然日闭区间" in SYSTEM_PROMPT
     assert "当前繁体支持不得扩大成全句转换" in SYSTEM_PROMPT
     assert "只有呈现层实际返回对应表格" in SYSTEM_PROMPT
+    assert "本季度/上个季度由代码按自然季度计算" in SYSTEM_PROMPT
+    assert "日结菜品表已消费该偏好" in SYSTEM_PROMPT
+    assert "缺卡明确写“缺成本卡”" in SYSTEM_PROMPT
     assert "当前月报固定 9 节" in SYSTEM_PROMPT
     assert "计划预警是同一 sealed QuerySpec" in SYSTEM_PROMPT
     assert "客如云风格 connector" in SYSTEM_PROMPT
@@ -285,6 +294,32 @@ def test_20260815_restaurant_progress_followups_and_cost_card_feedback_are_isola
     assert "不能说单菜毛利已经从估算变成实测" in answer
     assert "无数据、权限遮蔽、服务不可用或仍需澄清时不显示按钮" in answer
     assert "不替用户计算、补卡或分析真实门店数据" in answer
+
+
+def test_20260816_restaurant_daily_presentation_time_and_actions_are_deterministic():
+    equivalent_questions = (
+        "日结表格为什么只有菜品、营收、成本、毛利，没有毛利率列？",
+        "别用表格、只用文字时为什么不能反而锁死表格？",
+        "上个季度怎样计算，追问按钮为什么要携带当前时间窗？",
+        "成本高于营收的菜在日结里应该给什么下一步？",
+    )
+    assert all(
+        _needs_restaurant_daily_presentation_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_daily_presentation_guard(
+        "Workflow 的 BOM 怎样发布？"
+    )
+    answer = _RESTAURANT_DAILY_PRESENTATION_ANSWER
+    assert "本季度 / 上个季度”由代码按自然季度计算" in answer
+    assert "把当前屏幕的时间窗直接写进问句" in answer
+    assert "只用文字 / 别用表格 / 不要表格，文字就行" in answer
+    assert "菜品、营收、成本、毛利" in answer
+    assert "不显示单菜毛利率列" in answer
+    assert "缺成本卡" in answer
+    assert "最多点名 3 道" in answer
+    assert "不能直接据此调价、下架或砍菜" in answer
+    assert "不替用户读取、计算或分析真实门店数据" in answer
 
 
 def test_only_production_chain_questions_force_the_current_sop_source():
@@ -449,14 +484,16 @@ def test_reporting_unit_and_cross_unit_yield_use_the_reviewed_contract():
 def test_label_qc_workbench_uses_three_reference_layers_and_human_tools():
     equivalent_questions = (
         "标签质检复核台的盒子白标彩标参考框怎么用？",
-        "标签 AI 漏检时用什么画笔补框？",
-        "彩标审核能不能让 AI 自动给结论？",
+        "标签切换盒子时怎样自动保存，矛盾状态会怎样？",
+        "工厂整图真值和平台单盒精修会互相覆盖吗？",
     )
     assert all(_needs_label_qc_review_guard(q) for q in equivalent_questions)
-    assert not _needs_label_qc_review_guard("普通批次质检在哪里？")
-    assert "盒子 → 白标 → 彩标" in _LABEL_QC_REVIEW_ANSWER
-    assert "白标画笔或彩标画笔" in _LABEL_QC_REVIEW_ANSWER
+    assert _needs_label_qc_review_guard("普通质检照片上传后怎样作为照片证据回读？")
+    assert "`QUALITY_CHECK` 附件" in _LABEL_QC_REVIEW_ANSWER
+    assert "切换盒子或照片时自动校验并保存" in _LABEL_QC_REVIEW_ANSWER
     assert "AI 为 0 候选也必须人工检查" in _LABEL_QC_REVIEW_ANSWER
+    assert "拒绝或无法判断的盒子不裁切" in _LABEL_QC_REVIEW_ANSWER
+    assert "不能回写或覆盖工厂整图盒子真值" in _LABEL_QC_REVIEW_ANSWER
     assert "不会自动训练或发布模型" in _LABEL_QC_REVIEW_ANSWER
 
 
@@ -494,9 +531,9 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
 
 def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
     equivalent_questions = (
-        "在手机端，仓库角色的盘点记录和智能入库各能做什么？",
-        "RN 仓库角色能看盘点记录吗，生产角色为什么去电脑端？",
-        "手机里的智能入库、盘点记录和电脑端物料需求单边界是什么？",
+        "手机里的 AI 智能入库为什么退役，仓库现在从哪里收货？",
+        "RN 仓库上架成功后怎样回读 storageLocation？",
+        "手机里的盘点记录、仓储待收货和电脑端物料需求单边界是什么？",
     )
     assert all(_needs_factory_rn_readonly_guard(q) for q in equivalent_questions)
     assert not _needs_factory_rn_readonly_guard("Web 后台怎么创建生产计划？")
@@ -506,7 +543,10 @@ def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
     assert "业务入口只面向仓库主管和仓库操作员" in _FACTORY_RN_READONLY_ANSWER
     assert "缺少规格明确显示“未设规格”" in _FACTORY_RN_READONLY_ANSWER
     assert "物料需求单和生产工作台属于电脑 Web" in _FACTORY_RN_READONLY_ANSWER
-    assert "不会替用户提交、审批或增加库存" in _FACTORY_RN_READONLY_ANSWER
+    assert "无来源建批次接口" in _FACTORY_RN_READONLY_ANSWER
+    assert "仓储待收货 / 采购收货列表" in _FACTORY_RN_READONLY_ANSWER
+    assert "实际更新该批次的 `storageLocation`" in _FACTORY_RN_READONLY_ANSWER
+    assert "独立刷新/回读新库位" in _FACTORY_RN_READONLY_ANSWER
 
 
 def test_factory_accounting_period_close_uses_oa_state_machine():
@@ -1111,6 +1151,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
     assert "所有照片都必须进入人工审核" in current_sop
     assert "盒子、白标和彩标三层参考框" in current_sop
+    assert "`QUALITY_CHECK` 附件" in current_sop
+    assert "切换盒子或照片时自动校验并保存" in current_sop
+    assert "平台单盒精修队列" in current_sop
+    assert "不能回写或覆盖工厂整图盒子真值" in current_sop
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
@@ -1146,11 +1190,15 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "有生效 BOM 但明细为空时只能说“还没配辅料/包材”" in current_sop
     assert "包材 Cell 位于成品上方并连向所属成品" in current_sop
     assert "旧启用版本不能把“自动同步并发布”自身误拦" in current_sop
+    assert "仓储待收货 / 采购收货列表" in current_sop
+    assert "实际更新批次 `storageLocation`" in current_sop
+    assert "只展示该供应商当前有效供应关系中的物料" in current_sop
+    assert "按 OA 实例当前节点筛选" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-15" in html
+    assert "origin/main · SOP sync 2026-08-16" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
     assert "调整后应剩多少的绝对值" in html
@@ -1174,6 +1222,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "多产出逐行确认" in html
     assert "所有照片都会进入人工审核" in html
     assert "盒子、白标、彩标三层参考框" in html
+    assert "普通质检照片与标签对象真值分开" in html
+    assert "切换盒子/照片即校验保存" in html
+    assert "平台精修" in html
     assert "跨单位成品率" in html
     assert "单总监死锁" in html
     assert "RN 仓储页与 Web 生产页不要混说" in html
@@ -1199,6 +1250,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "包材 Cell 位于成品上方并连向所属成品" in html
     assert "旧版本不能把重发布自身误拦" in html
     assert "原料分流才把整条版本谱系自动重锚到该原料" in html
+    assert "仓储待收货 / 采购收货列表" in html
+    assert "刷新回读库位后才成功" in html
+    assert "只展示该供应商当前有效供应关系中的" in html
+    assert "待办按 OA 实例当前节点筛选" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -1299,6 +1354,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "SmartBI 成本卡运营口径",
             "整单折扣无法确定性分摊到某一道菜",
             "补卡提高覆盖率",
+            "本季度 / 上个季度",
+            "缺成本卡",
+            "最多点名 3 道",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -1334,6 +1392,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "简称或片段唯一推断到一家时先显示真实门店确认按钮",
             "不能丢成裸店名",
             "写判定与只读意图矛盾时就地 fail closed",
+            "本季度/上个季度由代码按自然季度计算",
+            "按钮问句直接携带当前屏幕时间窗",
+            "缺卡行明确写“缺成本卡”",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -1363,6 +1424,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "成本卡运营毛利额",
             "整单折扣无法确定性摊到每道菜",
             "补齐缺卡只能提高覆盖率",
+            "日结菜品表固定显示菜品、营收、成本、毛利",
+            "最多点名 3 道",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -1375,13 +1438,16 @@ def test_restaurant_registered_sources_match_current_product_contract():
     ai_assist = (
         PROJECT_ROOT / "web-admin/public/aiassist.html"
     ).read_text(encoding="utf-8")
-    assert "三层参考框与标签人工复核" in ai_assist
+    assert "质检照片、对象真值与单盒精修" in ai_assist
     assert "报工单位与跨单位成品率" in ai_assist
     assert "指定区间、全部門店与输出形态" in ai_assist
     assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "计划预警与平台同步边界" in ai_assist
-    assert "RN 仓库角色与 Web 业务边界" in ai_assist
+    assert "RN 正规收货与真实上架" in ai_assist
+    assert "供应关系与 OA 当前节点" in ai_assist
+    assert "日结菜品表与异常成本动作" in ai_assist
+    assert "季度、追问时间窗与输出否定" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
     assert "默认全店与当前限制" in ai_assist
