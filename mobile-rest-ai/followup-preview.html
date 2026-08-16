@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  B-5 载体验收页 —— 把**真实形状**的后端响应喂给真的 `normalizeFollowups`,
+  再用真的 style.css 渲染出芯片。
+
+  ⛔ 不重写归一化逻辑 —— 直接 import `src/api.ts` 里那一份(形态 D: 两份必漂)。
+  ⚠️ 为此 `normalizeFollowups` 需要被导出; 它是纯函数, 导出只为可测。
+-->
+<meta charset="utf-8">
+<title>B-5 · 「接下来可以问什么」在老板那个前端上的样子</title>
+<link rel="stylesheet" href="/src/style.css">
+<style>
+  body { margin: 0; background: #f5f6f8; font: 14px/1.6 system-ui; }
+  .frame { max-width: 420px; margin: 16px auto; background: #fff; padding: 16px;
+           border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .cap { color: #888; font-size: 12px; margin: 12px auto 4px; max-width: 420px; }
+</style>
+<div class="cap">① 后端给了 3 条（三种不同形状）</div>
+<div class="frame">
+  <div class="markdown-body"><p>今天营收 ¥12,480，比昨天少 18%。</p></div>
+  <div class="answer-followups" id="with" aria-label="接下来可以问"></div>
+</div>
+<div class="cap">② 后端一条都不给 —— ⛔ 这里必须一个按钮都没有</div>
+<div class="frame">
+  <div class="markdown-body"><p>今天营收 ¥12,480。</p></div>
+  <div class="answer-followups" id="without" aria-label="接下来可以问"></div>
+</div>
+<script type="module">
+  import { normalizeFollowups } from '/src/api.ts';
+
+  // 真实形状: Java 侧 `suggestedFollowups` 的条目历史上出现过这三种
+  const backendGave = [
+    '为什么今天卖的这么少',              // 裸字符串
+    { question: '哪道菜拖了后腿' },       // {question}
+    { label: '跟上周比差在哪' },          // {label}
+  ];
+
+  function render(el, list) {
+    el.innerHTML = '';
+    for (const q of list) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'followup-chip';
+      b.textContent = q;
+      el.appendChild(b);
+    }
+  }
+
+  const withList = normalizeFollowups(backendGave);
+  const withoutList = normalizeFollowups(undefined, [], null);
+  render(document.getElementById('with'), withList);
+  render(document.getElementById('without'), withoutList);
+
+  window.__probe = {
+    withFollowups: [...document.querySelectorAll('#with .followup-chip')].map(b => b.textContent),
+    withoutFollowups: [...document.querySelectorAll('#without .followup-chip')].map(b => b.textContent),
+  };
+</script>
