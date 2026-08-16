@@ -31,10 +31,24 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 客户撞到的「报工单位<b>袋</b>，BOM 单位 <b>bag</b>」409 就是这么来的：
  * 不是数据脏，是两边存的形态不一样。
  *
- * <p>所以守的性质是「<b>两侧都归一，且都归到码</b>」。哪天有人把任一侧改回裸传或改存中文，
- * 这里立刻红。
+ * <h2>🔴 2026-08-16 订正：守的不再是「都归到码」，是「都走同一个权威出口」</h2>
+ *
+ * <p>本测试原先钉的是字面 {@code return normalized.code();}。那是<b>当时</b>的实现，
+ * 而两侧后来都被<b>有意</b>迁到了 {@code UnitContractService#storageUnit} ——
+ * 因为 {@code code()} 会把「只」写成 {@code pcs}、把工厂自定义单位写成自动生成的拼音码。
+ * 「件/个/只」是<b>三个独立单位</b>（2026-08-14 实测：两厂 50 个包材因此加不进 BOM）。
+ *
+ * <p>{@code storageUnit} 的三条规则：①权威表认不出 → 原样保留；②同码多中文写法
+ * （实测只有 {@code pcs}: 件/个/只）或工厂自定义单位 → <b>保中文字面</b>；③内置单位 → 存英文码。
+ * ⇒ 「都归到码」这个说法本身已经不成立，它只在规则③下为真。
+ *
+ * <p>于是这两条断言从「守着一个已经被判定为缺陷的旧行为」变成了阻挡，在
+ * {@code origin/main} 上一直是红的（且因为 CI 选择器不跑它，红了两天没人看见）。
+ * 现在把守的东西从<b>字面</b>抬到<b>性质</b>：
+ * 「<b>两侧都归一，且经由同一个权威出口</b>」，并各配一条阴性对照钉住「不许退回 code()」。
+ * 哪天有人把任一侧改回裸传、或绕开 {@code storageUnit}，这里立刻红。
  */
-@DisplayName("SKU 单位存储契约：两侧都归一到英文码")
+@DisplayName("SKU 单位存储契约：两侧都走同一个权威出口 storageUnit")
 class SkuUnitStorageIsCodeContractTest {
 
     private static final Path RAW = Paths.get(
@@ -57,18 +71,21 @@ class SkuUnitStorageIsCodeContractTest {
     }
 
     @Test
-    @DisplayName("🔴 原料侧归一到 code（既有行为，别被改回去）")
+    @DisplayName("🔴 原料侧把落库字面交给权威函数（既有行为，别被改回去）")
     void rawMaterialNormalizesToCode() throws IOException {
         String src = read(RAW);
         assertThat(src).contains("private String normalizeInventoryUnit(");
         assertThat(src)
-                .as("原料侧必须返回权威表的 code")
-                .contains("return normalized.code();");
+                .as("原料侧落库字面必须由 UnitContractService#storageUnit 决定")
+                .contains("unitContractService.storageUnit(factoryId, value)");
+        assertThat(src)
+                .as("⛔ 不许退回 normalized.code() —— 它把「只」写成 pcs, 把自定义单位写成拼音码")
+                .doesNotContain("return normalized.code();");
         assertThat(src).contains("dto.setUnit(normalizeInventoryUnit(");
     }
 
     @Test
-    @DisplayName("🔴 成品侧也必须归一 —— 此前是裸传, 两侧方向相反正是 409 的成因")
+    @DisplayName("🔴 成品侧必须走同一个权威函数 —— 此前是裸传, 两侧方向相反正是 409 的成因")
     void productTypeNormalizesToo() throws IOException {
         String src = read(PRODUCT);
         assertThat(src)
@@ -78,7 +95,24 @@ class SkuUnitStorageIsCodeContractTest {
                 .as("成品更新同样不许裸传")
                 .doesNotContain("if (dto.getUnit() != null) productType.setUnit(dto.getUnit());");
         assertThat(src).contains("private String normalizeProductUnit(");
-        assertThat(src).contains("normalized.recognized() ? normalized.code() : value");
+        assertThat(src)
+                .as("成品侧与原料侧必须是【同一个】权威函数, 否则两侧还会漂")
+                .contains("unitContractService.storageUnit(factoryId, value)");
+        assertThat(src)
+                .as("⛔ 成品侧同样不许退回 normalized.code()")
+                .doesNotContain("normalized.recognized() ? normalized.code() : value");
+    }
+
+    @Test
+    @DisplayName("🔑 两侧钉的是【同一个】权威出口 —— 这条才是「不会漂」的真正保证")
+    void bothSidesRouteThroughTheSameAuthority() throws IOException {
+        String authority = "unitContractService.storageUnit(factoryId, value)";
+        // 抽不成一份(两个 Service 各写各的), 就由这条闸钉住「两份指向同一个出口」。
+        assertThat(read(RAW)).as("原料侧").contains(authority);
+        assertThat(read(PRODUCT)).as("成品侧").contains(authority);
+        // 阳性对照: 这个串确实是从源码里读出来的, 不是笔误成了空断言
+        assertThat(read(RAW)).contains("private String normalizeInventoryUnit(");
+        assertThat(read(PRODUCT)).contains("private String normalizeProductUnit(");
     }
 
     @Test

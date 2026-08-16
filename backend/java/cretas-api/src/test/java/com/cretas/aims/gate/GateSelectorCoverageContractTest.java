@@ -65,15 +65,16 @@ class GateSelectorCoverageContractTest {
     private static final Set<String> SELECTOR_EXACT = Set.of("FlywayVersionUniquenessTest");
 
     /**
-     * 选择器里被<b>显式排除</b>的类，连同理由。
+     * 选择器里被<b>显式排除</b>的类，连同理由。<b>当前为空 —— 这是它应有的状态。</b>
      *
-     * <p>{@code SkuUnitStorageIsCodeContractTest}：它在 origin/main 上有 2 条一直红的断言，
-     * 守的是已经被有意改掉的行为 —— 两侧都已从 {@code normalized.code()} 迁到权威函数
-     * {@code UnitContractService#storageUnit}（{@code code()} 会把「只」写成 {@code pcs}）。
-     * 该文件落在 ACTIVE 台账 {@code BUG-F006-UNIT-DIMENSION-SCOPE-001} 的 scope 锁里，
-     * 由该任务的 owner 修，本次不进别人的锁。
+     * <p>2026-08-15 建闸时这里登记过 {@code SkuUnitStorageIsCodeContractTest}
+     * （它有 2 条一直红的断言，守的是已被有意改掉的行为）。2026-08-16 已还清并摘掉：
+     * 那条闸守的性质改成「两侧都走同一个权威出口 {@code storageUnit}」，恢复进选择器。
+     *
+     * <p>⛔ 往这里加一个类 = 让它退回「编译得到、断言看不见」，正是本闸要解决的问题。
+     * 只有在「该类的红是存量欠账且短期修不了」时才可临时登记，并必须写明由谁、何时还。
      */
-    private static final Set<String> SELECTOR_EXCLUDED = Set.of("SkuUnitStorageIsCodeContractTest");
+    private static final Set<String> SELECTOR_EXCLUDED = Set.of();
 
     /**
      * 存量欠账：会读 {@code src/main} 但类名进不了选择器的闸。<b>冻结于 2026-08-15，只许变短。</b>
@@ -181,8 +182,13 @@ class GateSelectorCoverageContractTest {
     @Test
     @DisplayName("⛔ 显式排除的类必须真的存在，理由过期要一起清")
     void exclusionsMustStillExist() throws IOException {
-        Set<String> gates = sourceScanningGates();
-        assertThat(gates)
+        // ⚠️ 空集上 containsAll 恒真 —— 所以先把「现在到底排除了几个」显式读出来,
+        //    不让这条断言在空集时静默变成恒真式。
+        if (SELECTOR_EXCLUDED.isEmpty()) {
+            assertThat(SELECTOR_EXCLUDED).as("当前没有任何排除项 —— 这是应有状态").isEmpty();
+            return;
+        }
+        assertThat(sourceScanningGates())
                 .as("SELECTOR_EXCLUDED 里的类已经不在了, 排除项和它的理由应当一并删除")
                 .containsAll(SELECTOR_EXCLUDED);
     }

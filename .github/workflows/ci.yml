@@ -152,10 +152,11 @@ jobs:
       # 落在本选择器的匹配面里。存量 29 个冻结成棘轮(只许变短), 名单外新增的当场红。
       # ⇒ 下一个忘记按约定命名的人, 会在 CI 上被拦住, 而不是安静地多一道哑闸。
       #
-      # `!SkuUnitStorageIsCodeContractTest`: 该类在 origin/main 上有 2 条一直红的断言,
-      # 守的是已被有意改掉的行为(两侧都已从 normalized.code() 迁到权威函数 storageUnit,
-      # 因为 code() 会把「只」写成 pcs)。文件落在 ACTIVE 台账
-      # BUG-F006-UNIT-DIMENSION-SCOPE-001 的 scope 锁里, 由该任务 owner 修复后删掉这个排除。
+      # 2026-08-16: 曾经排除过的 `!SkuUnitStorageIsCodeContractTest` 已还清并摘掉 ——
+      # 它那 2 条红守的是已被有意改掉的行为(两侧都从 normalized.code() 迁到了权威函数
+      # storageUnit, 因为 code() 会把「只」写成 pcs), 现在守的性质改成
+      # 「两侧都走同一个权威出口」, 恢复进选择器。⛔ 别再往这里加新的排除项 ——
+      # 排除一个类等于让它退回「编译得到、断言看不见」, 那正是本节要解决的问题。
       #
       # 实测代价: 选择器从 54 条 → 358 条测试, 本地 wall 129s(热编译), 远低于本步 30min 上限。
       #
@@ -169,7 +170,7 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 30
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest,!SkuUnitStorageIsCodeContractTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest' || '') }}
         run: |
           started=$(date +%s)
           if [ -n "$TARGET_TESTS" ]; then
@@ -194,7 +195,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         working-directory: backend/java/cretas-api/target
         env:
-          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest,!SkuUnitStorageIsCodeContractTest' || '') }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest' || '') }}
         run: |
           JAR=cretas-backend-system-1.0.0.jar
           test -f "$JAR"
