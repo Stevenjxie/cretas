@@ -1,56 +1,52 @@
 package com.cretas.aims.ai.tool.impl.purchase;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.service.inventory.PurchaseService;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.cretas.aims.exception.BusinessException;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
 
-@Slf4j
 @Component
 public class PurchaseFinanceApproveTool extends AbstractBusinessTool {
-
-    @Autowired
-    private PurchaseService purchaseService;
 
     @Override
     public String getToolName() { return "purchase_finance_approve"; }
 
     @Override
-    public String getDescription() { return "采购订单财务审核通过或驳回"; }
+    public String getDescription() {
+        return "采购财务审批的旧兼容入口，仅提示用户前往工作台的待我审批；不执行通过或驳回";
+    }
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of("type", "object", "properties", Map.of(
-                "orderId", Map.of("type", "string", "description", "采购订单ID"),
-                "action", Map.of("type", "string", "description", "操作: approve 或 reject"),
-                "notes", Map.of("type", "string", "description", "审核意见")
-        ), "required", List.of("orderId", "action"));
+        return Map.of("type", "object", "properties", Map.of());
     }
 
     @Override
-    protected List<String> getRequiredParameters() { return List.of("orderId", "action"); }
+    protected List<String> getRequiredParameters() { return List.of(); }
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String orderId = getString(params, "orderId");
-        String action = getString(params, "action");
-        String notes = getString(params, "notes");
-        Long userId = getLong(params, "userId");
-
-        if ("approve".equalsIgnoreCase(action)) {
-            var order = purchaseService.financeApproveOrder(factoryId, orderId, userId, notes);
-            return buildSimpleResult("采购订单财务审核通过", Map.of("orderNumber", order.getOrderNumber(), "status", order.getStatus().name()));
-        } else {
-            var order = purchaseService.financeRejectOrder(factoryId, orderId, userId, notes);
-            return buildSimpleResult("采购订单财务审核已驳回", Map.of("orderNumber", order.getOrderNumber(), "status", order.getStatus().name()));
-        }
+        throw oaOnly();
     }
 
-    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    /**
+     * 保留旧 tool name 是为了让生产中已有的 intent 配置得到明确、可行动的 OA 引导，
+     * 而不是变成 tool-not-found。等运行时配置和历史迁移都不再引用
+     * {@code purchase_finance_approve} 后，连同 descriptor 一并删除。
+     */
+    static BusinessException oaOnly() {
+        return new BusinessException(410,
+                "采购财务审批只能在工作台 → 待我审批中处理；AI 不执行通过或驳回")
+                .withCode("PURCHASE_APPROVAL_OA_ONLY")
+                .withHint("请打开工作台 → 待我审批，并在当前 OA 节点完成审批");
+    }
+
+    /**
+     * 兼容入口自身不执行业务写，但旧 tool name 含 approve；按全局治理规则继续走
+     * W0 写确认并保持最保守的权限语义。删除旧运行时 intent 后连同本 sentinel 一并删除。
+     */
     @Override
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
