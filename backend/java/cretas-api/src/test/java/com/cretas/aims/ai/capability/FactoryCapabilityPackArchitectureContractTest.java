@@ -10,7 +10,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class FactoryCapabilityPackArchitectureTest {
+class FactoryCapabilityPackArchitectureContractTest {
     private static final List<String> FORBIDDEN_SOURCE_TOKENS = List.of(
             "ToolRegistry", "ToolExecutor", "SkillExecutor", "DefaultToolExecutionGateway",
             "IntentExecutionOrchestrator", "DynamicToolSelectionService",

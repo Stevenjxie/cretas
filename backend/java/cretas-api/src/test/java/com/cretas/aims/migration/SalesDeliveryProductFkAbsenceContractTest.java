@@ -37,7 +37,7 @@ import org.junit.jupiter.api.Test;
  * {@code *RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest},
  * <b>不覆盖本用例</b>(本仓 Java 全量套件只在 full_audit 跑)。
  */
-class SalesDeliveryProductFkAbsenceTest {
+class SalesDeliveryProductFkAbsenceContractTest {
 
     private static final Path MIGRATION_DIR = Path.of("src/main/resources/db/flyway");
 

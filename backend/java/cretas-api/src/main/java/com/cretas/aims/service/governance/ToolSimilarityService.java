@@ -48,7 +48,7 @@ public class ToolSimilarityService {
      * ⚠️ 第一轮之所以没被拦住: 我的断言只验了「本服务能否构造」, 而失效发生在**执行**那一步。
      * 守卫必须跑在真实调用点上 —— 见 {@code ToolRegistryStartupGateTest}(驱动真实的 {@code init()},
      * 断言直接打在生产症状那行 WARN 上)。实测: 把本类的调用改回无参重载, 那个文件 4/4 全红,
-     * 而只验构造的 {@code ToolSimilarityGateRunsTest} 纹丝不动。
+     * 而只验构造的 {@code ToolSimilarityGateRunsContractTest} 纹丝不动。
      *
      * 范围澄清: 从未执行的是**启动闸**这一条路。{@code ToolHealthMonitor} 的定时扫描
      * (启动完成之后跑)一直是通的, 日志里有 {@code Tool similarity scan complete} 为证。

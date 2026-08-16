@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>2026-08-05 租户收敛: DEMO_REST 停用并从本名单移除。
  * <p><b>2026-08-10 重开</b> (owner 拍板「只需要做餐饮的」): 实测该租户有
  * 523,113 笔交易、数据到昨天, 停用理由已不成立。本类的断言方向随之翻回
- * 「必须在名单内」—— 见 {@code DemoIdentityDisabledTest} 里那条更通用的不变式。
+ * 「必须在名单内」—— 见 {@code DemoIdentityDisabledContractTest} 里那条更通用的不变式。
  *
  * <p>注意 DEMO_LOGISTICS 是**有意**不在名单内的（排线调度演示需要真实写操作），
  * 一并断言，防止有人"顺手补全"把它加进去锁死物流演示。
@@ -77,7 +77,7 @@ class DemoFactoryGateConfigTest {
         //    cretas.demo.rest.factory-id 指向 DEMO_REST 而不上写闸, 公开扫码演示
         //    会拿到 demo_rest(factory_super_admin) 的完整写权限。
         //    所以这条断言的方向必须跟着身份配置一起翻。
-        // ⛔ 更通用的守卫见 DemoIdentityDisabledTest 的
+        // ⛔ 更通用的守卫见 DemoIdentityDisabledContractTest 的
         //    everyConfiguredDemoIdentityIsReadOnlyLocked —— 那条对未来任何一个
         //    新增的演示身份都成立, 不需要有人记得来改这里。
         assertTrue(demoFactoryIdsValue().contains("DEMO_REST"),

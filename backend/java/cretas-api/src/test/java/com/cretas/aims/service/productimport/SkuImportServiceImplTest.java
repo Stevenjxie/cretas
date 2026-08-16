@@ -214,7 +214,7 @@ class SkuImportServiceImplTest {
         // ⚠️ 前两条期望值改过, 因为旧期望编码的正是缺陷本身:
         //   box → 箱: 权威表与名录里 box=盒、case=箱 是两个不同单位, 归到一起等于把盒改成箱
         //   个  → 件: #1976 明确「一只鸡不是一件包材」, 个/只 刻意不并进 pcs
-        // 详见 SkuImportUnitCanonicalizationTest。
+        // 详见 SkuImportUnitCanonicalizationContractTest。
         assertThat(SkuImportServiceImpl.normalizeUnit(" box ")).isEqualTo("盒");
         assertThat(SkuImportServiceImpl.normalizeUnit("case")).isEqualTo("箱");
         assertThat(SkuImportServiceImpl.normalizeUnit("carton")).isEqualTo("箱");

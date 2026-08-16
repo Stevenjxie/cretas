@@ -48,7 +48,7 @@ import org.junit.jupiter.api.Test;
  * {@code *RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest},
  * <b>不覆盖本用例</b>(本仓 Java 全量套件只在 full_audit 跑)。
  */
-class PackagingLegacyPricingUnlockTest {
+class PackagingLegacyPricingUnlockContractTest {
 
     private static final Path SERVICE = Path.of(
             "src/main/java/com/cretas/aims/service/impl/RawMaterialTypeServiceImpl.java");

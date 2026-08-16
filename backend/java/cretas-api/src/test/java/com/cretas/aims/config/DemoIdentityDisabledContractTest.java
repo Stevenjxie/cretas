@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * 演示身份与"只读写闸名单"必须一致 —— 配了身份就必须上闸。
  *
  * <p><b>2026-08-10 重开餐饮演示 (owner 拍板「修吧, 但是只需要做餐饮的」)。</b>
- * 本类原名 DemoIdentityDisabledTest, 钉的是 08-05「DEMO_REST 随租户收敛停用」
+ * 本类原名 DemoIdentityDisabledContractTest, 钉的是 08-05「DEMO_REST 随租户收敛停用」
  * 那个决定。今天实测该租户有 <b>523,113 笔交易, 2025-01-01 ~ 2026-08-09(昨天)</b>
  * —— 停用时的理由(收敛后不可演示)已不成立, 于是重开。类名保留是为了让
  * git blame 能顺着找到这段来龙去脉。
@@ -34,7 +34,7 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ 配置有三个承载点(application.properties + 两处 {@code @Value} fallback),
  * 08-05 那次三处都改了。本类逐个断言, 不假设它们同步。
  */
-class DemoIdentityDisabledTest {
+class DemoIdentityDisabledContractTest {
 
     private static final Path PROPS = Path.of("src/main/resources/application.properties");
     private static final Path INTERCEPTOR =

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * 钉住迁移写入的权限形状。断言的是「每个角色只有一个部门是 rw」这个不变量,
  * 不是字符串出现次数 —— 后者改个格式就绕过去了。
  */
-class RestaurantDepartmentPermissionMigrationTest {
+class RestaurantDepartmentPermissionMigrationContractTest {
 
     private static final Path MIGRATION = Path.of(
         "src/main/resources/db/flyway/V20261029_52__restaurant_department_module_permissions.sql");

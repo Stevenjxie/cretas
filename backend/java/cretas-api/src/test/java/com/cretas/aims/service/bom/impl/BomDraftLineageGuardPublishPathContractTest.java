@@ -49,13 +49,13 @@ import static org.mockito.Mockito.when;
  * (同一 {@code @Transactional} 内), 所以放行之后读取侧看到的是一致状态; 发布失败则整体回滚。
  *
  * <p>⚠️ 这个类测的是**闸的判断本身**(直接调私有方法), 不是整条发布链路。链路上「有没有真的
- * 把正在发布的那条 id 传进来」由 {@link com.cretas.aims.service.workflow.PublishBomSyncOrderTest}
+ * 把正在发布的那条 id 传进来」由 {@link com.cretas.aims.service.workflow.PublishBomSyncOrderContractTest}
  * 的源码顺序契约钉住 —— 两者缺一不可。
  */
 @DisplayName("🔴 版本线闸: 发布链路必须放行「正在发布的那条工艺」, 手动生效路径照旧拦住")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class BomDraftLineageGuardPublishPathTest {
+class BomDraftLineageGuardPublishPathContractTest {
 
     private static final String FACTORY = "F006";
     private static final String PRODUCT = "0a095c3d-bd1e-4f30-8758-ff11367b0889";

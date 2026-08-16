@@ -45,6 +45,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>⚠️ 名单是<b>债务登记</b>，不是豁免。它同时守两个方向：既不许新增，
  * 也不许让已删除的条目烂在名单里（还清了就必须从名单里划掉）。
+ *
+ * <h2>当前状态：欠账已还清（2026-08-16）</h2>
+ *
+ * <p>29 条全部还清，{@link #KNOWN_UNCOVERED} 现为空集 ⇒ 这道闸<b>不再有任何豁免</b>，
+ * 从棘轮变回硬红。任何会读 {@code src/main} 的新测试类，类名不落在选择器匹配面里就当场红。
  */
 @DisplayName("闸的选择器覆盖：源码扫描型闸必须能被 CI 执行")
 class GateSelectorCoverageContractTest {
@@ -78,41 +83,21 @@ class GateSelectorCoverageContractTest {
 
     /**
      * 存量欠账：会读 {@code src/main} 但类名进不了选择器的闸。<b>冻结于 2026-08-15，只许变短。</b>
+     * <b>2026-08-16 已还清至空 —— 这是它应有的状态。</b>
      *
-     * <p>已还清：{@code StringConstantStatusEqualityGuardTest}（2026-08-16 → 改名
-     * {@code …ContractTest} 进入选择器）。还清它的那一刻它就是<b>红</b>的 ——
+     * <p>还清过程：建闸当天 29 条。{@code StringConstantStatusEqualityGuardTest} 先还
+     * （2026-08-16 → 改名 {@code …ContractTest} 进入选择器）；还清它的那一刻它就是<b>红</b>的 ——
      * {@code FinishedGoodsFeedServiceImpl:431} 拿 {@code ==} 比 String 常量 holder。
-     * ⇒ 这份名单不是形式主义，29 条里至少有 1 条真的压着缺陷。
+     * 余下 28 条于同日一并改名还清，改名前先整体跑过一遍：<b>28 类 / 129 条测试 / 0 红</b>。
+     * ⇒ 这份名单不是形式主义，29 条里有 1 条真的压着缺陷。
+     *
+     * <p>⚠️ 空集会让 {@link #debtListMustNotRot()} 静默变成恒真式，所以那条测试里显式
+     * 分了「当前为空」这一支 —— 与 {@link #SELECTOR_EXCLUDED} 的处理同源。
+     *
+     * <p>⛔ 这份名单<b>只许变短</b>。它已经空了，也就是说：往里加任何一个类名都是在开倒车。
+     * 新写的源码扫描型闸直接按 {@code *ContractTest} / {@code *StartupGuardTest} 命名即可。
      */
-    private static final Set<String> KNOWN_UNCOVERED = Set.of(
-            "ApprovedToolSensitiveLoggingTest",
-            "BlockingErrorsCarryActionHintTest",
-            "BomDraftLineageGuardPublishPathTest",
-            "BomRecipeCostNullCaliberTest",
-            "BomSeasoningBindingIntegrityTest",
-            "BomWorkflowSlotOrphanTest",
-            "DeactivateRestaurantTenantsMigrationTest",
-            "DemoIdentityDisabledTest",
-            "FactoryCapabilityPackArchitectureTest",
-            "FindingNavigationTest",
-            "FormAssistantSuccessNotSelfReportedTest",
-            "MissingCountUnitSeedMigrationTest",
-            "MobileToolPromptsDoNotAskForIdsTest",
-            "PackagingLegacyPricingUnlockTest",
-            "ProductionStartEntryPointsConvergeTest",
-            "PublishBomSyncOrderTest",
-            "PurchaserWorkdeskRoleDeclarationTest",
-            "RestaurantAgentWorkflowLabelMigrationParityTest",
-            "RestaurantDepartmentPermissionMigrationTest",
-            "RestaurantTenantDetectionTest",
-            "SalesDeliveryProductFkAbsenceTest",
-            "SkuImportUnitCanonicalizationTest",
-            "ToolSimilarityGateRunsTest",
-            "TransferVoucherGeneratedOnConfirmTest",
-            "TransferVoucherVoidOnTerminationTest",
-            "UnitAuthorityConsistencyTest",
-            "UserFacingMessagesAreChineseTest",
-            "VoucherBackfillScopeTest");
+    private static final Set<String> KNOWN_UNCOVERED = Set.<String>of();
 
     /** 一个测试类只要在源码里出现 {@code "src/main}，就认定它在扫产品源码。 */
     private static final String SOURCE_SCANNING_MARKER = "\"src/main";
@@ -174,6 +159,15 @@ class GateSelectorCoverageContractTest {
     @DisplayName("⛔ 欠账名单只许变短：已还清的条目必须从名单里划掉")
     void debtListMustNotRot() throws IOException {
         Set<String> gates = sourceScanningGates();
+
+        // ⚠️ 空集上 removeIf 之后仍是空集 —— 断言会静默变成恒真式。
+        //    名单已于 2026-08-16 还清至空, 所以显式分出这一支, 让「空」是一个被写下来的
+        //    结论而不是一个碰巧通过的读数。与 exclusionsMustStillExist 同源。
+        if (KNOWN_UNCOVERED.isEmpty()) {
+            assertThat(KNOWN_UNCOVERED).as("欠账已还清至空 —— 这是应有状态").isEmpty();
+            return;
+        }
+
         Set<String> stale = new TreeSet<>(KNOWN_UNCOVERED);
         stale.removeIf(name -> gates.contains(name) && !coveredBySelector(name));
 

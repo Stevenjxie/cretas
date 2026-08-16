@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>另一个失效方式是有人改迁移时漏掉某个码 —— 权威别名表里的计数单位与名录又对不齐,
  * 正是本次要修的问题本身。</p>
  */
-class MissingCountUnitSeedMigrationTest {
+class MissingCountUnitSeedMigrationContractTest {
 
     private static final String[] SEEDED_CODES = {"roll", "slice", "portion", "crate", "pail", "item"};
     private static final String[] SEEDED_NAMES = {"卷", "片", "份", "框", "桶", "项"};

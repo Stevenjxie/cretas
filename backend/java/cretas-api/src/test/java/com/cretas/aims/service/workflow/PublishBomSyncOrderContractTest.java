@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 「改了一条规则」要问的不是「我改了几处」，而是「**发布这条链路上还有谁在判同一件事**」。
  * 这里用源码顺序把它钉死：源码位置本身就是语义。
  */
-class PublishBomSyncOrderTest {
+class PublishBomSyncOrderContractTest {
 
     private String source() throws Exception {
         return Files.readString(Path.of(

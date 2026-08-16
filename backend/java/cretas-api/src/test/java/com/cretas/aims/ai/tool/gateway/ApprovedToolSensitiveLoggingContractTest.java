@@ -7,7 +7,7 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class ApprovedToolSensitiveLoggingTest {
+class ApprovedToolSensitiveLoggingContractTest {
 
     @Test
     void approvedRestrictedToolsDoNotLogRawParametersOrUserProvidedNamesAndReasons() throws Exception {

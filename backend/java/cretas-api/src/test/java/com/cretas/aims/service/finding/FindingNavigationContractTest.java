@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 发现 → 「下一步去哪」映射的约束。不起 Spring、不连库。 */
-class FindingNavigationTest {
+class FindingNavigationContractTest {
 
     private static Finding finding(String code, String subject, int actionability) {
         return new Finding(code, "restaurant", Finding.Severity.WARNING, actionability,

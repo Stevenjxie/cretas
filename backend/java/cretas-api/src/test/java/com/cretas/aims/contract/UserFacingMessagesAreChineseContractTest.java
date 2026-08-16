@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 精确的两条模式(直接 / 三元)才是对的粒度。
  */
 @DisplayName("用户可见报错必须是中文(棘轮)")
-class UserFacingMessagesAreChineseTest {
+class UserFacingMessagesAreChineseContractTest {
 
     /**
      * 当前存量欠账。翻译一条就减一 —— <b>只许减不许增</b>。

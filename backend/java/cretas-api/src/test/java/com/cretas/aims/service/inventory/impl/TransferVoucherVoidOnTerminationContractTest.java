@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("调拨终止 → 凭证作废")
-class TransferVoucherVoidOnTerminationTest {
+class TransferVoucherVoidOnTerminationContractTest {
 
     @Mock private InternalTransferRepository transferRepository;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
