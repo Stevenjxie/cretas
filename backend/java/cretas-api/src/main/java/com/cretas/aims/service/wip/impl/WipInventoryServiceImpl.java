@@ -933,7 +933,20 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (sourceWip.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             sourceWip.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }
+        // ⚠️ 先记流水再改余额: consumptionRow 用【扣减前】状态算余额快照, 顺序不能换。
+        //    2026-08-17 F006 生产走查实测: 整条链走通后流水里只有 1 行 IN、一行 OUT 都没有,
+        //    而那一轮发生过两次领用 —— 余额扣了, 但查不到是谁领走的。
+        //    OUT 的语义早就写在 SemiFinishedInventoryTransaction 的 javadoc 里, 只是没人写。
+        //    由 SemiConsumptionWritesLedgerTest 钉住。
+        SemiFinishedInventoryTransaction outTxn = com.cretas.aims.service.wip.WipLedgerEntries
+                .consumptionRow(sourceWip, input, report, task, operatorId);
+
         wipRepo.save(sourceWip);
+        if (outTxn != null) {
+            txnRepo.save(outTxn);
+            log.info("[SP1-semi] posted OUT txn for report {} sfi={} qty=-{} balanceAfter={}",
+                    report.getId(), sourceWip.getId(), input, outTxn.getBalanceAfter());
+        }
         recordWipLineageEdge(report.getFactoryId(), sourceWip, task, input, operatorId);
     }
 
