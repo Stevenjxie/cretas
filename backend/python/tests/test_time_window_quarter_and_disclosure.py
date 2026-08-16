@@ -143,16 +143,41 @@ def test_every_approved_direct_time_phrase_is_resolvable():
     assert not unresolvable, f"这些说法已批准给用户用, 但 resolver 解不出: {unresolvable}"
 
 
-# ── ③ 回归闸：⛔ 不许顺手把「诚实回退」改掉 ────────────────────────────
-@pytest.mark.parametrize("query", ["上半年营业额", "下半年营业额"])
-def test_half_year_still_falls_back_honestly(query):
-    """裁定 ③: 上半年/下半年落「全部历史」是**已经想清楚的取舍**, ⛔ 不做。
+# ── ③ 上半年/下半年 = 日历半年（2026-08-16 推翻裁定 ③）─────────────────
+@pytest.mark.parametrize("query,expected_range,expected_label", [
+    ("上半年营业额", (datetime.date(2026, 1, 1), datetime.date(2026, 6, 30)), "上半年"),
+    ("下半年营业额", (datetime.date(2026, 7, 1), TODAY), "下半年"),
+])
+def test_half_year_is_a_calendar_half(query, expected_range, expected_label):
+    """🔴 这条**推翻了裁定 ③**（原文: 落「全部历史」是已经想清楚的取舍, ⛔ 不做）。
 
-    这条不是在守一个 bug, 是在守一个**决定** —— 防止做 ② 的时候顺手改掉它。
+    推翻理由见 `docs/decisions/2026-08-16-上半年下半年-推翻裁定3.md`, 三条:
+      ① 「回退」用词不对 —— 全部历史不是「我不知道」, 是**另一个具体答案**,
+         而且不吭声。仓里自己的 T6②「静默换窗口必须披露」正好否定它。
+      ② 「不在此猜测」的前提不成立 —— 日历半年是**定义**不是推断,
+         真正要猜的「半年」(滚动 183 天)那一支本来就已经处理了。
+      ③ 同模块里**季度已经按日历算**(上个季度 -> 4-1~6-30), 半年留成唯一例外
+         就是同一个概念两种做法。
+
+    ⚠️ 改断言**不是删断言**: 原来守的是「落全部历史」这个字面结果,
+       现在守的是**性质** —— 窗口精确等于日历半年, 且右端点夹到今天。
+       保护面比原来大(下面还有一条阴性对照)。
     """
     got_range, label = _resolve_sales_date_range(query, today=TODAY)
-    assert (got_range, label) == ((None, None), "全部历史"), (
-        f"{query!r} 的诚实回退被改掉了 -> {got_range} {label!r}")
+    assert (got_range, label) == (expected_range, expected_label)
+
+
+def test_half_year_right_edge_never_reaches_into_the_future():
+    """阴性对照: 下半年问在 8 月, ⛔ 答案不许给到 12-31（T6④ 的不变式）。"""
+    (_, end), _ = _resolve_sales_date_range("下半年营业额", today=TODAY)
+    assert end == TODAY, f"右端点 {end} 落在未来"
+
+
+def test_rolling_half_year_is_untouched():
+    """回归对照: 「半年」(不带上/下) 仍是**滚动 183 天**, ⛔ 不许顺手改成日历半年。"""
+    (start, end), label = _resolve_sales_date_range("最近半年营业额", today=TODAY)
+    assert label == "最近半年" and end == TODAY
+    assert (end - start).days == 182, f"滚动半年的天数变了: {(end - start).days}"
 
 
 # ── ④ end 不许晚于今天（作用域=历史查询）────────────────────────────────

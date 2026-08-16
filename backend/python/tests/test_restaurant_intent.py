@@ -3552,8 +3552,13 @@ def test_colloquial_numerals_and_half_year_windows():
     (hs, he), hlabel = _resolve_sales_date_range("近半年赚钱了吗", today=date(2026, 7, 7))
     assert hlabel == "最近半年" and (he - hs).days == 182
 
-    _, uh_label = _resolve_sales_date_range("上半年营收多少", today=date(2026, 7, 7))
-    assert uh_label == "全部历史"
+    # 🔴 2026-08-16 推翻裁定 ③: 上半年/下半年 = **日历半年**, ⛔ 不再落全部历史。
+    #    理由见 docs/decisions/2026-08-16-上半年下半年-推翻裁定3.md。
+    #    ⚠️ 这里紧挨着上面那条「近半年 = 滚动 183 天」—— 两条并排放着正好说明
+    #      **它们是两个不同的概念**, 而原来把日历半年也塞给了「全部历史」。
+    (uh_s, uh_e), uh_label = _resolve_sales_date_range("上半年营收多少", today=date(2026, 7, 7))
+    assert uh_label == "上半年"
+    assert (uh_s, uh_e) == (date(2026, 1, 1), date(2026, 6, 30))
 
 
 def test_uses_relative_window_covers_last_week():
