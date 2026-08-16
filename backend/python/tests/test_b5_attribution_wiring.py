@@ -145,23 +145,36 @@ def test_failure_is_fail_open_but_leaves_a_trace(monkeypatch, caplog):
     assert any("attribution failed" in r.message for r in caplog.records)
 
 
-def test_long_window_is_skipped_because_baseline_would_overlap(stub_cells, caplog):
-    """🔴 基线是 -7 天平移 —— 窗口一长, 它就与主窗口**重叠**。
+def test_long_window_now_gets_a_calendar_baseline(stub_cells):
+    """🔴 这条**推翻了它自己的上一版**（`..._is_skipped_because_baseline_would_overlap`）。
 
-    实测重叠量:
-        今天(1 天)    重叠 0 天
-        本月(16 天)   重叠 9 天 / 16
-        上半年(181天) 重叠 **174** 天 / 181
+    上一版守的是「窗口 >7 天就跳过」——那是当时的取舍：-7 天基线在长窗口上
+    会与主窗口重叠（上半年 174/181 天），硬算出来的主因是噪音假装成洞察。
 
-    ⇒ 那种「对比」的两边几乎是同一批数据, 拆出来的主因是噪音假装成洞察,
-      而且**带着一个精确的数字** —— 比不归因更糟。
+    ⇒ 现在基线按**窗口形状**挑（`attribution_baseline.pick_baseline`），
+      长窗口有了不重叠的对照期，跳过的理由就不成立了。
+      ⚠️ 断言守的是**需求**（别拿重叠的两段比），不是那条临时取舍。
     """
     long_range = (datetime.date(2026, 1, 1), datetime.date(2026, 6, 30))
+    out = _run(_Spec(date_range=long_range))
+    assert out != BASE, "上半年这种完整半年现在应当能归因"
+    assert "上一个半年" in out, out
+    # 基线必须真的传下去了 —— 上一个半年 = 2025-07-01 ~ 2025-12-31
+    ranges = {r for _m, r in stub_cells}
+    assert (datetime.date(2025, 7, 1), datetime.date(2025, 12, 31)) in ranges, ranges
+
+
+def test_baseline_that_cannot_be_picked_is_skipped_with_a_trace(caplog):
+    """挑不出不重叠的基线 ⇒ **明说跳过**并留痕，⛔ 不硬算。
+
+    ⚠️ 阴性对照：证明「跳过」这条路还在 —— 上面那条只证明长窗口能归因了，
+       两条一起才说明「该归因的归因、该跳过的跳过」。
+    """
     with caplog.at_level(logging.WARNING):
-        out = _run(_Spec(date_range=long_range))
-    assert out == BASE, "⛔ 长窗口不许硬算归因"
-    assert stub_cells == [], "⛔ 也不该白查四次库"
-    assert any("window too long" in r.message for r in caplog.records)
+        out = _run(_Spec(date_range=(datetime.date(2026, 8, 16),
+                                     datetime.date(2026, 8, 1))))   # 起止颠倒
+    assert out == BASE
+    assert any("no baseline" in r.message for r in caplog.records)
 
 
 def test_seven_day_window_still_attributes(stub_cells):

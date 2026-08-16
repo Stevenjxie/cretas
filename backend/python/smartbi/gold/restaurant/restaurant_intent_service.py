@@ -196,23 +196,18 @@ _DISH_TABLE_TOP_N = 10
 #: 归因用的基线偏移：**上周同一天**。⛔ 不是昨天。
 #: 理由见 `attribution.py` 模块头「裁定一」——餐饮周内效应极强，
 #: 跟昨天比会把「周末结束了」报成「生意变差了」，那是一条方向就错的归因。
-_ATTRIBUTION_BASELINE_DAYS = 7
-_ATTRIBUTION_BASELINE_LABEL = "上周同一天"
-
-#: 🔴 归因只支持 **窗口 ≤ 7 天**。
+#: 🔴 基线由 `attribution_baseline.pick_baseline` **按窗口形状**挑, ⛔ 不再固定 -7 天。
 #:
-#: 基线是把窗口整体往前挪 7 天。对**单日**窗口这没问题（今天 vs 上周同一天，
-#: 两个窗口不相交）；窗口一长, 基线就会**与主窗口重叠**:
+#: 原来只有「整体前挪 7 天」一条规则。对**单日**窗口没问题, 窗口一长基线就
+#: **与主窗口重叠**(实测): 本月至今 9/16 天、上季度 84/91 天、上半年 174/181 天。
+#: 重叠的「对比」两边几乎是同一批数据 —— 拆出来的主因是噪音假装成洞察,
+#: **而且带着一个精确的数字**, 比不归因更糟。
 #:
-#:     今天(1 天)    基线 08-09~08-09      重叠 **0** 天
-#:     本月(16 天)   基线 07-25~08-09      重叠 **9** 天 / 16
-#:     上半年(181天) 基线 2025-12-25~06-23 重叠 **174** 天 / 181
-#:
-#: ⚠️ 重叠 174/181 意味着「对比」的两边几乎是同一批数据 —— 拆出来的任何主因
-#:    都是噪音假装成洞察。**比不归因更糟**: 它带着一个精确的数字。
-#: ⇒ 长窗口需要的是另一套基线（上月同期 / 去年同期），那是另一条规则,
-#:   ⛔ 现在不建。够不着的窗口**明说跳过**并留痕。
-_ATTRIBUTION_MAX_WINDOW_DAYS = 7
+#: ⇒ 现在按形状挑: 单日→上周同一天 · 完整月→上个月 · 月初至今→**上月同期**
+#:   （⛔ 不是上月整月: 16 天 vs 31 天营收当然低一半, 那不是经营变化）
+#:   · 季度→上一季度 · 半年→上一个半年 · 其余→前移同样天数。
+#: 🔴 `pick_baseline` 出口前**自己断言不重叠**, 挑不出来就返回 None ——
+#:   那时归因**明说跳过**并留痕, ⛔ 不硬算。
 
 #: 哪些意图配归因。⛔ 只挂门店级经营概览 —— 归因拆的是**营收 = 单量 × 客单价**，
 #: 那是门店级的恒等式；挂到菜品级意图上会变成拿全店的拆解去解释一道菜。
@@ -252,24 +247,22 @@ async def _maybe_append_attribution(pool, factory_id: str, spec, answer_text: st
             f"(factory={factory_id} intent={getattr(spec, 'intent', None)})")
         return answer_text
 
-    span_days = (end - start).days + 1
-    if span_days > _ATTRIBUTION_MAX_WINDOW_DAYS:
-        # ⛔ 不硬算 —— 基线会与主窗口重叠, 归因就成了拿窗口跟它自己比。
-        logger.warning(
-            "[restaurant-intent] attribution skipped: window too long "
-            f"({span_days} 天 > {_ATTRIBUTION_MAX_WINDOW_DAYS}), "
-            f"-{_ATTRIBUTION_BASELINE_DAYS}天基线会与主窗口重叠 "
-            f"(factory={factory_id})")
-        return answer_text
-
     try:
         import datetime
 
         from smartbi.gold.restaurant.attribution import decompose, render
         from smartbi.gold.restaurant.generic_executor import execute_cell
 
-        delta = datetime.timedelta(days=_ATTRIBUTION_BASELINE_DAYS)
-        windows = {"now": (start, end), "base": (start - delta, end - delta)}
+        from smartbi.gold.restaurant.attribution_baseline import pick_baseline
+
+        baseline, baseline_label = pick_baseline(start, end)
+        if baseline is None:
+            # ⛔ 挑不出不重叠的基线就**不归因** —— 硬算出来的主因是噪音假装成洞察。
+            logger.warning(
+                f"[restaurant-intent] attribution skipped: no baseline "
+                f"({baseline_label}) window={start}~{end} factory={factory_id}")
+            return answer_text
+        windows = {"now": (start, end), "base": baseline}
         vals = {}
         async with pool.acquire() as conn:
             await conn.execute(
@@ -290,7 +283,7 @@ async def _maybe_append_attribution(pool, factory_id: str, spec, answer_text: st
             revenue_now=vals.get("revenue_now"), orders_now=vals.get("orders_now"),
             revenue_base=vals.get("revenue_base"), orders_base=vals.get("orders_base"),
         )
-        block = render(d, base_label=_ATTRIBUTION_BASELINE_LABEL)
+        block = render(d, base_label=baseline_label)
     except Exception as e:                                   # noqa: BLE001 — fail-open
         logger.warning(f"[restaurant-intent] attribution failed: {e}")
         return answer_text
