@@ -74,6 +74,12 @@ jest.mock('@react-navigation/native', () => ({
     params: {},
   }),
   useFocusEffect: jest.fn(),
+  // 2026-08-16: 补 useNavigationState。屏幕后来用它算 canGoBack, 而这份局部 mock
+  // 【覆盖】了 setup.ts 的全局 mock, 所以必须在这里也补, 否则渲染期抛
+  //   "Couldn't get the navigation state. Is your component inside a navigator?"
+  // 返回单路由栈 = 「当前在栈底」, canGoBack 为 false, 不凭空造出返回按钮。
+  useNavigationState: (selector: (state: unknown) => unknown) =>
+    selector({ index: 0, routes: [{ key: 'test-0', name: 'Test' }] }),
 }));
 
 const mockedProcessingApi = processingApiClient as jest.Mocked<typeof processingApiClient>;
