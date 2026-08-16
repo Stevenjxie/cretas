@@ -1772,6 +1772,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant-full-chain-sop.html",
         ),
         (
+            "打烊日结的菜品表显示哪些列？缺成本卡和成本高于营收的菜怎样处理？",
+            "restaurant",
+            _RESTAURANT_DAILY_PRESENTATION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "本季度怎样按自然季度计算？追问按钮怎样保留当前时间窗？我说别用表格时会怎样？",
+            "restaurant",
+            _RESTAURANT_DAILY_PRESENTATION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
             "看 2026年7月1日到7月15日全部門店营收，给我表格",
             "restaurant",
             _RESTAURANT_QUERY_CONTRACT_ANSWER,

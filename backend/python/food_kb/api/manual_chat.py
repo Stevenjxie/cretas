@@ -2334,14 +2334,18 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     elif (
         is_restaurant_request
+        and _needs_restaurant_daily_presentation_guard(request.question)
+    ):
+        # This reviewed contract intentionally overlaps with the older broad
+        # progress guard on "缺成本卡" and "追问按钮".  Resolve the more
+        # specific daily/time/output question first so those shared terms
+        # cannot steal the route and return an unrelated data-progress answer.
+        guard_answer = _RESTAURANT_DAILY_PRESENTATION_ANSWER
+    elif (
+        is_restaurant_request
         and _needs_restaurant_data_progress_followup_guard(request.question)
     ):
         guard_answer = _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER
-    elif (
-        is_restaurant_request
-        and _needs_restaurant_daily_presentation_guard(request.question)
-    ):
-        guard_answer = _RESTAURANT_DAILY_PRESENTATION_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_default_time_provenance_guard(request.question)
