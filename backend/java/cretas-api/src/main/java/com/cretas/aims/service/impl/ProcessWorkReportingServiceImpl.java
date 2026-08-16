@@ -53,7 +53,11 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         report.setApprovedBy(approvedBy);
         report.setApprovedAt(LocalDateTime.now());
         reportRepository.save(report);
-        postWipForApprovedReport(factoryId, report, approvedBy);
+        // 2026-08-16: 审批不再过账 —— 库存在【提交】那一刻已同事务进账
+        // (见 YieldReportServiceImpl.submitReport)。
+        // ⛔ 不要在这里恢复过账。postApprovedOutput 的 wipPosted 幂等标记会让多加一处调用
+        //    【不报错、不双重入库】, 于是它只是安静地让「审批」重新看起来像入库时机,
+        //    下一个人就会据此推理 —— 幂等让这个错误无声。由 RealtimeWipPostingContractTest 钉住。
         return Map.of("reportId", reportId, "status", "APPROVED");
     }
 
@@ -95,7 +99,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
             report.setApprovedBy(approvedBy);
             report.setApprovedAt(LocalDateTime.now());
             reportRepository.save(report);
-            postWipForApprovedReport(factoryId, report, approvedBy);
+            // 2026-08-16: 同 approveReport —— 审批不再过账, 库存在提交时已进账。
             approved.add(Map.of("reportId", reportId, "status", "APPROVED"));
         }
 
@@ -240,29 +244,12 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .orElse(null);
     }
 
-    private void postWipForApprovedReport(String factoryId, ProductionReport report, Long operatorId) {
-        if (report.getWorkProcessTaskId() == null) {
-            return;
-        }
-        if (!isApprovalWipPostingReport(report)) {
-            log.info("Skip WIP posting for report {}: no approval posting marker", report.getId());
-            return;
-        }
-        WorkProcessTask task = workProcessTaskRepository
-                .findByFactoryIdAndId(factoryId, report.getWorkProcessTaskId())
-                .orElse(null);
-        if (task == null) {
-            log.warn("Skip WIP posting for report {}: workProcessTask {} not found",
-                    report.getId(), report.getWorkProcessTaskId());
-            return;
-        }
-        wipInventoryService.postApprovedOutput(factoryId, report, task, operatorId);
-    }
-
-    private boolean isApprovalWipPostingReport(ProductionReport report) {
-        Map<String, Object> fields = report.getCustomFields();
-        return fields != null && "APPROVAL".equals(fields.get("wipPostingMode"));
-    }
+    // 2026-08-16 删除 postWipForApprovedReport / isApprovalWipPostingReport:
+    // 过账已移到报工提交那一刻 (YieldReportServiceImpl.submitReport), 同事务完成
+    // 「扣上道料 + 产出进 SFI」。此前「领用即时扣、产出等审批」的不对称造成
+    // 下一道工序永远领不到料 —— 2026-08-16 F006 受控走查实测。
+    //
+    // ⛔ 不要在本类恢复过账, 见 approveReport 处的说明。
 
     private Map<String, Object> reportToMap(
             String factoryId,
