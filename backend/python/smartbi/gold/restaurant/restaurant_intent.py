@@ -7221,7 +7221,13 @@ async def _parse_continuation(
     # `query` 可能是按钮发来的**合成句**(`<片段>+original_query`) —— 直接拼接
     # 会把 original_query 重复一遍(见 `_button_answer_fragment`)。手打的自由
     # 文本不受影响, 该辅助函数只在确实是 <片段>+original_query 时才还原。
-    concatenated = f"{original_query} {_button_answer_fragment(original_query, query)}".strip()
+    #
+    # ⚠️ 算成**一个局部**再用, ⛔ 不在每个需要它的地方各内联一次 ——
+    # 本函数下面还有两处 `_is_pure_store_scope_answer(...)` 要用同一个还原值,
+    # 内联会让它们悄悄漏掉(第一版就漏了: 门店按钮的合成句在那两处判为 False,
+    # 于是落回 T3)。由 `test_button_answer_roundtrip` 里的 AST 闸钉住。
+    answer_fragment = _button_answer_fragment(original_query, query)
+    concatenated = f"{original_query} {answer_fragment}".strip()
 
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
@@ -7349,7 +7355,7 @@ async def _parse_continuation(
     ):
         if (
             "store" in _slots_of_clarification(clarification_question)
-            and _is_pure_store_scope_answer(query)
+            and _is_pure_store_scope_answer(answer_fragment)
         ):
             # Store-scope buttons are syntactically trailing answers, while
             # the dish extractor's trusted grammar accepts scope prefixes.
@@ -7472,7 +7478,7 @@ async def _parse_continuation(
 
     if (
         "store" in _slots_of_clarification(clarification_question)
-        and _is_pure_store_scope_answer(query)
+        and _is_pure_store_scope_answer(answer_fragment)
     ):
         explicit_comparison_spec = _explicit_sales_period_comparison_spec(
             concatenated,

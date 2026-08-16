@@ -213,3 +213,51 @@ def test_shorter_or_equal_length_answer_is_never_reduced():
     """`len(a) > len(q)` 这一半准入是承重的: 答案不比 original_query 长,
     不可能是 `<片段>+original_query` 的形状, 不许尝试还原。"""
     assert _button_answer_fragment(SEED, "短") == "短"
+
+
+# ══════════════════════════════════════════════════════════════════
+# `_parse_continuation` 内部: 每个消费点都得用还原后的片段
+# ══════════════════════════════════════════════════════════════════
+def test_pure_store_scope_predicate_needs_the_reduced_fragment():
+    """先证明「用原始 query」和「用还原后的片段」在门店按钮上**结论相反**。
+
+    没有这一条, 下面那道 AST 闸只是在守一个名字。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _is_pure_store_scope_answer,
+    )
+
+    composed = f"全部门店{SEED}"                      # 门店按钮现在发的形状
+    assert _is_pure_store_scope_answer(composed) is False, "前置事实变了"
+    fragment = _button_answer_fragment(SEED, composed)
+    assert _is_pure_store_scope_answer(fragment) is True, fragment
+
+
+def test_parse_continuation_feeds_every_store_check_the_fragment():
+    """🔴 `_parse_continuation` 里每一处 `_is_pure_store_scope_answer(...)`
+    都必须收到**还原后的片段**, ⛔ 不是原始 `query`。
+
+    ⚠️ 用 **AST** 数实参, ⛔ 不用字符串计数 —— 本仓栽过三次
+    (数注解不剥注释 / grep 数进 docstring / 计数打中了不相干的表达式)。
+
+    ⚠️ 这两个调用点在 fallback 分支里, **没有任何行为测试到得了它们**
+    (实测: 把它们改回 `query`, 231 条相关测试全绿)。所以这道结构闸
+    是它们**唯一**的守卫 —— 少了它, 改回去不会有任何东西变红。
+    """
+    import ast
+    import inspect
+
+    import smartbi.gold.restaurant.restaurant_intent as RI
+
+    tree = ast.parse(inspect.getsource(RI._parse_continuation))
+    args = [
+        node.args[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_is_pure_store_scope_answer"
+        and node.args
+    ]
+    assert args, "一个调用点都没找到 —— 解析类的闸「什么都没找到」最像「一切正常」"
+    bad = [a.id for a in args if not (isinstance(a, ast.Name) and a.id == "answer_fragment")]
+    assert not bad, f"{len(bad)}/{len(args)} 处仍在用原始 query: {bad}"
