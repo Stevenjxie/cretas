@@ -141,3 +141,105 @@ def test_the_window_must_be_the_one_the_user_clicked():
     """
     assert _resolve_sales_date_range(f"上上上个月{SEED}")[1] == "上上个月"   # 前置事实
     assert _compose_clarification_question("上上上个月", SEED, kind="time") == "上上上个月"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 接线：`_clarification_followups` 真的用上了合成函数
+# ══════════════════════════════════════════════════════════════════
+from smartbi.gold.restaurant.restaurant_intent import (          # noqa: E402
+    STORE_SCOPE_CLARIFICATION_QUESTION,
+    TIME_CLARIFICATION_QUESTION,
+    RestaurantQuerySpec,
+)
+from smartbi.gold.restaurant.restaurant_intent_service import (  # noqa: E402
+    _SWITCHABLE_WINDOWS,
+    _clarification_followups,
+)
+
+
+def _spec(**overrides) -> RestaurantQuerySpec:
+    """⚠️ 用**真的** RestaurantQuerySpec，⛔ 不用 SimpleNamespace ——
+    桩的自由度会让我构造出真实那侧永远不产出的形状（本仓形态 B‴）。
+
+    🔴 它有 **12 个必填字段**，⛔ 不能只传 `clarification_question`
+    （实测 `TypeError`）。下面这份 defaults 抄自
+    `tests/test_restaurant_intent_service.py:41` —— 同一个被测模块的既有 helper，
+    ⛔ 不要自己另编一套默认值。
+    """
+    defaults = dict(
+        intent="RESTAURANT_OPS_SALES_SUMMARY",
+        domain="restaurant",
+        date_range=(None, None),
+        window_label="全部历史",
+        relative_window=False,
+        metrics=(),
+        wants_margin=False,
+        asks_profitability=False,
+        dimensions=(),
+        comparison=None,
+        confidence=0.9,
+        source_tier="keyword",
+        clarification_needed=True,
+        clarification_question=None,
+    )
+    defaults.update(overrides)
+    return RestaurantQuerySpec(**defaults)
+
+
+def test_time_clarification_buttons_carry_the_whole_question():
+    spec = _spec(clarification_question=TIME_CLARIFICATION_QUESTION)
+    got = _clarification_followups(spec, SEED)
+    assert [b["question"] for b in got] == [f"{w}{SEED}" for w in _SWITCHABLE_WINDOWS]
+    # label 仍是短词 —— 按钮上显示的东西⛔ 不变
+    assert [b["label"] for b in got] == list(_SWITCHABLE_WINDOWS)
+
+
+def test_store_clarification_buttons_carry_the_whole_question():
+    spec = _spec(clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+                 store_options=list(STORE_NAMES))
+    got = _clarification_followups(spec, SEED)
+    assert got[0]["question"] == f"全部门店{SEED}"
+    assert got[1]["question"] == f"{STORE_NAMES[0]}{SEED}"
+    assert got[0]["label"] == "全部门店"
+
+
+def test_no_bare_window_word_is_ever_sent_as_a_question():
+    """🔴 承重：这是缺陷本身。任何按钮的 `question` 都不许**等于**一个窗口词。"""
+    spec = _spec(clarification_question=TIME_CLARIFICATION_QUESTION)
+    for b in _clarification_followups(spec, SEED):
+        assert b["question"] not in _SWITCHABLE_WINDOWS, b
+
+
+def test_empty_seed_still_produces_buttons():
+    """阳性对照 + 退化路径：seed 为空时**仍然出按钮**（发光秃秃的词），
+    ⛔ 不是「一个按钮都没有」—— 那会把澄清 UI 整个弄没。"""
+    spec = _spec(clarification_question=TIME_CLARIFICATION_QUESTION)
+    got = _clarification_followups(spec, "")
+    assert [b["question"] for b in got] == list(_SWITCHABLE_WINDOWS)
+
+
+def test_llm_authored_options_are_untouched():
+    """⛔ 不动第三支：自撰选项是「先看营收」这种任意短语，
+    不存在自足性概念，前置它没有意义。"""
+    spec = _spec(clarification_options=["先看营收", "先看毛利"])
+    got = _clarification_followups(spec, SEED)
+    assert [b["question"] for b in got] == ["先看营收", "先看毛利"]
+
+
+def test_the_window_list_has_exactly_one_definition():
+    """形态 D：`_SWITCHABLE_WINDOWS` 与澄清按钮的窗口清单原本是**同一份字面量抄两遍**
+    （`:1006` 的注释自己写着「两处一漂」，而没有闸钉住）。
+
+    抽成一份之后这条断言由构造成立 —— 它守的是**别再抄回去**。
+    """
+    import ast
+    import inspect
+
+    import smartbi.gold.restaurant.restaurant_intent_service as svc
+
+    src = inspect.getsource(svc._clarification_followups)
+    tree = ast.parse(inspect.cleandoc(src))
+    literals = {n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert not (set(_SWITCHABLE_WINDOWS) & literals), (
+        f"窗口词又被抄进函数体了: {set(_SWITCHABLE_WINDOWS) & literals}")

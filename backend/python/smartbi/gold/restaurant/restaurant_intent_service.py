@@ -1288,21 +1288,33 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     return combined[:4]
 
 
-def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
-    """Render LLM-selected choices after they passed factual allowlists."""
+def _clarification_followups(
+    spec: RestaurantQuerySpec, seed: str = "",
+) -> List[Dict[str, str]]:
+    """Render LLM-selected choices after they passed factual allowlists.
+
+    `question` 是**合成的完整问句**, `label` 仍是短词。
+    ⚠️ 两者曾经相同 —— 那让「本月」成了全系统最高频的计划缓存键,
+    而它的含义完全取决于上一轮(生产实测串话题)。见
+    `_compose_clarification_question`。
+    """
     if spec.clarification_question == TIME_CLARIFICATION_QUESTION:
         return [
-            {"label": window, "question": window}
-            for window in ("本月", "上个月", "最近7天", "最近30天")
+            {"label": window,
+             "question": _compose_clarification_question(window, seed, kind="time")}
+            for window in _SWITCHABLE_WINDOWS       # ⛔ 不再抄一份字面量
         ]
     if spec.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
-        choices = [{"label": "全部门店", "question": "全部门店"}]
-        choices.extend(
-            {"label": name[:12], "question": name}
-            for name in spec.store_options[:3]
-        )
-        return choices
+        names = tuple(spec.store_options)
+        scopes = ["全部门店", *list(spec.store_options[:3])]
+        return [
+            {"label": scope[:12],
+             "question": _compose_clarification_question(
+                 scope, seed, kind="store", store_names=names)}
+            for scope in scopes
+        ]
     if spec.clarification_options:
+        # ⛔ 自撰选项不合成 —— 「先看营收」这种短语没有自足性可言。
         return [
             {"label": option[:12], "question": option}
             for option in spec.clarification_options[:6]
@@ -1723,7 +1735,7 @@ async def tiered_answer(
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
-            followups = _clarification_followups(spec)
+            followups = _clarification_followups(spec, query)
             if followups:
                 clarification_result["suggested_followups"] = followups
             if action_warning:
