@@ -49,6 +49,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _SERVICE_DISPATCHED_WINDOW_AWARE,
+    _resolve_sales_date_range,          # ← 新增
     _resolve_sales_query_spec,
     demo_data_factory_for_code,
     dish_catalogue_scope,
@@ -1038,6 +1039,59 @@ def _split_time_scope(seed: str) -> Tuple[str, str]:
         if text.startswith(prefix):
             return prefix, text[len(prefix):].strip()
     return "", text
+
+
+def _compose_clarification_question(
+    prefix: str,
+    seed: Optional[str],
+    *,
+    kind: str,
+    store_names: Sequence[str] = (),
+) -> str:
+    """澄清按钮的 `question`: 把用户点的那一段**前置**到原问句上。
+
+    ## 为什么要合成
+
+    发光秃秃的「本月」有两个后果, 都在生产上实测到了:
+
+    1. **计划缓存串话题** —— 缓存键是 `(factory_id, 归一化问句, 版本)`, 不含会话。
+       「本月」这种串的含义完全取决于上一轮, 而它是全系统最高频的键。
+    2. **飞轮语料没价值** —— 记下来的是「本月」「上个月」这几个无意义的串,
+       而语料的全部价值在于「完整、自足、下次能直接问的句子」。
+
+    ## 为什么**前置**是安全的
+
+    走到时间澄清的硬条件就是「LLM 没认出时间词 **且** 确定性层解不出窗口」
+    ⇒ seed 里按定义没有时间段要替换, ⛔ 不需要 `_split_time_scope` 定位。
+
+    ⚠️ 即使两层都漏了某个时间词(实测 `最近损耗怎么样` 在确定性层就是「全部历史」),
+    合成句解出的仍是**用户点的那个窗口**:
+    `本月最近损耗怎么样` → 「本月」。两条路都不产生坏结果。
+
+    ## 准入(任一不过就退回 `prefix`, ⛔ 不发一个更坏的串)
+
+    1. seed 非空 —— ⚠️ **不能靠下面那条兜**: seed 为空时合成句就是 `prefix`,
+       而 `prefix` 自己解得出窗口, 自足性检查会放行一个不是完整句子的串。
+    2. 合成句自足 —— 🔴 **按种类查不同的东西**:
+       - time: 解得出窗口
+       - store: 门店前缀能被 `_split_store_scope` 原样切回来
+
+       ⛔ 不要拿「解得出窗口」去查门店 —— `全部门店米饭的销量是多少` 的窗口
+       是「全部历史」, 那样**每一个**门店合成句都会退回光秃秃的词。
+    """
+    head = (prefix or "").strip()
+    body = (seed or "").strip()
+    if not head or not body:                       # 准入 1
+        return prefix
+    composed = f"{head}{body}"
+    if kind == "time":
+        ok = _resolve_sales_date_range(composed)[1] == head
+    elif kind == "store":
+        ok = _split_store_scope(composed, store_names)[0] == head
+    else:
+        # ⛔ 不兜底 —— 拼错的 kind 静默退回旧行为, 长得和「准入没过」一模一样。
+        raise ValueError(f"unknown clarification button kind: {kind!r}")
+    return composed if ok else prefix
 
 
 def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
