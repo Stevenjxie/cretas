@@ -600,38 +600,11 @@ const businessRoutes: RouteRecordRaw[] = [
               redirect: (to) => ({ path: '/warehouse/materials', query: { ...to.query, view: 'receiving' } }),
               meta: { requiresAuth: true, title: '仓储待收货与批次', module: 'warehouse', hidden: true }
             },
-          // Sprint2-J P-FIN-1 follow-up (Chat 6 Vue): 财务审核 PC 入口
-          // 后端 approveOrder 触发条件 (priceAlert OR totalAmount > 阈值) 满足时
-          // 自动进 PENDING_FINANCE_REVIEW, 财务在此审核. RBAC 由 detail.vue v-if + 后端
-          // @RequirePermission("finance:read_write") 双层保护. module: 'finance' 让
-          // finance_manager 可见 (web-admin 当前 matrix 把 finance_manager 的 finance
-          // 设为 'none', 上线后需配套调整 matrix 或 backend pull permissions).
-          {
-            // Issue #736 fix (2026-05-17): 显式 roles 白名单, 防 viewer 凭 finance:r 进入.
-            // 后端 PurchaseController.listOrdersByStatus 也加了 procurement:finance_review:view
-            // 双层防御 (前端路由 + 后端 API 都拒绝 viewer).
-            path: 'finance-review',
-            name: 'PurchaseOrderFinanceReviewList',
-            component: () => import('@/views/procurement/finance-review/list.vue'),
-            meta: {
-              requiresAuth: true,
-              title: '财务待审采购单',
-              module: 'finance',
-              roles: financeReviewRoles
-            }
-          },
-          {
-            path: 'finance-review/:id',
-            name: 'PurchaseOrderFinanceReviewDetail',
-            component: () => import('@/views/procurement/finance-review/detail.vue'),
-            meta: {
-              requiresAuth: true,
-              title: '财务审核详情',
-              module: 'finance',
-              hidden: true,
-              roles: financeReviewRoles
-            }
-          },
+          // 2026-08-16 移除: 采购财审 PC 入口 (/procurement/finance-review)。
+          // 它查 PENDING_FINANCE_REVIEW, 而 OA 投影从不经过这个状态 —— prod 全库 0 行,
+          // 页面恒空; 页内「通过/驳回」打的两个端点自 #1557 起无条件抛 410。
+          // 采购的财务节点现在走同一条 OA 流程, 入口是菜单里的「待我审批」(/workflow/pending)。
+          // ⛔ 销售侧 /sales/finance-review 是另一条【仍然活着】的路, 不受影响。
           // P-NUCLEAR-1 (28-Backlog #30): 核价单 询价 → 核价 → 采购 pipeline
           {
             path: 'inquiry-quotes',

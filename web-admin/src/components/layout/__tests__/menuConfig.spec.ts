@@ -60,13 +60,14 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     return findGroup(groupPath)?.children?.filter((c) => c.groupLabel).map((c) => c.groupLabel!) ?? [];
   }
 
-  it('keeps finance review queues discoverable under business modules and finance', () => {
-    expect(childPaths('/procurement')).toContain('/procurement/finance-review');
+  it('keeps the sales finance review queue discoverable, and no longer offers the dead purchase one', () => {
     expect(childPaths('/sales')).toContain('/sales/finance-review');
     expect(childPaths('/finance')).toEqual(expect.arrayContaining([
       '/sales/finance-review',
-      '/procurement/finance-review',
     ]));
+    // 2026-08-16: 采购那条恒空且按钮打 410, 已整条移除; 阴性对照钉住它别回来。
+    expect(childPaths('/procurement')).not.toContain('/procurement/finance-review');
+    expect(childPaths('/finance')).not.toContain('/procurement/finance-review');
   });
 
   it('keeps account and department management under HR, with workflow setup in system', () => {
@@ -211,15 +212,17 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]));
   });
 
-  it('groups procurement into execution, approval, and supplier-price sections', () => {
+  it('groups procurement into execution and supplier-price sections', () => {
+    // 2026-08-16: 「采购审批」这一组的唯一成员是 /procurement/finance-review,
+    // 它恒空且按钮打 410, 已整条移除 —— 组随之消失, 不是漏配。
+    // 采购的审批入口现在是菜单里的「待我审批」(/workflow/pending)。
     expect(childGroupLabels('/procurement')).toEqual([
       '采购执行',
-      '采购审批',
       '供应商与价格',
     ]);
+    expect(childGroupLabels('/procurement')).not.toContain('采购审批');
     expect(childPaths('/procurement')).toEqual([
       '/procurement/orders',
-      '/procurement/finance-review',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);
@@ -255,7 +258,6 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childPaths('/finance')).toEqual([
       '/sales/finance-review',
-      '/procurement/finance-review',
       '/finance/adjustments',
       '/finance/costs',
       '/finance/three-statements',

@@ -50,7 +50,6 @@ export const financeManagerMenu: MenuItem[] = [
   { path: '/finance/invoices?status=REQUESTED', title: '开票审核', icon: 'Tickets', module: 'finance' },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance' },
   // Smoke v2 Bug #2: 财务审核采购单 — finance_manager 是该列表的主审核人
-  { path: '/procurement/finance-review', title: '财务待审采购单', icon: 'ShoppingCart', module: 'finance' },
   // Sprint4-H F-AR-1: 财务审核销售单 — finance_manager 复核成本/利润/BOM 标准
   { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' }
 ];
@@ -181,7 +180,6 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement', groupLabel: '采购执行' },
-      { path: '/procurement/finance-review', title: '财务待审采购单', icon: '', module: 'finance', groupLabel: '采购审批' },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement', groupLabel: '供应商与价格' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]
@@ -204,7 +202,8 @@ const rawMenuConfig: MenuItem[] = [
       // #739/#746: 销售方向付款申请 (退款/返利/销售费用) — roles 镜像 router/index.ts SalesPaymentRequests
       { path: '/sales/payment-requests', title: '销售付款申请', icon: '', module: 'sales',
         roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier'] },
-      // Sprint4-H F-AR-1: 销售单财务审核 (镜像 /procurement/finance-review).
+      // Sprint4-H F-AR-1: 销售单财务审核。(采购侧那条镜像已于 2026-08-16 移除 ——
+      // 它恒空且按钮打 410; 销售侧这条仍然活着。)
       // module:'finance' 让 finance_manager 在 /sales 组下也可见. 销售员可看但
       // 后端 @RequirePermission("finance:read_write") 限制操作权.
       { path: '/sales/finance-review', title: '财务待审销售单', icon: '', module: 'finance', groupLabel: '销售审批' },
@@ -244,7 +243,6 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/sales/finance-review', title: '待审销售单', icon: '', module: 'finance', groupLabel: '审核队列' },
-      { path: '/procurement/finance-review', title: '待审采购单', icon: '', module: 'finance' },
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance' },
       { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance', groupLabel: '财务核算' },
       { path: '/finance/three-statements', title: '财务报表', icon: '', module: 'finance' },
