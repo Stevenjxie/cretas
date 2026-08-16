@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  B-1 载体验收页 —— 用**真的** marked + **真的** style.css 渲染 prod 的原文。
+
+  ⛔ 不是「我照 App.vue 重写一遍渲染」——那样量的是我重写的东西(形态 D)。
+  这里逐条对齐 App.vue:308 的真实调用:
+      marked.parse(markdown, { breaks: true, gfm: true })
+  样式直接 <link> 到 src/style.css, class 用 markdown-body(App.vue:93)。
+
+  唯一的差别是没有 Vue 外壳与 DOMPurify.sanitize —— 前者不参与 markdown 解析,
+  后者只做净化(不会改表格结构)。
+-->
+<meta charset="utf-8">
+<title>B-1 · 日结表格在 mobile-rest-ai 载体上的样子</title>
+<link rel="stylesheet" href="/src/style.css">
+<style>
+  body { margin: 0; background: #f5f6f8; }
+  .frame { max-width: 420px; margin: 16px auto; background: #fff; padding: 16px;
+           border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .label { font: 12px/1.6 system-ui; color: #888; max-width: 420px; margin: 8px auto; }
+</style>
+<div class="label">▼ 420px 宽（手机常见宽度）· 真 marked + 真 style.css</div>
+<div class="frame"><div class="markdown-body" id="out">加载中…</div></div>
+<script type="module">
+  import { marked } from '/node_modules/marked/lib/marked.esm.js';
+  // ⚠️ vite base 是 /mobile-ai/rest/, 绝对路径会打到错的根上(第一版 404)
+  const md = await (await fetch('./prod-answer.md')).text();
+  // 逐字对齐 App.vue:308-312
+  document.getElementById('out').innerHTML = marked.parse(md, { breaks: true, gfm: true });
+  // 把渲染结果的结构暴露出来, 供断言读 —— ⛔ 不靠肉眼数
+  const root = document.getElementById('out');
+  window.__probe = {
+    tables: root.querySelectorAll('table').length,
+    headerCells: [...root.querySelectorAll('table th')].map(e => e.textContent.trim()),
+    bodyRows: root.querySelectorAll('table tbody tr').length,
+    topLevelBlocks: root.children.length,
+    rawPipeLeak: /\|\s*菜品\s*\|/.test(root.textContent),
+  };
+</script>

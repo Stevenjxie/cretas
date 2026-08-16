@@ -138,6 +138,7 @@ def render(data: Dict[str, Any], *, top_n: int = 10) -> str:
         lines.append(_row([str(d.get("name") or "—"), _money(float(d.get("revenue") or 0.0)), cost, profit]))
 
     shown = list(rows)
+    qty_leader_note = ""
     if qty_leader is not None:
         if qty_leader.get("hasCost"):
             cost = _money(float(qty_leader["totalCost"]))
@@ -145,17 +146,24 @@ def render(data: Dict[str, Any], *, top_n: int = 10) -> str:
         else:
             cost = profit = NO_COST_CARD
         qty = float(qty_leader.get("qty") or 0.0)
+        # 🔴 菜名格里**只放菜名**。
+        #    第一版写的是 f"{name}（份数最多，{qty:g} 份）" —— 在 420px 宽的手机上
+        #    实测把菜品列撑到 **212px / 全表 55%**, 于是最右边的**毛利列被裁到屏外**,
+        #    要横滑才看得到。而毛利正是这张表的全部意义。
+        #    ⚠️ 这个缺陷 DOM 里看不出来(四列齐全)、闸 10/10、CI 全绿、prod 真跑通过 ——
+        #      只有**渲染出来看一眼**才发现。份数注记挪到下面的披露里。
         lines.append(_row([
-            f"{qty_leader.get('name')}（份数最多，{qty:g} 份）",
+            str(qty_leader.get("name") or "—"),
             _money(float(qty_leader.get("revenue") or 0.0)), cost, profit,
         ]))
         shown.append(qty_leader)
+        qty_leader_note = f"{qty_leader.get('name')}（{qty:g} 份）"
 
     gap = explain_gap(data, shown)
     notes = []
     if qty_leader is not None:
         notes.append(
-            "ℹ️ 最后一行是按**份数**理解的「卖得最多」——"
+            f"ℹ️ 最后一行 {qty_leader_note} 是按**份数**理解的「卖得最多」——"
             "这是我的推断，你要是指营收最高，那就是表里第一行。"
         )
     if gap["noCardCount"]:
