@@ -1892,6 +1892,34 @@ def _budgeted_attempt_timeout(
     )
 
 
+#: 已经为「key 是空的」告过警的账号 —— 每个进程每个账号只喊一次。
+#: ⛔ 不是每次调用都喊: 那会在链上有一个空 key 时刷屏, 而刷屏的告警最终会被静音
+#:    (形态 E: 完备性与存活是矛盾的)。
+_EMPTY_KEY_WARNED: set = set()
+
+
+def _note_empty_key(tag: str, account: str, errors: list) -> None:
+    """在册账号的 key 是空的 —— 这是**配置错误**, ⛔ 不是「这条路今天不可用」。
+
+    🔴 2026-08-16 实测: 这两行原本是 `logger.debug(...)` + 直接 `continue`,
+    于是两件事同时发生:
+      ① debug 级在生产上**看不见**
+      ② **不进 `errors`** ⇒ 最终那句 "All providers exhausted for chat: "
+         后面**什么都没有** —— 连"因为没 key"都不说
+    结果是 `LLM_DEEPSEEK_API_KEY` 空了整整三周没人发现, 而它是 9-13 悬崖的
+    唯一接班人。⇒ 静默是这个洞能活下来的**唯一原因**。
+
+    ⚠️ 每账号只喊一次: 链上有一个空 key 时, 每次问答都会走到这里。
+    """
+    if account not in _EMPTY_KEY_WARNED:
+        _EMPTY_KEY_WARNED.add(account)
+        logger.warning(
+            f"[{tag}] {account}: **API key 为空**, 该账号在链上但每次都会被跳过。"
+            f" ⇒ 查它的环境变量是不是存在但值为空(`存在` 不等于 `有值`)。"
+            f" 本进程内该账号只提示这一次。"
+        )
+    errors.append(f"{account}: empty_api_key")
+
 async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
@@ -1985,7 +2013,7 @@ async def call_chain(
 
         base_url, api_key = _provider_config(account)
         if not api_key:
-            logger.debug(f"[llm_router] {account}: no API key, skip")
+            _note_empty_key("llm_router", account, errors)
             continue
 
         req_payload = _apply_slot_params(
@@ -2207,7 +2235,7 @@ async def call_chain_stream(
 
         base_url, api_key = _provider_config(account)
         if not api_key:
-            logger.debug(f"[llm_router_stream] {account}: no API key, skip")
+            _note_empty_key("llm_router_stream", account, errors)
             continue
 
         req_payload = _apply_slot_params(
