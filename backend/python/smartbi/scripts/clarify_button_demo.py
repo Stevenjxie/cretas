@@ -13,23 +13,36 @@
 """
 import sys
 
+from smartbi.gold.restaurant.restaurant_intent_service import (
+    _SWITCHABLE_WINDOWS,
+    _compose_clarification_question,
+)
 from smartbi.gold.restaurant.restaurant_ops_router import _resolve_sales_date_range
 
-TIME_BUTTONS = ("本月", "上个月", "最近7天", "最近30天")
+# ⛔ 不再自己抄一份窗口清单, 也不再自己实现一遍合成 ——
+#    第一版两样都抄了, 而且合成用的是**被否掉的第一版判据**
+#    (`!= "全部历史"`, 它会把每一个门店合成句判成不自足)。
+#    一个演示脚本与产品说的不是一件事, 比没有演示更糟。
+TIME_BUTTONS = _SWITCHABLE_WINDOWS
 
 
 def compose(window: str, seed: str) -> str:
-    """按钮合成：前置。
+    """按钮合成 —— **直接调产品那一份**。
 
     ⚠️ 前置之所以安全，是因为**触发时间澄清的硬条件**就是
     「LLM 没认出时间词 且 确定性层解不出窗口」——
     走到这一步的 seed 按定义没有时间段可替换。
     """
-    return f"{window}{seed}"
+    return _compose_clarification_question(window, seed, kind="time")
 
 
 def self_sufficient(sentence: str) -> bool:
-    """自足 = 单独拿去解析解得出窗口。"""
+    """自足 = 单独拿去解析解得出窗口。
+
+    ⚠️ 这是**演示用**的宽判据。产品那条准入更严: 解出的窗口必须**等于**
+    用户点的那个 (见 `_compose_clarification_question`) —— 「解出了某个窗口」
+    会放行「点本月却解成上个月」。
+    """
     return _resolve_sales_date_range(sentence)[1] != "全部历史"
 
 
