@@ -38,6 +38,12 @@ import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
 import { useCanViewPrice } from '../../store/canViewPriceStore';
 import { TouchableRipple } from 'react-native-paper';
+import {
+  resolveInitialStepIndex,
+  resolveStepPhase,
+  type StepPhase,
+  type StepTaskLike,
+} from './yieldStepResolution';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -90,7 +96,7 @@ function maybeShowSemiOutputGap(warning: string | undefined): void {
 }
 
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
-type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
+// StepPhase 从 ./yieldStepResolution 导入 —— ⛔ 不要在这里再定义一份, 两份必然漂。
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
 
 type EvidenceMediaKind = 'image' | 'video';
@@ -667,29 +673,26 @@ const YieldStepReportScreen: React.FC = () => {
       if (yd) setYieldData(yd);
 
       // 三阶段 (单元2): operator 自动分配模式锁定后台分配的本道;
-      // 普通模式首次加载自动跳到第一道未完成 (phase != COMPLETED) 的道.
+      // 用户在列表点了哪一道就打开哪一道; 都没有才退回「第一道未完成的」.
+      // 判定本身在 ./yieldStepResolution, 那里记着这两条各自栽过的实例.
       if (sortedTasks.length > 0) {
-        const phaseFor = (task: WorkProcessTask): StepPhase => {
-          if (!yd) return 'AWAITING_INPUT';
-          const s = yd.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder);
-          return (s?.phase as StepPhase) ?? 'AWAITING_INPUT';
-        };
-        if (autoAssigned) {
-          const assignedIndex = sortedTasks.findIndex((task) => {
-            if (assignedWorkProcessTaskId != null && task.id === assignedWorkProcessTaskId) return true;
-            return assignedProcessOrder != null && task.processOrder === assignedProcessOrder;
-          });
-          if (assignedIndex !== -1) {
-            setCurrentStepIndex(assignedIndex);
-            setScreenPhase('reporting');
-            return;
-          }
-        }
-        const firstUnfinished = sortedTasks.findIndex((t) => phaseFor(t) !== 'COMPLETED');
-        if (firstUnfinished === -1) {
+        const phaseFor = (task: StepTaskLike): StepPhase =>
+          resolveStepPhase(
+            task,
+            yd?.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder)?.phase,
+          );
+        const targetIndex = resolveInitialStepIndex({
+          tasks: sortedTasks,
+          assignedWorkProcessTaskId,
+          assignedProcessOrder,
+          phaseOf: phaseFor,
+        });
+        if (targetIndex === -1) {
           setScreenPhase('done');
         } else {
-          setCurrentStepIndex(firstUnfinished);
+          setCurrentStepIndex(targetIndex);
+          // autoAssigned 只影响「锁不锁定本道」, 不影响上面选了哪一道.
+          if (autoAssigned) setScreenPhase('reporting');
         }
       }
     } catch (error) {
@@ -880,10 +883,14 @@ const YieldStepReportScreen: React.FC = () => {
     !isFirstStep && materialBatchRefs.length > 0 && !hasSourceWipInput;
   const showReadonlyMaterialInput =
     (isFirstStep && materialBatchRefs.length > 1) || showMaterialOnlyReadonlyInput;
+  // ⛔ 「上道产出读不到」不等于「本道是首道」—— 前者是数据有没有, 后者是结构事实.
+  //    用前者断言后者, 会对第②道的工人说一句假话, 并让他去领原料.
   const prefillNote =
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
-      : '本道为首道, 请填本道领料投入量';
+      : isFirstStep
+        ? '本道为首道, 请填本道领料投入量'
+        : '上道产出量暂时取不到, 请按本道实际投入量填写';
 
   // P0-3: 产出绝对物理上限 = 2 × maxAllowed
   const OUTPUT_HARD_CAP_MULTIPLIER = 2;
