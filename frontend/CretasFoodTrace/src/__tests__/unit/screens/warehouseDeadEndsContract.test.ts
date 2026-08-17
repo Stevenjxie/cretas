@@ -17,13 +17,16 @@
 import fs from 'fs';
 import path from 'path';
 
-const read = (rel: string) =>
-  fs.readFileSync(path.resolve(__dirname, '../../../', rel), 'utf8');
+const sourceRoot = path.resolve(__dirname, '../../../');
+const read = (rel: string) => fs.readFileSync(path.resolve(sourceRoot, rel), 'utf8');
 
 const inboundList = read('screens/warehouse/inbound/WHInboundListScreen.tsx');
 const scanScreen = read('screens/warehouse/shared/WHScanOperationScreen.tsx');
 const inventoryList = read('screens/warehouse/inventory/WHInventoryListScreen.tsx');
 const inventoryDetail = read('screens/warehouse/inventory/WHInventoryDetailScreen.tsx');
+const inventoryNavigator = read('navigation/warehouse/WHInventoryStackNavigator.tsx');
+const navigationTypes = read('types/navigation.ts');
+const warehouseI18nMigration = read('../scripts/migrate-warehouse-i18n.js');
 
 /** 剥掉行注释与块注释 —— 否则注释里提到的 navigate("X") 会被数进来。 */
 function stripComments(src: string): string {
@@ -132,5 +135,17 @@ describe('库存: 不许把用户送进只改 storageLocation 的原型调拨屏
     expect(code).toContain('WHExpireHandle');
 
     expect(navTargets(inventoryDetail)).not.toContain('WHInventoryTransfer');
+  });
+
+  it('原型屏、route、导航类型和迁移脚本残留均已退役', () => {
+    const retiredScreen = path.resolve(
+      sourceRoot,
+      'screens/warehouse/inventory/WHInventoryTransferScreen.tsx',
+    );
+
+    expect(fs.existsSync(retiredScreen)).toBe(false);
+    expect(stripComments(inventoryNavigator)).not.toContain('WHInventoryTransfer');
+    expect(stripComments(navigationTypes)).not.toMatch(/\bWHInventoryTransfer\s*:/);
+    expect(stripComments(warehouseI18nMigration)).not.toContain('WHInventoryTransferScreen');
   });
 });
