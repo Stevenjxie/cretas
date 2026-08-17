@@ -2556,6 +2556,11 @@ def _build_spec(
     # import 会成环; 调用期两个模块都已加载, 安全。
     repair_candidate = planned_intents[0] if len(planned_intents) == 1 else ""
     repair_target_serves_dimensions = True
+    #: 标签自己服务不了本轮维度 —— 契约修复的**第二条独立正当性**（见下方 elif）。
+    #: ⛔ 它只当条件用, 修复动作仍然走**同一段**代码: 那段除了改 code 还要抹掉
+    #:    不再成立的 clarification。自己另写一份必然漏 —— 实测就漏了 3 行,
+    #:    6 条用例红在「计划修好了却仍被一句已经不真实的反问挡住」。
+    label_cannot_serve_dimensions = False
     if repair_candidate and dimensions:
         from smartbi.gold.restaurant.restaurant_intent_service import (
             _RESOLVER_DIMENSIONS,
@@ -2622,22 +2627,25 @@ def _build_spec(
             #
             # ⛔ 不无条件让计划赢: 标签能服务时该赢的是标签(上面那支);
             #    两边都服务不了时那次拒答是正当的(阴性对照钉着)。
-            # ⚠️ authority 复用已在白名单里的 `_contract_repair` 后缀 ——
-            #    `_execution_mismatch` 拿 `planner_authority` 当**白名单**判,
-            #    新造一个字符串会把「修好矛盾」换成另一句拒答。
+            #
+            # 🔴 这里**只置一个标志**, ⛔ 不自己改 code —— 修复动作走下面那段
+            #    契约修复的**同一段**代码。第一版我在这里直接 `code = repair_candidate`
+            #    并顺手补了 authority, 结果**漏了它另外三行善后**
+            #    (clarification_needed / clarification_question / missing_slot 抹掉),
+            #    6 条既有用例当场红在「计划修好了, 却仍被一句已经不真实的反问挡住」。
+            #    ▎我一边写着「⛔ 不把矛盾留给下游当拒答理由」, 一边留了另一个。
+            #    ⇒ 形态 D 的现场证据: 同一件善后有两份, 第二份必然漏。
             logger.warning(
-                "[restaurant-intent] code realigned to plan %s (label was %s): "
-                "标签只服务 %s, 服务不了本次的 %s, 而计划服务 %s —— "
-                "⛔ 不把矛盾留给下游当拒答理由",
-                repair_candidate, code,
+                "[restaurant-intent] label cannot serve dimensions, deferring to "
+                "contract repair: label=%s 只服务 %s, 服务不了本次的 %s; "
+                "计划 %s 服务 %s —— ⛔ 不把矛盾留给下游当拒答理由",
+                code,
                 sorted(_RESOLVER_DIMENSIONS.get(code, frozenset())),
                 list(dimensions),
+                repair_candidate,
                 sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
             )
-            code = repair_candidate
-            effective_planner_authority = (
-                f"{effective_planner_authority}_contract_repair"
-            )
+            label_cannot_serve_dimensions = True
     # 🔴 这次覆盖是【用户自己的话】造成的, 还是【模型的猜测】造成的?
     #
     # 下面那条 `_repair_backed_by_user_wording` 守的正是这件事, 但它只会问一种
@@ -2684,7 +2692,18 @@ def _build_spec(
     if (
         len(planned_intents) == 1
         and (not code or code not in planned_intents)
-        and supported_requested_metrics
+        # 🔴 2026-08-18: 覆盖的正当性有**两条**, 任一成立即可 —— 而修复动作只有
+        #    这一段(它除了改 code, 还要抹掉不再成立的 clarification)。
+        #    ① 下面那一整串: 用户措辞编译出的指标背书(原有, 一字未改)
+        #    ② label_cannot_serve_dimensions: **标签自己服务不了本轮维度**
+        #       —— 这时保留标签 100% 以拒答收场, 而计划明明能服务。
+        #       📏 MOCK_REST prod 14 链 × 3 轮: 该形状 3/3 稳定, 全部拒答。
+        # ⛔ 不把 ② 写成第二段修复代码 —— 实测第一版那么写, 漏了三行善后,
+        #    6 条既有用例红在「计划修好了却仍被一句不真实的反问挡住」。
+        and (
+            label_cannot_serve_dimensions
+            or (
+                supported_requested_metrics
         # 🔴 覆盖 planner 已经给出的 resolver, 必须由【用户措辞编译出的指标】驱动。
         #
         # 下面那段注释写着本次覆盖的全部正当性来源: "its raw resolver label is not
@@ -2716,18 +2735,25 @@ def _build_spec(
         # 用户指标」这一格里从 False 变成 True, **反而让 repair 在原本不该触发的地方
         # 触发**(实测挂了 chart/regression 那条: 本该 clarification_needed=True 却出了
         # 一个计划)。这个 guard 的作用只能是【更严】, 任何时候都不该放宽。
-        and (bool(code) or bool(explicit_requested_metrics))
-        and (
-            not code
-            or _repair_backed_by_user_wording(effective_query, supported_requested_metrics)
-            # 环比是用户自己说的词, 且它决定了这次编译结果 —— 与指标背书同源, 见上。
-            or comparison_drove_the_plan
+                and (bool(code) or bool(explicit_requested_metrics))
+                and (
+                    not code
+                    or _repair_backed_by_user_wording(
+                        effective_query, supported_requested_metrics)
+                    # 环比是用户自己说的词, 且它决定了这次编译结果 ——
+                    # 与指标背书同源, 见上。
+                    or comparison_drove_the_plan
+                )
+                and all(
+                    metric in _CONTRACT_REPAIRABLE_METRICS
+                    for metric in supported_requested_metrics
+                )
+            )
         )
+        # ⚠️ 这一条对**两条正当性都必须成立** —— 目标 resolver 服务不了本轮维度时,
+        #    覆盖过去只会把「拒答」换成「用错粒度回答」, 那比拒答更糟。
+        #    所以它留在 or 的**外面**。
         and repair_target_serves_dimensions
-        and all(
-            metric in _CONTRACT_REPAIRABLE_METRICS
-            for metric in supported_requested_metrics
-        )
     ):
         # The LLM remains the semantic entry point, but its raw resolver label
         # is not executable when it contradicts the metric/object slots in the

@@ -205,6 +205,65 @@ class TestItActuallyRuns:
         )
 
 
+class TestTheTwoHistoricalIncidentsStayClosed:
+    """`label_cannot_serve_dimensions` **旁路**了三道有事故背景的 guard
+    （`supported_requested_metrics` / `_repair_backed_by_user_wording` /
+    `_CONTRACT_REPAIRABLE_METRICS`）。必须证明它没有把那两次事故重新打开。
+
+    📏 反事实实测（基线树 origin/main vs 本分支，同一条命令、同一份输入）：
+    6 行读数**只有 1 行不同**，就是本改动要修的那一行。这 5 条把那个结论钉住。
+
+    ⚠️ 判据是 (intent, planned_intents, clarification_needed) 三元组，
+    ⛔ 不是「有没有报错」—— 那两次事故的症状都不是异常，是**答成了别的**。
+    """
+
+    @staticmethod
+    def _spec(code, dims, metrics, query):
+        from smartbi.gold.restaurant import restaurant_intent as ri
+
+        return ri._build_spec(code, query, confidence=0.9, tier="llm",
+                              llm_dimensions=dims, llm_requested_metrics=metrics)
+
+    def test_2026_07_30_purchase_incident_stays_closed(self):
+        """「全部门店最近30天采购花了多少钱」—— planner 的 REQUISITION_TREND
+        当年被一个纯 LLM 指标槽推翻过。它必须原样保留。"""
+        spec = self._spec("RESTAURANT_OPS_REQUISITION_TREND", ("ingredient",),
+                          ("sales_volume",), "全部门店最近30天采购花了多少钱")
+        assert spec.intent == "RESTAURANT_OPS_REQUISITION_TREND"
+        assert list(spec.planned_intents) == ["RESTAURANT_OPS_REQUISITION_TREND"]
+
+    def test_2026_07_31_stocktake_incident_stays_closed(self):
+        """「全部门店最近30天盘点亏了多少」—— 当年 STOCK_SHORTAGE 被 WASTAGE_TOP
+        覆盖掉。⚠️ 这里的期望是**当前行为**（矛盾保留，交下游），⛔ 不是「理想行为」。"""
+        spec = self._spec("RESTAURANT_OPS_STOCK_SHORTAGE", (), ("wastage",),
+                          "全部门店最近30天盘点亏了多少")
+        assert spec.intent == "RESTAURANT_OPS_STOCK_SHORTAGE"
+        assert list(spec.planned_intents) == ["RESTAURANT_OPS_WASTAGE_TOP"]
+
+    def test_comparison_repair_pr2798_is_untouched(self):
+        """PR#2798 那条（环比驱动 ⇒ 计划赢）必须原样。"""
+        spec = self._spec("RESTAURANT_OPS_TREND_ANALYSIS", (), ("revenue",),
+                          "这个月比上个月好还是差")
+        assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+        assert spec.planner_authority == "llm_contract_repair"
+
+    def test_pr2799_case_is_untouched(self):
+        """PR#2799 那条（标签能服务 ⇒ 标签赢）必须原样。"""
+        spec = self._spec("RESTAURANT_OPS_STORE_MARGIN", ("store",),
+                          ("recipe_cost",), "哪家店成本最高")
+        assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+        assert spec.planner_authority == "llm"
+
+    def test_a_plain_consistent_question_is_untouched(self):
+        """阴性对照：本来就一致的句子, authority 不许被拼上修复后缀。"""
+        spec = self._spec("RESTAURANT_OPS_SALES_SUMMARY", (), ("revenue",),
+                          "最近生意好还是差")
+        assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+        assert spec.planner_authority == "llm", (
+            "本来就一致的句子被当成修复过了 —— authority 会误导下游与飞轮"
+        )
+
+
 class TestTheRepairedAuthorityStaysTrusted:
     """⚠️ `_execution_mismatch` 拿 `planner_authority` 当**白名单**在判。
 
