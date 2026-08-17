@@ -8,12 +8,15 @@
 # 硬闸 (生死线):
 #   1. 签名校验 — 发布前比对 APK 签名 SHA-256 == release keystore 的 SHA-256。
 #      若是 debug 签名 (keystore.properties 缺失时的 fallback), 立即拒绝发布。
-#   2. 残留扫描 — sed 后 grep 全 download-page/ 确认无旧版本号 / 占位符 / example.com。
+#   2. 启动冒烟 — 装到设备上真打开一次, 崩了 / 没量到 都拒绝发布。
+#      (2026-08-17: v1.0.4 通过了当时的每一道闸, 因为没有一道问「它打得开吗」。)
+#   3. 残留扫描 — sed 后 grep 全 download-page/ 确认无旧版本号 / 占位符 / example.com。
 #
 # 用法:
 #   ./scripts/deploy/deploy-apk.sh --build               # 构建签名 APK → 发布全流程
 #   ./scripts/deploy/deploy-apk.sh --apk ~/Downloads/cretas-v1.0.1.apk
 #   ./scripts/deploy/deploy-apk.sh --build --dry-run     # 构建+校验, 不上传/不部署
+#   ./scripts/deploy/deploy-apk.sh --apk <path> --skip-smoke         # ⛔ 逃生门: 跳过启动冒烟
 #   ./scripts/deploy/deploy-apk.sh --apk <path> --with-server-copy   # 额外传一份到 139 downloads/
 #
 # 依赖: keytool(JDK), ossutil(账号 B), 可选 aliyun(CDN 刷新). keystore.properties 必须存在。
@@ -38,6 +41,7 @@ DRY_RUN=0
 WITH_SERVER_COPY=0
 SKIP_PAGE_DEPLOY=0
 PAGE_ONLY=0
+SKIP_SMOKE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +51,8 @@ while [ $# -gt 0 ]; do
     --with-server-copy) WITH_SERVER_COPY=1; shift ;;
     --skip-page-deploy) SKIP_PAGE_DEPLOY=1; shift ;;
     --page-only) PAGE_ONLY=1; shift ;;   # 仅重写+部署下载页, 跳过 APK/签名/OSS/CDN (APK 未变时改页面用)
+    # ⛔ 逃生门, 别当默认: 跳过「装起来跑一次」。v1.0.4 就是没人打开过才发出去的。
+    --skip-smoke) SKIP_SMOKE=1; shift ;;
     *) echo "❌ 未知参数: $1"; echo "用法见脚本头部注释"; exit 1 ;;
   esac
 done
@@ -126,7 +132,39 @@ if [ "$APK_SHA" != "$EXPECTED_SHA" ]; then
    绝不能分发 — 老用户将无法覆盖更新。检查 keystore.properties 是否在构建机生效。"
 fi
 log "   ✓ 签名 = release key, 通过硬闸"
-fi  # PAGE_ONLY=0: 步骤 1-2 (APK 定位/构建 + 签名硬闸) 仅完整发布
+
+# ==================== 2b. 启动冒烟硬闸 (生死线之二) ====================
+# 🔴 2026-08-17: 加这道闸的理由 —— 分发中的 v1.0.4 **一启动就崩, 任何设备都崩**
+#   java.lang.NoSuchMethodError: getDirectConverter(...) in ReturnTypeKt
+#   at expo.modules.font.FontLoaderModule.definition(FontLoaderModule.kt:98)
+# 而它**通过了这个脚本的每一道闸**: 签名对、残留扫描过、上传成功、下载可达。
+# 因为这些闸问的全是「这个文件对不对」, 没有一道问「它打得开吗」。
+# ⇒ 签名硬闸守「老用户能不能覆盖安装」, 这道闸守「装完能不能打开」。两件事。
+if [ "$SKIP_SMOKE" = "1" ]; then
+  log "⚠️  [smoke] 已用 --skip-smoke 跳过启动冒烟 —— 这个包**没有人打开过**。"
+  log "⚠️  [smoke] v1.0.4 就是这样发出去的。除非你刚刚亲手在真机上打开过它, 否则别用这个开关。"
+else
+  SMOKE_SH="$PROJECT_ROOT/scripts/smoke-android-apk.sh"
+  [ -x "$SMOKE_SH" ] || die "找不到启动冒烟脚本 $SMOKE_SH — 拒绝发布未经启动验证的包"
+  log "🚬 [smoke] 装到设备上启动一次..."
+  set +e
+  "$SMOKE_SH" "$APK_PATH"
+  SMOKE_RC=$?
+  set -e
+  case "$SMOKE_RC" in
+    0) log "   ✓ 启动正常, 通过硬闸" ;;
+    # rc=2 是三态里的「这次没量到」(没有设备/装不上), ⛔ 不是通过。
+    # 这里选择**拦住**而不是放行: 这是最后一道分发闸, 「没量到」在这里等价于
+    # 「又一次没有人打开过它」。逃生门显式且留痕, 不做成静默默认。
+    2) die "启动冒烟**没量到**(没有已连接设备 / 装不上) — 拒绝发布。
+   起一台模拟器再来: emulator -avd <name> & 然后重跑本命令
+   ⚠️ MIUI 等厂商 ROM 会拒 adb 安装(INSTALL_FAILED_USER_RESTRICTED), 用模拟器
+   确实要跳过(例如你已在真机手动装过并打开): 加 --skip-smoke" ;;
+    *) die "启动冒烟失败: 这个包装上去打不开, ⛔ 绝不能分发。
+   读上面的崩溃摘录; 常见成因是打包机依赖漂移(用 npm ci 而不是 npm install)。" ;;
+  esac
+fi
+fi  # PAGE_ONLY=0: 步骤 1-2 (APK 定位/构建 + 签名硬闸 + 启动冒烟) 仅完整发布
 
 # ==================== 3. 重写下载页 (单一事实源) ====================
 log "📝 [page] 重写 download-page/*.html 版本文案..."

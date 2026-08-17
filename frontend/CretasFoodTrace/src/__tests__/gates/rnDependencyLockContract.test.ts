@@ -141,6 +141,9 @@ describe('RN 依赖锁定契约', () => {
     expect(smokeSrc).toContain('exit 2');
 
     const callers = [
+      // 🔑 发布入口最重要 —— v1.0.4 通过了 deploy-apk.sh 的**每一道**闸
+      //    (签名对/残留扫描过/上传成功/下载可达), 因为没有一道问「它打得开吗」。
+      'scripts/deploy/deploy-apk.sh',
       'scripts/build-android-apk.sh',
       '.claude/skills/build-android-apk/scripts/build-apk.sh',
     ];
