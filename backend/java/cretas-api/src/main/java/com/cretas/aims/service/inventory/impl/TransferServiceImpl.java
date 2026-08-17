@@ -588,7 +588,18 @@ public class TransferServiceImpl implements TransferService {
             transactionUnit = specUnit;
             baseUnit = specBase;
             factor = spec.getConversionFactor();
-        } else if (!transactionUnit.equals(baseUnit)) {
+            // 🔴 2026-08-17: 这里曾是 transactionUnit.equals(baseUnit) 的字面比较 —— 与上面
+            // 那处 sameTransferUnit 只隔几行, 修的时候漏了这一半。主档存「盒」而前端
+            // canonicalUnitCode 送 box, 同一个单位判不等, 于是按基本单位调拨的行被推进
+            // 「必须选包装规格」分支; 而这类物料实测多数一条规格都没有(F006: 283/316),
+            // 下拉里只有「基本单位」一项 —— 用户选什么都过不去。
+            // ⚠️ sameTransferUnit 走 storageUnit, 只/个/件 仍各自为单位, 不会被合并。
+        } else if (sameTransferUnit(factoryId, transactionUnit, baseUnit)) {
+            // 同一个单位的两种写法。与命中规格那条分支同一条纪律: 快照一律采用**主数据的写法**,
+            // 不采用客户端送来的写法, 否则批次单位会存成 box 而主档是「盒」——
+            // 那正是 LIUSHANMEN 2026-07-30 事故的形状(报工按字面比较看不见整批货)。
+            transactionUnit = baseUnit;
+        } else {
             if (materialPackagingSpecRepository == null) {
                 throw new BusinessException(422, "调拨包装单位必须选择具体规格")
                         .withHintTarget("materialPackagingSpecId");
