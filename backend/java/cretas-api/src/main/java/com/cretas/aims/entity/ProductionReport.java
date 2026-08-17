@@ -287,6 +287,26 @@ public class ProductionReport {
     @Column(name = "semi_code", length = 50)
     private String semiCode;
 
+    /**
+     * 客户端提交幂等键。
+     *
+     * <p>2026-08-17 生产实测：提交两次<b>完全相同</b>的领用报工（间隔 37ms），
+     * 两次都 200、产生两条报工、库存 {@code consumed 0.00 → 1.00} —— 领 0.5 扣了 1.0。
+     * 报工改成<b>提交即入账</b>之后，重复提交 = 库存立刻被多扣。
+     *
+     * <p>同一次点击的重试带<b>同一个号</b>；用户真的再报一笔时前端<b>重新生成</b>号。
+     * {@code null} = 旧版 App，向后兼容不拦。
+     *
+     * <p>⛔ 不用时间窗去重：报工是合法高频动作（分段报工／领两批料／多人分报），
+     * 时间窗会误拦正当操作，而会误拦的闸最后一定被绕开或关掉。
+     *
+     * <p>唯一性由 {@code (factory_id, client_request_id)} 部分唯一索引约束
+     * （见 {@code V20261030_03}）。设计卡
+     * {@code docs/decisions/2026-08-17-报工幂等用客户端请求号而非时间窗.md}。
+     */
+    @Column(name = "client_request_id", length = 128)
+    private String clientRequestId;
+
     /** 是否已结清 (每日结清打标) */
     @Column(name = "settled")
     @Builder.Default
