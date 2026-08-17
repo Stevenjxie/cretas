@@ -3301,6 +3301,23 @@ async def resolve_wastage_top(
             """,
             factory_id, days, window_start, window_end,
         )
+        # 窗口内一条都没有时, 「最后一次录损耗是哪天」是老板唯一能据以行动的事实。
+        # ⛔ 用**同一张**聚合表, 不换口径去问 `fact_restaurant_wastage` ——
+        #    上面三条读数都来自 agg 层, 混着问会得出「明明有却说没有」这种自相矛盾。
+        # ⚠️ **只在空窗口时才查**: 常规路径(绝大多数)不必多付一次往返,
+        #    而且这样既有的假连接不会因为多一个方法名而集体失效。
+        window_has_nothing = (
+            not top_rows
+            and not type_rows
+            and int(total["total_count"] or 0) == 0
+        )
+        last_wastage_date = await conn.fetchval(
+            """
+            SELECT max(date) FROM agg_restaurant_daily_totals
+             WHERE factory_id = $1 AND COALESCE(wastage_count, 0) > 0
+            """,
+            factory_id,
+        ) if window_has_nothing else None
 
     type_name_map = {
         "EXPIRED": "过期", "DAMAGED": "破损", "SPOILED": "变质",
@@ -3373,16 +3390,49 @@ async def resolve_wastage_top(
         # 必需的空行(没有它 markdown-it 会把表格并进上一段当普通文字)。
         top_block = "\n".join([f"{top_heading}:"] + top_list_lines)
 
-    answer = (
-        f"{window_text}损耗总览:\n"
-        f"{totals_line}\n"
-        f"- 损耗类型分布: {type_summary}\n\n"
-        f"{top_block}\n\n"
-        f"建议动作:\n"
-        f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
-        f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
-        f"3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
-    )
+    # 🔴 2026-08-17 prod 实测(RES_3101_009): 窗口内零损耗时, 下面那三条建议照发 ——
+    #    而第 1 条是「先把**损耗金额最高的类型**拆到门店和班次」, 那个类型**不存在**。
+    #    三条全都预设有数据, 读起来像分析, 其实一个字都不成立。
+    #    ⚠️ 本仓 anti-goal: 一条会误发的提示烧掉的是「这东西说的话能信」这件事本身。
+    #
+    # ⛔ 但**零损耗是合法状态** —— 不许断言「没人录」。摆事实, 让老板自己判断:
+    #    实测该租户最后一条损耗是 2026-06-08(70 天前), 而 POS 数据到昨天。
+    #    这两件事放在一起他一眼就知道该问谁; 由产品替他下结论反而会错。
+    #
+    # 与正上方 `cost_axis_unavailable` 是同一条纪律: **数出不来就说出不来,
+    # ⛔ 不用别的东西顶替**。那条守的是「不拿数量排名顶金额排名」,
+    # 这条守的是「不拿通用建议顶没有的数据」。
+    if window_has_nothing:
+        if last_wastage_date:
+            gap_days = (date.today() - last_wastage_date).days
+            next_step = (
+                f"{window_text}一条损耗记录都没有。你们最后一次录损耗是 "
+                f"{last_wastage_date:%Y-%m-%d}，到今天 {gap_days} 天。\n"
+                f"这有两种可能：真的一件损耗都没发生，或者最近没人录。"
+                f"先去后厨问一句是哪一种 —— 是后者的话补录之后我才能告诉你钱漏在哪。"
+            )
+        else:
+            next_step = (
+                f"{window_text}一条损耗记录都没有，而且这个账号从来没有过损耗记录。\n"
+                f"损耗台账看起来还没开始录。要先有人录，我才能告诉你钱漏在哪；"
+                f"在那之前这一项我给不了任何判断，也不会拿别的数据凑。"
+            )
+        answer = (
+            f"{window_text}损耗总览:\n"
+            f"{totals_line}\n\n"
+            f"{next_step}"
+        )
+    else:
+        answer = (
+            f"{window_text}损耗总览:\n"
+            f"{totals_line}\n"
+            f"- 损耗类型分布: {type_summary}\n\n"
+            f"{top_block}\n\n"
+            f"建议动作:\n"
+            f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
+            f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
+            f"3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
+        )
 
     charts = []
     if top_rows and not cost_axis_unavailable:
