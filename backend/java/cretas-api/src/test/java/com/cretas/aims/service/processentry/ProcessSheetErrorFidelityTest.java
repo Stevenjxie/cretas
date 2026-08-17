@@ -124,6 +124,35 @@ class ProcessSheetErrorFidelityTest {
     }
 
     @Test
+    @DisplayName("(c) 列长校验必须在 submitRow 的最前面 —— 放晚了等于没有")
+    void columnLimitsRunBeforeAnyOtherSubmitCheck() throws Exception {
+        // 🔴 2026-08-18 生产复验实测: 这条校验原来只在 saveRow 里, 而 submitRow 会先跑
+        //    workflow 端口校验 —— 36 字符 processCode 的探针先撞到
+        //    「Workflow 端口选择组不满足 AT_LEAST_ONE」, 前置校验**一次都没被执行到**。
+        //    ⚠️ 名义上的"前置"不是前置; 顺序本身就是被守的行为, 所以单独钉一条。
+        // ⚠️ 必须先剥注释: 第一版没剥, 闸红在**我自己写在 assertColumnLimits 上面那条注释**里的
+        //    "AT_LEAST_ONE" 上 (位置 403 < 555)。本仓形态 A⁗「grep 把 docstring 也数进去」——
+        //    这个 session 第三次。注释应该保留, 所以改的是闸。
+        String raw = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/processentry/impl/ProcessSheetServiceImpl.java"));
+        String src = raw.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)^\\s*//.*$", "");
+        int submitAt = src.indexOf("public ProcessSheetRowResult submitRow");
+        org.junit.jupiter.api.Assertions.assertTrue(submitAt > 0, "没找到 submitRow, 这道闸在读空气");
+        String body = src.substring(submitAt, src.indexOf("saveRow(factoryId, planId, req, userId)", submitAt));
+        int limitAt = body.indexOf("assertColumnLimits(req)");
+        org.junit.jupiter.api.Assertions.assertTrue(limitAt > 0,
+                "submitRow 里没有 assertColumnLimits —— 它会被更早的 workflow 校验挡在前面");
+        // 必须早于 workflow 端口校验和生产日期校验
+        for (String later : new String[]{"必须填写生产日期", "AT_LEAST_ONE", "getOutputs()"}) {
+            int at = body.indexOf(later);
+            if (at > 0) {
+                org.junit.jupiter.api.Assertions.assertTrue(limitAt < at,
+                        "assertColumnLimits 排在 \"" + later + "\" 之后, 探针到不了它");
+            }
+        }
+    }
+
+    @Test
     @DisplayName("(b') clientRowId 上限 64 —— 一入多出会在它后面拼 #0/#1, 边界要按库定义")
     void clientRowIdLimitMatchesColumn() {
         assertColumnLimits(req("chaigu", "x".repeat(64)));  // 正好 64 放行
