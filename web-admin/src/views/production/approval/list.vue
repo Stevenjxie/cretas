@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -64,17 +64,56 @@ function handleFilterReset() {
 }
 
 // P2-6: Auto-refresh every 30 seconds
+//
+// ⚠️ 这一页在 <keep-alive :max="10"> 里 (AppLayout)。keep-alive 的语义是
+// 「离开时【不卸载】, 只 deactivate」—— 所以 onUnmounted 在离开本页时【不会触发】,
+// 它只在被挤出缓存(超过 10 个)或整个布局销毁时才跑。
+//
+// 后果: 只要访问过一次本页, 那个 30s 定时器就【一直在后台跑】, 用户早就切到
+// 别的页面了, 它还在每 30 秒打一次 pending-approval。在别的页面上待 2 分钟,
+// 就能看到 5 次本页的请求 —— 看起来像「一次加载重复请求五次」, 实际是
+// 「一个永远不停的后台轮询」。
+//
+// ⇒ 用 onActivated / onDeactivated 管定时器(keep-alive 场景的正确钩子),
+//   并且页面不可见时不轮询。onUnmounted 保留做兜底(被挤出缓存那条路径)。
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh(); // 幂等: 重复 activate 不叠加定时器
+  refreshTimer = setInterval(() => {
+    // 标签页在后台时不轮询 —— 没人在看, 打回来的数据没有用
+    if (document.visibilityState !== 'visible') return;
+    void loadData();
+  }, 30000);
+}
+
 onMounted(() => {
   loadData();
-  refreshTimer = setInterval(loadData, 30000);
+  startAutoRefresh();
 });
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer);
+
+// keep-alive: 回到本页时重新拉一次并恢复轮询; 离开时立刻停掉
+onActivated(() => {
+  loadData();
+  startAutoRefresh();
 });
+onDeactivated(stopAutoRefresh);
+onUnmounted(stopAutoRefresh);
+
+// 防重入: 上一次还没回来就不要再发一次(30s 轮询 + 手动刷新 + 审批后刷新会叠)
+let inFlight = false;
 
 async function loadData() {
   if (!factoryId.value) return;
+  if (inFlight) return;
+  inFlight = true;
   loading.value = true;
   try {
     // 全量拉取待审批队列 (审批后即离队, 队列体量天然有界) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
@@ -90,6 +129,7 @@ async function loadData() {
     handleCatchError(e, '加载待审批列表失败,请检查网络');
   } finally {
     loading.value = false;
+    inFlight = false;
   }
 }
 
