@@ -8,6 +8,7 @@ same contract before they are served.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, List, Optional
 
 from smartbi.gold.restaurant.restaurant_intent import (
@@ -275,7 +276,59 @@ def _execution_consistency_present(
     )
 
 
+#: 「我做不到」的标记。⚠️ 只有它**不够** —— 见 `_explicit_analysis_gap`。
+_ANALYSIS_CANNOT_TOKENS = (
+    "算不出", "算不了", "无法", "不能", "给不出", "说不清", "说不出",
+    "做不了", "还不能", "暂时没有", "缺少", "缺",
+)
+#: 「正在讲分析这件事」的域词。同样只有它不够。
+_ANALYSIS_TOPIC_TOKENS = (
+    "原因", "归因", "为什么", "主因", "驱动", "优化", "改进", "动作", "建议",
+)
+
+
+def _explicit_analysis_gap(answer_text: str) -> bool:
+    """有没有**显式地说清「分析这一层我做不到」**。
+
+    ## 为什么要有这条（2026-08-17，设计卡）
+
+    契约在别处**自己就有**这条哲学（`_EXPLICIT_GAP_TOKENS` 的注释原话）:
+
+        an explicit, honest "we could not compute this" disclosure
+        **satisfies the contract just as well as a real number would**
+        （「缺不了就明说」本身即合规，不是失败）
+
+    唯独 `analysis_action` 没接上 ⇒ 一句诚实的「这次算不出原因，因为缺 X」
+    会被判不合规、整份拒掉。而那本身就是 goal 定义五要的**合格回答**。
+
+    ## 🔴 为什么必须是「同一句里两个条件都满足」
+
+    2026-08-10 事故（仓里有记录）：用户问「本月营收比上月低是什么原因」，
+    兜底回了一句「本月全部门店营收合计 ¥6,490,180.61。」——
+    **用一个数字回答了「为什么」**。
+
+    ⇒ 逃生口**不能**是「文本里随便出现一个 `缺少`/`无法` 就放行」，
+      否则「正文全是数字、别处顺带提一句缺成本卡」就能蒙混过关。
+    ⇒ 必须**在讲分析这件事的那一句里**说自己做不到。
+
+    ⚠️ 这是**代理判据**（两个人写的词表），⛔ 不假装它等于「真的说清楚了」。
+       要收敛得把面向用户的分析结论收到一处产出，再让契约扫那一处。
+    """
+    for sentence in re.split(r"[。！？!?\n]+", answer_text or ""):
+        if not sentence.strip():
+            continue
+        if (_contains_any(sentence, _ANALYSIS_CANNOT_TOKENS)
+                and _contains_any(sentence, _ANALYSIS_TOPIC_TOKENS)):
+            return True
+    return False
+
+
 def _analysis_action_present(spec: RestaurantQuerySpec, answer_text: str) -> bool:
+    # 「明说这一层做不到」与真的做了分析**同等合规**（设计卡裁定 B）。
+    # ⛔ 不是放宽成「随便提一句缺什么就行」—— `_explicit_analysis_gap`
+    #    要求「做不到」和「分析域词」出现在**同一句**里。
+    if _explicit_analysis_gap(answer_text):
+        return True
     if spec.analysis_action == "diagnose":
         return _contains_any(
             answer_text,
