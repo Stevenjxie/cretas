@@ -774,11 +774,29 @@ def _narrative_grounding_violations(
             # labels them as an adjustable assumption that still needs approval.
             # This rejects the live failure "5000元预算、日均94→110单" while
             # allowing "试点参数（建议值，需老板确认）".
+            # 🔴 2026-08-17: 规则三与规则四**互相打架**，实测让合规写法过不去。
+            #
+            #    `_PRESCRIBED_NUMBER_RE` 的触发词里有「试点」，而 32 字内出现
+            #    任何数字就命中。于是规则四**要求**的安全框架
+            #        「建议先小范围试点下架毛利最低的 5 个菜，确认后再推开，可回滚」
+            #    被规则三判成「未标注为假设的预算或目标」——「5 个菜」是**观察到的
+            #    条数**，根本不是预算或 KPI。
+            #
+            # ▎满足一条规则的写法触发另一条 ⇒ 「按闸的要求措辞」这条路走不通。
+            #   而那正是设计卡裁定的 A（治本）所依赖的前提。
+            #
+            # ⛔ 不新造启发式（本仓明令：不要靠不断加启发式去逼近语义）。
+            #    复用**既有的、权威的** `_HIGH_IMPACT_ACTION_SAFETY_RE`：
+            #    一个已经写明「先试点 / 确认后 / 待确认 / 可回滚 / 暂不执行」的
+            #    句子，**本身就是把数字标注成了提案**，正是规则三豁免的语义。
+            # ⚠️ 与既有豁免同为**句级**（`sentence`），保持一致 ——
+            #    对冲写在下一个分句里同样应该算数。
             prescribed = _PRESCRIBED_NUMBER_RE.search(clause)
             if (
                 prescribed
                 and prescribed.group(0) not in (question or "")
                 and not _PRESCRIBED_NUMBER_ASSUMPTION_RE.search(sentence)
+                and not _HIGH_IMPACT_ACTION_SAFETY_RE.search(sentence)
             ):
                 violations.append(f"未标注为假设的预算或目标：{clause[:120]}")
 
