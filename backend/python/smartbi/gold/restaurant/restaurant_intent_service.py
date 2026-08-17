@@ -2247,9 +2247,36 @@ async def tiered_answer(
                 )
             # 2026-08-12 白话化: 原文「本次结果没有可靠覆盖…也没有改走相邻指标」
             # 三个内部说法叠在一起, prod 实测原样发给了店长(问「到底赚钱了没」)。
+            # 🔴 2026-08-17: 「这次没算出X」在**产出被驳回**的那一半里是假话。
+            #
+            #    实测(prod, 追问「它的问题出在哪」): 产品把归因和行动方案**完整
+            #    算出来了** —— 具体门店名、4.504→4.7 星、下架 5 个菜、验收方式 ——
+            #    然后被叙事接地闸整份驳回, 五条 violations **没有一条是「数字错了」**
+            #    (无保留因果断言 / 预算目标未标注为假设 / 高影响动作未经确认)。
+            #    而老板收到的是「这次**没算出**本轮要求的原因分析」。
+            #
+            #    ⇒ 违反反目标里最重的一条: **敢说不准的全部本钱, 就是每一句都
+            #      站得住**。说「没算出」而其实算出来了, 烧的正是这份本钱。
+            #
+            # ⛔ 这里**只改措辞**, 不放行那份被驳回的文本 —— 无保留因果断言正是
+            #    不许发给店长的东西, 闸抓住它是**做对了**(设计卡裁定: ⛔ 不做 D)。
+            # ⚠️ 区分靠**手边已有的数据**: `answer_text` 非空 = 产出过又被驳回;
+            #    空 = 真的没算出来。⛔ 不新增判别。
+            #    (下面 3 行就把它当 `rejected_answer` 记进了日志 —— 代码一直知道。)
+            produced_but_rejected = bool(str(answer_text or "").strip())
             safe_text = partial_text or (
-                f"这次没算出{missing}，所以我{CONTRACT_REFUSAL_MARK}，"
-                f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
+                (
+                    f"{missing}我这次跑出来了，但里面有几句话没达到我们"
+                    f"「不把推测说成结论」的要求，所以我没发给你 —— "
+                    f"{NO_SUBSTITUTION}，也不给你一个我不敢担保的因果结论。"
+                    f"你可以问得更具体一点，例如把「为什么」换成"
+                    f"「哪家店/哪道菜拉低了毛利」，那条路我能给你确定的数。"
+                )
+                if produced_but_rejected else
+                (
+                    f"这次没算出{missing}，所以我{CONTRACT_REFUSAL_MARK}，"
+                    f"{NO_SUBSTITUTION}。说清楚具体范围我再试一次。"
+                )
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)
             asyncio.create_task(log_intent_capture(
