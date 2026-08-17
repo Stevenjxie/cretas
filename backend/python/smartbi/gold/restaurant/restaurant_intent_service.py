@@ -510,6 +510,28 @@ def _store_scope_disclosure(spec: Any) -> str:
 #    两处各写一份字面量, 改一处就静默失联(症状是"歧义消解不出现", 不报错)。
 _STORE_SCOPE_MISMATCH = "你问的是某家门店，我这次挑到的却是全店合计"
 
+#: 「我不知道你想看哪一层」这句用户可见的话 —— **只此一处定义**。
+#:
+#: ## 为什么两条路要共用它（📏 MOCK_REST prod 2026-08-18，3 轮稳定）
+#:
+#: `code ∉ planned_intents` 的 12 条里有 **9 条**是 `dims=∅`，
+#: 它们拿到的是「我准备算的东西跟你问的对不上，所以这次我没敢算。…」——
+#: 前半句是**产品内部两个推导打架**的自我描述，老板不需要知道，
+#: 而且与上下文矛盾（他上一轮问的就是门店）。
+#:
+#: 而对**老板**来说，「两个推导没谈拢且他没说清要看哪一层」与
+#: 「他要的层超出了能力」是同一件事：**我不知道你想看哪一层**。
+#: ⇒ 收敛成一句，⛔ 不新造第三句措辞。
+#:
+#: ⚠️ 只在 `dims=∅` 时用它。`spec.dimensions` 非空 = 老板**说清了**层，
+#:    那时说「不知道哪一层」就是撒谎，保持原来那句（有阴性对照钉着）。
+#: ⚠️ 日志侧不受影响：那行 warning 已经带 `intent/planned/dimensions`。
+#: ⛔ 这里**不**加第二个 `mismatch == …` 的身份比较 —— 返回值已经被当类型系统
+#:    用了一处（下游按 `_STORE_SCOPE_MISMATCH` 决定能不能做歧义消解），
+#:    与 spec 里 `clarification_question ==` 那 10 处同形。正解是把返回值
+#:    结构化成 `(log_reason, user_text)`，那要一次改 6 个 return，**独立一轮做**。
+_LAYER_UNCLEAR = "我不确定你要看的是哪一层的数"
+
 
 def _supported_dimensions(plan: Tuple[str, ...]) -> set:
     """这个计划选中的那些 resolver, 合起来能按什么分组。
@@ -607,6 +629,15 @@ def _execution_mismatch(
     if not spec.plan_hash or tuple(spec.planned_intents) != plan:
         return "我没把这次要算的东西凑齐"
     if spec.intent not in plan:
+        # 🔴 2026-08-18: `dims=∅` 时这句是**错的措辞**。
+        #    📏 prod 12 条 `code ∉ plan` 里 9 条是这个形状(3 轮稳定), 拿到的是
+        #    「我准备算的东西跟你问的对不上，所以这次我没敢算。…」——
+        #    前半句是产品内部两个推导打架的自白, 老板不需要知道, 而且与上下文
+        #    矛盾(他上一轮问的就是门店)。对他来说这就是「我不知道你想看哪一层」。
+        # ⚠️ `spec.dimensions` 非空 = 他**说清了**层 ⇒ 保持原句, 那时说
+        #    「不知道哪一层」是撒谎(有阴性对照钉着)。
+        if not spec.dimensions:
+            return _LAYER_UNCLEAR
         return "我准备算的东西跟你问的对不上"
     if store_dish and plan != ("RESTAURANT_OPS_STORE_MARGIN",):
         return "这句同时限定了门店和菜品，我这次挑的算法管不住两头"
@@ -653,7 +684,7 @@ def _execution_mismatch(
         #    **我不知道你想看哪一层, 所以没敢算。**
         # ⚠️ 这个串会被上游拼成 `f"这次没有开算：{mismatch}。"`(见 :1512),
         #    所以它自己写成一个能接在后面的短语。
-        return "我不确定你要看的是哪一层的数"
+        return _LAYER_UNCLEAR
     return None
 
 
