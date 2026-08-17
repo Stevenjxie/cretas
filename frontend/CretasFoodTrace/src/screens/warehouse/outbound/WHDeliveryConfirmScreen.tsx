@@ -35,6 +35,14 @@ interface EditableItem {
   unit: string;
   /** 用户输入的实发数量 (字符串, 允许编辑中间态). */
   actualQtyText: string;
+  /**
+   * 该行是否已完成批次分配 (finishedGoodsBatchId 非空)。
+   *
+   * 🔴 2026-08-18 真机实测: 这个字段**详情接口一直在返回**, 而本屏没读它 ——
+   * 于是仓管点「确认并扣库存」→ 请求发到后端 → 409「未完成批次分配, 无法确认发货」
+   * 才知道。**该事先拦住的变成了提交后才报错**, 而事实在进屏那一刻就在手里。
+   */
+  batchAllocated: boolean;
 }
 
 function itemDisplayName(it: WarehouseDeliveryItem): string {
@@ -75,6 +83,7 @@ export function WHDeliveryConfirmScreen() {
             plannedQty: planned,
             unit: it.unit || 'kg',
             actualQtyText: String(planned), // 默认实发 = 计划
+            batchAllocated: it.finishedGoodsBatchId != null && it.finishedGoodsBatchId !== '',
           };
         }),
       );
@@ -98,7 +107,9 @@ export function WHDeliveryConfirmScreen() {
     .find((e) => e != null);
   const hasError = firstError != null;
   const anyChanged = items.some((it) => Number(it.actualQtyText) !== it.plannedQty);
-  const canSubmit = !loading && !submitting && canSubmitRows(items);
+  // 未分配批次的行 —— 进屏就知道, 不必等后端 409。
+  const unallocated = items.filter((it) => !it.batchAllocated);
+  const canSubmit = !loading && !submitting && canSubmitRows(items) && unallocated.length === 0;
 
   // 确认写操作 — 页面按钮直接调用, 不经 Alert 回调 (Expo web 上 Alert 回调失效).
   const submitConfirm = async () => {
@@ -180,6 +191,20 @@ export function WHDeliveryConfirmScreen() {
             {anyChanged ? ' 已修改数量 —— 如批次已分配，需先到"发货记录"重新分配保证总量匹配。' : ''}
           </Text>
         </Surface>
+
+        {/* 🔴 未分配批次 —— 事先说清, 而不是让人点了才被后端 409 挡回来。
+            ⚠️ 只 disable 按钮是**另一种「点不动」**: 用户看不出为什么。所以必须同时给出原因和去处。 */}
+        {unallocated.length > 0 ? (
+          <Surface style={styles.blockCard} elevation={1} testID="wh-confirm-unallocated">
+            <MaterialCommunityIcons name="package-variant-closed" size={18} color="#c62828" />
+            <Text style={styles.blockText}>
+              {`还有 ${unallocated.length} 行未分配批次，现在还不能确认发货：`}
+              {unallocated.map((it) => `\n· ${it.productName}`).join('')}
+              {'\n请先在网页端「销售 → 发货记录」点「分配批次」，完成后回来刷新本页。'}
+              {'\n（无关联销售订单的手工发货单不会自动分配批次 —— 新发货请从销售订单创建）'}
+            </Text>
+          </Surface>
+        ) : null}
 
         {/* Rule 1: 每行实发数量, 计划作上限 */}
         <View style={styles.itemsWrap}>
@@ -288,6 +313,17 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: 'row', marginBottom: 8 },
   infoLabel: { width: 72, fontSize: 13, color: '#999' },
   infoValue: { flex: 1, fontSize: 13, color: '#333', fontWeight: '500' },
+  blockCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 12,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 8,
+    backgroundColor: '#ffebee',
+  },
+  blockText: { flex: 1, fontSize: 13, lineHeight: 20, color: '#c62828' },
   warnCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
