@@ -659,6 +659,15 @@ _MISSING_DISCLOSURE_RE = re.compile(
     r"缺|未提供|没有(?:提供|接入|记录|数据)|无法|未知|不可|待补|需补|"
     r"需要补充|尚无|不参与|不能判断|数据不足"
 )
+#: 「让老板自己去弄数据」的说法。⚠️ 它**只是触发词** —— 单独命中不构成违规,
+#: 还必须命中一个 status=available 的维度(见 `_narrative_grounding_violations`)。
+#: 📏 扫 28 条缓存: 8 条含这类措辞而 **6 条是正当的**(导出预算表/租金/会员名单),
+#: 所以按措辞抓的闸误报率 6/8, 必然被关掉 —— 判据要落在「那一维有没有数据」上。
+_ASK_USER_TO_SUPPLY_RE = re.compile(
+    r"(需要你提供|请你提供|请提供|你没有提供|你没提供|你给的摘要"
+    r"|需要你补充|需要你先补|请上传|需要上传|你需要提供)"
+)
+
 _MISSING_DIMENSION_TERMS: Dict[str, Tuple[str, ...]] = {
     "revenue": ("营业额", "营收", "实收", "订单量", "订单数", "客单价"),
     "period_comparison": ("同比", "环比", "较上期", "较去年", "增长率", "下降率"),
@@ -742,6 +751,26 @@ def _narrative_grounding_violations(
         for item in (factbook.missing_dimensions or [])
         if item.get("code")
     }
+    # 🔴 2026-08-18: 上面那条查「缺失维度被当作事实」。这里是它的**镜像** ——
+    #    **有数据的维度被说成「你没提供」**。
+    #
+    # 📏 prod 实拍(MOCK_REST, narrative_cache 里一条 TTL 24h 的答案):
+    #      「需要你提供后5家店的营业额、订单数、就餐人数数据，才能算出哪家店真的垫底」
+    #    而那 10 家店的营业额/订单数/就餐人数**全在库里**。老板照着去提供会一无所获
+    #    —— 反目标里最重的一条。⚠️ 它是 kind=answer, 任何「答上率」都数它为成功。
+    #
+    # ⛔ 判据**不是**按措辞抓: 扫 28 条缓存, 8 条含这类措辞而 **6 条是正当的**
+    #    (导出预算表/租金/会员名单 —— 那些确实不在库里)。误报率 6/8 的闸必然被关掉。
+    #    ⇒ 判据是「**那一维有没有数据**」——**查**, 不是**猜**。
+    #
+    # ⚠️ 只认 status == "available"。`partial`(部分覆盖)时说「需要你补 X」可能正当,
+    #    宁可窄而可信。
+    # ⚠️ 同时出现在两侧时按 missing 算(减掉) —— 同上, 宁可不报。
+    available_codes = {
+        str(item.get("code") or "")
+        for item in (factbook.available_dimensions or [])
+        if item.get("code") and item.get("status") == "available"
+    } - missing_codes
 
     attribution = factbook.attribution or {}
     primary_cause = str(attribution.get("primary_cause") or "").strip()
@@ -783,6 +812,17 @@ def _narrative_grounding_violations(
                 if any(term in clause for term in terms):
                     violations.append(f"缺失维度被当作事实（{code}）：{clause[:120]}")
                     break
+
+            # ── 镜像: 有数据的维度被说成「你没提供」──────────────────────
+            # ⛔ 复用**同一张**词表 `_MISSING_DIMENSION_TERMS`, 不新造第二套。
+            if _ASK_USER_TO_SUPPLY_RE.search(clause):
+                for code in sorted(available_codes):
+                    terms = _MISSING_DIMENSION_TERMS.get(code, ())
+                    if any(term in clause for term in terms):
+                        violations.append(
+                            f"有数据的维度被说成用户没提供（{code}）：{clause[:120]}"
+                        )
+                        break
 
             # Exact budgets and KPI targets are proposals, not observed facts.
             # They may be shown only when the user supplied them or the answer
