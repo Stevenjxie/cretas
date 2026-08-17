@@ -244,6 +244,35 @@ build_apk() {
   fi
 }
 
+smoke_apk() {
+  print_header "启动冒烟 (装起来跑一次)"
+
+  # 🔴 2026-08-17: 加这一步的理由 —— 分发中的 v1.0.4 APK **一启动就崩, 任何设备都崩**
+  # (NoSuchMethodError: getDirectConverter, expo-font 与 expo-modules-core 版本不匹配),
+  # 而当时**每一道既有判据都是绿的**: OTA 四步验收 / jest / tsc / CI。
+  # ⇒ 因为没有任何一条判据是「把它装起来跑一次」。
+  # 「构建成功」「制品里 grep 到标记」都只证明**发出去了**, 不证明**跑得起来**。
+  local smoke="$PROJECT_ROOT/scripts/smoke-android-apk.sh"
+  if [ ! -x "$smoke" ]; then
+    print_warning "找不到 $smoke —— 跳过冒烟。⚠️ 这个包**没有人打开过**, 不要直接分发。"
+    return 0
+  fi
+
+  set +e
+  "$smoke" "$APK_PATH"
+  local rc=$?
+  set -e
+
+  case "$rc" in
+    0) print_success "冒烟通过: 装上去能启动, 无 FATAL / NoSuchMethodError" ;;
+    2) # 三态: rc=2 是「这次没量到」, 与「没问题」必须分开报 (本仓硬约束 4)
+       print_warning "冒烟**没量到**(没有设备/装不上) —— 这不是通过。分发前请在模拟器上补跑:"
+       print_warning "  ANDROID_SERIAL=emulator-5554 $smoke $APK_PATH" ;;
+    *) print_error "冒烟失败: 这个包装上去打不开, ⛔ 禁止分发"
+       exit 1 ;;
+  esac
+}
+
 install_apk() {
   print_header "安装 APK 到设备"
 
@@ -381,6 +410,7 @@ main() {
   prepare_environment
   generate_native_project
   build_apk
+  smoke_apk
 
   if [ "$AUTO_INSTALL" = true ]; then
     install_apk

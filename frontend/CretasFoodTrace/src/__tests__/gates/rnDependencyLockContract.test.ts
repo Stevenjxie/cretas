@@ -126,4 +126,39 @@ describe('RN 依赖锁定契约', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('打 APK 的脚本必须调冒烟闸 —— 「构建成功」不等于「跑得起来」', () => {
+    // 这一条守的是**接线**, 不是脚本存在。
+    // v1.0.4 那次, 依赖是坏的、包也打出来了、所有判据都绿 ——
+    // 缺的就是「装起来跑一次」这一步。冒烟脚本写了而没人调, 等于没写。
+    const REPO = path.resolve(RN_ROOT, '../../');
+    const SMOKE = path.join(REPO, 'scripts/smoke-android-apk.sh');
+    expect(fs.existsSync(SMOKE)).toBe(true);
+
+    // 冒烟闸必须是**三态**(本仓硬约束 4): rc=2「这次没量到」要与 rc=0「没问题」分开,
+    // 否则一台没有设备的打包机会安静地天天绿, 而它一次都没打开过那个包。
+    const smokeSrc = fs.readFileSync(SMOKE, 'utf8');
+    expect(smokeSrc).toContain('exit 2');
+
+    const callers = [
+      'scripts/build-android-apk.sh',
+      '.claude/skills/build-android-apk/scripts/build-apk.sh',
+    ];
+    const notWired: string[] = [];
+    let scanned = 0;
+    for (const rel of callers) {
+      const src = fs.readFileSync(path.join(REPO, rel), 'utf8');
+      scanned += 1;
+      // 只认执行行: 注释里写「以后要接冒烟」不算接上了。
+      const wired = src.split('\n').some((line) => {
+        const code = line.replace(/#.*$/, '').trim();
+        return code.includes('smoke-android-apk.sh') || /"\$\{?SMOKE\}?"/.test(code) || /"\$smoke"/.test(code);
+      });
+      if (!wired) notWired.push(rel);
+    }
+
+    // 🔴 阳性对照: 真的读了两个脚本, 否则「都接上了」可能只是一个都没读。
+    expect(scanned).toBe(callers.length);
+    expect(notWired).toEqual([]);
+  });
 });

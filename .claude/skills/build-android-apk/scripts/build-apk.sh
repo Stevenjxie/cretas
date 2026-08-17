@@ -91,6 +91,25 @@ if [ -f "$APK_PATH" ]; then
     cp "$APK_PATH" "$PROJECT_ROOT/../../../$OUTPUT_NAME"
     echo "  已复制到: $OUTPUT_NAME"
 
+    # 7. 启动冒烟 —— 把它装起来跑一次
+    # 🔴 2026-08-17: v1.0.4 一启动就崩(任何设备), 而当时每一道既有判据都是绿的,
+    #    因为没有一条判据是「把它装起来跑一次」。「构建成功」不等于「跑得起来」。
+    SMOKE="$PROJECT_ROOT/../../scripts/smoke-android-apk.sh"
+    if [ -x "$SMOKE" ]; then
+        set +e
+        "$SMOKE" "$APK_PATH"
+        SMOKE_RC=$?
+        set -e
+        case "$SMOKE_RC" in
+            0) echo "  冒烟通过: 能启动, 无 FATAL / NoSuchMethodError" ;;
+            # rc=2 是三态里的「这次没量到」, 不是通过 (本仓硬约束 4)
+            2) echo "  ⚠️ 冒烟**没量到**(没有设备/装不上) —— 这不是通过, 分发前请在模拟器上补跑" ;;
+            *) echo "  ⛔ 冒烟失败: 这个包装上去打不开, 禁止分发"; exit 1 ;;
+        esac
+    else
+        echo "  ⚠️ 找不到 $SMOKE —— 这个包没有人打开过, 不要直接分发"
+    fi
+
     exit 0
 else
     echo ""
