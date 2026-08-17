@@ -79,3 +79,22 @@ export function calculateImagePlaneStyle(
 
   return style;
 }
+
+/** Keeps the image point under the cursor fixed while zooming. */
+export function calculateAnchoredPan(
+  currentZoom: number,
+  nextZoom: number,
+  currentPan: ImagePan,
+  pointer: ImagePan,
+  renderedPlaneCenter: ImagePan,
+): ImagePan {
+  if (!Number.isFinite(currentZoom) || currentZoom <= 0 || !Number.isFinite(nextZoom) || nextZoom <= 0) {
+    return currentPan;
+  }
+  if (nextZoom <= 1) return { x: 0, y: 0 };
+  const ratio = nextZoom / currentZoom;
+  return {
+    x: currentPan.x + (1 - ratio) * (pointer.x - renderedPlaneCenter.x),
+    y: currentPan.y + (1 - ratio) * (pointer.y - renderedPlaneCenter.y),
+  };
+}

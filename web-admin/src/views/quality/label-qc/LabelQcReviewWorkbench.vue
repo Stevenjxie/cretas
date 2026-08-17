@@ -58,7 +58,17 @@ import {
   type LabelQcObjectDraftItem,
   type LabelQcTrayObjectDraft,
 } from './objectReviewModel';
-import { calculateImagePlaneStyle, resolveImageSize } from './imageViewport';
+import {
+  calculateAnchoredPan,
+  calculateImagePlaneStyle,
+  resolveImageSize,
+} from './imageViewport';
+import {
+  buildHorizontalGuideRows,
+  deduplicateOverlayBoxes,
+  type HorizontalGuideRow,
+  type OverlayLabelBox,
+} from './overlayGeometry';
 
 const props = defineProps<{
   detail: LabelQcTaskDetail;
@@ -412,9 +422,9 @@ function objectBoxStyle(bbox: LabelQcBoundingBox, color: string): Record<string,
 }
 
 function objectColor(type: LabelQcObjectType | 'TRAY'): string {
-  if (type === 'WHITE_LABEL') return '#0891b2';
-  if (type === 'COLOR_LABEL') return '#9333ea';
-  return '#2563eb';
+  if (type === 'WHITE_LABEL') return '#d40000';
+  if (type === 'COLOR_LABEL') return '#6f00b8';
+  return '#00a6b8';
 }
 
 function objectLabelText(type: LabelQcObjectType): string {
@@ -423,6 +433,14 @@ function objectLabelText(type: LabelQcObjectType): string {
 
 function presenceText(presence: LabelQcPresence): string {
   return { PRESENT: '有', MISSING: '缺', UNJUDGEABLE: '看不清' }[presence];
+}
+
+function presenceActionText(presence: LabelQcPresence): string {
+  return {
+    PRESENT: '有标签',
+    MISSING: '实物缺标',
+    UNJUDGEABLE: '看不清',
+  }[presence];
 }
 
 function changePresence(type: LabelQcObjectType, presence: LabelQcPresence): void {
@@ -704,8 +722,18 @@ function endPointer(event: PointerEvent): void {
   }
 }
 
-function changeZoom(delta: number): void {
+function changeZoom(delta: number, anchor?: { x: number; y: number }): void {
   const next = Math.min(4, Math.max(1, Number((zoom.value + delta).toFixed(2))));
+  if (anchor && planeRef.value) {
+    const rect = planeRef.value.getBoundingClientRect();
+    pan.value = calculateAnchoredPan(
+      zoom.value,
+      next,
+      pan.value,
+      anchor,
+      { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+    );
+  }
   zoom.value = next;
   if (next === 1) pan.value = { x: 0, y: 0 };
 }
@@ -717,7 +745,7 @@ function handleWheel(event: WheelEvent): void {
     brushRadius.value = Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, next));
     return;
   }
-  changeZoom(event.deltaY < 0 ? 0.2 : -0.2);
+  changeZoom(event.deltaY < 0 ? 0.2 : -0.2, { x: event.clientX, y: event.clientY });
 }
 
 function confirmCurrentPhoto(): void {
@@ -790,9 +818,9 @@ type ScreenTray = {
 };
 
 const LAYER_META: Record<ScreenLayer, { key: string; text: string; color: string }> = {
-  tray: { key: '1', text: '托盘', color: '#2f6fdd' },
-  white: { key: '2', text: '白标', color: '#06b6d4' },
-  color: { key: '3', text: '彩标', color: '#a855f7' },
+  tray: { key: 'Q', text: '盒子', color: '#00a6b8' },
+  white: { key: 'W', text: '白标', color: '#d40000' },
+  color: { key: 'E', text: '彩标', color: '#6f00b8' },
 };
 
 const visibleLayers = ref<Record<ScreenLayer, boolean>>({
@@ -811,11 +839,8 @@ const screenTrays = computed<ScreenTray[]>(() => {
   }
 });
 
-const hasScreenDetail = computed(() => screenTrays.value.length > 0);
-
 type RefBox = {
   key: string;
-  label: string;
   layer: ScreenLayer;
   style: Record<string, string>;
   title: string;
@@ -827,29 +852,62 @@ const referenceBoxes = computed<RefBox[]>(() => {
     if (visibleLayers.value.tray && tray.bbox?.length === 4) {
       out.push({
         key: `tray-${tray.index}`,
-        label: `${LAYER_META.tray.text} ${tray.index + 1}`,
         layer: 'tray',
         style: boxStyleFrom(tray.bbox, LAYER_META.tray.color),
         title: `${LAYER_META.tray.text} #${tray.index + 1}${tray.trayConfidence != null
           ? ` ${Math.round(tray.trayConfidence * 100)}%` : ''}`,
       });
     }
-    for (const [i, label] of (tray.labels ?? []).entries()) {
-      if (label.type !== 'white' && label.type !== 'color') continue;
-      const layer: ScreenLayer = label.type;
-      if (!visibleLayers.value[layer] || label.bbox?.length !== 4) continue;
+    const labelCandidates = (tray.labels ?? []).flatMap((label, index) => {
+      if ((label.type !== 'white' && label.type !== 'color') || label.bbox?.length !== 4) return [];
+      const xMin = label.bbox[0]!;
+      const yMin = label.bbox[1]!;
+      const xMax = label.bbox[2]!;
+      const yMax = label.bbox[3]!;
+      if ([xMin, yMin, xMax, yMax].some((value) => !Number.isFinite(value))) return [];
+      return [{
+        key: `lb-${tray.index}-${index}`,
+        type: label.type === 'white' ? 'WHITE_LABEL' as const : 'COLOR_LABEL' as const,
+        bbox: { xMin, yMin, xMax, yMax },
+        label,
+      }];
+    });
+    const { kept } = deduplicateOverlayBoxes(labelCandidates);
+    for (const candidate of kept) {
+      const layer: ScreenLayer = candidate.type === 'WHITE_LABEL' ? 'white' : 'color';
+      if (!visibleLayers.value[layer]) continue;
       out.push({
-        key: `lb-${tray.index}-${i}`,
-        label: LAYER_META[layer].text,
+        key: candidate.key,
         layer,
-        style: boxStyleFrom(label.bbox, LAYER_META[layer].color),
-        title: `${LAYER_META[layer].text} ${label.confidence != null
-          ? Math.round(label.confidence * 100) + '%' : ''}`,
+        style: boxStyleFrom(candidate.label.bbox, LAYER_META[layer].color),
+        title: `${LAYER_META[layer].text} ${candidate.label.confidence != null
+          ? Math.round(candidate.label.confidence * 100) + '%' : ''}`,
       });
     }
   }
   return out;
 });
+
+const horizontalGuides = computed<HorizontalGuideRow[]>(() => {
+  const labels: OverlayLabelBox[] = [];
+  for (const tray of objectDraft.value?.trays ?? []) {
+    for (const label of tray.labels) {
+      const layer: ScreenLayer = label.type === 'WHITE_LABEL' ? 'white' : 'color';
+      if (!visibleLayers.value[layer]) continue;
+      labels.push({ key: label.key, type: label.type, bbox: label.bbox });
+    }
+  }
+  return buildHorizontalGuideRows(labels);
+});
+
+function horizontalGuideStyle(guide: HorizontalGuideRow): Record<string, string> {
+  return {
+    left: `${guide.left * 100}%`,
+    top: `${guide.top * 100}%`,
+    width: `${guide.width * 100}%`,
+    '--guide-color': objectColor(guide.type),
+  };
+}
 
 function boxStyleFrom(bbox: number[], color: string): Record<string, string> {
   const [x0, y0, x1, y1] = bbox;
@@ -859,7 +917,6 @@ function boxStyleFrom(bbox: number[], color: string): Record<string, string> {
     width: `${(x1 - x0) * 100}%`,
     height: `${(y1 - y0) * 100}%`,
     borderColor: color,
-    '--reference-color': color,
   };
 }
 
@@ -903,9 +960,10 @@ const SHORTCUTS = [
   { keys: '1 / 2 / 3 / 4', text: '缺白标 / 缺彩标 / 正常 / 不可判定' },
   { keys: 'V / R / B', text: '选择 / 拉框 / 画笔' },
   { keys: '滚轮', text: '画笔模式调笔刷大小，否则缩放' },
-  { keys: 'Enter', text: '确认本图结论' },
+  { keys: 'Space / Enter', text: '确认并下一张' },
   { keys: 'N', text: '整图正常' },
-  { keys: '← / →', text: '上一张 / 下一张' },
+  { keys: 'A', text: '上一张' },
+  { keys: 'Backspace', text: '删除当前框' },
   { keys: 'Q / W / E', text: '盒子 / 白标 / 彩标 图层' },
   { keys: 'Esc', text: '取消选中框' },
 ] as const;
@@ -927,32 +985,86 @@ function pickLabel(label: LabelQcLabel): void {
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  return tag === 'INPUT'
+    || tag === 'TEXTAREA'
+    || tag === 'SELECT'
+    || target.isContentEditable;
+}
+
+function isActionTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.tagName === 'BUTTON' || target.tagName === 'A');
+}
+
+function confirmAndGoNext(): void {
+  if (!confirmCurrentObjectBeforeSwitch('照片') || !activeDraft.value) return;
+  if (!activeDraft.value.reviewed) {
+    const error = markPhotoReviewed(activeDraft.value);
+    if (error) {
+      ElMessage.warning(`${error}，请先完成本图再进入下一张`);
+      choosePreferredItem();
+      return;
+    }
+    setDirty(true);
+  }
+  nextPhoto();
+}
+
+function deleteSelectedByKeyboard(): void {
+  if (selectedObject.value) {
+    deleteObjectLabel(selectedObject.value);
+    return;
+  }
+  if (selectedItem.value?.source === 'HUMAN') {
+    deleteHumanItem();
+    return;
+  }
+  if (selectedItem.value?.source === 'AI') {
+    rejectAiCandidate();
+    return;
+  }
+  const tray = selectedTray.value;
+  if (!tray || selectedObjectKey.value !== tray.key) return;
+  void ElMessageBox.confirm(
+    `确认删除盒子 ${tray.trayIndex + 1} 及其标签框？`,
+    '删除盒子',
+    {
+      type: 'warning',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    },
+  ).then((): void => deleteSelectedTray()).catch((): void => {});
 }
 
 function onShortcutKey(event: KeyboardEvent): void {
   // 输入框内打字、以及带修饰键的组合，一律不拦截
   if (isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+  // 避免 Space / Enter 在已聚焦按钮上同时触发按钮原动作和“下一张”。
+  if ((event.key === ' ' || event.key === 'Enter') && isActionTarget(event.target)) return;
   if (!props.canReview) return;
 
   switch (event.key) {
     case 'Enter':
+    case ' ':
       event.preventDefault();
-      if (activeDraft.value?.reviewed) nextPhoto();
-      else confirmCurrentPhoto();
+      confirmAndGoNext();
       break;
     case 'n':
     case 'N':
       event.preventDefault();
       void confirmCurrentPhotoNormal();
       break;
-    case 'ArrowLeft':
+    case 'a':
+    case 'A':
       event.preventDefault();
       previousPhoto();
       break;
     case 'ArrowRight':
       event.preventDefault();
-      nextPhoto();
+      confirmAndGoNext();
+      break;
+    case 'Backspace':
+      event.preventDefault();
+      deleteSelectedByKeyboard();
       break;
     case '1':
     case '2':
@@ -1177,11 +1289,28 @@ onBeforeUnmount(() => {
             <span class="toolbar-kicker">第 {{ activePhotoIndex + 1 }} 张原图</span>
             <strong>{{ aiReviewStatusText }}</strong>
           </div>
-          <div class="zoom-tools" aria-label="照片缩放">
-            <button type="button" aria-label="缩小照片" @click="changeZoom(-0.25)"><Minus /></button>
-            <span>{{ Math.round(zoom * 100) }}%</span>
-            <button type="button" aria-label="放大照片" @click="changeZoom(0.25)"><Plus /></button>
-            <button type="button" class="reset-view" @click="resetView"><RefreshLeft />复位</button>
+          <div class="viewer-controls">
+            <div class="layer-toggles" aria-label="框图层显示">
+              <button
+                v-for="(meta, layer) in LAYER_META"
+                :key="layer"
+                type="button"
+                class="layer-toggle"
+                :class="[`layer-${layer}`, { off: !visibleLayers[layer as ScreenLayer] }]"
+                :style="{ '--layer-color': meta.color }"
+                :aria-pressed="visibleLayers[layer as ScreenLayer]"
+                :aria-label="`${visibleLayers[layer as ScreenLayer] ? '隐藏' : '显示'}${meta.text}`"
+                @click="toggleLayer(layer as ScreenLayer)"
+              >
+                <i class="dot" /><span>{{ meta.text }}</span><kbd>{{ meta.key }}</kbd>
+              </button>
+            </div>
+            <div class="zoom-tools" aria-label="照片缩放">
+              <button type="button" aria-label="缩小照片" @click="changeZoom(-0.25)"><Minus /></button>
+              <span>{{ Math.round(zoom * 100) }}%</span>
+              <button type="button" aria-label="放大照片" @click="changeZoom(0.25)"><Plus /></button>
+              <button type="button" class="reset-view" @click="resetView"><RefreshLeft />复位</button>
+            </div>
           </div>
         </div>
 
@@ -1230,7 +1359,7 @@ onBeforeUnmount(() => {
             <strong>按住左键涂抹</strong> · 滚轮调笔刷大小 · 涂过的范围会圈成一个框 · 中键拖动画面
           </span>
           <span v-else>
-            <strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮放大照片后拖动画面
+            <strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮以鼠标位置为中心放大
           </span>
         </div>
 
@@ -1262,28 +1391,34 @@ onBeforeUnmount(() => {
               @load="handleMainImageLoad"
               @error="handleMainImageError"
             >
-            <!-- AI 初筛参考层：只读，画在人工标注框下面 -->
+            <!-- 仅在对象草稿不可用时回退显示 AI 参考框，避免同一个框叠画两遍。 -->
             <div
               v-for="ref in referenceBoxes"
+              v-show="!objectDraft"
               :key="ref.key"
               class="reference-box"
               :class="`layer-${ref.layer}`"
               :style="ref.style"
               :title="ref.title"
             >
-              <span class="reference-tag">{{ ref.label }}</span>
             </div>
-            <!-- 人工最终对象层：可交互，AI 参考层仍保留在下方作为不可变证据。 -->
+            <div
+              v-for="guide in horizontalGuides"
+              :key="guide.key"
+              class="horizontal-guide"
+              :class="guide.type === 'WHITE_LABEL' ? 'guide-white' : 'guide-color'"
+              :style="horizontalGuideStyle(guide)"
+              :title="`${objectLabelText(guide.type)}横排，共 ${guide.count} 个`"
+            />
+            <!-- 人工最终对象层：这是审核员实际修正和提交的唯一一套对象框。 -->
             <template v-for="tray in objectDraft?.trays ?? []" :key="tray.key">
               <div
+                v-if="visibleLayers.tray"
                 class="object-final-box object-tray-box"
                 :class="{ selected: selectedObjectKey === tray.key, muted: selectedTray && selectedTray.key !== tray.key }"
                 :style="objectBoxStyle(tray.bbox, objectColor('TRAY'))"
                 @pointerdown="startObjectPointer($event, tray, tray, 'move')"
               >
-                <button type="button" class="object-final-tag" @pointerdown.stop="selectTray(tray)">
-                  盒子 {{ tray.trayIndex + 1 }}{{ tray.confirmed ? ' ✓' : '' }}
-                </button>
                 <button
                   v-if="canReview && selectedObjectKey === tray.key"
                   type="button"
@@ -1294,20 +1429,13 @@ onBeforeUnmount(() => {
               </div>
               <div
                 v-for="label in tray.labels"
+                v-show="visibleLayers[label.type === 'WHITE_LABEL' ? 'white' : 'color']"
                 :key="label.key"
                 class="object-final-box object-label-box"
                 :class="{ selected: selectedObjectKey === label.key, muted: selectedTray && selectedTray.key !== tray.key }"
                 :style="objectBoxStyle(label.bbox, objectColor(label.type))"
                 @pointerdown="startObjectPointer($event, tray, label, 'move')"
               >
-                <button
-                  type="button"
-                  class="object-final-tag"
-                  :style="{ backgroundColor: objectColor(label.type) }"
-                  @pointerdown.stop="selectedTrayKey = tray.key; selectedObjectKey = label.key"
-                >
-                  {{ objectLabelText(label.type) }}{{ label.truncated ? '·边缘' : '' }}
-                </button>
                 <button
                   v-if="canReview && selectedObjectKey === label.key"
                   type="button"
@@ -1329,14 +1457,6 @@ onBeforeUnmount(() => {
               :style="annotationStyle(item)"
               @pointerdown="startBoxPointer($event, item, 'move')"
             >
-              <button
-                type="button"
-                class="box-label"
-                :style="{ backgroundColor: itemColor(item) }"
-                @pointerdown.stop="selectItem(item)"
-              >
-                {{ item.source === 'AI' ? 'AI' : '人工' }} · {{ labelText(item.label ?? item.aiLabel) }}
-              </button>
               <button
                 v-if="canReview"
                 type="button"
@@ -1431,6 +1551,14 @@ onBeforeUnmount(() => {
             </div>
 
             <template v-if="selectedTray">
+              <div class="missing-label-guide">
+                <strong>先看原图，再选动作</strong>
+                <div>
+                  <span><b>实物没有标签</b>选“实物缺标”，不要画假框</span>
+                  <span><b>实物有、AI 漏框</b>点“补白标框 / 补彩标框”</span>
+                  <span><b>被挡住看不清</b>选“看不清”，不会当作缺标真值</span>
+                </div>
+              </div>
               <div class="tray-context-row">
                 <strong>盒子 {{ selectedTray.trayIndex + 1 }}</strong>
                 <span>白标 {{ presenceText(selectedTray.whitePresence) }} · 彩标 {{ presenceText(selectedTray.colorPresence) }}</span>
@@ -1448,10 +1576,10 @@ onBeforeUnmount(() => {
                     :disabled="!canReview"
                     @click="changePresence(type, presence)"
                   >
-                    {{ presenceText(presence) }}
+                    {{ presenceActionText(presence) }}
                   </button>
                   <button type="button" class="add-label" :disabled="!canReview" @click="addDefaultObjectLabel(type)">
-                    + 补框
+                    + 补{{ objectLabelText(type) }}框
                   </button>
                 </div>
               </div>
@@ -1476,7 +1604,7 @@ onBeforeUnmount(() => {
                 <button type="button" class="danger-link" :disabled="!canReview" @click="deleteObjectLabel(selectedObject)">删除错框</button>
               </div>
 
-              <p class="object-auto-confirm-hint">切换盒子或照片时自动保存当前结果；图层显示开关不改变审核结论。</p>
+              <p class="object-auto-confirm-hint">切换盒子或照片会保留当前草稿；提交整单后才写入服务器。图层开关只改变显示，不改变审核结论。</p>
             </template>
           </section>
 
@@ -1625,7 +1753,7 @@ onBeforeUnmount(() => {
 
     <footer class="review-navigation">
       <button type="button" class="previous" :disabled="activePhotoIndex === 0" @click="previousPhoto">
-        上一张
+        上一张 <kbd>A</kbd>
       </button>
       <div class="current-state" :class="{ complete: currentPhotoComplete }">
         <span>第 {{ activePhotoIndex + 1 }}/{{ drafts.length }} 张</span>
@@ -1635,19 +1763,6 @@ onBeforeUnmount(() => {
             <kbd>{{ s.keys }}</kbd>{{ s.text }}
           </span>
         </div>
-        <div v-if="hasScreenDetail" class="layer-toggles">
-          <button
-            v-for="(meta, layer) in LAYER_META"
-            :key="layer"
-            type="button"
-            class="layer-toggle"
-            :class="{ off: !visibleLayers[layer as ScreenLayer] }"
-            :style="{ '--layer-color': meta.color }"
-            @click="toggleLayer(layer as ScreenLayer)"
-          >
-            <i class="dot" /><kbd>{{ meta.key }}</kbd>{{ meta.text }}
-          </button>
-        </div>
       </div>
       <button
         v-if="!allComplete"
@@ -1656,7 +1771,7 @@ onBeforeUnmount(() => {
         :disabled="!currentPhotoComplete"
         @click="nextPhoto"
       >
-        {{ nextButtonText }}
+        {{ nextButtonText }} <kbd>Space / Enter</kbd>
         <Right />
       </button>
       <button
@@ -1863,6 +1978,14 @@ button {
   gap: 12px;
   padding: 11px 14px;
   color: #f6faf8;
+}
+
+.viewer-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .image-toolbar > div:first-child {
@@ -2125,31 +2248,22 @@ button {
   border: 2px solid;
   border-radius: 3px;
   pointer-events: none;
-  opacity: .92;
+  border-width: 3px;
+  opacity: 1;
 }
 
 .reference-box.layer-tray {
-  border-style: dashed;
-  opacity: .78;
+  border-style: solid;
+  opacity: 1;
 }
 
-.reference-tag {
+.horizontal-guide {
   position: absolute;
-  top: -1px;
-  left: -1px;
-  display: block;
-  max-width: max-content;
-  padding: 2px 6px 3px;
-  border-radius: 2px 0 4px;
-  color: #fff;
-  background: var(--reference-color);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: .02em;
-  white-space: nowrap;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, .35);
+  z-index: 4;
+  height: 0;
+  border-top: 4px solid var(--guide-color);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 92%), 0 -1px 0 rgb(255 255 255 / 92%);
+  pointer-events: none;
 }
 
 /* 单层细框：原先是 3px 边框 + 1px 白描边 (选中时再叠 3px 白 + 6px 绿 = 一圈 9px)，
@@ -2163,7 +2277,7 @@ button {
 }
 
 .annotation-box.pending {
-  border-style: dashed;
+  border-style: solid;
   background: rgba(245, 165, 36, .08);
 }
 
@@ -2175,20 +2289,6 @@ button {
   border-width: 3px;
   z-index: 4;
   filter: drop-shadow(0 0 3px rgba(0, 0, 0, .55));
-}
-
-.box-label {
-  position: absolute;
-  top: -27px;
-  left: -3px;
-  min-width: max-content;
-  padding: 4px 7px;
-  border: 0;
-  border-radius: 5px 5px 5px 0;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 800;
-  cursor: pointer;
 }
 
 .resize-handle {
@@ -2586,7 +2686,6 @@ button:disabled {
 .layer-toggles {
   display: flex;
   gap: 8px;
-  margin-top: 6px;
   justify-content: center;
 }
 
@@ -2594,24 +2693,28 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
-  border: 1px solid var(--el-border-color, #d9dde5);
-  border-radius: 99px;
-  background: var(--el-bg-color, #fff);
-  font-size: 11px;
-  color: var(--el-text-color-regular, #4a5262);
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 2px solid var(--layer-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--layer-color) 22%, #14231e);
+  font-size: 12px;
+  color: #fff;
+  font-weight: 800;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .layer-toggle .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
   background: var(--layer-color);
 }
 
 .layer-toggle.off {
-  opacity: .45;
+  opacity: .55;
+  background: transparent;
 }
 
 .layer-toggle.off .dot {
@@ -2620,7 +2723,8 @@ button:disabled {
 }
 
 .shortcut kbd,
-.layer-toggle kbd {
+.layer-toggle kbd,
+.review-navigation > button kbd {
   display: inline-block;
   min-width: 18px;
   padding: 1px 6px;
@@ -2751,35 +2855,55 @@ button:disabled {
 .object-final-box {
   position: absolute;
   z-index: 2;
-  border: 2px solid;
+  border: 3px solid;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 72%);
   pointer-events: auto;
   cursor: move;
 }
 
-.object-final-box.muted { opacity: .28; }
+.object-final-box.muted { opacity: .68; }
 .object-final-box.selected { z-index: 3; box-shadow: 0 0 0 3px rgb(255 255 255 / 80%); }
-.object-tray-box { border-style: dashed; }
-.object-final-tag {
-  position: absolute;
-  top: -26px;
-  left: -2px;
-  min-height: 24px;
-  padding: 3px 7px;
-  border: 0;
-  border-radius: 4px 4px 0 0;
-  color: #fff;
-  background: #2563eb;
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
+.object-tray-box { border-style: solid; }
 .object-review-card {
   margin-bottom: 12px;
   padding: 14px;
   border: 1px solid #bfdbfe;
   border-radius: 12px;
   background: #eff6ff;
+}
+
+.missing-label-guide {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 11px 12px;
+  border: 1px solid #f4b35e;
+  border-left: 5px solid #e47c00;
+  border-radius: 9px;
+  color: #5c3b12;
+  background: #fff8e9;
+}
+
+.missing-label-guide > strong {
+  font-size: 13px;
+}
+
+.missing-label-guide > div {
+  display: grid;
+  gap: 5px;
+}
+
+.missing-label-guide span {
+  color: #6f512d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.missing-label-guide b {
+  display: inline-block;
+  min-width: 96px;
+  color: #9a4b00;
 }
 
 .object-review-heading,
@@ -2814,9 +2938,9 @@ button:disabled {
 .tray-context-row span { color: #475569; font-size: 12px; }
 .danger-link { color: #b91c1c !important; }
 .presence-editor { display: grid; gap: 8px; }
-.presence-editor > div { display: grid; grid-template-columns: 42px repeat(4, 1fr); gap: 6px; align-items: center; }
+.presence-editor > div { display: grid; grid-template-columns: 48px repeat(3, minmax(62px, 1fr)); gap: 6px; align-items: center; }
 .presence-editor button.on { color: #fff; border-color: #2563eb; background: #2563eb; }
-.presence-editor .add-label { color: #1d4ed8; }
+.presence-editor .add-label { grid-column: 2 / -1; color: #1d4ed8; }
 .object-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .object-list button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; }
 .object-list button.active { border-color: #2563eb; box-shadow: 0 0 0 2px #bfdbfe; }

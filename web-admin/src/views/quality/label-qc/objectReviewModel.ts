@@ -7,6 +7,7 @@ import type {
   LabelQcPresence,
   LabelQcTrayObjectReview,
 } from '@/api/labelQc';
+import { deduplicateOverlayBoxes, type OverlayLabelBox } from './overlayGeometry';
 
 export interface LabelQcObjectDraftItem extends LabelQcObjectReviewItem {
   key: string;
@@ -81,7 +82,7 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
     const trayIndex = Number.isInteger(rawTray.index) ? rawTray.index! : order;
     const bbox = toBox(rawTray.bbox);
     if (!bbox) return [];
-    const labels = (rawTray.labels ?? []).flatMap((rawLabel, labelIndex) => {
+    const labelCandidates = (rawTray.labels ?? []).flatMap((rawLabel, labelIndex) => {
       const labelBox = toBox(rawLabel.bbox);
       if (!labelBox || (rawLabel.type !== 'white' && rawLabel.type !== 'color')) return [];
       return [{
@@ -93,6 +94,9 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
         truncated: false,
       }];
     });
+    const { kept: labels, rejected } = deduplicateOverlayBoxes(
+      labelCandidates as (LabelQcObjectDraftItem & OverlayLabelBox)[],
+    );
     const whiteCount = labels.filter((label) => label.type === 'WHITE_LABEL').length;
     const colorCount = labels.filter((label) => label.type === 'COLOR_LABEL').length;
     return [{
@@ -104,7 +108,7 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
       whitePresence: presenceFrom(rawTray.hasWhite, whiteCount),
       colorPresence: presenceFrom(rawTray.hasColor, colorCount),
       labels,
-      rejectedAiObjectKeys: [] as string[],
+      rejectedAiObjectKeys: rejected.flatMap((label) => label.aiObjectKey ? [label.aiObjectKey] : []),
       confirmed: true,
     }];
   });

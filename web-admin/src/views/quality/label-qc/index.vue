@@ -1063,7 +1063,19 @@ onMounted(load);
   padding: 0;
 }
 
+/* 标签密集审核必须保留整图、图层开关和逐盒判定三栏。全局短屏规则会把
+   普通抽屉压到 560px，这个专用工作台在桌面短屏仍保持接近全屏。 */
+:deep(.review-drawer.el-drawer) {
+  width: 96% !important;
+  max-width: 96vw;
+}
+
 @media (max-width: 900px) {
+  :deep(.review-drawer.el-drawer) {
+    width: 100% !important;
+    max-width: 100vw;
+  }
+
   .summary-grid {
     grid-template-columns: 1fr;
   }

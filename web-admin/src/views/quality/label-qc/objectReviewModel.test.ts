@@ -79,4 +79,27 @@ describe('label QC object review model', () => {
     });
     expect(payload.trays[0]?.labels[0]).not.toHaveProperty('aiObjectKey');
   });
+
+  it('automatically removes obvious duplicate AI label proposals and records the rejection', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{
+        index: 0,
+        bbox: [0, 0, 1, 1],
+        labels: [
+          { type: 'color', bbox: [0.20, 0.20, 0.40, 0.40] },
+          { type: 'color', bbox: [0.19, 0.19, 0.41, 0.41] },
+          { type: 'color', bbox: [0.21, 0.21, 0.39, 0.39] },
+        ],
+      }],
+    })));
+
+    expect(draft.trays[0]?.labels).toHaveLength(1);
+    expect(draft.trays[0]?.labels[0]?.bbox).toEqual({
+      xMin: 0.19,
+      yMin: 0.19,
+      xMax: 0.41,
+      yMax: 0.41,
+    });
+    expect(draft.trays[0]?.rejectedAiObjectKeys).toEqual(['label-0-0', 'label-0-2']);
+  });
 });
