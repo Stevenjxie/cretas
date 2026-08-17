@@ -71,6 +71,24 @@ function maybeShowBalanceWarning(warning: string | undefined): void {
   );
 }
 
+/**
+ * 本道未配「半成品产出编号」—— 产出没进半成品库, 下一道领不到。
+ *
+ * <p>2026-08-17 F006 生产走查实测: 全厂只有 42/186 工序配了这个编号,
+ * 客户在用的批次三道【一道都没配】。此前整条链是【静默】的:
+ * 报工返回 200, 产出不入账, 下一道空着, 没有人被告知 ——
+ * 这就是客户说的「上工序报工、下工序没有库存」。
+ *
+ * ⚠️ 后端 2026-08-17 起会在响应里带 semiOutputNotConfigured, 但前端【零消费端】
+ *    就等于没加(本仓反复踩的「产出端有了、消费端收不到」)。这里就是那个消费端。
+ *
+ * 文案两句封顶: 发生了什么 + 下一步点哪。⛔ 不堆解释。
+ */
+function maybeShowSemiOutputGap(warning: string | undefined): void {
+  if (!warning) return;
+  appAlert('产出没进半成品库', warning);
+}
+
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
@@ -1075,6 +1093,7 @@ const YieldStepReportScreen: React.FC = () => {
         await refetchYield();
         setEvidencePhotos([]);
         maybeShowBalanceWarning(res.data.balanceWarning);
+        maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
         appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
       } catch (error) {
         handleError(error, { showAlert: false, logError: true });
@@ -1158,6 +1177,7 @@ const YieldStepReportScreen: React.FC = () => {
       // 投入提交成功 → 该道转 IN_PRODUCTION; 清生产阶段输入残留
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
+      maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
       appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
@@ -1269,6 +1289,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
+      maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
     } catch (forceError) {
       handleError(forceError, { showAlert: false, logError: true });
       const fe = forceError as { response?: { data?: { message?: string } } };
@@ -1339,6 +1360,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
+      maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
       // 同单未完结续报: 留单继续 (markComplete=false) → 清空产出输入, 提示累计已产出 + 可继续。
       const cumulative = res.data.cumulativeOutput ?? null;
       if (!markComplete) {
@@ -1533,6 +1555,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
+      maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
       appAlert('领料已记录', '可继续报工，完成后请提交产出', [
         { text: '好的', style: 'default' },
       ]);
@@ -1598,6 +1621,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
+      maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const { title, msg } = friendlySubmitError(error);
