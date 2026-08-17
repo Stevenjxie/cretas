@@ -98,6 +98,10 @@ from smartbi.agent.dimension_catalog import (
 )
 from smartbi.agent.factbook import (
     FactBook,
+    # 门店名单上限**只此一处定义**(factbook)。查库这一端和渲染那一端必须读同一个
+    # 常量 —— 改之前它们是两个各自写死的 5(`top_n_stores=5` / `stores[:5]`),
+    # 名字不同, 数其中一个数不到另一个, 只改一处会「实测没变化」。
+    LLM_STORE_ROSTER_CAP,
     NOTE_COMPLAINT_DISPUTE,
     NOTE_DISH_MARGIN_ABSENT,
     NOTE_DISH_TAG_NOT_NAME,
@@ -181,7 +185,10 @@ async def _pos_finance_summary(
     factory_id: str,
     date_range: Tuple[date, date],
     *,
-    top_n_stores: int = 5,
+    # ⛔ 默认值也读同一个常量 —— 写死的 5 就是第三份口径, 它会在
+    #    「有人不传这个参数」时悄悄把名单截回 5 家, 而症状是模型又开始说
+    #    「你没提供后几名的数据」(形态 D: 同一件事多处, 一定会漂)。
+    top_n_stores: int = LLM_STORE_ROSTER_CAP,
     store_names: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """Read revenue/order facts from bill-grain POS data when agg_daily lags.
@@ -1824,7 +1831,7 @@ class ComprehensiveSynthesisEngine:
                     self._pool,
                     gold_sales_factory,
                     date_range,
-                    top_n_stores=5,
+                    top_n_stores=LLM_STORE_ROSTER_CAP,
                     **(
                         {"store_names": store_names}
                         if store_names is not None
@@ -2009,7 +2016,7 @@ class ComprehensiveSynthesisEngine:
                         self._pool,
                         gold_sales_factory,
                         date_range,
-                        top_n_stores=5,
+                        top_n_stores=LLM_STORE_ROSTER_CAP,
                         store_names=store_names,
                     ),
                     "finance_pos_fallback",

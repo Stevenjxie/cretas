@@ -387,7 +387,13 @@ class TestBuildFactbook:
                 datetime.date(2026, 7, 21),
                 datetime.date(2026, 7, 27),
             )
-            assert top_n_stores == 5
+            # ⚠️ 2026-08-18: 原来写死 5。这条守的是「传下去的是那个上限」这个行为,
+            #    而上限本身被订正了(📏 prod 实测: 只给 5 家导致模型说
+            #    「需要你提供后 5 家店的数据」, 而数据全在库里)。
+            # ⛔ 不写死 20 —— 那是第四份口径。读常量。
+            from smartbi.agent.factbook import LLM_STORE_ROSTER_CAP
+
+            assert top_n_stores == LLM_STORE_ROSTER_CAP
             assert store_names is None
             return {
                 "total_revenue": 188000.0,

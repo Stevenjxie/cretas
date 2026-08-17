@@ -143,6 +143,35 @@ def _has_reliable_dish_margin(dm: Any) -> bool:
     return isinstance(dm, dict) and dm.get("cost_basis_complete") is True
 
 
+#: 喂给 LLM 的门店名单最多列几家。**明写出来的选择，⛔ 不是推导出来的。**
+#:
+#: ## 为什么有这个常量（📏 MOCK_REST prod 2026-08-18）
+#:
+#: 老板问「我要不要关掉最差的那家店」，产品答了 948 字，其中说
+#:     「你给的摘要里只有营业额排名前5的门店，没有后5名的数据」
+#:     「**需要你提供后5家店的营业额、订单数、就餐人数数据**」
+#: 而那 10 家店的数据**全在库里**（同一天别的问句列得出最高与最低）。
+#:
+#: ▎LLM 说的「我只看到前 5 名」是**忠实的**。
+#: ▎错在我们只给了它 5 家，然后它把「摘要被截断」翻译成了「用户没提供数据」。
+#: ▎老板照着去「提供数据」会一无所获 —— 反目标里最重的那一条。
+#:
+#: ## 截断原来有**两处**，名字不同，数一个数不到另一个（硬约束 8）
+#:
+#:     ① synthesis_engine  top_n_stores=5   查库时截
+#:     ② 本文件 _render_finance  stores[:5]  **渲染给 LLM 时又截一次** ← 真正生效的那层
+#:
+#: ⇒ 收敛成这一个常量，两处都读它。⛔ 不许再出现写死的数字。
+#:
+#: ## 为什么是 20 而不是「全给」
+#:
+#: 架构裁定：开集或大的事实（门店/菜单/能力表）走**检索召回几条**，
+#: ⛔ 不全量塞 prompt —— 上千家店时 prompt 会爆。20 覆盖单体与中小连锁；
+#: 超过它时**明说是我们截的、数据在系统里**（见 `_render_finance`），
+#: 让 LLM 即使照抄也是照抄一句真话。
+LLM_STORE_ROSTER_CAP = 20
+
+
 @dataclass
 class FactBook:
     """Deterministic metric汇总. LLM/analyzer read here, never self-compute."""
@@ -324,12 +353,25 @@ class FactBook:
             )
         stores = fin.get("top_stores") or []
         if stores:
+            shown = stores[:LLM_STORE_ROSTER_CAP]
             lines.append("- Top 门店（按营业额）：")
-            for i, s in enumerate(stores[:5], 1):
+            for i, s in enumerate(shown, 1):
                 name = s.get("store_name") or s.get("store_id") or "未知门店"
                 rev = s.get("revenue")
                 bc = s.get("bill_count") or 0
                 lines.append(f"  {i}. {name}：¥{_money(rev)}（{int(bc):,} 单）")
+            # 🔴 截断了就**说清是我们截的**, ⛔ 不让模型自己去推。
+            #    📏 prod 实测: 只给 5 家 + 上一行写着「门店 10 家」, 模型推出来的是
+            #    「需要你提供后 5 家店的数据」—— 它的推断没错, 是我们给的信息自相矛盾。
+            #    这一句可以被原样照抄, 而照抄的是**真话**。
+            # ⚠️ 只在真的截断了才出现 —— 无条件打印就是一条会误导的提示(有阴性对照钉着)。
+            if int(store_count or 0) > len(shown):
+                lines.append(
+                    f"  （共 {int(store_count):,} 家门店，上面按营业额列了前 "
+                    f"{len(shown)} 家；其余 {int(store_count) - len(shown)} 家的数据"
+                    f"**在系统里**，只是没放进这段摘要 —— "
+                    f"⛔ 不要说成用户没提供，需要时可以按门店再查一次。）"
+                )
         lines.append("")
 
     def _render_weather(self, lines: List[str]) -> None:

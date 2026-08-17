@@ -1927,7 +1927,41 @@ _INTERROGATIVE_MARKERS: Tuple[str, ...] = (
 _STORE_SPREAD_WORTH_CHASING_PCT = 5.0
 
 
-def _advice_line(top_stores, can_see_money: bool) -> str:
+def _store_revenue_spread(rows) -> "Optional[Tuple[float, float, float]]":
+    """(最高营收, 最低营收, 极差%) —— **门店极差只此一处计算**。
+
+    ## 为什么要抽出来（📏 MOCK_REST prod 2026-08-18）
+
+    改之前有**两处**各算一遍，而且两处都拿到的是**被截断成前 5 家**的名单
+    （`finance_summary(top_n_stores=5)["top_stores"]`），于是老板看到：
+
+    ```
+    最高与最低相差 0.7%（¥2,173,119.81 vs ¥2,157,418.33）   ← 前 5 名内部的极差
+    ```
+
+    而**同一份答案里的门店表有 10 家**，真实极差是 **2.7%**
+    （¥2,173,119.81 vs ¥2,114,240.16）。老板去核对那张表就会发现
+    最低的那家不是括号里写的那家、金额也对不上 —— **一条经不起查的结论**。
+
+    ⚠️ 更值得记的是：`_advice_line` 自己的注释里写着「10 家店只差 **2.6%**」，
+       与代码印出来的 0.7% 不是一个数 —— **注释用的是真值，代码用的是截断值**。
+
+    ⚠️ 这次 5% 阈值下建议方向**碰巧没反**（0.7% 与 2.7% 都 < 5%）。
+       ⛔ 不能因为这次没出事就说它没问题：第 6~10 名里只要有一家显著低，方向就会反。
+
+    ⇒ 修两件事：① 调用点传**全量**门店（`store_comparison` 的结果，
+      它本来就在同一个函数里）；② 极差计算收敛成这一个函数。
+    """
+    revenues = [float(r.get("revenue") or 0.0) for r in (rows or [])]
+    if len(revenues) < 2:
+        return None
+    hi, lo = max(revenues), min(revenues)
+    if hi <= 0:
+        return None
+    return hi, lo, (hi - lo) / hi * 100.0
+
+
+def _advice_line(stores, can_see_money: bool) -> str:
     """按门店差距给建议 —— 差距小就直说别按门店拆。
 
     🔴 2026-08-17 冷启动实测催生: 这里原来是一句**无条件常量**,
@@ -1940,19 +1974,18 @@ def _advice_line(top_stores, can_see_money: bool) -> str:
     ⛔ 不压掉建议(那会少一个出口), 而是让它**指向数据支持的那个方向**:
        差距够大 → 按门店查; 差距很小 → 明说门店之间没东西可追, 换个方向。
     """
-    if not can_see_money or len(top_stores) < 2:
+    if not can_see_money or len(stores) < 2:
         return (
             "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
             "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
         )
-    revs = [float(s.get("revenue") or 0.0) for s in top_stores]
-    hi, lo = max(revs), min(revs)
-    if hi <= 0:
+    spread = _store_revenue_spread(stores)
+    if spread is None:
         return (
             "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
             "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
         )
-    spread_pct = (hi - lo) / hi * 100.0
+    _hi, _lo, spread_pct = spread
     if spread_pct < _STORE_SPREAD_WORTH_CHASING_PCT:
         return (
             f"建议：这段时间门店之间差得很少（最高与最低相差 {spread_pct:.1f}%，"
@@ -2050,15 +2083,23 @@ def _store_lead_sentence(rows, *, noun: str, top_type_text: str = "") -> str:
             f"要按门店看，需要录{noun}时选门店（或让上游把门店字段补上）；"
             f"补上之后我就能算。下面先给按食材的那一层。"
         )
-    amounts = [float(r["cost"] or 0.0) for r in rows]
+    # ⛔ 极差走 `_store_revenue_spread` 这一处。
+    # 🔴 2026-08-18 订正: 我写这段(损耗首段)时**自己又写了一份** `(hi-lo)/hi*100`,
+    #    而同一次改动的注释里还写着「阈值复用 _STORE_SPREAD_WORTH_CHASING_PCT,
+    #    ⛔ 不新写一份」—— 复用了阈值, 却新写了算法。形态 D 的现场证据。
+    #    是那道「极差只许一处在算」的 AST 闸把它抓出来的。
+    # ⚠️ 该函数按 `revenue` 键取值, 而损耗行的键是 `cost` ⇒ 这里先改名对齐,
+    #    ⛔ 不给它加第二个键名参数(那等于把「读哪个字段」变成第二处口径)。
+    spread = _store_revenue_spread(
+        [{"revenue": r.get("cost")} for r in rows])
     hi_row, lo_row = rows[0], rows[-1]
-    hi, lo = max(amounts), min(amounts)
-    if len(rows) < 2 or hi <= 0:
+    if spread is None:
+        hi = float(rows[0].get("cost") or 0.0)
         return (
             f"按门店看：只有 **{hi_row['store_name']}** 有记门店的{noun}，"
             f"¥{hi:,.2f}。其余门店这段时间没有记门店的{noun}单据。"
         )
-    spread_pct = (hi - lo) / hi * 100.0
+    hi, lo, spread_pct = spread
     head = (
         f"按门店看：**{hi_row['store_name']}** {noun}最多，¥{hi:,.2f}；"
         f"最少的是 {lo_row['store_name']} ¥{lo:,.2f}。"
@@ -8090,12 +8131,22 @@ async def resolve_sales_summary(
     #    要修的是产品**替他做了那个判断**却没给依据: 说了「谁最强/先看谁」,
     #    却从没说「差多少」。
     # ⇒ 把差距量出来接在结论后面, 让他自己判断值不值得追。
+    # 🔴 2026-08-18: 这里原来读 `top_stores` —— 那是
+    #    `finance_summary(top_n_stores=5)["top_stores"]`, **只有前 5 家**。
+    #    而 `stores`(上面 `store_comparison` 的结果)就在同一个函数里, 是**全量**。
+    #    📏 MOCK_REST 实测: 前 5 名极差 0.7%(¥2,173,119.81 vs ¥2,157,418.33),
+    #       全部 10 家极差 **2.7%**(¥2,173,119.81 vs ¥2,114,240.16)。
+    #       老板去核对同一份答案里那张 10 行门店表, 会发现最低的那家不是括号里
+    #       写的那家、金额也对不上 —— 一条经不起查的结论。
+    #    ⚠️ `_advice_line` 自己的注释里写着「10 家店只差 2.6%」, 与代码印出来的
+    #       0.7% 不是一个数 —— 注释用的是真值, 代码用的是截断值。
+    #    ⚠️ 这次 5% 阈值下建议方向碰巧没反; ⛔ 不能因为这次没出事就说它没问题。
+    # ⛔ 极差计算走 `_store_revenue_spread` 这一处, 不再各算一遍(改前有两处)。
     _spread_note = ""
-    if can_see_money and len(top_stores) >= 2:
-        _revs = [float(s.get("revenue") or 0.0) for s in top_stores]
-        _hi, _lo = max(_revs), min(_revs)
-        if _hi > 0:
-            _spread_pct = (_hi - _lo) / _hi * 100.0
+    if can_see_money:
+        _spread = _store_revenue_spread(stores)
+        if _spread is not None:
+            _hi, _lo, _spread_pct = _spread
             _spread_note = (
                 f"最高与最低相差 {_spread_pct:.1f}%"
                 f"（{_money(_hi)} vs {_money(_lo)}）。"
@@ -8332,7 +8383,10 @@ async def resolve_sales_summary(
         # ▎读起来很具体、其实与他这次问的和这次的数据都没关系 —— 那是**假建议**。
         # ⇒ 让它随差距变。⚠️ 5% 这个线是**明写出来的选择**, 不是推导出来的:
         #    把它印在正文里, 老板不同意可以直接反驳 —— ⛔ 藏起来的阈值没法被质疑。
-        _advice_line(top_stores, can_see_money),
+        # ⛔ 传 `stores`(store_comparison 的**全量**门店)而不是 `top_stores`
+        #    (finance_summary 截断成前 5 家的那份) —— 见 `_store_revenue_spread`
+        #    的 docstring: 两者在 prod 上是 2.7% vs 0.7%, 而建议就是按这个数给的。
+        _advice_line(stores, can_see_money),
         prohibited_actions_line,
     ]
     answer = "\n\n".join(part for part in answer_parts if part)
