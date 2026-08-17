@@ -151,3 +151,33 @@ def test_the_exemption_needs_the_safety_words_not_just_any_action(empty_factbook
     bad = "下架毛利最低的 5 个菜。"
     got = _violations(bad, empty_factbook)
     assert any("未经验证或确认的高影响动作" in v for v in got), got
+
+
+# ── 跨问句普查（盲区①）抓到的第二个同形缺口 ────────────────────────
+def test_bare_pilot_word_counts_as_a_safety_frame(empty_factbook):
+    """🔴「试点」本身就是安全框架，⛔ 不该只认「先试点／小范围试点」。
+
+    跨问句普查（8 条归因/建议型问句、23 条违例）里的实际长相：
+
+        建议在鲜行者打浦桥日月光店、B、C 这三家高营业额店**试点**雨天外卖满减活动
+
+    被判「未经验证或确认的高影响动作」—— 因为
+    `_HIGH_IMPACT_ACTION_SAFETY_RE` 要的是「**先**试点」或「**小范围**试点」，
+    光写「试点」不认。
+
+    ▎「试点」的语义**就是**限定范围地试 —— 那正是这条规则要的东西。
+    ▎与上一条修复同形：**自然的合规写法不被识别**，于是 A 走不通。
+    """
+    ok = "建议在三家高营业额店试点雨天外卖满减活动。"
+    got = _violations(ok, empty_factbook)
+    assert not any("未经验证或确认的高影响动作" in v for v in got), got
+
+
+def test_an_action_with_no_pilot_or_confirmation_is_still_caught(empty_factbook):
+    """🔴 阴性对照：既没试点也没确认的动作，必须照样被抓住。
+
+    ⛔ 少了它，「把试点加进安全词」会滑成「把规则四关掉」。
+    """
+    bad = "在三家高营业额店上线雨天外卖满减活动。"
+    got = _violations(bad, empty_factbook)
+    assert any("未经验证或确认的高影响动作" in v for v in got), got
