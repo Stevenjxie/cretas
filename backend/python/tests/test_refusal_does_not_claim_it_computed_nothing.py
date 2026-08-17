@@ -64,6 +64,14 @@ def test_the_refusal_has_two_branches_not_one():
         f"`produced_but_rejected` 赋值 {len(assigns)} 次，期望 1。"
         "0 = 分支没了（又变回一句话对所有人说）")
 
+    # 🔴 只钉「有这个赋值」不够 —— 变异实测：把右边换成常量 `False`，
+    #    结构一模一样，断言纹丝不动，而分支已经死了（永远走旧文案）。
+    #    ⇒ 必须钉它**是从 `answer_text` 推出来的**。
+    rhs = ast.unparse(assigns[0].value)
+    assert "answer_text" in rhs, (
+        f"`produced_but_rejected` 不是从 `answer_text` 推出来的（右边是 {rhs!r}）"
+        " —— 常量化 = 分支是死的，永远只走一支")
+
     ifexps = [n for n in ast.walk(tree)
               if isinstance(n, ast.IfExp)
               and any(getattr(x, "id", None) == "produced_but_rejected"
