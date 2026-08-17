@@ -38,6 +38,12 @@ import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
 import { useCanViewPrice } from '../../store/canViewPriceStore';
 import { TouchableRipple } from 'react-native-paper';
+import {
+  resolveInitialStepIndex,
+  resolveStepPhase,
+  type StepPhase,
+  type StepTaskLike,
+} from './yieldStepResolution';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -90,7 +96,7 @@ function maybeShowSemiOutputGap(warning: string | undefined): void {
 }
 
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
-type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
+// StepPhase 从 ./yieldStepResolution 导入 —— ⛔ 不要在这里再定义一份, 两份必然漂。
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
 
 type EvidenceMediaKind = 'image' | 'video';
@@ -630,6 +636,15 @@ const YieldStepReportScreen: React.FC = () => {
     const prevStep = yieldData.steps.find((s: StepYieldDTO) => s.processOrder === prevOrder);
     return prevStep?.totalOutput ?? null;
   }, [currentTask, yieldData]);
+  // ⚠️ 上道产出的单位是【上道的】—— 卤制出 kg、拼装分装出 盒, 拿本道的 unit 去标它,
+  //    界面上会写出「上道产出 2.5 盒」这种假话 (实际是 2.5 kg)。取不到就不标单位。
+  const prevOutputUnit = useMemo<string | null>(() => {
+    if (!currentTask || !yieldData) return null;
+    const prevStep = yieldData.steps.find(
+      (s: StepYieldDTO) => s.processOrder === currentTask.processOrder - 1,
+    );
+    return prevStep?.outputUnit ?? null;
+  }, [currentTask, yieldData]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -667,29 +682,26 @@ const YieldStepReportScreen: React.FC = () => {
       if (yd) setYieldData(yd);
 
       // 三阶段 (单元2): operator 自动分配模式锁定后台分配的本道;
-      // 普通模式首次加载自动跳到第一道未完成 (phase != COMPLETED) 的道.
+      // 用户在列表点了哪一道就打开哪一道; 都没有才退回「第一道未完成的」.
+      // 判定本身在 ./yieldStepResolution, 那里记着这两条各自栽过的实例.
       if (sortedTasks.length > 0) {
-        const phaseFor = (task: WorkProcessTask): StepPhase => {
-          if (!yd) return 'AWAITING_INPUT';
-          const s = yd.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder);
-          return (s?.phase as StepPhase) ?? 'AWAITING_INPUT';
-        };
-        if (autoAssigned) {
-          const assignedIndex = sortedTasks.findIndex((task) => {
-            if (assignedWorkProcessTaskId != null && task.id === assignedWorkProcessTaskId) return true;
-            return assignedProcessOrder != null && task.processOrder === assignedProcessOrder;
-          });
-          if (assignedIndex !== -1) {
-            setCurrentStepIndex(assignedIndex);
-            setScreenPhase('reporting');
-            return;
-          }
-        }
-        const firstUnfinished = sortedTasks.findIndex((t) => phaseFor(t) !== 'COMPLETED');
-        if (firstUnfinished === -1) {
+        const phaseFor = (task: StepTaskLike): StepPhase =>
+          resolveStepPhase(
+            task,
+            yd?.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder)?.phase,
+          );
+        const targetIndex = resolveInitialStepIndex({
+          tasks: sortedTasks,
+          assignedWorkProcessTaskId,
+          assignedProcessOrder,
+          phaseOf: phaseFor,
+        });
+        if (targetIndex === -1) {
           setScreenPhase('done');
         } else {
-          setCurrentStepIndex(firstUnfinished);
+          setCurrentStepIndex(targetIndex);
+          // autoAssigned 只影响「锁不锁定本道」, 不影响上面选了哪一道.
+          if (autoAssigned) setScreenPhase('reporting');
         }
       }
     } catch (error) {
@@ -853,6 +865,12 @@ const YieldStepReportScreen: React.FC = () => {
     : wipAvailable;
   const wipUnit = (needsWipPicker ? selectedWip?.unit : yieldLimits?.wipAvailableUnit) ?? unit;
   const hasSourceWipInput = !isFirstStep && effectiveSourceWipNo != null;
+  // 本道【投入】的单位。领上道半成品时是那笔半成品的单位; 否则才是本道自己的 unit。
+  // ⚠️ 本道的 unit 描述的是它的【产出】(卤制出 kg、拼装分装出 盒), 用它标投入会同时
+  //    造成两件事: 界面写出「2.5 盒」这种假话, 以及提交被后端以
+  //    「半成品单位与本道投入单位不一致」409 拒收 —— 而工人填任何数字都过不去。
+  //    ⛔ 只此一处定义, 显示与提交共用, 不许再各写各的。
+  const effectiveInputUnit = hasSourceWipInput ? wipUnit : unit;
   const materialInputTotal = useMemo(
     () => materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0),
     [materialBatchRefs],
@@ -880,10 +898,14 @@ const YieldStepReportScreen: React.FC = () => {
     !isFirstStep && materialBatchRefs.length > 0 && !hasSourceWipInput;
   const showReadonlyMaterialInput =
     (isFirstStep && materialBatchRefs.length > 1) || showMaterialOnlyReadonlyInput;
+  // ⛔ 「上道产出读不到」不等于「本道是首道」—— 前者是数据有没有, 后者是结构事实.
+  //    用前者断言后者, 会对第②道的工人说一句假话, 并让他去领原料.
   const prefillNote =
     prevOutput != null
-      ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
-      : '本道为首道, 请填本道领料投入量';
+      ? `← 上道产出 ${prevOutput}${prevOutputUnit ? ` ${prevOutputUnit}` : ''}, 请确认实际投了多少`
+      : isFirstStep
+        ? '本道为首道, 请填本道领料投入量'
+        : '上道产出量暂时取不到, 请按本道实际投入量填写';
 
   // P0-3: 产出绝对物理上限 = 2 × maxAllowed
   const OUTPUT_HARD_CAP_MULTIPLIER = 2;
@@ -1196,7 +1218,11 @@ const YieldStepReportScreen: React.FC = () => {
       workProcessTaskId: currentTask.id,
       reportKind: 'INPUT',
       inputQuantity: input,
-      inputUnit: unit,
+      // 领的是上道半成品时, 投入单位是【那笔半成品的单位】, 不是本道的单位 ——
+      // 本道的 unit 描述的是它的产出 (卤制出 kg, 拼装分装出 盒), 拿它当投入单位,
+      // 后端会以「半成品单位与本道投入单位不一致」409 拒收, 而工人填任何数字都过不去。
+      // 另一处构造 (二次加工首道) 早就写对了 —— 这里是漏改的那一半。
+      inputUnit: effectiveInputUnit,
       outputQuantity: 0,  // 后端按 reportKind=INPUT 强制忽略 output
       ...(materialBatchRefs.length > 0
         ? {
@@ -2428,7 +2454,7 @@ const YieldStepReportScreen: React.FC = () => {
                   }
                   value={inputQty}
                   onChangeText={setInputQty}
-                  unit={unit}
+                  unit={effectiveInputUnit}
                   max={inputMax}
                   maxHint={inputMaxHint}
                   prefillNote={prefillNote}
