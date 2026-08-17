@@ -95,6 +95,38 @@ class TestTheMetricsMustAlsoLineUp:
         )
         assert spec.intent in spec.planned_intents
 
+    def test_the_two_sides_are_canonicalized_before_comparing(self):
+        """🔴 两侧必须**归一**再比 —— 登记表写 `food_cost`，管线里叫 `recipe_cost`。
+
+        📏 `_default_metrics_for_code(RECIPE_COST) = ('food_cost',)`
+           而老板那句编译出来的是 `('recipe_cost',)` —— **同一个指标，两个名字**。
+        不归一就是「口径不同的两个集合求交」，结果恒空，会把这一格也挡掉。
+
+        ⚠️ 这条是变异对照逼出来的，而且**逼了两次**：
+
+        1. 去掉 `_canonical_metrics` 后全绿 —— 我原来那几条用例的指标名两侧恰好
+           相同（`gross_margin`/`sales_volume`），归一那一层没有任何断言在守。
+        2. 补了一条 `query="哪道菜成本最高"` 的用例，**仍然全绿** —— 因为那句话里
+           有「成本」，`_repair_backed_by_user_wording` 为真，走的是**原有那条**
+           契约修复，镜像被挡住也照样修好。⇒ 那条用例对这个变异没有区分力。
+
+        ⇒ 输入必须让**原有理由不成立**，只剩镜像这一条路：
+        📏 `_repair_backed_by_user_wording("那这个呢", ("recipe_cost",))` = False，
+           而 spec 仍然被修成 `RECIPE_COST` ⇒ **只能是镜像干的**。
+        """
+        from smartbi.gold.restaurant import restaurant_intent as ri
+
+        # 阳性前提: 原有那条理由在这个输入上确实不成立(否则这条用例测的是它)
+        assert ri._repair_backed_by_user_wording("那这个呢", ("recipe_cost",)) is False, (
+            "措辞背书在这个输入上成立了 —— 这条用例会变成在测原有路径, "
+            "对『两侧归一』毫无区分力"
+        )
+        spec = _spec(_SALES_SUMMARY, ("dish",), ("recipe_cost",), query="那这个呢")
+        assert spec.intent == "RESTAURANT_OPS_RECIPE_COST", (
+            "recipe_cost 与 food_cost 没被认成同一个指标 —— 两侧没归一"
+        )
+        assert spec.intent in spec.planned_intents
+
     def test_the_criterion_reads_the_existing_default_metric_table(self):
         """⛔ 不新造第二张「哪个 resolver 出哪些指标」的表（形态 D）。"""
         from smartbi.gold.restaurant import restaurant_intent as ri
