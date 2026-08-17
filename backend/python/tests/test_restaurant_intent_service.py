@@ -2093,7 +2093,14 @@ async def test_tiered_answer_store_scope_mismatch_fails_closed_without_reroute(m
     )
     assert result["kind"] == "clarification"
     assert result["contract_pass"] is False
-    assert "门店范围" in result["answer_text"]
+    # 2026-08-17: 原断言是 `"门店范围" in answer_text` —— 守的是**字面**。
+    # 那句拒答理由当时写作「门店范围不能由全店或全门店 resolver 代答」，
+    # 里面的 `resolver` 是内部概念名，已改写成老板读得懂的话。
+    # ⇒ 断言从字面抬到**性质**: 拒答必须点明「问的是门店 / 给的是全店合计」
+    #   这件事本身，⛔ 并且不许再漏内部概念名（阴性对照）。
+    assert "门店" in result["answer_text"]
+    assert "全店" in result["answer_text"]
+    assert "resolver" not in result["answer_text"].lower()
     assert "当前未执行任何下架" in result["answer_text"]
     assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
     resolver.assert_not_awaited()
@@ -2118,7 +2125,11 @@ async def test_tiered_dish_scope_mismatch_fails_closed_without_reroute(monkeypat
     result = await tiered_answer("米饭的销量是多少", object(), "DEMO_REST", "restaurant_manager")
     assert result["kind"] == "clarification"
     assert result["contract_pass"] is False
-    assert "菜品范围" in result["answer_text"]
+    # 2026-08-17: 同上 —— 原文是「菜品范围不能由全店汇总 resolver 代答」。
+    # 守性质: 点明「问的是某道菜 / 给的是全店合计」, 且不漏内部概念名。
+    assert "菜" in result["answer_text"]
+    assert "全店" in result["answer_text"]
+    assert "resolver" not in result["answer_text"].lower()
     resolver.assert_not_awaited()
 
 
