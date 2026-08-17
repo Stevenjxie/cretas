@@ -93,24 +93,6 @@ class TestBothDirectionsLiveInTheSameBranchAndShareTheCriterion:
             "没找到 `if repair_candidate and dimensions:` —— 下面的断言会失去意义"
         )
 
-    def test_the_mirror_assigns_code_from_the_plan(self):
-        """🔴 承重：镜像那一支必须把 `code` 换成计划，⛔ 不许只记日志。
-
-        ⚠️ 这条与 PR#2799 的 `test_the_skip_branch_reassigns_the_plan` 是一对：
-        那条钉 `planned_intents = (code,)`，这条钉 `code = repair_candidate`。
-        """
-        branch = self._dims_branch()
-        assigns = [
-            n
-            for n in ast.walk(branch)
-            if isinstance(n, ast.Assign)
-            and any(getattr(t, "id", None) == "code" for t in n.targets)
-        ]
-        assert len(assigns) == 1, (
-            "`if repair_candidate and dimensions:` 里没有对 code 的赋值 —— "
-            "标签服务不了时矛盾原样留给下游, 那就是拒答"
-        )
-
     def test_the_mirror_is_gated_on_the_label_being_incapable(self):
         """⛔ 不许无条件让计划赢 —— 标签能服务时该赢的是标签（PR#2799）。"""
         branch = self._dims_branch()
@@ -126,6 +108,100 @@ class TestBothDirectionsLiveInTheSameBranchAndShareTheCriterion:
         src = inspect.getsource(ri._build_spec)
         assert "issubset(" not in src, (
             "_build_spec 里出现了手写的 subset 检查 —— 那就是第二份口径"
+        )
+
+
+class TestItActuallyRuns:
+    """🔴 行为级承重 —— AST 断言在这里**不够**，而这是变异当场抓出来的。
+
+    第一版这两条写的是 AST：「分支里有没有 `code = ...` 赋值」「authority 那个
+    字面量在不在白名单里」。变异实测：
+
+        M1 把整支关成 `elif False:`  → **不红**（分支体还在，AST 照样看得见）
+        M3 把 authority 换成一个没白名单化的新串 → **全绿**（它不以
+           `_contract_repair` 结尾，我的正则/字面量检查根本没扫到它）
+
+    ⇒ 两条都是恒真式（形态 B′）。判据必须打在**行为**上：跑一次 `_build_spec`，
+      看它交出来的 spec 自不自洽、authority 可不可信。
+    """
+
+    @staticmethod
+    def _spec(code, dims, metrics):
+        from smartbi.gold.restaurant import restaurant_intent as ri
+
+        return ri._build_spec(
+            code, "哪个卖得最多", confidence=0.9, tier="llm",
+            llm_dimensions=dims, llm_requested_metrics=metrics,
+        )
+
+    def test_mirror_direction_produces_a_self_consistent_spec(self):
+        """📏 prod 那条 3/3 稳定的形状，跑一次让它自己说。
+
+        标签 SALES_SUMMARY 服务不了 dish，计划 GROSS_MARGIN 能 ⇒ 计划赢。
+        """
+        spec = self._spec(_SALES_SUMMARY, ("dish",), ("sales_volume",))
+        assert spec.planned_intents, "计划编译成空的, 这条用例测不到东西"
+        assert spec.intent in spec.planned_intents, (
+            f"交给执行的 spec 仍然自相矛盾: intent={spec.intent} "
+            f"plan={list(spec.planned_intents)} —— 下游会拿这个矛盾拒答"
+        )
+        assert spec.intent == _GROSS_MARGIN, (
+            "赢的不是计划 —— 镜像那一支没生效"
+        )
+
+    def test_mirror_direction_keeps_the_authority_trusted(self):
+        """⚠️ 修好矛盾却换来另一句拒答, 是这个改动最容易长出的坏形状。"""
+        from smartbi.gold.restaurant.restaurant_intent import (
+            TRUSTED_PLANNER_AUTHORITIES,
+        )
+
+        spec = self._spec(_SALES_SUMMARY, ("dish",), ("sales_volume",))
+        assert spec.planner_authority in TRUSTED_PLANNER_AUTHORITIES, (
+            f"planner_authority={spec.planner_authority!r} 不在白名单里 —— "
+            f"`_execution_mismatch` 会判「这次的问题我没理解到有把握的程度」"
+        )
+
+    def test_the_other_direction_still_wins_when_the_label_is_capable(self):
+        """阴性对照：PR#2799 那一支 ⛔ 不许被这次改动抢走。
+
+        标签 STORE_MARGIN 能按门店、计划 RECIPE_COST 不能 ⇒ **标签**赢。
+        """
+        spec = self._spec("RESTAURANT_OPS_STORE_MARGIN", ("store",),
+                          ("recipe_cost",))
+        assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN", (
+            "标签能服务这些维度时该赢的是标签, 被镜像那一支抢走了"
+        )
+        assert spec.intent in spec.planned_intents
+
+    def test_shape_one_dims_empty_is_deliberately_left_untouched(self):
+        """⛔ 登记：形状①（`dims=∅`）**故意不改**，行为与改动前逐字相同。
+
+        📏 prod 12 条 `code ∉ plan` 里有 9 条是这个形状，3 轮稳定。
+        两边都 serves（空集是任何集合的子集）⇒ 维度判据**没有区分力**；
+        而按架构 §反问⑥「那最差的呢」没说是店/菜/时段 ⇒ **反问本身是对的**。
+        统一消解会把「哪家店卖得最好 → 那成本呢」（成本只能按菜录，按门店的
+        成本**不存在**）从诚实拒答变成拿别的数据凑。
+
+        ⚠️ 这条断言守的是**今天的裁定**，不是永远的需求（形态 C‴）：
+        哪天决定修形状①，它会红 —— 那时该改的是这条断言，不是把改动回退。
+        它同时抓住「有人把镜像那一支的 `and dimensions` 条件去掉」这种过宽实现。
+        """
+        spec = self._spec(_SALES_SUMMARY, (), ("gross_margin",))
+        if spec.planned_intents and spec.intent:
+            assert spec.intent not in spec.planned_intents, (
+                "dims=∅ 这个形状被消解了 —— 本轮明确登记为不改, "
+                "先去更新登记再改行为"
+            )
+
+    def test_neither_capable_is_left_alone(self):
+        """阴性对照：两边都服务不了时 ⛔ 不许硬凑一个出来。
+
+        INVENTORY_WARNING 只声明 ingredient；问的是 store。
+        这时候拒答是**正当的**，产品确实没有按门店的缺货数据。
+        """
+        spec = self._spec("RESTAURANT_OPS_INVENTORY_WARNING", ("store",), ())
+        assert spec.intent == "RESTAURANT_OPS_INVENTORY_WARNING", (
+            "两边都服务不了却把 code 换掉了 —— 那就是拿别的数据凑"
         )
 
 
