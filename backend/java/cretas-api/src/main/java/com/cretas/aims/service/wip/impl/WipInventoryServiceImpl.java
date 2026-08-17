@@ -22,6 +22,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -785,6 +786,92 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * inUnitCost 加权): 0 量占位行 accumulatedCost=null → 首次累加后 = 本次 rollup, unitCost = accumulated/produced,
      * 与历史 new-row / existing-row 行为字节一致。诚实 null: accumulatedCost 为 null (无工价无料价) → unitCost null。
      */
+    @Override
+    @Transactional
+    public void reverseReportPosting(String factoryId, ProductionReport report,
+                                     WorkProcessTask task, Long operatorId) {
+        if (report == null || task == null || report.getId() == null) {
+            return;
+        }
+        // 幂等: 已经冲销过就不再退第二次。判据是「这条报工名下有没有 REVERSE 流水」——
+        // ⛔ 不看报工的 approvalStatus: 那个字段可以被反复改, 而流水是只增不改的事实。
+        boolean alreadyReversed = txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
+                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType()));
+        if (alreadyReversed) {
+            log.info("[wip] report {} 已冲销过, 本次 no-op", report.getId());
+            return;
+        }
+        String ref = "REVERSE-REPORT-" + report.getId();
+
+        // ① 本道产出退回
+        BigDecimal out = nz(report.getOutputQuantity());
+        if (out.signum() > 0) {
+            SemiFinishedInventory wip = wipRepo
+                    .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                            factoryId, generateBatchNo(task))
+                    .orElse(null);
+            if (wip != null) {
+                BigDecimal consumed = nz(wip.getConsumedQuantity());
+                // ⛔ 下游已经领走了就拒绝 —— 允许冲销会让下游那条报工建立在一批
+                //    已经不存在的料上, 而且不报错。事先拦住优于事后不自洽。
+                if (consumed.signum() > 0) {
+                    throw new BusinessException(409, "这笔产出已被下一道领用 "
+                            + consumed.stripTrailingZeros().toPlainString()
+                            + firstNonBlank(wip.getUnit(), "") + ", 不能直接驳回")
+                            .withHint("请先处理领用它的那道工序的报工, 再回来驳回本条");
+                }
+                BigDecimal produced = nz(wip.getProducedQuantity()).subtract(out).max(BigDecimal.ZERO);
+                wip.setProducedQuantity(produced);
+                wip.setAvailableQuantity(
+                        produced.subtract(consumed).add(nz(wip.getAdjustmentQuantity())));
+                if (wip.getAvailableQuantity().signum() <= 0
+                        && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
+                    wip.setStatus(SemiFinishedInventory.Status.DEPLETED);
+                }
+                // 退空了就把成本一起清掉 —— 留着一个没有数量的均价, 下一次入库会被它带偏。
+                if (produced.signum() == 0) {
+                    wip.setAccumulatedCost(null);
+                    wip.setUnitCost(null);
+                }
+                wipRepo.save(wip);
+                // 🔴 流水在【改完之后】构造 —— reversalRow 直接读改完的 availableQuantity,
+                //    与 consumptionRow(读扣减前) 口径相反, 混用会算出负余额。
+                SemiFinishedInventoryTransaction t =
+                        WipLedgerEntries.reversalRow(wip, out.negate(), report, ref, operatorId);
+                if (t != null) {
+                    txnRepo.save(t);
+                }
+            }
+        }
+
+        // ② 本道领用还回上道
+        String srcNo = report.getSourceWipNo();
+        if (srcNo != null && !srcNo.isBlank()) {
+            BigDecimal back = nz(sourceWipQuantity(report));
+            if (back.signum() > 0) {
+                SemiFinishedInventory src = wipRepo
+                        .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, srcNo)
+                        .orElse(null);
+                if (src != null) {
+                    BigDecimal consumed = nz(src.getConsumedQuantity()).subtract(back).max(BigDecimal.ZERO);
+                    src.setConsumedQuantity(consumed);
+                    src.setAvailableQuantity(nz(src.getProducedQuantity())
+                            .subtract(consumed).add(nz(src.getAdjustmentQuantity())));
+                    if (src.getAvailableQuantity().signum() > 0
+                            && !SemiFinishedInventory.Status.RETURNED.equals(src.getStatus())) {
+                        src.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+                    }
+                    wipRepo.save(src);
+                    SemiFinishedInventoryTransaction t =
+                            WipLedgerEntries.reversalRow(src, back, report, ref, operatorId);
+                    if (t != null) {
+                        txnRepo.save(t);
+                    }
+                }
+            }
+        }
+    }
+
     private SemiFinishedInventory upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
                                    BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(task);

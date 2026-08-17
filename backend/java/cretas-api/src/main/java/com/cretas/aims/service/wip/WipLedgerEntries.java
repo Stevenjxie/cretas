@@ -79,4 +79,42 @@ public final class WipLedgerEntries {
                 .operatorId(operatorId)
                 .build();
     }
+
+    /**
+     * 构造一条<b>冲销</b>流水行（驳回 / 修正一条报工时用）。
+     *
+     * <p>⚠️ 与 {@link #consumptionRow} 的余额口径<b>相反</b>：那一条由「扣减前」状态推出余额；
+     * 这一条要求调用方<b>先把库存行改完再调</b>，直接读改完的 {@code availableQuantity}。
+     * 两种口径各自都对，混起来必错 —— 2026-08-17 就是把构造点放错边，
+     * 算出过 {@code balanceAfter = -2.000000}。所以这里<b>不自己推</b>，只读结果。
+     *
+     * @param sfi        <b>已经改完</b>的半成品库存行
+     * @param signedQty  带符号的冲销量：退回产出为负、还回领用为正
+     * @param report     被冲销的那条报工
+     * @param sourceRef  定位串，如 {@code "REVERSE-REPORT-23814"}
+     * @return 冲销流水行；{@code signedQty} 为 0 时返回 {@code null}（⛔ 不凭空造流水）
+     */
+    public static SemiFinishedInventoryTransaction reversalRow(
+            SemiFinishedInventory sfi, BigDecimal signedQty,
+            ProductionReport report, String sourceRef, Long operatorId) {
+
+        if (sfi == null || report == null || signedQty == null
+                || signedQty.compareTo(BigDecimal.ZERO) == 0) {
+            return null;
+        }
+
+        return SemiFinishedInventoryTransaction.builder()
+                .factoryId(report.getFactoryId())
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef(sourceRef)
+                .quantity(signedQty)
+                .unitCostAtTxn(sfi.getUnitCost())   // 诚实 null 传播
+                .balanceAfter(nz(sfi.getAvailableQuantity()))
+                .balanceCostAfter(sfi.getUnitCost())
+                .reportId(report.getId())
+                .operatorId(operatorId)
+                .build();
+    }
 }

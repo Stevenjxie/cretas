@@ -70,6 +70,19 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     @Transactional
     public Map<String, Object> rejectReport(String factoryId, Long reportId, String reason, Long rejectedBy) {
         ProductionReport report = loadPendingReport(factoryId, reportId);
+        // 🔴 驳回必须把库存一起退回来, ⛔ 不能只翻状态位。
+        //    库存在【提交】那一刻就进账(不等审批), 这个设计能成立的前提是核对能纠正它。
+        //    2026-08-17 实测: 驳回后半成品行纹丝不动, 下一道照样领得到文员刚判为无效的料。
+        //    ⚠️ 放在 setApprovalStatus 之前: 下游已领用时 reverseReportPosting 抛 409,
+        //       此时整个事务回滚, 报工不会留下一个「已驳回但库存还在」的状态。
+        WorkProcessTask task = report.getWorkProcessTaskId() == null ? null
+                : workProcessTaskRepository
+                        .findByFactoryIdAndId(factoryId, report.getWorkProcessTaskId())
+                        .orElse(null);
+        if (task != null) {
+            wipInventoryService.reverseReportPosting(factoryId, report, task, rejectedBy);
+        }
+
         report.setApprovalStatus("REJECTED");
         report.setRejectedReason(reason);
         report.setApprovedBy(rejectedBy);

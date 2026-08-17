@@ -44,6 +44,24 @@ public interface WipInventoryService {
     void postApprovedOutput(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId);
 
     /**
+     * 冲销一条报工的库存影响：产出退回、领用还回，各留一条 {@code REVERSE} 流水。
+     *
+     * <p><b>为什么必须有</b>：库存在<b>提交</b>那一刻就进账（不等审批），
+     * 这个设计能成立的前提是<b>核对能纠正它</b>。2026-08-17 实测：文员驳回一条已入库的产出后，
+     * 半成品行纹丝不动，下一道照样领得到文员刚判为无效的料 —— 驳回只是翻了个状态位。
+     *
+     * <p><b>下游已经领走了怎么办</b>：⛔ <b>拒绝冲销</b>，抛 409 并指名是哪一道。
+     * 理由是「事先拦住」优于「事后留下一个不自洽的库存」——
+     * 允许冲销会让下游那条报工建立在一批已经不存在的料上，而且不报错。
+     * 用户的下一步是明确的：先处理下游那道，再回来驳回本条。
+     * 设计卡 {@code docs/decisions/2026-08-17-驳回报工不回退库存.md}。
+     *
+     * <p>可重复调用：已经冲销过的报工再调一次是 no-op（靠 {@code REVERSE} 流水判重），
+     * ⛔ 不会退第二次。
+     */
+    void reverseReportPosting(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId);
+
+    /**
      * SP1 T4 — Returns all WorkProcessTasks for {@code batchId} whose parent
      * WorkProcess has {@code semiFinishedOutputCode} configured.
      *
