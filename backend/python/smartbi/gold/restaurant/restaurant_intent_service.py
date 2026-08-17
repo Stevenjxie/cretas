@@ -108,7 +108,20 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
-    "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient"}),
+    # 2026-08-17 补 `wastage_type`。⛔ 补的依据是**它真能出**(与 2026-08-09 给
+    # DAYPART_PERFORMANCE 补 meal_period 同一道程序), 不是为了让某条用例过:
+    #   prod DEMO_REST(fact_restaurant_wastage 214 行 / 5 种类型) 上真跑
+    #   「损耗最多的食材是哪些」, 答案第二行就是 ——
+    #     损耗类型分布: 变质 ¥2491.45、过期 ¥1788.10、其他 ¥1424.00、
+    #                   破损 ¥1413.95、加工损耗 ¥1141.00
+    #   5 种全带金额, 与库里 `count(DISTINCT wastage_type)=5` 对得上。
+    # 🔴 漏登的代价是**产品在对老板说假话**: 问「损耗都是哪些类型造成的」拿到
+    #    「按损耗类型拿不到」「这两层的数不在同一张表上」—— 而同一个 resolver
+    #    的输出里就印着那张分布。这是形态 D(两份漂了)最贵的一种长相:
+    #    能力表比真实能力**窄**, 于是把能算的说成算不出。
+    # ⚠️ `_WASTAGE_DIMS` 还列了 `wastage_reason`, ⛔ 本次不补 —— 输出里没有
+    #    按原因分的东西, 没有依据。宁可窄而真。
+    "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient", "wastage_type"}),
     "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
     "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
     # The sales summary resolver returns a real per-store Top-N table in

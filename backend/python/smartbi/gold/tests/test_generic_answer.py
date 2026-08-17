@@ -421,9 +421,15 @@ def test_generic_fallback_only_runs_when_the_contract_failed():
 #:    悄悄变成拒答」, 从通过率上看像模型退化。2026-08-09 实测: 放开 meal_period
 #:    当天,「下个月各店人效安排」就这么挂了 —— 而那个 resolver **本来就按餐段出数**,
 #:    只是能力表里没这个名字。
+#: ⚠️ 2026-08-17 `wastage_type` 从这张表**移出** —— 它是上面那条 meal_period
+#:    事故的**重演**: `WASTAGE_TOP` 本来就按损耗类型出数(prod DEMO_REST 实测,
+#:    答案第二行「损耗类型分布: 变质 ¥2491.45、过期 ¥1788.10、…」5 种全带金额),
+#:    只是能力表里没这个名字。于是「损耗都是哪些类型造成的」被拒答成
+#:    「按损耗类型拿不到」—— **产品在对老板说假话**。
+#:    ⛔ `wastage_reason` 留着: 输出里没有按原因分的东西, 没有依据补。
 _DIMENSIONS_NO_RESOLVER_SERVES = {
     "brand", "category", "city", "hour", "table", "weekday",
-    "wastage_reason", "wastage_type", "staff", "all",
+    "wastage_reason", "staff", "all",
 }
 
 
