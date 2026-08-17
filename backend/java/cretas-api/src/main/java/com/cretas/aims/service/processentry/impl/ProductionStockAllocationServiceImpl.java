@@ -130,6 +130,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 }
             }
             if (remaining.signum() > 0) {
+                // 🔴 2026-08-18: 只报「生产仓可用 X, 缺 Y」分不清两种完全不同的处境 ——
+                //    实测同一天两条: 冻猪蹄全厂 30kg 而生产仓只有 5kg (有货没领),
+                //    2030真空袋全厂 0 (真没货)。当时两者的提示是同一句「请联系仓管补料」,
+                //    而正确动作一个是「去领料」、一个是「去采购」。
+                //    ⇒ 这里同时算一份**全厂在手量**, 用同一套单位匹配规则, 让成因可推导。
+                BigDecimal factoryOnHand = factoryOnHandFor(
+                        factoryId, materialTypeId, inputUnit, massInput);
                 shortageItems.add(new ProductionStockShortageDTO.Item(
                         materialTypeId,
                         materialName(factoryId, materialTypeId),
@@ -137,7 +144,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         required,
                         availableForInput,
                         remaining,
-                        allocationUnit));
+                        allocationUnit,
+                        factoryOnHand,
+                        factoryOnHand.compareTo(availableForInput) > 0
+                                ? ProductionStockShortageDTO.Cause.NOT_REQUISITIONED
+                                : ProductionStockShortageDTO.Cause.TRULY_OUT_OF_STOCK));
             }
         }
 
@@ -157,6 +168,29 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         }
 
         return List.copyOf(allocations);
+    }
+
+    /**
+     * 全厂在手量 (不限仓库), 用于把「有货没领」和「真没货」分开。
+     *
+     * <p>⚠️ 必须与生产仓那一侧**同一套单位匹配规则** ({@code unitMatches} + {@code batchAvailable}) ——
+     * 否则两个数不同口径, 相减出来的「压在别的仓的量」是假的。
+     * 这正是本仓「报一个数的时候把这个数是怎么来的一起报」那条判据。
+     */
+    private BigDecimal factoryOnHandFor(
+            String factoryId, String materialTypeId, String inputUnit, boolean massInput) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(
+                factoryId, materialTypeId)) {
+            if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
+                continue;
+            }
+            BigDecimal available = batchAvailable(factoryId, batch, massInput);
+            if (available.signum() > 0) {
+                total = total.add(available);
+            }
+        }
+        return total;
     }
 
     /**

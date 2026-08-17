@@ -841,6 +841,34 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
     }
 
+    /**
+     * 列长前置校验 —— 数值取自 {@code process_sheet_rows} 的**实测列定义**, 不是猜的。
+     *
+     * <p>🔴 2026-08-18 实测: 传了 36 字符的 UUID 当 processCode (库里 varchar(32)),
+     * 结果是数据库抛 {@code value too long for type character varying(32)},
+     * 被包成「工序行保存失败，请检查**上游批次、成本和库存数据**」——
+     * 把人指向三个与真因完全无关的方向。
+     *
+     * <p>⚠️ 实体上这些字段**没有声明 length** (Hibernate 默认 255), 所以 ORM 层拦不住,
+     * 非要走到数据库才炸。⇒ 这里按库的真实限长事先拦, 并把是哪个字段、多长、上限多少说清楚。
+     */
+    private static void assertColumnLimits(ProcessSheetRowRequest req) {
+        assertMaxLength("工序编码 processCode", req.getProcessCode(), 32);
+        assertMaxLength("客户端行号 clientRowId", req.getClientRowId(), 64);
+        assertMaxLength("批次号 batchNumber", req.getBatchNumber(), 64);
+    }
+
+    private static void assertMaxLength(String label, String value, int max) {
+        if (value != null && value.length() > max) {
+            throw new BusinessException(400,
+                    label + " 超长: " + value.length() + " 字符, 上限 " + max)
+                    .withCode("PROCESS_SHEET_FIELD_TOO_LONG")
+                    .withHint("请缩短该字段后重试")
+                    .withHintTarget(label)
+                    .withSeverity("BLOCKING");
+        }
+    }
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -853,6 +881,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (productionPlanRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
             throw new BusinessException(403, "无权访问该计划");
         }
+
+        // 1a. 列长前置校验 —— 事先拦住, 而不是等数据库拒绝后包成一句误导的话。
+        assertColumnLimits(req);
 
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
         //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
@@ -1660,7 +1691,30 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return BigDecimal.ZERO.setScale(4);
         }
         BigDecimal minutes = BigDecimal.ZERO;
+        int index = 0;
         for (com.cretas.aims.dto.processentry.LaborSegment segment : segments) {
+            index++;
+            // 🔴 2026-08-18 实测: 这里原来直接 `BigDecimal.valueOf(segment.getWorkerCount())` 拆箱,
+            //    少填一个 workerCount → NullPointerException → 用户看到
+            //    「系统处理异常，请稍后重试 (追踪码 XXX)」。
+            //    栈: totalLaborHours ← synthesizeOutputRequest ← saveMultiOutputRow ——
+            //    **只在一入多出这条路径上**, 而那条路径生产上用得少, 所以一直没暴露。
+            //    ⇒ 缺字段是用户输入问题, 该给 400 + 说清缺的是第几段的哪一项, 不是 500。
+            if (segment.getWorkerCount() == null
+                    || segment.getStartTime() == null || segment.getEndTime() == null) {
+                throw new BusinessException(400,
+                        "第 " + index + " 段工时填写不完整: 开始时间/结束时间/人数都要填")
+                        .withCode("PROCESS_SHEET_LABOR_SEGMENT_INCOMPLETE")
+                        .withHintTarget("工时段")
+                        .withSeverity("BLOCKING");
+            }
+            if (segment.getWorkerCount() <= 0) {
+                throw new BusinessException(400,
+                        "第 " + index + " 段工时的人数必须大于 0, 当前 " + segment.getWorkerCount())
+                        .withCode("PROCESS_SHEET_LABOR_SEGMENT_INVALID_HEADCOUNT")
+                        .withHintTarget("工时段")
+                        .withSeverity("BLOCKING");
+            }
             java.time.LocalTime start = parseLaborTime(segment.getStartTime());
             java.time.LocalTime end = parseLaborTime(segment.getEndTime());
             long elapsed = java.time.Duration.between(start, end).toMinutes();
@@ -4454,7 +4508,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             log.warn("process sheet row flush failed: factory={}, plan={}, process={}, clientRowId={}, detail={}",
                     factoryId, planId, req.getProcessCode(), req.getClientRowId(), detail, e);
-            throw new BusinessException(409, "工序行保存失败，请检查上游批次、成本和库存数据")
+            // 🔴 2026-08-18 实测: process_code 传了 36 字符 UUID (库里是 varchar(32)),
+            //    数据库报的是 "value too long for type character varying(32)",
+            //    而用户看到的是「请检查**上游批次、成本和库存数据**」——
+            //    把人指向三个与真因完全无关的方向。
+            //    ⚠️ 这条兜底消息**断言了三个它从来没检查过的原因**。
+            //    ⇒ 长度超限单独识别(前置校验 assertColumnLimits 兜不住时的第二道网),
+            //      其余情况只说「数据库拒绝了这次写入」+ 把库自己的原话带出来, 不编原因。
+            if (detail != null && detail.contains("value too long")) {
+                throw new BusinessException(409, "工序行有字段超长，数据库拒绝写入：" + detail)
+                        .withCode("PROCESS_SHEET_ROW_VALUE_TOO_LONG")
+                        .withHint("请检查工序编码/客户端行号/批次号的长度")
+                        .withSeverity("BLOCKING");
+            }
+            throw new BusinessException(409, "工序行保存失败，数据库拒绝了这次写入：" + detail)
                     .withCode("PROCESS_SHEET_ROW_INTEGRITY")
                     .withHint(detail)
                     .withSeverity("BLOCKING")
