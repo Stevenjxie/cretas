@@ -5,6 +5,27 @@ description: 多模型分发路由规范(Opus/Sonnet/Fable/Codex/Composer)。触
 
 # 多模型分发路由规范 (Multi-Model Dispatch)
 
+> ## 🔴 2026-08-17 Steve 拍板：**Fable 5 退出路由，以后不再考虑**
+>
+> **模型轴从三档收成两档：`Sonnet 5 → Opus 5`。Opus 5 就是顶，卡住了也不再往上升。**
+>
+> ⇒ 本文件中**所有** Fable 5 相关内容（升级阶梯的第三档、三类预授权直通、
+> 频次闸、`fable` subagent 单点派出、2x 消耗核算）**一律作废**，读到请跳过，
+> ⛔ 不要照着执行。共 33 处提及，**没有逐处删除**——
+> 逐处删会把这份文件的历史推理也一起删掉，而那些推理解释了「为什么当初要三档」。
+> 用这条横幅覆盖，比把文件改成一份看不出演化过程的新版本更可信。
+>
+> **Opus 卡住时改怎么办**（原来升 Fable 的那些场景）：
+> 换手段，不换模型 —— 对抗式 fan-out（多个独立视角互相证伪）、
+> 换仪器重新量、或者把问题拆小。本仓的实测经验是：
+> Opus 卡住基本都是**量错了东西**，不是模型不够强。
+>
+> ⚠️ **保留不变的是 `earned-not-predicted` 本身**：
+> 默认 Sonnet 能做的就给 Sonnet，⛔ 不许「为了保险用最好的模型」。
+> 这条原本是拦 Fable 的，现在拦的是「无脑全上 Opus」——
+> 2026-08-17 当晚四个 subagent 全部继承 Opus、一次都没量过该不该，就是这个反模式。
+
+
 **最后更新**: 2026-07-28
 **触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。增补：Sonnet 执行层 + 三轴路由（模型/effort/orchestration）+ 预算均衡注记 + 两通道 + 审查分层。**2026-06-10**: Fable 5 上线(2x Opus 消耗)→ 加 model 轴破玻璃顶层 + Fable 5 定位铁律(organizer 本体不换 Fable 5, 只派 `fable` subagent 做四落点单点)。**2026-06-10 晚 v2(Steve 拍板)**: 升级闸修订 — 卡死阈值 2轮→**1轮认真尝试**; 新增**三类预授权直通**(prod 事故计时中/同族前科/不可逆小diff终审)可跳过 Opus 直接 Fable; Opus 失败轮产物必须回收进 fable brief。**2026-07-28 v3**: 判断层 Opus 4.8→**Opus 5**(同价 $5/$25, 官方定位为相对 4.8 的 step-change); **Sonnet 5 effort 天花板纠错**(原"xhigh 无收益"的证据来自 Sonnet **4.6** — 那代根本没有 xhigh 档); 附录加三模型 API 表面对照(**参考, 明确不构成升级理由**)。
 **关系**: 本规则同时回答"能不能并行"与"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"（前身 `.claude/rules/parallel-work-analysis.md` 已于 2026-07-28 删除并入本 skill）。隔离铁律继承 `.claude/rules/worktree-and-main-only-deploy.md` + `.claude/rules/concurrent-edit-safety.md`。编排顶层入口 → `organizer` skill。
