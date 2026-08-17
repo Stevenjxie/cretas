@@ -1439,6 +1439,18 @@ def _resolver_kwargs(
         "analysis_action": spec.analysis_action,
         "ranking_direction": spec.ranking_direction,
         "ranking_limit": spec.ranking_limit,
+        # 🔴 2026-08-18 加。此前**整条管线上规划器算出的维度从来没到过执行器**:
+        #    这个出口字典里没有这个键(AST 数过, 12 个键全在上面), 于是
+        #    「哪家店最多」与「最近损耗怎么样」拿到**逐字相同**的答案
+        #    (📏 MOCK_REST prod, 两轮正文 md5[:8] 同为 bd1d6675, 同为 1249 字,
+        #     而 spec.dimensions 分别是 ('store',) 和 ('ingredient',))。
+        # ⚠️ 只发出来还不够 —— `resolve_by_code` 按**签名**过滤 kwargs, 没声明
+        #    这个形参的 resolver 照样**静默**丢掉。两半都要接, 见
+        #    `tests/test_wastage_answers_the_asked_dimension.py` 的前两条。
+        # ⚠️ 今天只有 `resolve_wastage_top` 消费它; 其余 17 个 resolver **故意
+        #    不改**(登记在那份用例的模块 docstring 里), 它们收不到这个键的行为
+        #    与改动前逐字相同 —— 5 个带 **kwargs 的会收到但不读, 12 个被过滤掉。
+        "dimensions": tuple(spec.dimensions),
     }
     start, end = spec.date_range
     if start is not None and end is not None and hasattr(end, "__sub__"):
