@@ -47,7 +47,15 @@ export interface ProcessTaskItem {
   productionRunId?: string;
   sourceDocType?: string;
   sourceDocId?: string;
-  plannedQuantity: number;
+  /**
+   * 计划量。`null` = 【这道工序没有设计划量】, 与 `0` 不是一回事。
+   *
+   * ⚠️ 不要在这里兜底成 0。上游 `WorkProcessTask.plannedQuantity` 本来就是
+   * `number | null`(见 yieldReportApi.ts), 兜底会把「不知道」翻译成「是 0」,
+   * 而这两件事对下游完全不同 —— 屏幕会据此画出一个「计划量 0 / 进度 0%」的卡片,
+   * 对着一个根本没设过计划量的工序。那不是显示错误, 是【编了一个数】。
+   */
+  plannedQuantity: number | null;
   completedQuantity: number;
   pendingQuantity: number;
   inputQuantity?: number;
@@ -97,7 +105,8 @@ export interface ProcessTaskSummary {
   productName?: string;
   productTypeName?: string;
   processCategory?: string;
-  plannedQuantity?: number;
+  // 同 ProcessTaskItem: null 表示【没设计划量】, 与 0 不同, 不在传递途中抹掉
+  plannedQuantity?: number | null;
   completedQuantity?: number;
   pendingQuantity?: number;
   inputQuantity?: number;
@@ -241,7 +250,9 @@ class ProcessTaskApiClient {
       outputUnit: task.outputUnit ?? undefined,
       plannedUnit: task.plannedUnit ?? undefined,
       productionRunId: `BATCH-${task.productionBatchId}`,
-      plannedQuantity: task.plannedQuantity ?? 0,
+      // ⛔ 这里【曾经】是 `?? 0` —— 那一处兜底就是「计划量 0 + 0% 进度条」的源头。
+      // 后端 planned_quantity 为 NULL 时保持 null, 让屏幕自己决定怎么说「未设置」。
+      plannedQuantity: task.plannedQuantity ?? null,
       completedQuantity: task.actualQuantity ?? 0,
       pendingQuantity: 0,
       status: task.status,

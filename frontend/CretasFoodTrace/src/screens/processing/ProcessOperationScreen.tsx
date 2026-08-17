@@ -175,8 +175,11 @@ export default function ProcessOperationScreen() {
     });
   };
 
+  // 登记「本轮故意不改」: plannedQuantity 现在可能是 null(未设计划量)。
+  // 本轮只把【工序任务列表】那一屏改成显式的「未设置」, 这里维持原行为(按 0 算),
+  // 以免一次改动铺开到 5 块屏。⚠️ 它和列表页是同一个缺陷, 需要单独一轮处理。
   const remaining = selectedTask
-    ? Math.max(0, selectedTask.plannedQuantity - selectedTask.completedQuantity - selectedTask.pendingQuantity)
+    ? Math.max(0, (selectedTask.plannedQuantity ?? 0) - selectedTask.completedQuantity - selectedTask.pendingQuantity)
     : 0;
 
   // ==================== STEP 1: Select Task ====================
@@ -193,7 +196,9 @@ export default function ProcessOperationScreen() {
           {loading ? <ActivityIndicator size="large" style={{ marginTop: 40 }} /> :
             tasks.length === 0 ? <Text style={styles.empty}>暂无进行中的工序任务</Text> :
             tasks.map((task, idx) => {
-              const prog = task.plannedQuantity > 0 ? Math.min((task.completedQuantity / task.plannedQuantity) * 100, 100) : 0;
+              // 登记「本轮故意不改」: 同上, 未设计划量时仍按 0% 画。见本文件 remaining 处说明。
+              const planned = task.plannedQuantity ?? 0;
+              const prog = planned > 0 ? Math.min((task.completedQuantity / planned) * 100, 100) : 0;
               const card = (
                 <TouchableOpacity key={task.id} style={styles.taskCard} onPress={() => setSelectedTask(task)} activeOpacity={0.7}>
                   <View style={styles.taskHeader}>
@@ -204,7 +209,10 @@ export default function ProcessOperationScreen() {
                   </View>
                   {task.productTypeName && <Text style={styles.taskProduct}>{task.productTypeName}</Text>}
                   <View style={styles.taskStats}>
-                    <Text style={styles.taskStat}>计划: {task.plannedQuantity} {task.unit}</Text>
+                    {/* null 直接渲染是【空白】—— 比 0 更难懂。至少把话说出来。 */}
+                    <Text style={styles.taskStat}>
+                      计划: {task.plannedQuantity ?? '未设置'} {task.unit}
+                    </Text>
                     <Text style={[styles.taskStat, { color: '#67c23a' }]}>完成: {task.completedQuantity}</Text>
                   </View>
                   <View style={styles.progressRow}>
@@ -251,7 +259,7 @@ export default function ProcessOperationScreen() {
             {selectedTask.productTypeName && <Text style={styles.summaryProduct}>{selectedTask.productTypeName}</Text>}
             <View style={styles.summaryStats}>
               <View style={styles.summaryItem}>
-                <Text style={styles.summaryNum}>{selectedTask.plannedQuantity}</Text>
+                <Text style={styles.summaryNum}>{selectedTask.plannedQuantity ?? '未设置'}</Text>
                 <Text style={styles.summaryLabel}>计划 ({selectedTask.unit})</Text>
               </View>
               <View style={styles.summaryItem}>

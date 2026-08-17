@@ -395,6 +395,82 @@ describe('ProcessTaskListScreen', () => {
     });
   });
 
+  // ========== RN-SCR-06: 未设计划量的工序, 不许编一个数出来 ==========
+  //
+  // 背景: 后端 planned_quantity 允许为 NULL(那道工序压根没设计划量)。
+  // 修复前 processTaskApiClient 用 `?? 0` 兜底, 屏幕于是渲染出
+  //   「计划量 0」+ 一条 0% 的进度条 —— 对仓管员/操作员来说这是一个【明确的陈述】
+  //   (「这活一点没干」), 而事实是「没人设过计划量」。那是把「不知道」渲染成了一个数。
+  describe('RN-SCR-06: plannedQuantity 为 null 时显示「未设置」且不画进度条', () => {
+    const taskWithoutPlan = {
+      id: 'task-noplan',
+      factoryId: 'F001',
+      productTypeId: 'PT-009',
+      productTypeName: '卤猪蹄',
+      workProcessId: 'WP-009',
+      processName: '卤制',
+      processCategory: '热加工',
+      unit: 'kg',
+      // 真实那侧就是这个形状: 后端 planned_quantity 为 NULL
+      plannedQuantity: null,
+      completedQuantity: 0,
+      pendingQuantity: 0,
+      status: 'PENDING' as const,
+    };
+
+    beforeEach(() => {
+      mockedProcessTaskApi.getActiveTasks.mockResolvedValue({
+        success: true,
+        data: [taskWithoutPlan] as never,
+      });
+    });
+
+    it('计划量显示「未设置」, 而不是 0', async () => {
+      render(<ProcessTaskListScreen />);
+
+      await waitFor(() => {
+        expect(screen.getByText('卤制')).toBeTruthy();
+      });
+
+      expect(screen.getByTestId('process-task-planned-unset-task-noplan')).toBeTruthy();
+      // 阴性对照: 计划量那一格【根本不该渲染数值节点】。
+      // ⚠️ 不能写成 queryByText('0') —— 同一张卡上「已完成」本来就是 0,
+      //    那样写会把一个合法的 0 当成缺陷, 断言恒红。阴性对照要钉在【那一格】上。
+      expect(screen.queryByTestId('process-task-planned-value-task-noplan')).toBeNull();
+    });
+
+    it('不画进度条(0% 会被读成「一点没干」)', async () => {
+      render(<ProcessTaskListScreen />);
+
+      await waitFor(() => {
+        expect(screen.getByText('卤制')).toBeTruthy();
+      });
+
+      expect(screen.queryByTestId('process-task-progress-task-noplan')).toBeNull();
+      expect(screen.queryByText('0%')).toBeNull();
+    });
+
+    it('阳性对照: 有计划量时照常显示数字和进度条', async () => {
+      mockedProcessTaskApi.getActiveTasks.mockResolvedValue({
+        success: true,
+        data: [{ ...taskWithoutPlan, plannedQuantity: 200, completedQuantity: 50 }] as never,
+      });
+
+      render(<ProcessTaskListScreen />);
+
+      await waitFor(() => {
+        expect(screen.getByText('卤制')).toBeTruthy();
+      });
+
+      // 有计划量 ⇒ 数字在、进度条在、「未设置」不在
+      expect(screen.getByTestId('process-task-planned-value-task-noplan')).toBeTruthy();
+      expect(screen.getByText('200')).toBeTruthy();
+      expect(screen.getByTestId('process-task-progress-task-noplan')).toBeTruthy();
+      expect(screen.getByText('25%')).toBeTruthy();
+      expect(screen.queryByTestId('process-task-planned-unset-task-noplan')).toBeNull();
+    });
+  });
+
   // ========== RN-SCR-05: Empty state ==========
   describe('RN-SCR-05: Empty state shows appropriate message', () => {
     it('should show empty text when no tasks returned', async () => {

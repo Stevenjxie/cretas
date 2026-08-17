@@ -106,8 +106,10 @@ export default function ProcessRunOverviewScreen() {
             <Text variant="titleMedium" style={styles.listTitle}>工序列表</Text>
             {(overview.tasks || []).map((task: ProcessTaskItem, i: number) => {
               const status = STATUS_CONFIG[task.status] || { label: task.status, color: '#909399' };
-              const progress = task.plannedQuantity > 0
-                ? Math.min((task.completedQuantity / task.plannedQuantity) * 100, 100)
+              // 登记「本轮故意不改」: plannedQuantity 可能为 null(未设计划量)。
+              // 本轮只改工序任务列表那一屏, 这里维持按 0 算的原行为。同一缺陷, 待单独一轮。
+              const progress = (task.plannedQuantity ?? 0) > 0
+                ? Math.min((task.completedQuantity / (task.plannedQuantity ?? 1)) * 100, 100)
                 : 0;
 
               return (
@@ -138,7 +140,7 @@ export default function ProcessRunOverviewScreen() {
 
                     <View style={styles.taskStats}>
                       <Text style={styles.taskStat}>
-                        {task.completedQuantity}/{task.plannedQuantity} {task.unit}
+                        {task.completedQuantity}/{task.plannedQuantity ?? '未设置'} {task.unit}
                       </Text>
                       <View style={styles.miniProgress}>
                         <View style={[styles.miniProgressFill, { width: `${progress}%` }]} />

@@ -111,8 +111,18 @@ export default function ProcessTaskListScreen() {
     [orderedTasks]
   );
 
-  const getProgress = (task: ProcessTaskItem) => {
-    if (!task.plannedQuantity || task.plannedQuantity === 0) return 0;
+  /**
+   * 进度百分比。**没有计划量就没有进度可言** —— 返回 null, 让调用方不画进度条。
+   *
+   * ⚠️ 原来这里 `if (!plannedQuantity || === 0) return 0`, 把两件完全不同的事
+   * 折叠成了同一个 0:
+   *   - 计划量 100, 完成 0    → 真的是 0%
+   *   - 计划量【没设】        → 分母不存在, 百分比【算不出来】
+   * 对仓管员/操作员来说, 一条 0% 的进度条是一个明确的陈述(「这活一点没干」),
+   * 而事实是「没人给这道工序设过计划量」。那是在编一个数。
+   */
+  const getProgress = (task: ProcessTaskItem): number | null => {
+    if (task.plannedQuantity == null || task.plannedQuantity === 0) return null;
     return Math.min((task.completedQuantity / task.plannedQuantity) * 100, 100);
   };
 
@@ -165,7 +175,18 @@ export default function ProcessTaskListScreen() {
             <View style={styles.quantityRow}>
               <View style={styles.col}>
                 <Text style={styles.label}>计划量</Text>
-                <Text style={styles.value}>{item.plannedQuantity}</Text>
+                {item.plannedQuantity == null ? (
+                  <Text
+                    testID={`process-task-planned-unset-${item.id}`}
+                    style={[styles.value, styles.valueUnset]}
+                  >
+                    未设置
+                  </Text>
+                ) : (
+                  <Text testID={`process-task-planned-value-${item.id}`} style={styles.value}>
+                    {item.plannedQuantity}
+                  </Text>
+                )}
               </View>
               <View style={styles.col}>
                 <Text style={styles.label}>已完成</Text>
@@ -179,13 +200,16 @@ export default function ProcessTaskListScreen() {
               ) : null}
             </View>
 
-            {/* Progress bar */}
-            <View style={styles.progressContainer}>
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${progress}%` }]} />
+            {/* Progress bar —— 没有计划量就不画。
+                ⛔ 不要退回「画一条 0% 的条」: 那是把「算不出来」说成「一点没干」。 */}
+            {progress != null ? (
+              <View testID={`process-task-progress-${item.id}`} style={styles.progressContainer}>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                </View>
+                <Text style={styles.progressText}>{progress.toFixed(0)}%</Text>
               </View>
-              <Text style={styles.progressText}>{progress.toFixed(0)}%</Text>
-            </View>
+            ) : null}
           </View>
 
           {canReport ? (
@@ -322,6 +346,8 @@ const styles = StyleSheet.create({
   col: { flex: 1 },
   label: { color: theme.colors.textSecondary, fontSize: 15, marginBottom: 2 },
   value: { color: theme.colors.text, fontWeight: '600', fontSize: 18 },
+  // 「未设置」不是一个数值, 视觉上也不该长得像数值 —— 弱化 + 缩小, 避免被当成读数
+  valueUnset: { color: theme.colors.textTertiary, fontWeight: '500', fontSize: 15 },
   highlight: { color: theme.colors.primary, fontWeight: '700' },
   progressContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   progressTrack: {
