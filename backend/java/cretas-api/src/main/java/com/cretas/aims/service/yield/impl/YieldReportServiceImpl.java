@@ -157,6 +157,30 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Override
     @Transactional
     public Map<String, Object> submitReport(String factoryId, Long batchId, Long workerId, YieldReportRequest req) {
+        // ── 幂等: 同一次点击的重试不许再扣一次料 ──
+        //
+        // 2026-08-17 生产实测: 提交两次【完全相同】的领用报工(间隔 37ms), 两次都 200、
+        // 产生两条报工、库存 consumed 0.00 → 1.00 —— 领 0.5 扣了 1.0。
+        // 防护此前只在前端(disabled={submitting}), 网络重试/离线重发/进程重开/API 直调
+        // 全都绕得过去; 而报工改成【提交即入账】之后, 重复提交 = 库存立刻被多扣。
+        //
+        // ⛔ 不用时间窗去重: 报工是合法高频动作(分段报工/领两批料/多人分报),
+        //    时间窗会误拦正当操作, 而会误拦的闸最后一定被绕开或关掉。
+        // 设计卡 docs/decisions/2026-08-17-报工幂等用客户端请求号而非时间窗.md
+        String clientRequestId = req.getClientRequestId();
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            Optional<ProductionReport> dup = reportRepo
+                    .findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(factoryId, clientRequestId);
+            if (dup.isPresent()) {
+                log.info("[幂等] 同号重复提交, 返回原报工: factoryId={} clientRequestId={} reportId={}",
+                        factoryId, clientRequestId, dup.get().getId());
+                Map<String, Object> replay = new HashMap<>();
+                replay.put("reportId", dup.get().getId());
+                replay.put("idempotentReplay", true);
+                return replay;   // ⛔ 不新建、不报错 —— 重试就该拿到第一次的结果
+            }
+        }
+
         // C-074/C-075/X-10: 补录时效锁 — 报工业务日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
             backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "报工");
@@ -295,6 +319,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
                 .reportKind(reportKind)                   // 三阶段 (单元1): INPUT/SEGMENT/OUTPUT; null=旧式整合
                 .workerId(effectiveWorker).reporterName(req.getReporterName())
+                // 幂等键: 落库才能让下一次重试查得到 (见方法开头的查重)
+                .clientRequestId(clientRequestId)
                 // C-074/C-075/X-10: 客户传 businessDate 时采用 (补录场景); null 则取今天 (正常实时)
                 .reportDate(req.getBusinessDate() != null ? req.getBusinessDate() : LocalDate.now())
                 .workProcessTaskId(t.getId()).processOrder(t.getProcessOrder())

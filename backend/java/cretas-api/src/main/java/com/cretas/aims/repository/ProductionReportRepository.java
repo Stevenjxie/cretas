@@ -19,6 +19,16 @@ import java.util.Optional;
 @Repository
 public interface ProductionReportRepository extends JpaRepository<ProductionReport, Long> {
 
+    /**
+     * 幂等查重: 同一工厂 + 同一客户端请求号 的未删报工。
+     *
+     * <p>2026-08-17 生产实测双扣(领 0.5 扣了 1.0)后加的。
+     * 命中就返回原来那条的结果, ⛔ 不新建、不报错。
+     */
+    java.util.Optional<ProductionReport> findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(
+            String factoryId, String clientRequestId);
+
+
     // ==================== AUDIT-004 辅料按锅平摊 ====================
 
     /** 某共享锅的总产出量 (Σ output_quantity), 用于辅料按产出量分摊。 */

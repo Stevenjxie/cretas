@@ -12,6 +12,12 @@ import java.util.Map;
 @Data
 public class YieldReportRequest {
     private Long workProcessTaskId;
+
+    /**
+     * 客户端提交幂等键 (可选, 旧版 App 不传 → 保持现状不拦)。
+     * 同一次点击的【重试】带同一个号; 用户真的再报一笔时前端重新生成。
+     */
+    private String clientRequestId;
     private BigDecimal inputQuantity;     // 本道投入 (前端预填上道产出, 可改)
     private String inputUnit;
     private BigDecimal outputQuantity;    // 本道产出
