@@ -4,8 +4,11 @@
  *   ①1785 拆骨 COMPLETED / ②1786 卤制 PENDING / ③1787 拼装分装 PENDING,
  *   而 /yield 的 steps 是空的 (那批次一条报工记录都没有)。
  */
+import fs from 'fs';
+import path from 'path';
 import {
   resolveInitialStepIndex,
+  resolveInputUnit,
   resolveStepPhase,
   type StepPhase,
   type StepTaskLike,
@@ -90,5 +93,52 @@ describe('resolveInitialStepIndex', () => {
 
   it('空列表返回 -1', () => {
     expect(resolveInitialStepIndex({ tasks: [], phaseOf: phaseOfWithEmptyYield })).toBe(-1);
+  });
+});
+
+describe('resolveInputUnit', () => {
+  it('🔴 领上道半成品时用【那笔半成品的】单位, 不是本道的单位', () => {
+    // 生产实测: 卤制产出 kg, 拼装分装本道单位是 盒。
+    // 用 盒 提交, 后端 409「半成品单位与本道投入单位不一致」, 且填任何数字都过不去。
+    expect(resolveInputUnit({ hasSourceWipInput: true, wipUnit: 'kg', processUnit: '盒' })).toBe('kg');
+  });
+
+  it('不领半成品时用本道单位', () => {
+    expect(resolveInputUnit({ hasSourceWipInput: false, wipUnit: 'kg', processUnit: '盒' })).toBe('盒');
+  });
+
+  it('半成品单位缺失时退回本道单位, ⛔ 不返回空串', () => {
+    expect(resolveInputUnit({ hasSourceWipInput: true, wipUnit: null, processUnit: '盒' })).toBe('盒');
+    expect(resolveInputUnit({ hasSourceWipInput: true, wipUnit: '', processUnit: '盒' })).toBe('盒');
+  });
+});
+
+describe('屏幕确实用上了它 (防「只改一半调用点」)', () => {
+  // ⚠️ 当时的缺陷正是「两个 payload 构造处只改对了一个」。
+  //    这条钉住: effectiveInputUnit 必须【同时】用在提交 payload 和数量框显示上。
+  //    只改回其中任意一处, 计数就掉到 1, 这条红。
+  const SCREEN = path.join(__dirname, '../../screens/processing/YieldStepReportScreen.tsx');
+
+  it('effectiveInputUnit 至少被消费 2 次(提交 + 显示)', () => {
+    const src = fs.readFileSync(SCREEN, 'utf8');
+    const uses = src.split('effectiveInputUnit').length - 1;
+    // 1 次定义 + 至少 2 次消费
+    expect(uses).toBeGreaterThanOrEqual(3);
+    expect(src).toContain('inputUnit: effectiveInputUnit');
+    expect(src).toContain('unit={effectiveInputUnit}');
+  });
+
+  // 显式登记「故意不改」的那一处 (硬约束: 改共享结构要么改, 要么登记, 不许沉默):
+  //   handleSentinelMaterialSubmit —— 哨兵领料是纯原料流程, 那一屏没有半成品选择器,
+  //   payload 也不带 sourceWipNo, 所以它的 inputUnit: unit 是对的。
+  //   ⇒ 闸只钉「会挂 sourceWipNo 的那个 payload」, ⛔ 不搞成全文件禁用 inputUnit: unit
+  //     —— 那样会对一条正确的路径误报, 而误报的闸最终会被关掉。
+  it('⛔ 带 sourceWipNo 的那个 payload 里不许写死 inputUnit: unit', () => {
+    const src = fs.readFileSync(SCREEN, 'utf8');
+    const anchor = src.indexOf('sourceWipNo: effectiveSourceWipNo');
+    expect(anchor).toBeGreaterThan(-1); // 阳性对照: 锚点找不到就说明这条闸在扫空气
+    const payload = src.slice(Math.max(0, anchor - 1200), anchor);
+    expect(payload).toContain('inputUnit: effectiveInputUnit');
+    expect(payload).not.toContain('inputUnit: unit,');
   });
 });

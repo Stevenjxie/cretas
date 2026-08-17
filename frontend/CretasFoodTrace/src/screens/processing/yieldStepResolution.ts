@@ -70,3 +70,25 @@ export function resolveInitialStepIndex(params: {
 
   return tasks.findIndex((task) => phaseOf(task) !== 'COMPLETED');
 }
+
+/**
+ * 本道【投入】用哪个单位。
+ *
+ * 领上道半成品时是那笔半成品的单位；否则才是本道自己的 unit。
+ *
+ * ⚠️ 本道的 unit 描述的是它的**产出**（卤制出 kg、拼装分装出 盒）。拿它标投入会同时造成两件事，
+ * 2026-08-17 生产实测两件都发生了：
+ *  - 界面写出「上道产出 2.5 盒 / 半成品领用量 2.5 盒」，而那 2.5 是 **kg** —— 对工人是假话；
+ *  - 提交被后端以「半成品单位与本道投入单位不一致」**409** 拒收，
+ *    而单位是结构性不兼容的 ⇒ **工人填任何数字都过不去**，界面成了死胡同。
+ *
+ * ⛔ 显示与提交必须共用这一处，不许各写各的 —— 当时正是「两个 payload 构造处只改对了一个」。
+ */
+export function resolveInputUnit(params: {
+  hasSourceWipInput: boolean;
+  wipUnit: string | null | undefined;
+  processUnit: string;
+}): string {
+  const { hasSourceWipInput, wipUnit, processUnit } = params;
+  return hasSourceWipInput && wipUnit ? wipUnit : processUnit;
+}

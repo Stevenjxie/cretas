@@ -636,6 +636,15 @@ const YieldStepReportScreen: React.FC = () => {
     const prevStep = yieldData.steps.find((s: StepYieldDTO) => s.processOrder === prevOrder);
     return prevStep?.totalOutput ?? null;
   }, [currentTask, yieldData]);
+  // ⚠️ 上道产出的单位是【上道的】—— 卤制出 kg、拼装分装出 盒, 拿本道的 unit 去标它,
+  //    界面上会写出「上道产出 2.5 盒」这种假话 (实际是 2.5 kg)。取不到就不标单位。
+  const prevOutputUnit = useMemo<string | null>(() => {
+    if (!currentTask || !yieldData) return null;
+    const prevStep = yieldData.steps.find(
+      (s: StepYieldDTO) => s.processOrder === currentTask.processOrder - 1,
+    );
+    return prevStep?.outputUnit ?? null;
+  }, [currentTask, yieldData]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -856,6 +865,12 @@ const YieldStepReportScreen: React.FC = () => {
     : wipAvailable;
   const wipUnit = (needsWipPicker ? selectedWip?.unit : yieldLimits?.wipAvailableUnit) ?? unit;
   const hasSourceWipInput = !isFirstStep && effectiveSourceWipNo != null;
+  // 本道【投入】的单位。领上道半成品时是那笔半成品的单位; 否则才是本道自己的 unit。
+  // ⚠️ 本道的 unit 描述的是它的【产出】(卤制出 kg、拼装分装出 盒), 用它标投入会同时
+  //    造成两件事: 界面写出「2.5 盒」这种假话, 以及提交被后端以
+  //    「半成品单位与本道投入单位不一致」409 拒收 —— 而工人填任何数字都过不去。
+  //    ⛔ 只此一处定义, 显示与提交共用, 不许再各写各的。
+  const effectiveInputUnit = hasSourceWipInput ? wipUnit : unit;
   const materialInputTotal = useMemo(
     () => materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0),
     [materialBatchRefs],
@@ -887,7 +902,7 @@ const YieldStepReportScreen: React.FC = () => {
   //    用前者断言后者, 会对第②道的工人说一句假话, 并让他去领原料.
   const prefillNote =
     prevOutput != null
-      ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
+      ? `← 上道产出 ${prevOutput}${prevOutputUnit ? ` ${prevOutputUnit}` : ''}, 请确认实际投了多少`
       : isFirstStep
         ? '本道为首道, 请填本道领料投入量'
         : '上道产出量暂时取不到, 请按本道实际投入量填写';
@@ -1203,7 +1218,11 @@ const YieldStepReportScreen: React.FC = () => {
       workProcessTaskId: currentTask.id,
       reportKind: 'INPUT',
       inputQuantity: input,
-      inputUnit: unit,
+      // 领的是上道半成品时, 投入单位是【那笔半成品的单位】, 不是本道的单位 ——
+      // 本道的 unit 描述的是它的产出 (卤制出 kg, 拼装分装出 盒), 拿它当投入单位,
+      // 后端会以「半成品单位与本道投入单位不一致」409 拒收, 而工人填任何数字都过不去。
+      // 另一处构造 (二次加工首道) 早就写对了 —— 这里是漏改的那一半。
+      inputUnit: effectiveInputUnit,
       outputQuantity: 0,  // 后端按 reportKind=INPUT 强制忽略 output
       ...(materialBatchRefs.length > 0
         ? {
@@ -2435,7 +2454,7 @@ const YieldStepReportScreen: React.FC = () => {
                   }
                   value={inputQty}
                   onChangeText={setInputQty}
-                  unit={unit}
+                  unit={effectiveInputUnit}
                   max={inputMax}
                   maxHint={inputMaxHint}
                   prefillNote={prefillNote}
