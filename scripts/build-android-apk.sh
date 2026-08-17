@@ -17,7 +17,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目路径
-PROJECT_ROOT="/Users/jietaoxie/my-prototype-logistics"
+# 🔴 2026-08-17: 这里曾经硬编码成 `/Users/jietaoxie/my-prototype-logistics` ——
+# 换任何一台机器(或任何一个 git worktree)都跑不了, 打包实际上只有一个人能做。
+# 改成从脚本自身位置推导, 谁 clone 到哪都能跑。
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="$PROJECT_ROOT/frontend/CretasFoodTrace"
 ANDROID_DIR="$FRONTEND_DIR/android"
 
@@ -107,14 +110,23 @@ install_dependencies() {
 
   cd "$FRONTEND_DIR"
 
-  if [ ! -d "node_modules" ]; then
-    print_info "首次运行，安装 npm 依赖..."
-    npm install
-    print_success "npm 依赖安装完成"
-  else
-    print_info "node_modules 已存在，跳过安装"
-    print_warning "如需重新安装，请运行: rm -rf node_modules && npm install"
-  fi
+  # 🔴 2026-08-17: 这里曾经是「node_modules 存在就跳过安装」+ `npm install`。
+  # 两处都出过事:
+  #   · 跳过安装 ⇒ 打包机上留着的那套(可能早已漂过的)依赖被直接拿去打包;
+  #   · `npm install` 会在 lockfile 之外重新解析, 与 `npm ci` 不同。
+  # 实测代价: 分发中的 v1.0.4 APK **一启动就崩, 任何设备都崩** ——
+  #   java.lang.NoSuchMethodError: getDirectConverter(...) in ReturnTypeKt
+  #   at expo.modules.font.FontLoaderModule.definition(FontLoaderModule.kt:98)
+  # 从 APK 的 dex 直接证死(dex 全 ABI 共用): 调用方在、被调方不在。
+  # 而 lockfile 一直锁着好版本(expo-modules-core@2.5.0 / expo-font@13.3.2,
+  # 两个包的源码里都没有 getDirectConverter 这个名字) ⇒ 打出来的包不是按锁装的。
+  # ⇒ 一律 npm ci: 它会先清掉 node_modules, 再严格按 lockfile 装。
+  # ⚠️ 必须带 --legacy-peer-deps: 裸 `npm ci` 在本仓会因 peer-dep 解析差异报
+  #   "Missing: import-fresh@… from lock file" 而直接失败(实测)。
+  #   本仓其它安装命令一律带这个 flag, 保持一致。
+  print_info "按 lockfile 全量安装依赖 (npm ci --legacy-peer-deps)..."
+  npm ci --legacy-peer-deps
+  print_success "npm 依赖安装完成 (与 package-lock.json 一致)"
 }
 
 prepare_environment() {
@@ -230,6 +242,35 @@ build_apk() {
     print_error "APK 构建失败"
     exit 1
   fi
+}
+
+smoke_apk() {
+  print_header "启动冒烟 (装起来跑一次)"
+
+  # 🔴 2026-08-17: 加这一步的理由 —— 分发中的 v1.0.4 APK **一启动就崩, 任何设备都崩**
+  # (NoSuchMethodError: getDirectConverter, expo-font 与 expo-modules-core 版本不匹配),
+  # 而当时**每一道既有判据都是绿的**: OTA 四步验收 / jest / tsc / CI。
+  # ⇒ 因为没有任何一条判据是「把它装起来跑一次」。
+  # 「构建成功」「制品里 grep 到标记」都只证明**发出去了**, 不证明**跑得起来**。
+  local smoke="$PROJECT_ROOT/scripts/smoke-android-apk.sh"
+  if [ ! -x "$smoke" ]; then
+    print_warning "找不到 $smoke —— 跳过冒烟。⚠️ 这个包**没有人打开过**, 不要直接分发。"
+    return 0
+  fi
+
+  set +e
+  "$smoke" "$APK_PATH"
+  local rc=$?
+  set -e
+
+  case "$rc" in
+    0) print_success "冒烟通过: 装上去能启动, 无 FATAL / NoSuchMethodError" ;;
+    2) # 三态: rc=2 是「这次没量到」, 与「没问题」必须分开报 (本仓硬约束 4)
+       print_warning "冒烟**没量到**(没有设备/装不上) —— 这不是通过。分发前请在模拟器上补跑:"
+       print_warning "  ANDROID_SERIAL=emulator-5554 $smoke $APK_PATH" ;;
+    *) print_error "冒烟失败: 这个包装上去打不开, ⛔ 禁止分发"
+       exit 1 ;;
+  esac
 }
 
 install_apk() {
@@ -369,6 +410,7 @@ main() {
   prepare_environment
   generate_native_project
   build_apk
+  smoke_apk
 
   if [ "$AUTO_INSTALL" = true ]; then
     install_apk
