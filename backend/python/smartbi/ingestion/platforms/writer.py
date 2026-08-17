@@ -208,7 +208,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
         async with conn.transaction():
             await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
             for order in orders:
-                store_id = await _resolve_store(conn, factory_id, order)
+                store_id = await _resolve_store(
+                    conn, factory_id, order.platform, order.store_code)
                 # ⛔ has_discount / meal_period / staff_id 曾经全部漏写 ——
                 #    2026-08-08 实测 MOCK_REST 236,954 行这三列(以及另外 5 列)
                 #    100% 是 NULL, 而 `gold.queries.staff_ranking` 里有
@@ -269,17 +270,25 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
     return written
 
 
-async def _resolve_store(conn, factory_id: str, order: NormalizedOrder) -> int:
-    """平台门店 code → dim_store.store_id。查不到就报错, 不建"未知门店"也不丢弃。"""
+async def _resolve_store(
+    conn, factory_id: str, platform: str, store_code: str,
+) -> int:
+    """平台门店 code → dim_store.store_id。查不到就报错, 不建"未知门店"也不丢弃。
+
+    ⚠️ 2026-08-17 签名从 `(conn, factory_id, order)` 改成显式收 platform/store_code:
+       后厨单据(领料/损耗/盘点)也要做同一件事, 而它们不是 `NormalizedOrder`。
+       ⛔ 不在 `ops_writer` 里复制一份同样的查询 —— 那是形态 D(两份一定会漂),
+          而这里漂的表现是「订单按 A 表映射、后厨按 B 表映射」, 同一家店两个 id。
+    """
     row = await conn.fetchrow(
         "SELECT store_id FROM platform_store_map "
         "WHERE factory_id = $1 AND platform = $2 AND platform_store_code = $3",
-        factory_id, order.platform, order.store_code,
+        factory_id, platform, store_code,
     )
     if row is None:
         raise RuntimeError(
-            f"门店映射失败: factory={factory_id} platform={order.platform} "
-            f"code={order.store_code} —— 检查 V20261101_01 的 platform_store_map "
+            f"门店映射失败: factory={factory_id} platform={platform} "
+            f"code={store_code} —— 检查 V20261101_01 的 platform_store_map "
             f"种子是否与模拟端 seed.py 的 _STORES 对齐"
         )
     return row["store_id"]

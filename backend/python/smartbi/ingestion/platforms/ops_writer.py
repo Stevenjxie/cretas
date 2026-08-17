@@ -3,10 +3,18 @@
 列名与约束全部按 2026-07-29 生产实测校正, 不是凭记忆写的:
   * 三张表的幂等键都是 `uq_*_factory_source` = (factory_id, source_pk),
     source_pk 存平台单号。
-  * **三张表都没有 store_id** —— ops Silver 是工厂级而非门店级的。我们的
-    模拟器按门店产出, 门店信息只保留在 source_pk 里, 落到 Silver 后
-    门店归属就丢了。这是既有 schema 的形状, 不是这里的疏漏; 要按门店看
-    后厨得先扩 schema。
+  * 🔴 **2026-08-17 订正: 三张表现在有 store_id 了, 这里也接上了。**
+    此前这段写的是「三张表都没有 store_id …要按门店看后厨得先扩 schema」——
+    那句话当时是对的, 但它把一件**能做的事**描述成了既定形状, 于是
+    「哪家店损耗最多 / 哪家店缺货最严重 / 按门店看领用趋势」被拒答了很久,
+    而门店信息其实**每一层都在**:
+        模拟器 `wastage.store_id NOT NULL` → payload `shopCode`
+        → `NormalizedWastage.store_code`(必填) → **这里丢掉** → Silver 无列
+    ⇒ 形态 B 第 7 例(投影丢失): 产出端有、归一化层有、消费端收不到。
+    schema 已由 `V20261101_16__restaurant_ops_store_dimension.sql` 扩好,
+    门店解析**复用** `writer._resolve_store`(⛔ 不复制一份查询, 见该函数注释)。
+    ⚠️ 存量行的 store_id 是 NULL —— 本 writer 是
+       `ON CONFLICT (factory_id, source_pk) DO UPDATE`, 重放同一批单据会补上。
   * 列名各表不同, 别串: requisition 是 requested_qty/est_cost,
     wastage 是 quantity/estimated_cost, stocktaking 是
     system_qty/actual_qty/difference_qty/difference_cost。
@@ -32,6 +40,7 @@ from decimal import Decimal
 from typing import List
 
 from smartbi.canonical.entity_resolution.agents.deterministic import normalize_for_dim
+from smartbi.ingestion.platforms.writer import _resolve_store
 
 logger = logging.getLogger(__name__)
 
@@ -97,37 +106,41 @@ async def _resolve_ingredient(conn, factory_id: str, ref, cache: dict) -> int:
 _REQUISITION_SQL = """
 INSERT INTO fact_restaurant_requisition
     (factory_id, source_pk, requisition_number, date, ingredient_id,
-     status, requested_qty, unit, est_cost)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     status, requested_qty, unit, est_cost, store_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     requested_qty = EXCLUDED.requested_qty,
     est_cost      = EXCLUDED.est_cost,
     status        = EXCLUDED.status,
+    store_id      = EXCLUDED.store_id,
     updated_at    = NOW()
 """
 
 _WASTAGE_SQL = """
 INSERT INTO fact_restaurant_wastage
     (factory_id, source_pk, wastage_number, date, ingredient_id,
-     wastage_type, status, quantity, unit, estimated_cost)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     wastage_type, status, quantity, unit, estimated_cost, store_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     quantity       = EXCLUDED.quantity,
     estimated_cost = EXCLUDED.estimated_cost,
     wastage_type   = EXCLUDED.wastage_type,
+    store_id       = EXCLUDED.store_id,
     updated_at     = NOW()
 """
 
 _STOCKTAKING_SQL = """
 INSERT INTO fact_restaurant_stocktaking
     (factory_id, source_pk, stocktaking_number, date, ingredient_id,
-     status, system_qty, actual_qty, difference_qty, difference_cost, unit)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     status, system_qty, actual_qty, difference_qty, difference_cost, unit,
+     store_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     system_qty      = EXCLUDED.system_qty,
     actual_qty      = EXCLUDED.actual_qty,
     difference_qty  = EXCLUDED.difference_qty,
     difference_cost = EXCLUDED.difference_cost,
+    store_id        = EXCLUDED.store_id,
     updated_at      = NOW()
 """
 
@@ -151,9 +164,20 @@ async def write_ops(pool, factory_id: str, kind: str, items: List) -> int:
         # 而这几张表(含 dim_ingredient)的 RLS 都没有 __internal__ 逃生门。
         async with conn.transaction():
             await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            store_cache: dict = {}
             for item in items:
                 ing_id = await _resolve_ingredient(
                     conn, factory_id, item.ingredient, ingredient_cache)
+                # 门店解析**复用订单那条路的同一个函数** —— ⛔ 不在这里复制一份
+                # `platform_store_map` 查询(形态 D: 漂的表现是「订单按 A 映射、
+                # 后厨按 B 映射」, 同一家店两个 id, 而且不报错)。
+                # 一批单据通常只涉及少数几家店, 缓存掉重复查询。
+                store_key = (item.platform, item.store_code)
+                store_id = store_cache.get(store_key)
+                if store_id is None:
+                    store_id = await _resolve_store(
+                        conn, factory_id, item.platform, item.store_code)
+                    store_cache[store_key] = store_id
                 source_pk = f"{_SOURCE_PREFIX}:{item.doc_no}"
                 unit = item.ingredient.unit
                 if kind == "requisition":
@@ -161,12 +185,14 @@ async def write_ops(pool, factory_id: str, kind: str, items: List) -> int:
                         _REQUISITION_SQL, factory_id, source_pk, item.doc_no,
                         item.biz_date, ing_id, item.status,
                         _qty(item.qty_milli), unit, _yuan(item.cost_cents),
+                        store_id,
                     )
                 elif kind == "wastage":
                     await conn.execute(
                         _WASTAGE_SQL, factory_id, source_pk, item.doc_no,
                         item.biz_date, ing_id, item.wastage_type, item.status,
                         _qty(item.qty_milli), unit, _yuan(item.cost_cents),
+                        store_id,
                     )
                 else:
                     await conn.execute(
@@ -174,6 +200,7 @@ async def write_ops(pool, factory_id: str, kind: str, items: List) -> int:
                         item.biz_date, ing_id, item.status,
                         _qty(item.system_qty_milli), _qty(item.actual_qty_milli),
                         _qty(item.diff_qty_milli), _yuan(item.diff_cost_cents), unit,
+                        store_id,
                     )
                 written += 1
     logger.info("[platform-sync] 写入 %d 条 %s 单据 (factory=%s)", written, kind, factory_id)
