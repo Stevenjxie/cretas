@@ -1818,6 +1818,27 @@ _DEMO_GOLD_MAPPED_CODES = frozenset({
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_TREND_ANALYSIS",
+    # 🔴 2026-08-17 补: 渠道构成当天开始**出各门店的表**, 于是它进了「门店宇宙
+    #    必须一致」这一族。不补的后果当天就实测到了 ——
+    #      同一个 DEMO_REST 账号:
+    #        「哪家店外卖占比最高」(store_scoped=True)  -> RES_3101_009, 30 家店
+    #        「外卖占了几成」      (store_scoped=False) -> DEMO_REST,    27 家店
+    #    两套门店、两套营收，对不上账。**正是本函数 docstring 里说它要防的那件事**
+    #    (「排行说某店第一，而销售汇总夸的是另一个数据空间里的店」)。
+    # ⚠️ 这是「机制在、没接上」: `store_scoped` 这个参数存在的全部意义就是让调用方
+    #    声明「我这个答案是按门店的」, 而我给 CHANNEL_MIX 加门店表时**没有人告诉
+    #    租户解析这件事**。加能力要同时问一句: 它有没有进入某个「必须一致」的族。
+    "RESTAURANT_OPS_CHANNEL_MIX",
+})
+
+#: 能按门店分组、但**刻意没有**进上面那张表的 resolver。
+#: ⛔ 这不是豁免, 是**留痕**: 它们的门店宇宙与排行/汇总那一族可能对不上,
+#:    只是还没有人核过。⚠️ 棘轮 —— 这张表只许变短。
+#: (2026-08-17 建表时的存量。新写的 store-capable resolver 一律进映射表,
+#:  除非有人核过并写明理由。)
+_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED = frozenset({
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+    "RESTAURANT_OPS_STAFFING_ADVICE",
 })
 
 
