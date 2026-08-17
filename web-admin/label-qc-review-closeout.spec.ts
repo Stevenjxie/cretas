@@ -40,16 +40,39 @@ const detail = {
       aiModel: 'vision-review',
       promptVersion: 'qc-label-v3',
       screeningDetail: JSON.stringify({
-        trays: [{
-          index: 0,
-          bbox: [0.05, 0.1, 0.65, 0.48],
-          trayConfidence: 0.91,
-          screenVerdict: 'CLEAR',
-          labels: [
-            { type: 'white', confidence: 0.88, bbox: [0.12, 0.2, 0.3, 0.3] },
-            { type: 'color', confidence: 0.79, bbox: [0.38, 0.12, 0.53, 0.22] },
-          ],
-        }],
+        trays: [
+          {
+            index: 0,
+            bbox: [0.05, 0.1, 0.32, 0.48],
+            trayConfidence: 0.91,
+            screenVerdict: 'CLEAR',
+            labels: [
+              { type: 'white', confidence: 0.88, bbox: [0.12, 0.28, 0.23, 0.35] },
+              { type: 'white', confidence: 0.84, bbox: [0.115, 0.275, 0.235, 0.355] },
+              { type: 'color', confidence: 0.79, bbox: [0.08, 0.17, 0.2, 0.24] },
+            ],
+          },
+          {
+            index: 1,
+            bbox: [0.36, 0.1, 0.63, 0.48],
+            trayConfidence: 0.9,
+            screenVerdict: 'CLEAR',
+            labels: [
+              { type: 'white', confidence: 0.87, bbox: [0.43, 0.285, 0.54, 0.355] },
+              { type: 'color', confidence: 0.78, bbox: [0.39, 0.175, 0.51, 0.245] },
+            ],
+          },
+          {
+            index: 2,
+            bbox: [0.67, 0.1, 0.94, 0.48],
+            trayConfidence: 0.89,
+            screenVerdict: 'CLEAR',
+            labels: [
+              { type: 'white', confidence: 0.86, bbox: [0.74, 0.28, 0.85, 0.35] },
+              { type: 'color', confidence: 0.77, bbox: [0.7, 0.17, 0.82, 0.24] },
+            ],
+          },
+        ],
       }),
       annotations: [{
         id: 'ai-web-1',
@@ -262,15 +285,19 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
   await expect(page.getByRole('button', { name: '拒绝并移除框' })).toBeVisible();
   const mainImage = page.getByAltText('待审核包装标签照片');
   await expect(mainImage).toBeVisible();
-  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(1);
-  await expect(page.locator('.reference-box.layer-white')).toHaveCount(1);
-  await expect(page.locator('.reference-box.layer-color')).toHaveCount(1);
-  await expect(page.locator('.reference-tag')).toHaveText(['托盘 1', '白标', '彩标']);
-  const trayLayerToggle = page.locator('.layer-toggle').filter({ hasText: '托盘' });
+  const drawerBounds = await page.locator('.review-drawer').boundingBox();
+  expect(drawerBounds?.width).toBeGreaterThan(1290);
+  await expect(page.locator('.reference-box:visible')).toHaveCount(0);
+  await expect(page.locator('.object-tray-box')).toHaveCount(3);
+  await expect(page.locator('.object-label-box')).toHaveCount(6);
+  await expect(page.locator('.reference-tag, .object-final-tag, .box-label')).toHaveCount(0);
+  await expect(page.locator('.guide-white')).toHaveCount(1);
+  await expect(page.locator('.guide-color')).toHaveCount(1);
+  const trayLayerToggle = page.getByRole('button', { name: '隐藏盒子' });
   await trayLayerToggle.click();
-  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(0);
-  await trayLayerToggle.click();
-  await expect(page.locator('.reference-box.layer-tray')).toHaveCount(1);
+  await expect(page.locator('.object-tray-box:visible')).toHaveCount(0);
+  await page.getByRole('button', { name: '显示盒子' }).click();
+  await expect(page.locator('.object-tray-box').first()).toBeVisible();
   await expect(page.getByText('正在加载照片…')).toBeHidden();
   await expect.poll(() => mainImage.evaluate((image) => ({
     complete: (image as HTMLImageElement).complete,
@@ -288,8 +315,38 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
   expect(imageBounds!.height).toBeLessThanOrEqual(viewportBounds!.height + 1);
   await expect(page.locator('.image-plane')).toHaveCSS('transform', 'none');
 
+  const zoomPoint = {
+    x: imageBounds!.x + imageBounds!.width * 0.8,
+    y: imageBounds!.y + imageBounds!.height * 0.8,
+  };
+  const beforeWheel = await page.locator('.image-plane').boundingBox();
+  await page.mouse.move(zoomPoint.x, zoomPoint.y);
+  await page.mouse.wheel(0, -600);
+  const afterWheel = await page.locator('.image-plane').boundingBox();
+  expect(beforeWheel).not.toBeNull();
+  expect(afterWheel).not.toBeNull();
+  const normalizedBefore = {
+    x: (zoomPoint.x - beforeWheel!.x) / beforeWheel!.width,
+    y: (zoomPoint.y - beforeWheel!.y) / beforeWheel!.height,
+  };
+  const normalizedAfter = {
+    x: (zoomPoint.x - afterWheel!.x) / afterWheel!.width,
+    y: (zoomPoint.y - afterWheel!.y) / afterWheel!.height,
+  };
+  expect(normalizedAfter.x).toBeCloseTo(normalizedBefore.x, 4);
+  expect(normalizedAfter.y).toBeCloseTo(normalizedBefore.y, 4);
+  await page.getByRole('button', { name: '复位' }).click();
+
+  const whitePresenceRow = page.locator('.presence-editor > div').first();
+  await whitePresenceRow.getByRole('button', { name: '实物缺标' }).click();
+  await expect(page.locator('.object-label-box')).toHaveCount(5);
+  await expect(whitePresenceRow.getByRole('button', { name: '实物缺标' })).toHaveClass(/on/);
+  await whitePresenceRow.getByRole('button', { name: '+ 补白标框' }).click();
+  await expect(page.locator('.object-label-box')).toHaveCount(6);
+  await expect(whitePresenceRow.getByRole('button', { name: '有标签' })).toHaveClass(/on/);
+
   await mainImage.dispatchEvent('error');
-  await expect(page.getByRole('alert')).toContainText('主图没有加载出来');
+  await expect(page.locator('.image-load-error')).toContainText('主图没有加载出来');
   await expect(page.getByRole('link', { name: '新窗口打开原图' })).toHaveAttribute(
     'href',
     'https://qc-evidence.test/photo-1.jpg',

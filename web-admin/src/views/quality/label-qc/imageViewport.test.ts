@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { calculateImagePlaneStyle, resolveImageSize } from './imageViewport';
+import {
+  calculateAnchoredPan,
+  calculateImagePlaneStyle,
+  resolveImageSize,
+} from './imageViewport';
 
 describe('label QC image viewport compatibility', () => {
   it('uses the decoded image size when backend dimensions are invalid', () => {
@@ -52,5 +56,25 @@ describe('label QC image viewport compatibility', () => {
 
     expect(Object.values(style).join(' ')).not.toMatch(/NaN|Infinity/);
     expect(style).not.toHaveProperty('transform');
+  });
+
+  it('adjusts pan so wheel zoom stays anchored at the pointer', () => {
+    expect(calculateAnchoredPan(
+      1,
+      2,
+      { x: 0, y: 0 },
+      { x: 700, y: 500 },
+      { x: 400, y: 300 },
+    )).toEqual({ x: -300, y: -200 });
+  });
+
+  it('returns to the centered identity view at 100 percent', () => {
+    expect(calculateAnchoredPan(
+      2,
+      1,
+      { x: -120, y: 80 },
+      { x: 200, y: 100 },
+      { x: 400, y: 300 },
+    )).toEqual({ x: 0, y: 0 });
   });
 });
