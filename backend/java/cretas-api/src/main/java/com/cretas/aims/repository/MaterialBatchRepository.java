@@ -564,6 +564,29 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("materialTypeId") String materialTypeId);
 
     /**
+     * 同上, 但**限定一个仓库** —— 用来把「全厂没货」和「货在别的仓、还没领/调过来」分开。
+     *
+     * <p>🔴 2026-08-18 实测: 计划列表的「原料参考」用的是上面那个**全厂**口径, 于是
+     * F006 黄油鸡计划(4 个原料各 200kg 全在原料仓、生产仓 0)显示「暂无缺料预警」,
+     * 而点进逐道录入, 四行全是「0kg / 原料仓另有 200kg，待调拨入生产仓」——
+     * 同一个计划的两块界面各说各话, 用户看完「不缺料」再发现一行都填不了。
+     *
+     * <p>⚠️ 条件与全厂版<b>逐条相同</b>, 只多一个 {@code warehouseId} —— 两个数必须同口径,
+     * 否则相减出来的「压在别的仓的量」是假的。
+     */
+    @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+    BigDecimal sumAvailableRawStockQuantityByMaterialTypeAndWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId);
+
+    /**
      * Customer-supplied stock is usable only by the production plan sourced
      * from the same customer and sales order. It never contributes to the
      * factory-owned availability used for procurement shortfall calculation.

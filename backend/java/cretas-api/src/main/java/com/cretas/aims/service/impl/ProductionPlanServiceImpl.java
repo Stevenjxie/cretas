@@ -1089,15 +1089,88 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .availableQuantity(available)
                         .shortageQuantity(shortageQty)
                         .unit(unit)
+                        .kind(ProductionPlanMaterialAdvisoryDTO.Kind.FACTORY_SHORTAGE)
                         .message(String.format("%s: 需要 %s%s, 可用 %s%s, 缺口 %s%s",
                                 materialName,
                                 totalRequired.stripTrailingZeros().toPlainString(), unit,
                                 available.stripTrailingZeros().toPlainString(), unit,
                                 shortageQty.stripTrailingZeros().toPlainString(), unit))
                         .build());
+                continue;
+            }
+
+            // 🔴 全厂够, 再看**生产仓**够不够 —— 「忘了调拨」是一种独立的处境, 下一步是领料而非采购。
+            BigDecimal workshopAvailable = resolveWorkshopRawStock(factoryId, plan, item.getMaterialTypeId());
+            if (workshopAvailable != null && workshopAvailable.compareTo(totalRequired) < 0) {
+                warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                        .materialTypeId(item.getMaterialTypeId())
+                        .materialName(materialName)
+                        .requiredQuantity(totalRequired)
+                        .availableQuantity(available)
+                        .workshopAvailableQuantity(workshopAvailable)
+                        .shortageQuantity(totalRequired.subtract(workshopAvailable))
+                        .unit(unit)
+                        .kind(ProductionPlanMaterialAdvisoryDTO.Kind.NOT_IN_WORKSHOP)
+                        .message(String.format(
+                                "%s: 全厂有 %s%s, 但生产仓只有 %s%s。逐道报工按生产仓扣料，请先领料或调拨 %s%s",
+                                materialName,
+                                available.stripTrailingZeros().toPlainString(), unit,
+                                workshopAvailable.stripTrailingZeros().toPlainString(), unit,
+                                totalRequired.subtract(workshopAvailable).stripTrailingZeros().toPlainString(), unit))
+                        .build());
             }
         }
         return warnings;
+    }
+
+    /**
+     * 生产仓这一层<b>量得到吗</b> —— 与 {@link #resolveWorkshopRawStock} 的可判定条件同源。
+     *
+     * <p>存在的唯一理由是让「无预警」那句话分得清「生产仓没问题」和「没量生产仓」。
+     */
+    private boolean workshopCaliberAvailable(String factoryId, ProductionPlan plan) {
+        if (warehouseResolver == null) {
+            return false;
+        }
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return false;
+        }
+        try {
+            String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+            return workshopId != null && !workshopId.isBlank();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 生产仓可用量; 无法判定时返回 {@code null}（<b>不是 0</b>）。
+     *
+     * <p>⛔ 读不到就返回 null 让调用方跳过 —— 兜底成 0 会把「我不知道」翻译成「一粒都没有」,
+     * 于是每个计划都长出一条假的「请先领料」。本仓形态 A¹⁰。
+     *
+     * <p>返回 null 的情形: 没配生产仓 / resolver 不可用 / 客户来料计划(那类走另一套归属校验,
+     * 仓库维度的结论不适用)。
+     */
+    private BigDecimal resolveWorkshopRawStock(String factoryId, ProductionPlan plan, String materialTypeId) {
+        if (warehouseResolver == null || materialTypeId == null) {
+            return null;
+        }
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return null;
+        }
+        String workshopId;
+        try {
+            workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+        } catch (RuntimeException e) {
+            log.debug("[advisory] 生产仓解析失败 factory={}: {}", factoryId, e.getMessage());
+            return null;
+        }
+        if (workshopId == null || workshopId.isBlank()) {
+            return null;
+        }
+        return materialBatchRepository.sumAvailableRawStockQuantityByMaterialTypeAndWarehouse(
+                factoryId, materialTypeId, workshopId);
     }
 
     /**
@@ -2351,11 +2424,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = buildMaterialAdvisoryItems(factoryId, plan);
-        String message = warnings.isEmpty()
-                ? "原料库存参考: 暂无缺料预警"
-                : "原料库存参考: " + warnings.stream()
-                        .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
-                        .collect(Collectors.joining("; "));
+        // 🔴 2026-08-18: 原来这句只说「暂无缺料预警」, 不说自己量的是哪一层库存。
+        //    实测 F006 黄油鸡计划 4 个原料各 200kg 全在原料仓、生产仓 0 —— 这句话说「不缺料」,
+        //    点进逐道录入四行全是「0kg / 原料仓另有 200kg，待调拨入生产仓」。数没算错, 是没报口径。
+        //    本仓判据「报一个数的时候, 把这个数是怎么来的一起报」。
+        //
+        // ⚠️ 三态, 不是两态 (硬约束 4): 「没量到生产仓」不能折叠进「生产仓没问题」——
+        //    没配生产仓的工厂照样会走到这里, 那时宣称「生产仓也已备料」就是一句没量就下的结论。
+        String message;
+        if (!warnings.isEmpty()) {
+            message = "原料库存参考: " + warnings.stream()
+                    .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
+                    .collect(Collectors.joining("; "));
+        } else if (workshopCaliberAvailable(factoryId, plan)) {
+            message = "原料库存参考: 全厂库存足够, 生产仓也已备料";
+        } else {
+            message = "原料库存参考: 全厂库存足够（未核对生产仓 —— 本厂未配置生产仓）";
+        }
         return ProductionPlanMaterialAdvisoryDTO.builder()
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())

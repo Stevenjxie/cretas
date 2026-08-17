@@ -53,14 +53,28 @@ export function getReportModeDefault(factoryId: string) {
   return get<boolean>(`/${factoryId}/production-plans/report-mode-default`)
 }
 
+/**
+ * 缺料预警的类型 —— 三种处境的**下一步动作完全不同**，不能共用一句话。
+ *
+ * 🔴 2026-08-18 新增 `NOT_IN_WORKSHOP`：原来只有「全厂不够」一种，于是
+ * 「货在原料仓、生产仓一粒都没有」落不进任何一类，列表报「暂无缺料预警」，
+ * 而逐道录入页四行全是 0。
+ */
+export type MaterialAdvisoryKind = 'FACTORY_SHORTAGE' | 'NOT_IN_WORKSHOP' | 'UNIT_UNCONVERTIBLE'
+
 export interface MaterialAdvisoryItem {
   materialTypeId: string
   materialName: string
   requiredQuantity: number | null
+  /** 全厂可用量（不限仓库）。 */
   availableQuantity: number | null
   shortageQuantity: number | null
   unit: string | null
   message: string
+  /** 老后端不返回时为 undefined，按 FACTORY_SHORTAGE 理解。 */
+  kind?: MaterialAdvisoryKind
+  /** 生产仓可用量 —— 与 availableQuantity 同口径，只多一个仓库限定。 */
+  workshopAvailableQuantity?: number | null
 }
 
 export interface ProductionPlanMaterialAdvisory {
