@@ -38,8 +38,9 @@ echo ""
 #   at expo.modules.font.FontLoaderModule.definition(FontLoaderModule.kt:98)
 # 而 lockfile 一直锁着好版本 ⇒ 那个包不是按锁装出来的。
 # ⇒ 一律 npm ci(先清 node_modules, 再严格按锁装)。⛔ 不要改回 npm install / 不要加跳过分支。
-echo "按 lockfile 全量安装依赖 (npm ci)..."
-npm ci
+# ⚠️ 必须带 --legacy-peer-deps —— 裸 npm ci 在本仓会因 peer-dep 解析差异直接失败(实测)。
+echo "按 lockfile 全量安装依赖 (npm ci --legacy-peer-deps)..."
+npm ci --legacy-peer-deps
 
 # 2. 执行 Expo prebuild (如果需要)
 if [ ! -d "android" ]; then

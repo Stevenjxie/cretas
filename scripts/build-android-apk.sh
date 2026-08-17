@@ -17,7 +17,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目路径
-PROJECT_ROOT="/Users/jietaoxie/my-prototype-logistics"
+# 🔴 2026-08-17: 这里曾经硬编码成 `/Users/jietaoxie/my-prototype-logistics` ——
+# 换任何一台机器(或任何一个 git worktree)都跑不了, 打包实际上只有一个人能做。
+# 改成从脚本自身位置推导, 谁 clone 到哪都能跑。
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="$PROJECT_ROOT/frontend/CretasFoodTrace"
 ANDROID_DIR="$FRONTEND_DIR/android"
 
@@ -118,8 +121,11 @@ install_dependencies() {
   # 而 lockfile 一直锁着好版本(expo-modules-core@2.5.0 / expo-font@13.3.2,
   # 两个包的源码里都没有 getDirectConverter 这个名字) ⇒ 打出来的包不是按锁装的。
   # ⇒ 一律 npm ci: 它会先清掉 node_modules, 再严格按 lockfile 装。
-  print_info "按 lockfile 全量安装依赖 (npm ci)..."
-  npm ci
+  # ⚠️ 必须带 --legacy-peer-deps: 裸 `npm ci` 在本仓会因 peer-dep 解析差异报
+  #   "Missing: import-fresh@… from lock file" 而直接失败(实测)。
+  #   本仓其它安装命令一律带这个 flag, 保持一致。
+  print_info "按 lockfile 全量安装依赖 (npm ci --legacy-peer-deps)..."
+  npm ci --legacy-peer-deps
   print_success "npm 依赖安装完成 (与 package-lock.json 一致)"
 }
 
