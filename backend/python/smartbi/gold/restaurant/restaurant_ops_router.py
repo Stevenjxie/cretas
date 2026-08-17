@@ -8685,6 +8685,35 @@ async def resolve_channel_mix(
             """,
             factory_id, days, exact_start, exact_end,
         )
+        # 按门店再拆一层。**数据撑得住**(2026-08-17 prod 实测, 逐租户 set_config):
+        #   RES_3101_009 61,933 单 / store_id 空值 **0** / 30 家店 / 渠道 3 种
+        #   DEMO_REST    55,376 单 / store_id 空值 **0** / 27 家店 / 渠道 3 种
+        # ⛔ 补能力的依据是**它真能出**(与 SALES_SUMMARY「per-store Top-N table
+        #    in addition to the chain aggregate」同一个形状), 不是「希望它能出」。
+        # 🔑 「哪家店外卖占比最高」是连锁老板最自然的问题之一, 而此前它撞维度闸。
+        store_rows = await conn.fetch(
+            """
+            WITH anchor AS (
+                SELECT COALESCE($4::date, (
+                    SELECT MAX(date) FROM fact_pos_transaction
+                     WHERE factory_id = $1 AND order_type IS NOT NULL
+                )) AS end_date
+            )
+            SELECT s.name AS store_name, t.order_type,
+                   COUNT(*)::int AS bills,
+                   SUM(COALESCE(t.net_amount, 0))::float AS revenue
+              FROM fact_pos_transaction t
+              CROSS JOIN anchor
+              JOIN dim_store s
+                ON s.store_id = t.store_id AND s.factory_id = t.factory_id
+             WHERE t.factory_id = $1
+               AND anchor.end_date IS NOT NULL
+               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+               AND t.date <= COALESCE($4::date, anchor.end_date)
+             GROUP BY s.name, t.order_type
+            """,
+            factory_id, days, exact_start, exact_end,
+        )
     # order_type 先归一再聚合: 同一个渠道可能以中文或英文码落库(本函数最初照
     # DEMO_REST 的中文值写, MOCK_REST 落的是 dine_in/takeaway/groupon), 归一之后
     # 两个来源合并计数, 而不是各算各的。
@@ -8773,6 +8802,47 @@ async def resolve_channel_mix(
     if untyped_bills:
         lines.append("")
         lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
+
+    # ⛔ 归一**复用** `_normalize_order_type`, 不在 SQL 里再写一份 ——
+    #    同一个口径两份一定会漂(形态 D), 而漂的表现是「总表和门店表对不上」,
+    #    不报错, 只是两个数。
+    per_store: Dict[str, Dict[str, float]] = {}
+    for row in store_rows:
+        bucket = _normalize_order_type(row["order_type"])
+        if bucket is None:          # 未标注渠道的单不摊派到任何渠道
+            continue
+        slot = per_store.setdefault(
+            row["store_name"], {"堂食": 0, "外卖": 0, "其它": 0, "revenue": 0.0})
+        key = bucket if bucket in ("堂食", "外卖") else "其它"
+        slot[key] += int(row["bills"])
+        slot["revenue"] += float(row["revenue"] or 0.0)
+
+    # 单店租户不需要这张表 —— 一行的表格只是多两条竖线。
+    if len(per_store) >= 2:
+        ranked = sorted(
+            per_store.items(),
+            key=lambda kv: (kv[1]["外卖"] / (kv[1]["堂食"] + kv[1]["外卖"] + kv[1]["其它"])
+                            if (kv[1]["堂食"] + kv[1]["外卖"] + kv[1]["其它"]) else 0.0),
+            reverse=True,
+        )
+        store_table_rows = []
+        for name, v in ranked:
+            store_total = v["堂食"] + v["外卖"] + v["其它"]
+            takeaway_pct = v["外卖"] / store_total * 100 if store_total else 0.0
+            cells = [name, f"{takeaway_pct:.1f}%", f"{int(v['外卖']):,}",
+                     f"{int(v['堂食']):,}"]
+            if can_see_money:       # 金额是价格权限数据, 与上面那张表同一条规则
+                cells.append(f"¥{v['revenue']:,.0f}")
+            store_table_rows.append(cells)
+        headers = ["门店", "外卖占比", "外卖单量", "堂食单量"]
+        if can_see_money:
+            headers.append("营收")
+        lines.append("")
+        lines.append(f"**各门店渠道构成（按外卖占比排序，{len(ranked)} 家）：**")
+        lines.extend(_markdown_table(
+            headers, store_table_rows,
+            right_align={1, 2, 3, 4} if can_see_money else {1, 2, 3}))
+
     lines.append("")
     lines.append(_closing("CHANNEL_MIX_CLOSING", query))
     return OpsAnswer(
