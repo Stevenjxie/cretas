@@ -2598,12 +2598,24 @@ def test_conflicting_llm_intent_stays_fail_closed_when_plan_has_multiple_resolve
         "RESTAURANT_OPS_GROSS_MARGIN",
     )
     assert spec.intent == "RESTAURANT_OPS_REQUISITION_TREND"
-    assert spec.clarification_needed is True
-    # ⚠️ 2026-08-11 改包裹不改主语: 原措辞是「我识别到的**问题对象**与准备执行的
-    #    **分析范围**不一致…我不会用相邻指标替代」—— 前半句是内部概念名, 店长读不懂
-    #    (prod 实测: 用户只是打了个不完整的门店名就拿到这句)。本条的主语是
-    #    **fail-closed**(上面 `clarification_needed is True` 已经断住), 这句只是包裹。
-    assert "不会拿别的数据顶替" in spec.clarification_question
+    # ⚠️ 2026-08-11 的注释写着「**本条的主语是 fail-closed**, 这句只是包裹」。
+    #    2026-08-17 fail-closed **换了一层做**: 规划层不再自己拼那句通用反问
+    #    (它把能力边界说成了信息不足, prod 实测老板回答「门店」照样拿不到),
+    #    改由执行层 `_execution_mismatch` 接住同一个条件并把差在哪一层说清楚。
+    # ⇒ 断言跟着主语走: 仍然钉 **fail-closed**, 但钉在现在负责它的那一层。
+    #    ⛔ 不是删断言 —— 少了下面两条, 「计划对不上」就没有任何人守。
+    assert spec.intent not in spec.planned_intents, (
+        "主意图不在计划里 —— 这正是 fail-closed 要拦的形状, 前提没了断言就空转"
+    )
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _execution_mismatch,
+    )
+    reason = _execution_mismatch(
+        spec, tuple(spec.planned_intents),
+        dish_mention=None, store_mention=None, store_dish=None,
+    )
+    assert reason, "执行层没有拦住『主意图不在计划里』—— 这句会被放行去算"
+    assert "resolver" not in reason.lower(), f"拒答理由漏了内部概念名: {reason!r}"
 
 
 def test_llm_entity_slots_fix_scope_before_execution_plan_is_sealed():
