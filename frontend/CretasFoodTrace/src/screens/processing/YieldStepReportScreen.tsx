@@ -95,6 +95,55 @@ function maybeShowSemiOutputGap(warning: string | undefined): void {
   appAlert('产出没进半成品库', warning);
 }
 
+/**
+ * 完工出成确认弹窗前置判断: 产出与投入是否不平衡, 或单位不同拿不到换算率.
+ *
+ * <p>2026-08-17 F006 生产走查实测: 工人在「完工出成」填了一个大于投入的产出量
+ * (投入 10kg / 产出 99kg) 也能提交 —— 确认弹窗只说"完工后本道出成率锁定, 确认要
+ * 完工出成吗?", 一个字没提这个数不对。提交之后才弹"物料平衡偏差 890%", 而那时出成率
+ * 已锁定、99kg 已入半成品库, 工人自己撤不回来。裁定: 保持不阻塞 (现场确实有合法的
+ * 异常批次), 但把这个判断前移到确认弹窗里 —— 让工人在按确认前就看见.
+ *
+ * <p>⚠️ 同一屏上后端算的出成率会做跨单位换算 (如 80盒×800g=64kg ÷ 99kg = 64.65%),
+ * 前端拿不到那个换算率 —— 单位不同时禁止裸减法/裸比例算"偏差", 只能诚实说明
+ * "单位不同, 由后端核对" (本仓核心原则: 禁止降级处理, 不允许算出一个假数字充当读数).
+ */
+type YieldImbalanceInfo =
+  | { kind: 'unknown' }
+  | { kind: 'balanced' }
+  | { kind: 'unit-mismatch'; inputUnit: string; outputUnit: string }
+  | { kind: 'imbalanced'; input: number; inputUnit: string; output: number; outputUnit: string; deviationPct: number };
+
+// 完工出成确认弹窗的偏差阈值. 与文件顶部 legacy 整合报工 balanceWarning (后端 >15% 才附带)
+// 沿用同一个口径, ⛔ 不要为这里另起一个数字 (同一件事两份会漂, 见 measurement-and-wiring 形态D).
+const OUTPUT_IMBALANCE_WARN_RATIO = 0.15;
+
+function describeYieldImbalance(
+  input: number | null,
+  inputUnit: string | null | undefined,
+  output: number,
+  outputUnit: string,
+): YieldImbalanceInfo {
+  if (input == null || input <= 0 || !inputUnit || Number.isNaN(output) || output <= 0) {
+    return { kind: 'unknown' };
+  }
+  if (inputUnit !== outputUnit) {
+    return { kind: 'unit-mismatch', inputUnit, outputUnit };
+  }
+  const deviationRatio = Math.abs(output - input) / input;
+  if (deviationRatio <= OUTPUT_IMBALANCE_WARN_RATIO) {
+    return { kind: 'balanced' };
+  }
+  return {
+    kind: 'imbalanced',
+    input,
+    inputUnit,
+    output,
+    outputUnit,
+    deviationPct: Math.round(deviationRatio * 100),
+  };
+}
+
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 // StepPhase 从 ./yieldStepResolution 导入 —— ⛔ 不要在这里再定义一份, 两份必然漂。
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
@@ -1485,20 +1534,45 @@ const YieldStepReportScreen: React.FC = () => {
   }, [outputOverHardCap, doSubmitOutput]);
 
   // 完工二次确认 (Rule: 出成率锁定) — markComplete=true。
+  // ⚠️ 不平衡判断前移到这里 (确认弹窗里), 而不是留给提交后的 balanceWarning —— 见
+  // describeYieldImbalance 头部注释里的 2026-08-17 实测事故。⛔ 仍然不阻塞提交,
+  // 只是让工人在按下确认前就看见, 按钮永远可点。
   const handleSubmitOutput = useCallback(() => {
     if (outputOverHardCap) {
       appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
       return;
     }
-    appAlert(
-      '完工出成确认',
-      `${productType || ''} ${currentTask?.processName ?? ''}\n完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")`,
-      [
-        { text: '取消', style: 'cancel' },
-        { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput(true) },
-      ],
+    const outVal = parseFloat(outputQty);
+    const imbalance = describeYieldImbalance(
+      currentStepYield?.totalInput ?? null,
+      currentStepYield?.inputUnit ?? unit,
+      outVal,
+      outUnit,
     );
-  }, [outputOverHardCap, productType, currentTask, doSubmitOutput]);
+    const header = `${productType || ''} ${currentTask?.processName ?? ''}`;
+    const baseBody = '完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")';
+    let title = '完工出成确认';
+    let message = `${header}\n${baseBody}`;
+    if (imbalance.kind === 'imbalanced') {
+      // 平衡正常时不加这段 — 每次都弹会让人练成无视, 只在真不平衡时醒目提示.
+      title = '⚠️ 投入产出不平衡 — 完工出成确认';
+      message =
+        `${header}\n` +
+        `投入 ${imbalance.input}${imbalance.inputUnit}, 产出 ${imbalance.output}${imbalance.outputUnit}, ` +
+        `偏差约 ${imbalance.deviationPct}%, 请核对数量是否填错。\n` +
+        baseBody;
+    } else if (imbalance.kind === 'unit-mismatch') {
+      // ⛔ 单位不同时前端拿不到换算率, 不裸减/不裸猜 —— 只诚实说明由后端核对.
+      message =
+        `${header}\n` +
+        `投入单位 ${imbalance.inputUnit} 与产出单位 ${imbalance.outputUnit} 不同, 完工后由后端按规格换算核对是否平衡。\n` +
+        baseBody;
+    }
+    appAlert(title, message, [
+      { text: '取消', style: 'cancel' },
+      { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput(true) },
+    ]);
+  }, [outputOverHardCap, productType, currentTask, doSubmitOutput, outputQty, currentStepYield, unit, outUnit]);
 
   // ========================= 完成阶段: 下一道 =========================
   const goNextStep = useCallback(() => {
