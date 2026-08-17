@@ -237,26 +237,57 @@ if [ "$SKIP_PAGE_DEPLOY" = "0" ]; then
 fi
 
 if [ "$PAGE_ONLY" = "0" ]; then
-# ==================== 8. CDN 刷新 (best-effort, latest 别名) ====================
-if command -v aliyun >/dev/null 2>&1; then
-  log "♻️  [cdn] 刷新 latest 别名缓存..."
-  aliyun cdn RefreshObjectCaches --ObjectPath "https://${CDN_DOMAIN}/${LATEST_ALIAS}" --ObjectType File >/dev/null 2>&1 \
-    && log "   ✓ 已提交刷新" || log "   ⚠️ CDN 刷新失败 (非致命, 版本化文件名无需刷新)"
-else
-  log "   ⚠️ aliyun CLI 未安装, 跳过 CDN 刷新 (版本化文件名 $APK_FILE 是新对象, 无需刷新)"
-fi
+# ==================== 8. CDN 刷新 ====================
+# 🔴 2026-08-17: 这一步以前有两个洞, 同一晚各踩了一次 ——
+#   ① 只刷 latest 别名, 理由写着「版本化文件名是新对象, 无需刷新」。
+#      **同版本号重发时不成立** —— 那是同名覆盖, CDN 边缘照旧返回旧对象。
+#      实测: 源站 OSS 已是新包(122302626), 而 CDN 仍返回旧包(122521709)。
+#   ② 只在有 aliyun CLI 时刷; 没装就整段跳过。本机就没装 ⇒ 从来没刷过。
+# ⇒ 两个都修: **版本化文件名和别名都刷**, 且 CLI 缺失时退回 OpenAPI 直发
+#   (scripts/deploy/cdn-refresh.py, AK/SK 从 ossutil 配置读, 无额外依赖)。
+# ⚠️ 这一步失败不致命 —— 紧接着第 9 步的 Content-Length 比对才是那道闸,
+#    它两次都正确地把「CDN 还是旧的」拦了下来。
+refresh_cdn_path() {
+  local url="$1"
+  if command -v aliyun >/dev/null 2>&1; then
+    aliyun cdn RefreshObjectCaches --ObjectPath "$url" --ObjectType File >/dev/null 2>&1
+  else
+    python "$SCRIPT_DIR/cdn-refresh.py" "$url" File >/dev/null 2>&1
+  fi
+}
+
+log "♻️  [cdn] 刷新缓存 (版本化文件 + latest 别名)..."
+for _u in "$CDN_URL" "https://${CDN_DOMAIN}/${LATEST_ALIAS}"; do
+  if refresh_cdn_path "$_u"; then
+    log "   ✓ 已提交刷新: $_u"
+  else
+    log "   ⚠️ 刷新提交失败: $_u (非致命 — 下一步的 Content-Length 比对会兜住)"
+  fi
+done
 
 # ==================== 9. 验证可下 ====================
-log "🔍 [verify] curl -sI $CDN_URL ..."
-HDRS="$(curl -sIL --max-time 30 "$CDN_URL" || true)"
-HTTP_CODE="$(printf '%s' "$HDRS" | grep -iE '^HTTP/' | tail -1 | awk '{print $2}')"
-CLEN="$(printf '%s' "$HDRS" | grep -iE '^Content-Length:' | tail -1 | awk '{print $2}' | tr -d '\r')"
-XCACHE="$(printf '%s' "$HDRS" | grep -iE '^(X-Cache|X-Swift-CacheTime|Via):' | head -1 | tr -d '\r')"
-log "   HTTP $HTTP_CODE  Content-Length=$CLEN  ($XCACHE)"
-[ "$HTTP_CODE" = "200" ] || die "CDN 返回 $HTTP_CODE != 200 (DNS/CDN/OSS 回源未就绪?)"
-if [ -n "$CLEN" ] && [ "$CLEN" != "$APK_SIZE_BYTES" ]; then
-  die "CDN Content-Length($CLEN) != 本地 APK($APK_SIZE_BYTES) — 上传可能截断"
-fi
+# CDN 刷新是异步的, 边缘节点要几十秒才换过来 —— 立刻验会读到旧对象。
+# ⚠️ 但**不能因此放宽判据**: 这道 Content-Length 比对今晚两次都正确地拦下了
+#    「源站已新、CDN 还旧」。⇒ 只加重试, 不改结论。
+VERIFY_TRIES="${APK_VERIFY_TRIES:-8}"
+VERIFY_SLEEP="${APK_VERIFY_SLEEP:-15}"
+for _try in $(seq 1 "$VERIFY_TRIES"); do
+  log "🔍 [verify $_try/$VERIFY_TRIES] curl -sI $CDN_URL ..."
+  HDRS="$(curl -sIL --max-time 30 "$CDN_URL" || true)"
+  HTTP_CODE="$(printf '%s' "$HDRS" | grep -iE '^HTTP/' | tail -1 | awk '{print $2}')"
+  CLEN="$(printf '%s' "$HDRS" | grep -iE '^Content-Length:' | tail -1 | awk '{print $2}' | tr -d '\r')"
+  XCACHE="$(printf '%s' "$HDRS" | grep -iE '^(X-Cache|X-Swift-CacheTime|Via):' | head -1 | tr -d '\r')"
+  log "   HTTP $HTTP_CODE  Content-Length=$CLEN  ($XCACHE)"
+  [ "$HTTP_CODE" = "200" ] || die "CDN 返回 $HTTP_CODE != 200 (DNS/CDN/OSS 回源未就绪?)"
+  [ "$CLEN" = "$APK_SIZE_BYTES" ] && break
+  if [ "$_try" -eq "$VERIFY_TRIES" ]; then
+    die "CDN Content-Length($CLEN) != 本地 APK($APK_SIZE_BYTES), 重试 $VERIFY_TRIES 次仍不一致。
+   同版本号重发时这多半是**缓存没刷干净**(不是上传截断): 手动刷一次再验 —
+   python scripts/deploy/cdn-refresh.py '$CDN_URL' File"
+  fi
+  log "   ⏳ CDN 边缘仍是旧对象, ${VERIFY_SLEEP}s 后重试..."
+  sleep "$VERIFY_SLEEP"
+done
 log "   ✓ CDN 可下且大小一致"
 fi  # PAGE_ONLY=0: CDN 刷新 + 可下验证仅完整发布
 
