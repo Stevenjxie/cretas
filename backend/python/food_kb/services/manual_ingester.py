@@ -21,13 +21,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 # Sources to ingest
 MANUAL_SOURCES = [
     {
-        "path": "docs/plans/factory-operation-manual.html",
-        "title_prefix": "工厂操作手册",
-        "source": "factory-operation-manual.html",
-        "type": "html",
-        "subcategory": "factory",
-    },
-    {
         "path": "docs/plans/restaurant-metrics-glossary.html",
         "title_prefix": "餐饮指数字典",
         "source": "restaurant-metrics-glossary.html",
@@ -40,27 +33,6 @@ MANUAL_SOURCES = [
         "source": "restaurant-product-manual.html",
         "type": "html",
         "subcategory": "restaurant",
-    },
-    {
-        "path": "docs/plans/factory-requisition-detailed-flow.md",
-        "title_prefix": "工厂下单详细流程",
-        "source": "factory-requisition-detailed-flow.md",
-        "type": "markdown",
-        "subcategory": "factory",
-    },
-    {
-        "path": "docs/plans/factory-requisition-operation-guide.md",
-        "title_prefix": "工厂下单操作指南",
-        "source": "factory-requisition-operation-guide.md",
-        "type": "markdown",
-        "subcategory": "factory",
-    },
-    {
-        "path": "docs/manual/liushanmen-production/index.html",
-        "title_prefix": "六扇门生产链操作手册",
-        "source": "liushanmen-production-manual.html",
-        "type": "chapter_section",
-        "subcategory": "factory",
     },
     {
         "path": "backend/python/food_kb/data/f006_production_sop.md",

@@ -1116,6 +1116,13 @@ def test_manual_chat_request_rejects_unknown_sop_scope():
 
 
 def test_latest_f006_sop_is_a_deployable_manual_source():
+    factory_sources = {
+        item["source"]: item
+        for item in MANUAL_SOURCES
+        if item.get("subcategory") == "factory"
+    }
+    assert set(factory_sources) == {"f006-production-full-chain-sop.md"}
+
     source = next(
         item
         for item in MANUAL_SOURCES
