@@ -1922,6 +1922,15 @@ _INTERROGATIVE_MARKERS: Tuple[str, ...] = (
 )
 
 
+#: 门店表覆盖到这个比例就算「全」。**明写出来的选择, 不是推导出来的。**
+#:
+#: ⛔ **只此一处。** 表格下面那句覆盖度提示与首段的限定语必须读同一个数 ——
+#: 两份一定会漂, 而漂的表现是「表格说只覆盖 2%、首段却把它当全店结论」。
+#: ⚠️ 与「极差被算了两遍」同一形态: 那次第三处是我自己在同一个 PR 里写的,
+#: 靠一道 AST 闸才抓出来。
+_STORE_COVERAGE_COMPLETE_RATIO = 0.995
+
+
 #: 门店之间差多少才值得单独去查。**明写出来的选择, 不是推导出来的。**
 #: ⚠️ 印在正文里(「相差 X%」)就是为了让它可被反驳 —— 藏起来的阈值没人能质疑。
 _STORE_SPREAD_WORTH_CHASING_PCT = 5.0
@@ -2036,7 +2045,7 @@ def _store_breakdown_block(
     ]
     store_total = sum(float(r["cost"] or 0.0) for r in rows)
     coverage_note = ""
-    if all_total > 0 and store_total < all_total * 0.995:
+    if all_total > 0 and store_total < all_total * _STORE_COVERAGE_COMPLETE_RATIO:
         pct = store_total / all_total * 100
         coverage_note = (
             f"\n> ⚠️ 这张表只覆盖了 ¥{store_total:,.2f}"
@@ -2060,7 +2069,10 @@ def asked_by_store(dimensions: Optional[Sequence[str]]) -> bool:
     return "store" in set(canonical_dimensions(dimensions or ()))
 
 
-def _store_lead_sentence(rows, *, noun: str, top_type_text: str = "") -> str:
+def _store_lead_sentence(
+    rows, *, noun: str, top_type_text: str = "",
+    all_total: "Optional[float]" = None,
+) -> str:
     """按门店问时的**第一段**：点名 + 差距 + 该不该单独去查。
 
     ## 为什么它必须在开头（📏 MOCK_REST prod 2026-08-18）
@@ -2100,8 +2112,30 @@ def _store_lead_sentence(rows, *, noun: str, top_type_text: str = "") -> str:
             f"¥{hi:,.2f}。其余门店这段时间没有记门店的{noun}单据。"
         )
     hi, lo, spread_pct = spread
+    # 🔴 2026-08-18: 覆盖不全时**首段就要说清楚**。
+    #    这一句排在表格**上面**, 而 `_store_breakdown_block` 的覆盖度提示在表格
+    #    **下面** —— 老板可能只读首段, 于是把「已记门店的那部分里 X 最多」
+    #    读成「全店 X 最多」。
+    # 📏 那种情况是真的会发生的(见 `_store_breakdown_block` docstring 记的事故:
+    #    抬头 ¥317,441.84 / 门店表合计 ¥6,828.07 = 总额的 2%, 成因是存量行
+    #    store_id 为 NULL 被聚合侧排除)。
+    # ⚠️ MOCK_REST 当前覆盖度 100% ⇒ prod 验收对这个风险**完全沉默**, 只有单测覆盖。
+    # ⛔ 阈值读 `_STORE_COVERAGE_COMPLETE_RATIO` 这一处, ⛔ 不再内联一个 0.995。
+    # ⚠️ 拿不到 `all_total` 时**什么都不加** —— ⛔ 不许猜「可能不全」,
+    #    那就是一条无中生有的提示(有阴性对照钉着)。
+    # ⚠️ 与 `_store_breakdown_block` 里那句用**同一个表达式**求和 ——
+    #    #2807 把极差抽走之后这里已经没有 `amounts` 这个局部变量了。
+    store_total = sum(float(r.get("cost") or 0.0) for r in rows)
+    scope = ""
+    if all_total and float(all_total) > 0 and (
+        store_total < float(all_total) * _STORE_COVERAGE_COMPLETE_RATIO
+    ):
+        scope = (
+            f"（只算**已记门店**的那部分 ¥{store_total:,.2f}，"
+            f"占{noun}总额的 {store_total / float(all_total) * 100:.0f}%）"
+        )
     head = (
-        f"按门店看：**{hi_row['store_name']}** {noun}最多，¥{hi:,.2f}；"
+        f"按门店看{scope}：**{hi_row['store_name']}** {noun}最多，¥{hi:,.2f}；"
         f"最少的是 {lo_row['store_name']} ¥{lo:,.2f}。"
     )
     if spread_pct < _STORE_SPREAD_WORTH_CHASING_PCT:
@@ -3738,7 +3772,10 @@ async def resolve_wastage_top(
             answer = (
                 header
                 + _store_lead_sentence(
-                    store_wastage_rows, noun="损耗", top_type_text=top_type_text)
+                    store_wastage_rows, noun="损耗", top_type_text=top_type_text,
+                    # ⛔ 与紧跟其后的 `_store_breakdown_block` 传**同一个**总额 ——
+                    #    两处覆盖度判断读同一个分母, 否则首段和表格会各说各的。
+                    all_total=float(total["total_cost"] or 0.0))
                 + "\n"
                 + f"{store_block}\n"
                 + f"{top_block}\n"
