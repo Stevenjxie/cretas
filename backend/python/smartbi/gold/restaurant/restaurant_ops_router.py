@@ -2016,6 +2016,68 @@ def _store_breakdown_block(
     ) + coverage_note + "\n"
 
 
+def asked_by_store(dimensions: Optional[Sequence[str]]) -> bool:
+    """这一轮问的是不是**按门店**那一层。
+
+    ⛔ 不在这里手写 `'store' in dimensions` 的变体 —— 维度名有两套写法
+    (登记表键 / 管线内部名), 归一只有 `canonical_dimensions` 一个家。
+    """
+    from smartbi.gold.restaurant.metric_registry import canonical_dimensions
+
+    return "store" in set(canonical_dimensions(dimensions or ()))
+
+
+def _store_lead_sentence(rows, *, noun: str, top_type_text: str = "") -> str:
+    """按门店问时的**第一段**：点名 + 差距 + 该不该单独去查。
+
+    ## 为什么它必须在开头（📏 MOCK_REST prod 2026-08-18）
+
+    老板先问「最近损耗怎么样」，再追问「哪家店最多」。改之前两轮拿到**逐字
+    相同**的 1249 字总览 —— 门店那张表**确实在里面**，排在一张 10 行的食材表
+    之后。数据在，答案不在: 他要的那一句得自己从表里找。
+
+    ▎判据是「他问的那件事有没有被直接说出来」，⛔ 不是「那个数在不在正文里」。
+
+    ⛔ 数据不足时不许回落成「就当没问过门店」—— 那会让他以为问题被回答了。
+       缺什么 / 他要干什么, 明说(交付定义五)。
+
+    ⚠️ 差距阈值复用 `_STORE_SPREAD_WORTH_CHASING_PCT`, ⛔ 不新写一份 ——
+       两份阈值一定会漂(形态 D), 而漂的表现是「建议说值得查、正文说不值得」。
+    """
+    if not rows:
+        return (
+            f"按门店看这一层我给不了：这段时间的{noun}单据**没有记门店**，分不到店上。\n"
+            f"要按门店看，需要录{noun}时选门店（或让上游把门店字段补上）；"
+            f"补上之后我就能算。下面先给按食材的那一层。"
+        )
+    amounts = [float(r["cost"] or 0.0) for r in rows]
+    hi_row, lo_row = rows[0], rows[-1]
+    hi, lo = max(amounts), min(amounts)
+    if len(rows) < 2 or hi <= 0:
+        return (
+            f"按门店看：只有 **{hi_row['store_name']}** 有记门店的{noun}，"
+            f"¥{hi:,.2f}。其余门店这段时间没有记门店的{noun}单据。"
+        )
+    spread_pct = (hi - lo) / hi * 100.0
+    head = (
+        f"按门店看：**{hi_row['store_name']}** {noun}最多，¥{hi:,.2f}；"
+        f"最少的是 {lo_row['store_name']} ¥{lo:,.2f}。"
+    )
+    if spread_pct < _STORE_SPREAD_WORTH_CHASING_PCT:
+        tail = (
+            f"最高比最低高 {spread_pct:.1f}%，低于我们认为值得单独去查的 "
+            f"{_STORE_SPREAD_WORTH_CHASING_PCT:.0f}%，按门店拆多半找不到东西。"
+        )
+        if top_type_text:
+            tail += f"按类型看 {top_type_text} 是最大的一块，先查那一类。"
+        return head + tail
+    return (
+        head
+        + f"最高比最低高 {spread_pct:.1f}%，值得单独看这家：先对一下它的"
+          f"收货净重、分切标准和报损登记，再跟最低的那家比同一批食材。"
+    )
+
+
 def extract_store_mentions(query: Optional[str]) -> list[str]:
     """Pull one or more explicit store names from free text."""
     if not query:
@@ -3387,6 +3449,7 @@ async def resolve_wastage_top(
     query: str = "",
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     window_label: Optional[str] = None,
+    dimensions: Sequence[str] = (),
 ) -> OpsAnswer:
     """Top N wastage ingredients + wastage type breakdown for the asked window.
 
@@ -3401,8 +3464,17 @@ async def resolve_wastage_top(
     ``_resolver_kwargs`` reduced it to ``days=30``, and the range never arrived.
     The answer then read 「近 30 天」 over July numbers while the user had asked
     about June. Callers that pass only ``days`` keep the rolling behaviour.
+
+    ``dimensions`` 是**同一个形状的第二次**（2026-08-18）: 规划器算出的维度
+    此前根本没有进过 ``_resolver_kwargs`` 的出口字典, 于是「最近损耗怎么样」
+    (``ingredient``) 与追问「哪家店最多」(``store``) 拿到**逐字相同**的答案
+    (📏 MOCK_REST prod, 两轮正文 md5[:8] 同为 ``bd1d6675``, 同为 1249 字)。
+    门店那张表一直**就在正文里**, 只是排在一张 10 行的食材表后面 ——
+    ⇒ 判据是「他问的那件事有没有被直接说出来」, ⛔ 不是「那个数在不在正文里」。
+    ⚠️ 不传或不含 ``store`` 时, 产出与改动前**逐字相同**(有阴性对照钉着)。
     """
     rank_axis = _wastage_rank_axis(query)
+    by_store = asked_by_store(dimensions)
     window_start, window_end, window_text = _explicit_window(
         date_range, window_label, days,
     )
@@ -3603,19 +3675,50 @@ async def resolve_wastage_top(
         store_block = _store_breakdown_block(
             store_wastage_rows, float(total["total_cost"] or 0.0),
             title="各门店损耗金额", amount_header="损耗金额", noun="损耗")
-        answer = (
-            f"{window_text}损耗总览:\n"
-            f"{totals_line}\n"
-            f"- 损耗类型分布: {type_summary}\n\n"
-            f"{top_block}\n"
-            f"{store_block}\n"
+        actions = (
             f"建议动作:\n"
             f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
             f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
             f"3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
         )
+        header = (
+            f"{window_text}损耗总览:\n"
+            f"{totals_line}\n"
+            f"- 损耗类型分布: {type_summary}\n\n"
+        )
+        if by_store:
+            # 问的是门店 ⇒ 门店那一层排在最前, 并**先用一句话把它答了**。
+            # ⛔ 食材表照旧留着(换顺序不是删信息), 只是降到后面。
+            top_type_text = (
+                f"{type_name_map.get(type_rows[0]['type'], type_rows[0]['type'])} "
+                f"¥{float(type_rows[0]['cost'] or 0.0):,.2f}"
+                if type_rows else ""
+            )
+            answer = (
+                header
+                + _store_lead_sentence(
+                    store_wastage_rows, noun="损耗", top_type_text=top_type_text)
+                + "\n"
+                + f"{store_block}\n"
+                + f"{top_block}\n"
+                + actions
+            )
+        else:
+            answer = header + f"{top_block}\n" + f"{store_block}\n" + actions
 
     charts = []
+    # 问的是门店 ⇒ 门店那张图排在最前。⛔ 不删食材图(与正文同一条纪律:
+    # 换顺序不是删信息)。
+    if by_store and store_wastage_rows:
+        charts.append({
+            "chartType": "bar",
+            "title": f"{window_text}各门店损耗金额",
+            "xAxis": {"data": [r["store_name"] for r in store_wastage_rows]},
+            "series": [{
+                "name": "损耗金额", "type": "bar",
+                "data": [float(r["cost"] or 0.0) for r in store_wastage_rows],
+            }],
+        })
     if top_rows and not cost_axis_unavailable:
         charts.append({
             "chartType": "bar",
@@ -3667,6 +3770,11 @@ async def resolve_wastage_top(
             "total_qty": float(total["total_qty"] or 0.0),
             "total_cost": float(total["total_cost"] or 0.0),
             "total_count": int(total["total_count"] or 0),
+            # 来源标记: 这一轮**收到了**哪些维度。⛔ 不是「规划器算了什么」——
+            # 两者不同正是 2026-08-18 那个缺陷的全部内容, 所以要在执行侧留痕,
+            # 否则线上没有任何读数能分清「没传」和「传了没人用」。
+            "asked_dimensions": list(dimensions or ()),
+            "answered_by_store": by_store,
         },
     )
 

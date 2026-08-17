@@ -81,11 +81,23 @@ class TestThereIsOnlyOneCopyOfTheCriterion:
     """同一个判断有两个用处，⛔ 只许有一份实现。"""
 
     def test_the_skip_guard_and_the_realign_use_the_same_helper(self):
+        """三个用处共用同一份判据。
+
+        ⚠️ 2026-08-18 从 2 改成 3。第三处是**镜像那一支**（标签服务不了 ⇒
+        计划赢，见 `tests/test_plan_wins_when_the_label_cannot_serve.py`）。
+        📏 那一支消灭的是 prod 上 3/3 稳定的
+        「哪道菜毛利最高 → 哪个卖得最多」（code=SALES_SUMMARY 不能按菜品、
+        plan=GROSS_MARGIN 能，矛盾原样留着 ⇒ 60 字反问）。
+
+        ⛔ 精确计数是**刻意**的（与 `test_real_gold_contracts` 那道签名闸同一条
+        纪律）：任何新增/删除都必须来这里过一眼，确认它确实走的是同一份判据
+        而不是又写了一份。同一天那道签名闸就靠这条抓到过我漏改的消费方。
+        """
         from smartbi.gold.restaurant import restaurant_intent as ri
 
         src = inspect.getsource(ri._build_spec)
-        assert src.count("_resolver_serves_dimensions(") == 2, (
-            "两个用处没有共用同一份判据 —— 它们会漂, 而漂的表现恰好是"
+        assert src.count("_resolver_serves_dimensions(") == 3, (
+            "三个用处没有共用同一份判据 —— 它们会漂, 而漂的表现恰好是"
             "「自己造成再自己拒答」"
         )
         assert "issubset(" not in src, (

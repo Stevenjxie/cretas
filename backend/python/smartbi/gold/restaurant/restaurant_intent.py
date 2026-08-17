@@ -41,6 +41,13 @@ from smartbi.gold.customer_text import (
     PLANNER_UNAVAILABLE,
 )
 
+# ⛔ 「这次澄清该不该换成能力拒答模板」**只此一处定义**。注册侧(本模块的
+#    `_maybe_register_pending`)和拒答侧(`restaurant_intent_service:1839`)必须读
+#    同一个函数 —— 两份判据一定会漂, 而漂的表现是「注册侧说不拦、拒答侧说拦」,
+#    症状是会话又开始复读同一份文案, 且**不报错**。
+#    `capability_answer` 没有任何项目内 import(纯叶子), 顶层引入不会成环。
+from smartbi.gold.restaurant.capability_answer import should_use_capability_refusal
+
 # ⛔ 规划器的聚合可选值**只能**来自登记表 —— 手写第二份清单就是第四个膨胀点。
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS as _AGGREGATIONS,
@@ -2549,6 +2556,11 @@ def _build_spec(
     # import 会成环; 调用期两个模块都已加载, 安全。
     repair_candidate = planned_intents[0] if len(planned_intents) == 1 else ""
     repair_target_serves_dimensions = True
+    #: 标签自己服务不了本轮维度 —— 契约修复的**第二条独立正当性**（见下方 elif）。
+    #: ⛔ 它只当条件用, 修复动作仍然走**同一段**代码: 那段除了改 code 还要抹掉
+    #:    不再成立的 clarification。自己另写一份必然漏 —— 实测就漏了 3 行,
+    #:    6 条用例红在「计划修好了却仍被一句已经不真实的反问挡住」。
+    label_cannot_serve_dimensions = False
     if repair_candidate and dimensions:
         from smartbi.gold.restaurant.restaurant_intent_service import (
             _RESOLVER_DIMENSIONS,
@@ -2594,6 +2606,46 @@ def _build_spec(
                     list(dimensions),
                 )
                 planned_intents = (code,)
+        elif (
+            code
+            and code not in planned_intents
+            and not _resolver_serves_dimensions(code, dimensions)
+        ):
+            # ⚠️ 上面那支的**镜像**, 方向相反、判据同一个:
+            #     上面  计划服务不了 ⇒ 标签赢  (planned_intents = (code,))
+            #     这里  标签服务不了 ⇒ 计划赢  (code = repair_candidate)
+            #
+            # 🔴 这一支此前**根本不存在**。PR#2799 只处理了「repair 因维度不足
+            #    而跳过」, 没处理「repair 因别的 guard(措辞背书 / 指标可修复)
+            #    而跳过」—— 后者同样把矛盾原样留给下游, 同样以拒答收场。
+            #
+            # 📏 MOCK_REST prod 2026-08-18(14 条追问链 × 3 轮, 3/3 稳定):
+            #     「哪道菜毛利最高 → 哪个卖得最多」
+            #       code = SALES_SUMMARY   声明 ['store']         —— 它不能按菜品
+            #       plan = (GROSS_MARGIN,) 声明 ['dish','time']   —— **它能**
+            #       dims = ('dish',)  ⇒ 60 字「我准备算的东西跟你问的对不上」
+            #
+            # ⛔ 不无条件让计划赢: 标签能服务时该赢的是标签(上面那支);
+            #    两边都服务不了时那次拒答是正当的(阴性对照钉着)。
+            #
+            # 🔴 这里**只置一个标志**, ⛔ 不自己改 code —— 修复动作走下面那段
+            #    契约修复的**同一段**代码。第一版我在这里直接 `code = repair_candidate`
+            #    并顺手补了 authority, 结果**漏了它另外三行善后**
+            #    (clarification_needed / clarification_question / missing_slot 抹掉),
+            #    6 条既有用例当场红在「计划修好了, 却仍被一句已经不真实的反问挡住」。
+            #    ▎我一边写着「⛔ 不把矛盾留给下游当拒答理由」, 一边留了另一个。
+            #    ⇒ 形态 D 的现场证据: 同一件善后有两份, 第二份必然漏。
+            logger.warning(
+                "[restaurant-intent] label cannot serve dimensions, deferring to "
+                "contract repair: label=%s 只服务 %s, 服务不了本次的 %s; "
+                "计划 %s 服务 %s —— ⛔ 不把矛盾留给下游当拒答理由",
+                code,
+                sorted(_RESOLVER_DIMENSIONS.get(code, frozenset())),
+                list(dimensions),
+                repair_candidate,
+                sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
+            )
+            label_cannot_serve_dimensions = True
     # 🔴 这次覆盖是【用户自己的话】造成的, 还是【模型的猜测】造成的?
     #
     # 下面那条 `_repair_backed_by_user_wording` 守的正是这件事, 但它只会问一种
@@ -2640,7 +2692,18 @@ def _build_spec(
     if (
         len(planned_intents) == 1
         and (not code or code not in planned_intents)
-        and supported_requested_metrics
+        # 🔴 2026-08-18: 覆盖的正当性有**两条**, 任一成立即可 —— 而修复动作只有
+        #    这一段(它除了改 code, 还要抹掉不再成立的 clarification)。
+        #    ① 下面那一整串: 用户措辞编译出的指标背书(原有, 一字未改)
+        #    ② label_cannot_serve_dimensions: **标签自己服务不了本轮维度**
+        #       —— 这时保留标签 100% 以拒答收场, 而计划明明能服务。
+        #       📏 MOCK_REST prod 14 链 × 3 轮: 该形状 3/3 稳定, 全部拒答。
+        # ⛔ 不把 ② 写成第二段修复代码 —— 实测第一版那么写, 漏了三行善后,
+        #    6 条既有用例红在「计划修好了却仍被一句不真实的反问挡住」。
+        and (
+            label_cannot_serve_dimensions
+            or (
+                supported_requested_metrics
         # 🔴 覆盖 planner 已经给出的 resolver, 必须由【用户措辞编译出的指标】驱动。
         #
         # 下面那段注释写着本次覆盖的全部正当性来源: "its raw resolver label is not
@@ -2672,18 +2735,25 @@ def _build_spec(
         # 用户指标」这一格里从 False 变成 True, **反而让 repair 在原本不该触发的地方
         # 触发**(实测挂了 chart/regression 那条: 本该 clarification_needed=True 却出了
         # 一个计划)。这个 guard 的作用只能是【更严】, 任何时候都不该放宽。
-        and (bool(code) or bool(explicit_requested_metrics))
-        and (
-            not code
-            or _repair_backed_by_user_wording(effective_query, supported_requested_metrics)
-            # 环比是用户自己说的词, 且它决定了这次编译结果 —— 与指标背书同源, 见上。
-            or comparison_drove_the_plan
+                and (bool(code) or bool(explicit_requested_metrics))
+                and (
+                    not code
+                    or _repair_backed_by_user_wording(
+                        effective_query, supported_requested_metrics)
+                    # 环比是用户自己说的词, 且它决定了这次编译结果 ——
+                    # 与指标背书同源, 见上。
+                    or comparison_drove_the_plan
+                )
+                and all(
+                    metric in _CONTRACT_REPAIRABLE_METRICS
+                    for metric in supported_requested_metrics
+                )
+            )
         )
+        # ⚠️ 这一条对**两条正当性都必须成立** —— 目标 resolver 服务不了本轮维度时,
+        #    覆盖过去只会把「拒答」换成「用错粒度回答」, 那比拒答更糟。
+        #    所以它留在 or 的**外面**。
         and repair_target_serves_dimensions
-        and all(
-            metric in _CONTRACT_REPAIRABLE_METRICS
-            for metric in supported_requested_metrics
-        )
     ):
         # The LLM remains the semantic entry point, but its raw resolver label
         # is not executable when it contradicts the metric/object slots in the
@@ -4793,8 +4863,45 @@ async def _maybe_register_pending(
     (including for a falsy/empty session_key -- spec section 1 of the
     2026-07-08 design: "session_key 缺失 → 完全不启用续接") on every other
     path, so this is safe to call unconditionally after any fresh (non-
-    continuation) parse outcome."""
+    continuation) parse outcome.
+
+    🔴 2026-08-18: **能力拒答不注册。** 本函数的语义是「我问了你一个问题，
+    等你回答」——而能力拒答（§9.9 模板）**根本没有在问问题**，它说的是
+    「这个我算不了，我这儿有的是 A/B/C」。挂上去之后，会话里**下一句问什么
+    都会被当成对它的回答**。
+
+    📏 MOCK_REST prod 对照实验（唯一变量 session_key，生产入口对同一个
+    sessionId 全程共用一个）：
+
+        A 共用 key   翻台率怎么样 → clar 129 字 316dc92b
+                     营收趋势怎么样 → clar 129 字 316dc92b   ← 原样复读
+                     毛利最低的菜品有哪些 → clar 129 字 316dc92b
+        B 独立 key   营收趋势怎么样 → answer 511 字 / 毛利最低 → answer 2417 字
+
+    而 **LLM 每一轮都判对了**（第 2 轮 intent=TREND_ANALYSIS、
+    clarification_question='你想看哪个时间范围的营收趋势？'）——
+    错的是消费端：`_parse_continuation` 把 `original_query + 新问句` 强制
+    拼接当 effective_query，`requested_metrics` 从那个串里抽，
+    `table_turnover` 于是永远在。
+
+    🔑 判据不是新发明的，它来自一个**本来就存在的不一致**：注册进 pending 的
+    问题是 '你这次最想先看哪件事？'，而老板看到的正文是那 129 字 ——
+    **注册的问题和发出去的话不是同一件事**（形态 D）。
+
+    ⛔ 判据走**拒答侧读的同一个** `should_use_capability_refusal`，
+       ⛔ 不在这里写第二份（两份一定会漂，而漂的表现是会话又开始复读且不报错）。
+    ⚠️ 只拦这一类：缺时间 / 缺门店 / 说不清要看什么 **照旧注册**，
+       否则等于把整个澄清续接关掉（有阴性对照钉着）。
+    ⛔ 未做，显式登记：真反问之后换话题仍会拼接；`resolver_query_seed` 无条件
+       累积也没解决。两者归架构点 25（上下文存 spec 栈，⛔ 不存对话文字）。
+    """
     if session_key and spec is not None and spec.clarification_needed:
+        if should_use_capability_refusal(spec.unsupported_requirements):
+            logger.info(
+                "[restaurant-intent] 能力拒答不挂会话: unsupported=%s query=%r",
+                list(spec.unsupported_requirements), (query or "")[:40],
+            )
+            return
         await _pending_put(
             pool, factory_id, session_key,
             original_query=query, clarification_question=spec.clarification_question,
