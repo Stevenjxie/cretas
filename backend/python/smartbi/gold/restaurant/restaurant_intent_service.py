@@ -482,7 +482,7 @@ def _store_scope_disclosure(spec: Any) -> str:
 # 「用户点了某家店, 计划却是全店 resolver」这条拒答理由。
 # ⛔ 做成常量是因为下游要**按这个理由**决定能不能把死胡同换成歧义消解 ——
 #    两处各写一份字面量, 改一处就静默失联(症状是"歧义消解不出现", 不报错)。
-_STORE_SCOPE_MISMATCH = "门店范围不能由全店或全门店 resolver 代答"
+_STORE_SCOPE_MISMATCH = "你问的是某家门店，我这次挑到的却是全店合计"
 
 
 def _supported_dimensions(plan: Tuple[str, ...]) -> set:
@@ -577,19 +577,19 @@ def _execution_mismatch(
     if spec.plan_version != "restaurant-query-plan-v2":
         return None
     if spec.planner_authority not in TRUSTED_PLANNER_AUTHORITIES:
-        return "餐饮执行计划缺少可信语义来源"
+        return "这次的问题我没理解到有把握的程度"
     if not spec.plan_hash or tuple(spec.planned_intents) != plan:
-        return "餐饮执行计划不完整"
+        return "我没把这次要算的东西凑齐"
     if spec.intent not in plan:
-        return "主意图与执行步骤不一致"
+        return "我准备算的东西跟你问的对不上"
     if store_dish and plan != ("RESTAURANT_OPS_STORE_MARGIN",):
-        return "店菜范围与执行 resolver 不一致"
+        return "这句同时限定了门店和菜品，我这次挑的算法管不住两头"
     if (
         dish_mention
         and not store_mention
         and "RESTAURANT_OPS_SALES_SUMMARY" in plan
     ):
-        return "菜品范围不能由全店汇总 resolver 代答"
+        return "你问的是某道菜，我这次挑到的却是全店合计"
     if store_mention and any(
         code in ("RESTAURANT_OPS_SALES_SUMMARY", "RESTAURANT_OPS_GROSS_MARGIN")
         for code in plan
