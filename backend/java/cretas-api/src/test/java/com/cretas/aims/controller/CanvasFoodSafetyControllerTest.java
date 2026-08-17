@@ -246,6 +246,67 @@ class CanvasFoodSafetyControllerTest {
         assertNotNull(data.get("triggerTime"), "triggerTime auto-fill from server NOW()");
     }
 
+    /**
+     * 2026-08-02 owner 拍板: 已结案(COMPLETED)的召回不允许改回别的状态。
+     *
+     * <p>此前控制器允许人工把 status 改到词表里<b>任意</b>一个值 —— 包括把已结案的召回
+     * 改回"调查中"。召回是合规留痕场景, 改回去会让台账与监管上报对不上,
+     * 而且没有任何审计流水能还原它曾经结过案。
+     *
+     * <p>⚠️ 只禁这一条, <b>不是</b>完整流转矩阵 —— 见下一条配对用例。
+     */
+    @Test
+    @DisplayName("Recall update: COMPLETED → INVESTIGATING 回退 → 409 CONFLICT")
+    void testUpdateRecallForbidsCompletedRollback() {
+        RecallEvent ev = RecallEvent.builder()
+                .id(123L)
+                .factoryId("F006")
+                .eventCode("RECALL-20260801-001")
+                .status("COMPLETED")
+                .version(0L)
+                .build();
+        when(recallEventRepo.findById(123L)).thenReturn(Optional.of(ev));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", "INVESTIGATING");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRecall("F006", 123L, body);
+
+        assertEquals(409, resp.getCode());
+        assertEquals("CONFLICT", resp.getErrorCode());
+        assertEquals("COMPLETED", ev.getStatus(), "被拒绝时不该改动实体");
+        verify(recallEventRepo, never()).saveAndFlush(any());
+    }
+
+    /**
+     * 配对用例: <b>其余方向仍然放行</b>。
+     *
+     * <p>钉住"只禁一条"这个取舍本身 —— 哪天有人把它补成完整流转矩阵, 这条会红,
+     * 强迫那次改动是有意识的(补全矩阵会开始拒绝现在能做的其它人工操作)。
+     */
+    @Test
+    @DisplayName("Recall update: REPORTED → FROZEN 仍放行(只禁 COMPLETED 回退, 非完整矩阵)")
+    void testUpdateRecallStillAllowsOtherTransitions() {
+        RecallEvent ev = RecallEvent.builder()
+                .id(123L)
+                .factoryId("F006")
+                .eventCode("RECALL-20260801-001")
+                .status("REPORTED")
+                .version(0L)
+                .build();
+        when(recallEventRepo.findById(123L)).thenReturn(Optional.of(ev));
+        when(recallEventRepo.saveAndFlush(any(RecallEvent.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", "FROZEN");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRecall("F006", 123L, body);
+
+        assertEquals(200, resp.getCode());
+        assertEquals("FROZEN", ev.getStatus());
+    }
+
     @Test
     @DisplayName("Recall update: invalid status enum → 400 VALIDATION list allowed values")
     void testUpdateRecallInvalidStatus() {

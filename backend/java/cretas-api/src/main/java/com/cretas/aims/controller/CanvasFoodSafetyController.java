@@ -76,6 +76,9 @@ public class CanvasFoodSafetyController {
     private static final int EVENT_CODE_MAX = 100;
     private static final int LONG_TEXT_MAX = 4000;
 
+    /** 召回已结案 —— 2026-08-02 起不允许从该状态回退, 见 updateRecall。 */
+    private static final String RECALL_STATUS_COMPLETED = "COMPLETED";
+
     private static final List<String> RECALL_STATUSES =
             List.of("INVESTIGATING", "NOTIFYING", "FROZEN", "REPORTED", "COMPLETED");
     private static final List<String> HAZARD_TYPES =
@@ -462,6 +465,19 @@ public class CanvasFoodSafetyController {
                 return ApiResponse.errorWithCode(400, "VALIDATION",
                         "status 不合法: " + newStatus,
                         "允许值: " + String.join(" / ", RECALL_STATUSES), "warning");
+            }
+            // 🔴 2026-08-02 owner 拍板: 已结案(COMPLETED)的召回不允许改回别的状态。
+            //    召回是合规留痕场景, 改回去会让台账与监管上报对不上, 且没有审计流水能还原
+            //    它曾经结过案。
+            //    ⚠️ 【只禁这一条, 不是完整流转矩阵】—— 其余方向(如 REPORTED→FROZEN)仍放行,
+            //       补全矩阵会开始拒绝现在能做的其它人工操作, 是另一个决定。
+            if (RECALL_STATUS_COMPLETED.equals(ev.getStatus())
+                    && newStatus != null
+                    && !RECALL_STATUS_COMPLETED.equals(newStatus)) {
+                return ApiResponse.errorWithCode(409, "CONFLICT",
+                        "召回事件已结案 (COMPLETED), 不可改回 " + newStatus,
+                        "已结案的召回不允许回退状态。如确需重开, 请新建召回事件并在原因里引用本次编号",
+                        "warning");
             }
             if (newStatus != null) {
                 // Sanity: COMPLETED requires completedAt (auto-fill if missing)

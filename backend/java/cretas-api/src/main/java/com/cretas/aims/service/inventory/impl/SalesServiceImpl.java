@@ -101,6 +101,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService batchAllocationService;
 
+    /** HACCP 放行闸（可选注入，见 assertHaccpReleaseAllowed）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.HaccpMonitoringRecordRepository haccpMonitoringRecordRepository;
+
     /** Delivery-line lock access; field injection keeps historical test constructors stable. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesDeliveryItemRepository deliveryItemRepository;
@@ -2967,6 +2971,10 @@ public class SalesServiceImpl implements SalesService {
             }
         }
 
+        // 2026-08-02 owner 拍板: HACCP 放行闸 —— 在批次分配【之后】跑, 因为它要按已分配批次判定
+        assertHaccpReleaseAllowed(factoryId, record);
+
+
         // FIFO 扣减成品库存
         for (SalesDeliveryItem item : record.getItems()) {
             deductFinishedGoodsInventory(factoryId, record.getSalesOrderId(), item);
@@ -3011,6 +3019,66 @@ public class SalesServiceImpl implements SalesService {
         }
 
         return record;
+    }
+
+
+    /**
+     * HACCP 放行闸 —— 出货确认时按<b>已分配批次</b>校验关键控制点监控。
+     *
+     * <h2>这条判定此前【只存在于 AI 工具里】</h2>
+     *
+     * 2026-08-02 查证: "零偏离且有记录才算通过、无记录不可放行"只写在
+     * {@code HaccpCheckpointReviewTool} / {@code HaccpStatusQueryTool},
+     * <b>没有任何出货路径在用</b> —— 只有当有人用 AI 问的时候才存在。
+     *
+     * <h2>两档而不是一个开关(owner 明确要求"别把正常批次拦死")</h2>
+     *
+     * <ul>
+     *   <li><b>有偏离 → 硬拦</b>。偏离是实打实的食品安全事件。</li>
+     *   <li><b>无监控记录 → 只告警, 放行</b>。HACCP 监控在现场若录得不全,
+     *       把"没录"当成"不合格"会把大量正常批次拦死 —— 那是把数据缺口变成停产。
+     *       等覆盖率上来再考虑收紧, 是<b>另一个决定</b>。</li>
+     * </ul>
+     *
+     * <p>任一依赖未注入时整闸跳过, 与 P0-13 批次分配校验同样的可选注入风格。
+     */
+    private void assertHaccpReleaseAllowed(String factoryId, SalesDeliveryRecord record) {
+        if (haccpMonitoringRecordRepository == null || batchAllocationService == null) {
+            return;
+        }
+        java.util.List<String> deviating = new java.util.ArrayList<>();
+        java.util.List<String> unmonitored = new java.util.ArrayList<>();
+
+        for (SalesDeliveryItem item : record.getItems()) {
+            for (com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation alloc
+                    : batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()))) {
+                String batchNumber = alloc.getBatchNumber();
+                if (batchNumber == null || batchNumber.isBlank()) {
+                    continue;
+                }
+                java.util.List<com.cretas.aims.entity.foodsafety.HaccpMonitoringRecord> records =
+                        haccpMonitoringRecordRepository
+                                .findByFactoryIdAndBatchNumberOrderByMonitoringTimeDesc(factoryId, batchNumber);
+                if (records.isEmpty()) {
+                    unmonitored.add(batchNumber);
+                } else if (records.stream().anyMatch(
+                        com.cretas.aims.entity.foodsafety.HaccpMonitoringRecord::isDeviation)) {
+                    deviating.add(batchNumber);
+                }
+            }
+        }
+
+        if (!unmonitored.isEmpty()) {
+            log.warn("[HACCP放行闸] factory={} delivery={} 以下批次无 HACCP 监控记录, 已放行: {}",
+                    factoryId, record.getId(), unmonitored);
+        }
+        if (!deviating.isEmpty()) {
+            throw new BusinessException(409,
+                    "以下批次的 HACCP 关键控制点存在偏离，不可发货：" + String.join("、", deviating))
+                    .withCode("HACCP_DEVIATION_BLOCKS_RELEASE")
+                    .withHint("请先在「质量管理 → HACCP 监控」中处理这些批次的偏离记录，"
+                            + "或改分配其他批次后重新确认发货");
+        }
     }
 
     @Override

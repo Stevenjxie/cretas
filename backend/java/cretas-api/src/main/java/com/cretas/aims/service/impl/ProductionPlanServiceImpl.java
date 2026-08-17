@@ -88,6 +88,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private static final ObjectMapper PROCESS_SHEET_ROW_MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private final ProductionPlanRepository productionPlanRepository;
+
+    /** SSOP 阻产台账（可选注入，见 recordSsopBlockingGateIfAny）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.SsopExecutionRecordRepository ssopExecutionRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.SsopBlockingGateRepository ssopBlockingGateRepository;
     private final ProductionBatchRepository productionBatchRepository;
 
     /**
@@ -2384,6 +2391,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
+        //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;
+        //    把 SSOP 未完成变成硬拦与它直接相反, 是需要单独拍板的另一件事。
+        //    这里补的只是台账: 让月报的「月内阻产事件」有真实数据(此前那张表有读无写)。
+        recordSsopBlockingGateIfAny(factoryId, planId);
+
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
         // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
         // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
@@ -2449,6 +2462,67 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.info("开始生产: planId={}", planId);
         return toDTOWithConversionInfo(plan);
+    }
+
+
+    /** SSOP 阻产状态集 —— 与 {@code SsopProductionGateCheckTool} 同一份口径。 */
+    private static final java.util.List<String> SSOP_BLOCKING_STATUSES =
+            java.util.List.of("SCHEDULED", "IN_PROGRESS", "FAILED");
+
+    /**
+     * 开工时若今日 SSOP 清洁未全部完成, 记一条阻产台账。
+     *
+     * <h2>这张表此前【有读无写】</h2>
+     *
+     * {@code SsopMonthlyAuditReportTool} 的「月内阻产事件」在读 {@code ssop_blocking_gates},
+     * 但全仓<b>没有任何 writer</b>(表由 V20260821_37 建, 迁移里无种子) —— 那一栏永远是空列表,
+     * 读起来像"本月零阻产", 实际是"没人记"。
+     *
+     * <h2>只记不拦</h2>
+     *
+     * 本类多处写着「N1 开工无条件化」(原料不足只记录预警, 不再阻塞开工)。
+     * 本方法遵守它: <b>无论 SSOP 是否完成, 开工照常进行</b>。
+     * 要不要变成硬拦是<b>单独的业务决定</b>, 与 N1 冲突, 别顺手改。
+     *
+     * <p>去重按<b>生产计划</b>({@code production_plan_id} 是 NOT NULL,
+     * 仓储也已带 {@code existsByProductionPlanIdAndResolvedAtIsNull})。
+     *
+     * <p>任何异常只记 WARN 不外抛 —— 台账写失败不该把开工带崩。
+     */
+    private void recordSsopBlockingGateIfAny(String factoryId, String planId) {
+        if (ssopExecutionRecordRepository == null || ssopBlockingGateRepository == null) {
+            return;
+        }
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.util.List<com.cretas.aims.entity.foodsafety.SsopExecutionRecord> blocking =
+                    ssopExecutionRecordRepository.findByFactoryIdAndExecutionDateAndStatusIn(
+                            factoryId, today, SSOP_BLOCKING_STATUSES);
+            if (blocking.isEmpty()) {
+                return;
+            }
+            if (ssopBlockingGateRepository.existsByProductionPlanIdAndResolvedAtIsNull(planId)) {
+                return;
+            }
+            java.util.List<Long> procedureIds = blocking.stream()
+                    .map(com.cretas.aims.entity.foodsafety.SsopExecutionRecord::getProcedureId)
+                    .distinct()
+                    .toList();
+            String reason = String.format("开工时 %s 仍有 %d 项 SSOP 清洁未完成(状态在 %s 中)",
+                    today, blocking.size(), SSOP_BLOCKING_STATUSES);
+            ssopBlockingGateRepository.save(
+                    com.cretas.aims.entity.foodsafety.SsopBlockingGate.builder()
+                            .factoryId(factoryId)
+                            .productionPlanId(planId)
+                            .blockedAt(LocalDateTime.now())
+                            .blockReason(reason)
+                            .failedProcedureIds(procedureIds)
+                            .build());
+            log.warn("[SSOP阻产台账] factory={} planId={} 已记一条: {}", factoryId, planId, reason);
+        } catch (Exception e) {
+            log.warn("[SSOP阻产台账] 记录失败, 不影响开工: factory={} planId={} err={}",
+                    factoryId, planId, e.getMessage());
+        }
     }
 
     @Override
