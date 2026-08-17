@@ -103,10 +103,15 @@ describe('NfcCheckinScreen', () => {
     },
   };
 
+  // 字段名是 productType, 不是 productName。
+  // NfcCheckinScreen.parseBatchList 读的是 `b.productType`(见 processingApiClient
+  // 的 ProcessingBatch: `productType: string`), 桩里写 productName ⇒ 映射恒为
+  // undefined ⇒ 屏幕那行 `{item.productName && <Text>}` 永远不渲染。
+  // ⚠️ 这是【桩写错了字段名】, 不是屏幕不显示产品名 —— 判反方向就会去改屏幕。
   const mockBatches = [
-    { id: 101, batchNumber: 'BATCH-2026-001', productName: '鸡肉香肠', status: 'IN_PROGRESS' },
-    { id: 102, batchNumber: 'BATCH-2026-002', productName: '牛肉干', status: 'IN_PROGRESS' },
-    { id: 103, batchNumber: 'BATCH-2026-003', productName: '猪肉脯', status: 'IN_PROGRESS' },
+    { id: 101, batchNumber: 'BATCH-2026-001', productType: '鸡肉香肠', status: 'IN_PROGRESS' },
+    { id: 102, batchNumber: 'BATCH-2026-002', productType: '牛肉干', status: 'IN_PROGRESS' },
+    { id: 103, batchNumber: 'BATCH-2026-003', productType: '猪肉脯', status: 'IN_PROGRESS' },
   ];
 
   const mockCheckins: import('../../../types/workReporting').CheckinWorkerDTO[] = [
@@ -147,22 +152,37 @@ describe('NfcCheckinScreen', () => {
       isLoading: false,
     });
 
-    // 默认返回批次列表
-    mockedProcessingApi.getBatches.mockResolvedValue({
+    // 默认返回批次列表。
+    //
+    // ⚠️ 桩必须【认 status 参数】。loadBatches 会并发发两次:
+    //     getBatches({ status: 'IN_PROGRESS', ... }) 和 getBatches({ status: 'PLANNED', ... })
+    //   然后把两个结果【拼起来】。之前的桩是 mockResolvedValue(同一份 3 条),
+    //   于是两次都返回同样 3 条 ⇒ 列表里 6 行 ⇒ 每个批次号出现两次 ⇒
+    //   `getByText('BATCH-2026-001')` 报 "Found multiple elements"(12 条断言同因)。
+    //
+    // 真实那侧不可能这样: status 是过滤条件, 一个批次只有一个状态, 两次查询的结果
+    // 天然不相交。⇒ 桩喂的是一个【真实上游永远不会给出的形状】, 属于桩的缺陷,
+    // 不是屏幕把列表渲染重了。
+    const pageOf = (content: unknown[]) => ({
       success: true,
       code: 200,
       message: '成功',
       data: {
-        content: mockBatches,
-        totalElements: 3,
+        content,
+        totalElements: content.length,
         totalPages: 1,
         size: 10,
         number: 0,
         first: true,
         last: true,
-        empty: false,
+        empty: content.length === 0,
       },
-    } as any);
+    });
+    mockedProcessingApi.getBatches.mockImplementation((params?: { status?: string }) =>
+      Promise.resolve(
+        pageOf(params?.status === 'IN_PROGRESS' ? mockBatches : [])
+      ) as any
+    );
 
     // 默认返回签到列表
     mockedWorkReportingApi.getCheckinList.mockResolvedValue({
@@ -200,7 +220,10 @@ describe('NfcCheckinScreen', () => {
     });
 
     it('无批次时应该显示空状态', async () => {
-      mockedProcessingApi.getBatches.mockResolvedValueOnce({
+      // ⚠️ 这里必须用 mockResolvedValue 而不是 ...Once: loadBatches 最多发【三次】——
+      // IN_PROGRESS / PLANNED 并发两次, 两边都空时还会再发一次全工厂 fallback。
+      // 只桩第一次的话, 后两次会落回 beforeEach 的默认实现, 空状态根本出不来。
+      mockedProcessingApi.getBatches.mockResolvedValue({
         success: true,
         code: 200,
         message: '成功',
@@ -219,7 +242,7 @@ describe('NfcCheckinScreen', () => {
       render(<NfcCheckinScreen />);
 
       await waitFor(() => {
-        expect(screen.getByText('暂无进行中的批次')).toBeTruthy();
+        expect(screen.getByText('暂无可用批次')).toBeTruthy();
       });
     });
 
@@ -230,7 +253,7 @@ describe('NfcCheckinScreen', () => {
 
       await waitFor(() => {
         // 加载失败后不应崩溃，应显示空状态
-        expect(screen.getByText('暂无进行中的批次')).toBeTruthy();
+        expect(screen.getByText('暂无可用批次')).toBeTruthy();
       });
     });
   });
@@ -251,11 +274,13 @@ describe('NfcCheckinScreen', () => {
         expect(screen.getByText('BATCH-2026-001')).toBeTruthy();
       });
 
-      // 应该显示签到统计
+      // 应该显示签到统计。
+      // ⚠️「工作中」「已签退」在这块屏上各有两处: 顶部统计卡的【标签】+ 每条签到记录的
+      // 【状态徽标】。屏幕两处都该有, 所以断言要用 getAllByText, 不能用 getByText。
       await waitFor(() => {
         expect(screen.getByText('已签到')).toBeTruthy();
-        expect(screen.getByText('工作中')).toBeTruthy();
-        expect(screen.getByText('已签退')).toBeTruthy();
+        expect(screen.getAllByText('工作中').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('已签退').length).toBeGreaterThan(0);
       });
     });
 
@@ -300,15 +325,19 @@ describe('NfcCheckinScreen', () => {
 
       fireEvent.press(screen.getByText('BATCH-2026-001'));
 
+      // 无名字时的兜底文案是「工号33」, 不是「员工 #33」——
+      // 82735b19c3 (process-mode P0-P2) 那次把三处 `员工 #{id}` 统一改成了 `工号{id}`,
+      // 而本目录从 2026-05-09 起就没被执行过, 所以断言停在改名【之前】的文案上。
+      // ⇒ 这是断言过期, 不是屏幕回归(工号是车间里真在用的叫法, 改名是有意的)。
       await waitFor(() => {
         // 员工33工作中
-        expect(screen.getByText('员工 #33')).toBeTruthy();
-        expect(screen.getByText('工作中')).toBeTruthy();
+        expect(screen.getByText('工号33')).toBeTruthy();
+        expect(screen.getAllByText('工作中').length).toBeGreaterThan(0);
       });
 
       // 员工34已签退
-      expect(screen.getByText('员工 #34')).toBeTruthy();
-      expect(screen.getByText('已签退')).toBeTruthy();
+      expect(screen.getByText('工号34')).toBeTruthy();
+      expect(screen.getAllByText('已签退').length).toBeGreaterThan(0);
     });
 
     it('工作中的员工应该显示签退按钮', async () => {
