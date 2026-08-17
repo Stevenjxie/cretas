@@ -109,6 +109,37 @@ public class ProcessWorkReportingController {
         return ApiResponse.success(service.getReportDetail(factoryId, id));
     }
 
+    /**
+     * ⚠️ 这条路径与上面的 {@code /reports/{id}} 同前缀。Spring 的路径匹配把字面量段
+     * 排在模板段之前，所以 {@code historical-average} 不会被当成 {@code id}
+     * （legacy controller 里 {@code /reports/last} 与 {@code /reports/{id}} 已经这么共存过）。
+     * ⛔ 这是「推理正确但没验」的典型形状，所以 {@code ProcessReportSummaryTest}
+     * 用 MockMvc 真发一次请求钉住它 —— 落到错的方法上是 500，不是编译错误。
+     */
+    @GetMapping("/reports/historical-average")
+    @Operation(summary = "工序历史均值",
+            description = "替代 legacy GET /work-reporting/reports/historical-average（异常检测用）")
+    @RequirePermission("work_report:read")
+    public ApiResponse<com.cretas.aims.dto.WorkReportHistoricalAverageResponse> getHistoricalAverage(
+            @PathVariable String factoryId,
+            @RequestParam String processCategory,
+            @RequestParam(defaultValue = "30") int days) {
+        return ApiResponse.success(service.getHistoricalAverage(factoryId, processCategory, days));
+    }
+
+    /**
+     * 报工看板汇总。⛔ 与 legacy {@code /work-reporting/summary} 不同，
+     * <b>不接受 {@code startDate} / {@code endDate}</b> —— 理由（含被砍掉的四个字段
+     * 逐条登记）见 {@link com.cretas.aims.dto.WorkReportSummaryResponse}。
+     */
+    @GetMapping("/summary")
+    @Operation(summary = "报工看板汇总", description = "替代 legacy GET /work-reporting/summary")
+    @RequirePermission("work_report:read")
+    public ApiResponse<com.cretas.aims.dto.WorkReportSummaryResponse> getSummary(
+            @PathVariable String factoryId) {
+        return ApiResponse.success(service.getSummary(factoryId));
+    }
+
     @GetMapping("/by-task/{taskId}")
     @Operation(summary = "Reports by process task")
     public ApiResponse<List<Map<String, Object>>> getReportsByTask(
