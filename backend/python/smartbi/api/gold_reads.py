@@ -150,12 +150,26 @@ def _parse_date(s: str, field: str) -> date:
         )
 
 
-DEMO_GOLD_TENANT_ALIASES = {
-    # The public no-login restaurant demo account is intentionally lightweight
-    # in Java auth, but the AI demo needs the full restaurant Gold dataset.
-    # Keep the JWT tenant check strict, then read from the rich demo factory.
-    "DEMO_REST": "RES_3101_009",
-}
+#: 演示账号 → 数据租户 的重映射。**2026-08-17 起为空。**
+#:
+#: 🔴 原本这里写着 `"DEMO_REST": "RES_3101_009"`，注释称后者是「the rich demo
+#:    factory」。当天逐环实测下来，那个描述是错的：
+#:
+#:      RES_3101_009 的租户名是 **QHJ_PROD**，625,764 笔 POS、跨 2025-01-01 至
+#:      2026-08-16，门店是「青花椒南方百联店 / 大丸百货店 / 徐汇光启城店」这类
+#:      高度具体的真实门店 —— **是真客户的生产租户，不是 demo 工厂。**
+#:
+#:    而 `POST /api/mobile/auth/demo-login` 在 `JwtAuthInterceptor` 的免鉴权白名单
+#:    里，prod 上 `cretas.demo.enabled` 与 `cretas.demo.rest.factory-id` 都没有覆盖
+#:    (走 jar 默认 true / DEMO_REST)。⇒ 这条别名把**免密端点**接到了**真客户的
+#:    营收、门店排行、毛利、客单价**上。
+#:    ⚠️ Java 侧 `MobileAuthServiceImpl` 的注释写着「2026-08-05 停用、fallback 默认值
+#:       同步清空」——**那句注释是过期的**，打包的 application.properties 仍是默认开启。
+#:
+#: ⇒ owner 裁定(2026-08-17)：**只用 MOCK_REST**。演示不再借道任何真客户租户。
+#: ⛔ 将来要给演示账号配数据源，只能指向**生成数据**的租户(如 MOCK_REST)，
+#:    绝不指向生产租户 —— 判据很简单：**那个租户的门店名是不是真实存在的店。**
+DEMO_GOLD_TENANT_ALIASES: dict = {}
 
 
 def _resolve_tenant(factory_id: Optional[str]) -> str:

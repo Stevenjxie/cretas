@@ -89,7 +89,11 @@ def test_general_analysis_store_context_maps_only_data_factory(monkeypatch):
     response = asyncio.run(chat.general_analysis(request, _http_request()))
 
     assert response.success is True
-    assert captured["factory_id"] == "RES_3101_009"
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert captured["factory_id"] == "DEMO_REST"
     assert captured["session_factory_id"] == "DEMO_REST"
     assert captured["session_user_id"] == 9
     assert captured["lookup_factory_id"] == "DEMO_REST"
@@ -124,7 +128,11 @@ def test_general_analysis_time_anchor_passes_and_sales_reads_demo_gold(monkeypat
     response = asyncio.run(chat.general_analysis(request, _http_request()))
 
     assert response.success is True
-    assert captured["factory_id"] == "RES_3101_009"
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert captured["factory_id"] == "DEMO_REST"
     assert captured["code"] == "RESTAURANT_OPS_SALES_SUMMARY"
     assert captured["kwargs"]["today"] == date(2026, 7, 21)
 

@@ -523,12 +523,12 @@ async def test_demo_comprehensive_uses_unified_gold_tenant_only_for_pos_facts(
         period="2026-07-01 至 2026-07-02",
     )
 
-    assert calls["finance"] == ["RES_3101_009"]
-    assert calls["products"] == ["RES_3101_009", "RES_3101_009"]
+    assert calls["finance"] == ["DEMO_REST"]  # 2026-08-17: 演示别名已删(见 test_demo_never_reads_a_production_tenant.py)
+    assert calls["products"] == ["DEMO_REST", "DEMO_REST"]
     assert product_orders == ["desc", "asc"]
-    assert calls["channels"] == ["RES_3101_009"]
-    assert calls["discounts"] == ["RES_3101_009"]
-    assert calls["dish_margin"] == ["RES_3101_009"]
+    assert calls["channels"] == ["DEMO_REST"]
+    assert calls["discounts"] == ["DEMO_REST"]
+    assert calls["dish_margin"] == ["DEMO_REST"]
     assert calls["review"] == ["DEMO_REST"]
     assert calls["operations"] == ["DEMO_REST"]
     assert calls["external"] == ["DEMO_REST"]
@@ -599,7 +599,7 @@ async def test_sales_dimension_falls_back_to_canonical_pos_dish_rankings(
         "RESTAURANT_OPS_GROSS_MARGIN",
     }
     assert {call["factory_id"] for call in ranking_calls} == {
-        "RES_3101_009",
+        "DEMO_REST",  # 2026-08-17: 演示别名已删, 不再重映射
     }
     assert all(
         call["date_range"] == (date(2026, 6, 26), date(2026, 7, 25))

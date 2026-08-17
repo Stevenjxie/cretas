@@ -1811,7 +1811,19 @@ def _all_store_scope_dish_margin(query: "Optional[str]") -> bool:
     return True
 
 
-_DEMO_GOLD_TENANT = "RES_3101_009"
+#: 演示账号读哪个租户的数据。**2026-08-17 起为 None = 不重映射。**
+#:
+#: 🔴 原本是 `"RES_3101_009"` —— 而那个租户名叫 **QHJ_PROD**，是真客户
+#:    (青花椒) 的生产租户: 625,764 笔 POS、跨 20 个月、门店是「青花椒南方百联店」
+#:    这类真实存在的店。配合免鉴权的 `/api/mobile/auth/demo-login`
+#:    (prod 上 `cretas.demo.enabled` 无覆盖、走 jar 默认 true)，
+#:    这条重映射等于把免密端点接到真客户的经营数据上。
+#:    详见 `smartbi/api/gold_reads.py` 的 `DEMO_GOLD_TENANT_ALIASES` 注释。
+#:
+#: ⇒ owner 裁定(2026-08-17)：**只用 MOCK_REST**，演示不借道真客户租户。
+#: ⛔ 这里两处映射本来就是**同一件事的两份**(形态 D) —— 一并置空。
+#:    将来要恢复，只能指向生成数据的租户，判据是「那个租户的门店名是不是真店」。
+_DEMO_GOLD_TENANT: Optional[str] = None
 _DEMO_GOLD_MAPPED_CODES = frozenset({
     "RESTAURANT_OPS_STORE_DIRECTORY",
     "RESTAURANT_OPS_SALES_SUMMARY",
@@ -1875,6 +1887,12 @@ def demo_data_factory_for_code(
     therefore cannot switch tenants mid-conversation. Auth, session and cache
     identity always stay on the trusted tenant.
     """
+    # 🔴 `_DEMO_GOLD_TENANT is None` = 不重映射(2026-08-17 起的默认状态)。
+    # ⛔ 这个判断必须在最前面: 少了它, 下面会 `return None` 把租户整个弄丢 ——
+    #    那不是「不映射」, 是把 factory_id 变成 None 往下传, RLS 上会读到空,
+    #    而「空」看起来和「这家店没数据」一模一样(本仓形态 A¹⁰)。
+    if not _DEMO_GOLD_TENANT:
+        return factory_id
     if (
         factory_id
         and factory_id.upper() == "DEMO_REST"

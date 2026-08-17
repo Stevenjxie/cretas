@@ -1810,7 +1810,11 @@ async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkey
     result = await tiered_answer(
         "月球一号幻想店的毛利率是多少？", object(), "DEMO_REST", "restaurant_manager",
     )
-    assert captured["factory_id"] == "RES_3101_009"
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert captured["factory_id"] == "DEMO_REST"
     assert captured["kwargs"]["store_mention"] == "月球一号幻想店"
     assert result["kind"] == "clarification"
     assert "没有找到名为「月球一号幻想店」的门店" in result["answer_text"]
@@ -1820,6 +1824,19 @@ async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkey
 
 @pytest.mark.asyncio
 async def test_demo_dish_fallback_does_not_replace_truth_with_missing_store(monkeypatch):
+    """R18b 跨空间菜单回落：菜在别名租户查不到时回本租户重试，
+    但**不许**拿「门店都找不到」这种更差的答案替换掉真实的销量答案。
+
+    ⚠️ 2026-08-17 晚：生产的演示别名已删（它把免鉴权端点接到了真客户生产
+       租户上，owner 裁定只用 MOCK_REST）。而这段回落逻辑的触发条件是
+       `code_factory != factory_id`，即**发生过重映射** —— 没有别名就永不触发。
+    ⇒ ⛔ 不删这条用例：改成**注入一个合成别名**，让这个不变量在将来给演示
+      配置（生成数据的）别名时仍然被守着。与
+      `tests/test_gold_resolve_tenant_rls.py` 同一手法。
+    """
+    from smartbi.gold.restaurant import restaurant_ops_router as _router
+    monkeypatch.setattr(_router, "_DEMO_GOLD_TENANT", "GENERATED_DEMO_TENANT")
+
     spec = _spec(
         intent="RESTAURANT_OPS_STORE_MARGIN",
         resolver_query_seed="米饭的销量是多少 本月 兄弟土菜馆",
@@ -1833,7 +1850,9 @@ async def test_demo_dish_fallback_does_not_replace_truth_with_missing_store(monk
 
     async def _fake_resolve(code, pool, factory_id, **kwargs):
         calls.append(factory_id)
-        if factory_id == "RES_3101_009":
+        # 第一次调用走**重映射后**的租户(合成别名), 第二次回本租户 ——
+        # 与生产上曾有的形状一致, 只是别名值换成了不指向真客户的占位。
+        if factory_id == "GENERATED_DEMO_TENANT":
             return OpsAnswer(
                 code=code,
                 title="米饭门店销量",
@@ -1867,7 +1886,7 @@ async def test_demo_dish_fallback_does_not_replace_truth_with_missing_store(monk
         precomputed_spec=spec,
     )
 
-    assert calls == ["RES_3101_009", "DEMO_REST"]
+    assert calls == ["GENERATED_DEMO_TENANT", "DEMO_REST"]
     assert result["kind"] == "clarification"
     assert "米饭" in result["answer_text"]
     assert "门店销售记录" in result["answer_text"]
@@ -2068,7 +2087,7 @@ async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(mon
 
     monkeypatch.setattr(svc, "parse_restaurant_query", _parse_sales)
     result = await tiered_answer("昨天营业额比前天高还是低？", object(), "DEMO_REST", None)
-    assert captured["RESTAURANT_OPS_SALES_SUMMARY"] == "RES_3101_009"
+    assert captured["RESTAURANT_OPS_SALES_SUMMARY"] == "DEMO_REST"  # 2026-08-17: 演示别名已删(见 test_demo_never_reads_a_production_tenant.py)
     assert result["kind"] == "answer"
 
     async def _parse_wastage(*a, **kw):
@@ -2079,7 +2098,7 @@ async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(mon
     # 2026-08-17: 后厨 KPI 也读 gold 租户了(理由见上面的 docstring)。
     # ⚠️ 这一行同时是**回归守卫**: 它若变回 "DEMO_REST", 就说明后厨那一族
     #    又从映射表里掉出去了 —— 那时「换个问法就换租户」会一起回来。
-    assert captured["RESTAURANT_OPS_WASTAGE_TOP"] == "RES_3101_009"
+    assert captured["RESTAURANT_OPS_WASTAGE_TOP"] == "DEMO_REST"  # 2026-08-17: 演示别名已删(见 test_demo_never_reads_a_production_tenant.py)
 
 
 @pytest.mark.asyncio

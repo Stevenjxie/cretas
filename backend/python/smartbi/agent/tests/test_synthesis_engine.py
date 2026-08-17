@@ -382,7 +382,7 @@ class TestBuildFactbook:
             top_n_stores,
             store_names,
         ):
-            assert factory_id == "RES_3101_009"
+            assert factory_id == "DEMO_REST"  # 2026-08-17: 演示别名已删(见 test_demo_never_reads_a_production_tenant.py)
             assert date_range == (
                 datetime.date(2026, 7, 21),
                 datetime.date(2026, 7, 27),
