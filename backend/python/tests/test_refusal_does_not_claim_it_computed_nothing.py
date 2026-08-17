@@ -127,3 +127,27 @@ def test_the_rejected_text_is_still_not_forwarded():
     assert "answer_text" not in produced_branch, (
         "产出被驳回的分支里引用了 `answer_text` —— 那是被闸驳回的文本，"
         "⛔ 不许原样发给老板")
+
+
+def test_the_advice_does_not_assume_the_question_was_a_why(empty_ok=None):
+    """🔴 当天回归：⛔ 不许假设老板问的是「为什么」。
+
+    实测原形（2026-08-17，同日）：第一版这里硬编码了
+    「例如把**为什么**换成「哪家店/哪道菜拉低了毛利」」，
+    而这条文案会发给**任何**产出被驳回的问句。
+    「有没有菜是卖一份亏一份的」拿到了它 —— 老板**根本没问「为什么」**。
+
+    ▎那正是这个文件在修的那个毛病本身：**假建议**。
+    ▎一句听起来很具体、其实与他的问题无关的指路，
+    ▎烧的正是「敢说不准」那点本钱。
+    """
+    src = _refusal_branch_src()
+    tree = ast.parse(src)
+    ifexp = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.IfExp)
+                 and any(getattr(x, "id", None) == "produced_but_rejected"
+                         for x in ast.walk(n.test)))
+    produced_branch = ast.unparse(ifexp.body)
+    assert "为什么" not in produced_branch, (
+        "拒答文案里硬编码了「为什么」—— 它会发给任何被驳回的问句，"
+        f"包括根本没问为什么的那些。分支：{produced_branch[:200]}")
