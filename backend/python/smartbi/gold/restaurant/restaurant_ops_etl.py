@@ -850,6 +850,56 @@ ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE 
     version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
 """
 
+# 按门店的领料金额 / 盘亏金额。形状与上面两条 `*_by_store` 完全一致 ——
+# ⚠️ 三条的 `WHERE store_id IS NOT NULL` 都是承重的, 理由见 wastage 那条:
+#    0 在这张表里是「无维度」占位值, 不排除会造出一家金额最大的幽灵门店。
+# ⚠️ 各表的 status 口径**不一样**(领料 APPROVED/SUBMITTED, 盘点 COMPLETED),
+#    照抄各自主聚合的口径, ⛔ 不统一成一种 —— 那会让某一张表静默少算。
+_AGG_REQUISITION_COST_BY_STORE_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'requisition_cost_by_store',
+       store_id, '',
+       SUM(COALESCE(est_cost, 0))::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_requisition
+ WHERE factory_id = $1::varchar AND status IN ('APPROVED', 'SUBMITTED')
+   AND store_id IS NOT NULL
+ GROUP BY factory_id, date, store_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
+# 盘亏金额按门店。
+# 🔴 口径**照抄** `_AGG_STOCK_SHORTAGE_COST_SQL`, 一个字不改:
+#      判「是不是盘亏」看 `difference_qty < 0`, 金额取 `ABS(difference_cost)`。
+#    ⛔ 我第一版写成 `CASE WHEN difference_cost < 0 THEN -difference_cost`,
+#      被 `test_stocktaking_cost_is_summed_through_abs` 当场拦下 —— 那条闸
+#      记着一个实测事实: **`difference_cost` 的符号跨租户不统一**
+#      (DEMO_REST/F002/RES_3101_009 盘亏是**正**金额, MOCK_REST 650 行**全负**)。
+#      按金额符号判, 在正号那些租户上门店表会**全是 0** —— 又一个「看起来
+#      完全正常的错数」。⇒ 同一口径只许有一份, 这里就是抄那一份。
+_AGG_STOCK_SHORTAGE_COST_BY_STORE_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'stocktaking_shortage_cost_by_store',
+       store_id, '',
+       SUM(CASE WHEN difference_qty < 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END)::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_stocktaking
+ WHERE factory_id = $1::varchar AND status = 'COMPLETED'
+   AND store_id IS NOT NULL
+ GROUP BY factory_id, date, store_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
 # Stocktaking shortage per ingredient (absolute of negative difference).
 _AGG_STOCK_SHORTAGE_SQL = """
 INSERT INTO agg_restaurant_daily_ops (
@@ -990,8 +1040,13 @@ async def materialize_gold_daily_ops(
             r8 = await conn.execute(_AGG_WASTAGE_COST_SQL, factory_id)
             r10 = await conn.execute(_AGG_WASTAGE_COST_BY_STORE_SQL, factory_id)
             r11 = await conn.execute(_AGG_WASTAGE_QTY_BY_STORE_SQL, factory_id)
+            r12 = await conn.execute(_AGG_REQUISITION_COST_BY_STORE_SQL, factory_id)
+            r13 = await conn.execute(
+                _AGG_STOCK_SHORTAGE_COST_BY_STORE_SQL, factory_id)
             stats["wastage_cost_by_store"] = int(r10.split()[-1]) if r10 else 0
             stats["wastage_qty_by_store"] = int(r11.split()[-1]) if r11 else 0
+            stats["requisition_cost_by_store"] = int(r12.split()[-1]) if r12 else 0
+            stats["stock_shortage_cost_by_store"] = int(r13.split()[-1]) if r13 else 0
             stats["requisition_qty"] = int(r1.split()[-1]) if r1 else 0
             stats["requisition_cost"] = int(r2.split()[-1]) if r2 else 0
             stats["wastage_qty"] = int(r3.split()[-1]) if r3 else 0
