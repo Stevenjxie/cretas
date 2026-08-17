@@ -1123,6 +1123,35 @@ _SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
 _SEMANTIC_METRICS = frozenset(_REG_METRICS) | frozenset(_REG_DERIVED) | frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
 
 
+def _resolver_serves_dimensions(resolver: str, dimensions: Sequence[str]) -> bool:
+    """这个 resolver 能不能按这些维度分组。
+
+    抽出来是因为同一个判断有**两个**用处, 而它们必须永远同口径:
+      ① 契约修复的目标服务不了这些维度 ⇒ 不许覆盖 planner
+      ② ①成立时, planner 自己的标签**能不能**服务 ⇒ 能就把计划对齐到标签,
+         ⛔ 不把矛盾留给下游当拒答理由
+
+    两处若各写一份 subset 检查, 漂的表现恰好是"自己造成再自己拒答"(形态 D)。
+
+    ⚠️ 必须走 `grouping_dimensions` 归一: `all` 是「不分组」, 不在任何 resolver
+    的「能按什么分组」集合里, 也不可能在 —— 不减掉的话这里对**任何全店合计
+    问句**恒为 False。2026-08-13 实测踩过。
+
+    函数内 import: restaurant_intent_service 在模块级 import 本模块, 顶层
+    import 会成环; 调用期两个模块都已加载, 安全。
+    """
+    if not resolver:
+        return False
+    from smartbi.gold.restaurant.metric_registry import grouping_dimensions
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _RESOLVER_DIMENSIONS,
+    )
+
+    return set(grouping_dimensions(tuple(dimensions))).issubset(
+        _RESOLVER_DIMENSIONS.get(resolver, frozenset())
+    )
+
+
 def _repair_backed_by_user_wording(
     query: str, repair_metrics: Sequence[str]
 ) -> bool:
@@ -2524,15 +2553,10 @@ def _build_spec(
         from smartbi.gold.restaurant.restaurant_intent_service import (
             _RESOLVER_DIMENSIONS,
         )
-        # ⛔ 同一个范畴错误的第二处: `all` 是「不分组」, 不在任何 resolver 的
-        #    「能按什么分组」集合里, 也不可能在。不减掉的话这里恒为 False,
-        #    契约修复对**任何全店合计问句**都会被跳过。
-        #    2026-08-13 实测: 修好了执行前那道闸之后, 拒答只是挪到了这里。
-        from smartbi.gold.restaurant.metric_registry import grouping_dimensions
 
-        repair_target_serves_dimensions = set(
-            grouping_dimensions(dimensions)
-        ).issubset(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset()))
+        repair_target_serves_dimensions = _resolver_serves_dimensions(
+            repair_candidate, dimensions
+        )
         if not repair_target_serves_dimensions:
             logger.warning(
                 "[restaurant-intent] contract-repair SKIPPED %s -> %s: 目标 resolver "
@@ -2541,6 +2565,35 @@ def _build_spec(
                 sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
                 list(dimensions),
             )
+            # 🔴「保留 planner 的判断」必须**真的保留** —— 否则它与拒答是同一件事。
+            #
+            # 上面那条日志说得对: 目标服务不了这些维度, 所以不该覆盖。但只是
+            # "不覆盖" 的话, code 与 planned_intents 就此**保持矛盾**, 而下游
+            # `_execution_mismatch` 正是拿这个矛盾拒答 —— planner 的判断一个字
+            # 都没被保留下来。
+            #
+            # 2026-08-17 MOCK_REST 实测(稳定复现):
+            #   「哪家店成本最高」 code=STORE_MARGIN  plan=(RECIPE_COST,)  dims=('store',)
+            #     STORE_MARGIN 声明 ['dish','store'] —— **它能按门店**
+            #     RECIPE_COST  声明 ['dish']         —— 它不能
+            #   ⇒ 该赢的是标签。产品明明算得出, 却因为两个内部推导不一致而拒答。
+            #
+            # ⚠️ 判据走**上面那道闸用的同一个** `_resolver_serves_dimensions`
+            #   —— ⛔ 不另写一份 subset 检查, 否则两处判定会漂, 而漂的表现恰好
+            #   又是"自己造成再自己拒答"(形态 D)。
+            #
+            # ⚠️ 与环比那条(comparison_drove_the_plan, 见下)是**同一个类、相反的
+            #   方向**: 那次计划赢, 这次标签赢。共同点是 ⛔ 都不许把矛盾留着。
+            if code and _resolver_serves_dimensions(code, dimensions):
+                logger.warning(
+                    "[restaurant-intent] plan realigned to planner label %s "
+                    "(plan was %s): 标签服务 %s, 涵盖本次的 %s —— "
+                    "⛔ 不把矛盾留给下游当拒答理由",
+                    code, repair_candidate,
+                    sorted(_RESOLVER_DIMENSIONS.get(code, frozenset())),
+                    list(dimensions),
+                )
+                planned_intents = (code,)
     # 🔴 这次覆盖是【用户自己的话】造成的, 还是【模型的猜测】造成的?
     #
     # 下面那条 `_repair_backed_by_user_wording` 守的正是这件事, 但它只会问一种
