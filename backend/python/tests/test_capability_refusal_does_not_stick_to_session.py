@@ -177,3 +177,37 @@ def test_both_layers_read_the_same_capability_predicate():
     assert "should_use_capability_refusal" in called, (
         "`_maybe_register_pending` 没有调用那个判据 —— 守卫没接上"
     )
+
+
+def test_the_guard_covers_every_registration_path():
+    """守卫装在 `_maybe_register_pending` 上，前提是**没有别的路能绕过它**。
+
+    📏 AST 数（⛔ 不用 grep 数文本）：`_pending_put` 全模块 1 个调用点，
+    就在 `_maybe_register_pending` 里；而 `_maybe_register_pending` 有 13 个调用点。
+    ⇒ 13 条注册路径全部经过那一道守卫。
+
+    ⚠️ 数的是「这个结构涉及的所有地方」，⛔ 不是「这个名字出现几次」——
+    后者会因为「同一个问题被拆成几处调用」而虚高（硬约束 8 的原形）。
+
+    这条会在有人新增一条**绕过** `_maybe_register_pending` 直接
+    `_pending_put(...)` 的路径时红。那正是守卫失效的样子，而它不报错。
+    """
+    import ast as _ast
+
+    src = inspect.getsource(ri)
+    tree = _ast.parse(src)
+    put_sites = [
+        node.lineno
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.Call)
+        and (getattr(node.func, "id", None) or getattr(node.func, "attr", None))
+        == "_pending_put"
+    ]
+    assert len(put_sites) == 1, (
+        f"`_pending_put` 有 {len(put_sites)} 个调用点（{put_sites}）—— "
+        f"守卫只装在 `_maybe_register_pending` 上, 多出来的那条绕过了它"
+    )
+    guarded_src = inspect.getsource(ri._maybe_register_pending)
+    assert "_pending_put(" in guarded_src, (
+        "唯一那个调用点不在 `_maybe_register_pending` 里 —— 守卫守错了地方"
+    )
