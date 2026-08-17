@@ -116,15 +116,22 @@ class TestChannelMixNowSharesTheStoreUniverse:
             "两套门店数:\n  " + "\n  ".join(offenders)
         )
 
-    def test_store_name_lookup_still_resolves_against_the_gold_catalogue(self):
-        """⛔ 阴性对照：`code is None` 那条(门店名解析)**必须**仍然走 gold 租户。
+    def test_store_name_lookup_uses_the_same_tenant_as_the_answers(self):
+        """门店名解析必须和答案读**同一个**租户 —— 否则解析出来的店在答案侧不存在。
 
-        它是 `store_scoped` 参数的承重用途 —— 老板说的店名在 gold 目录里查。
-        若把 `store_scoped` 从判据里整个拿掉, 这一条会红, 而后果是
-        「查无此店」, 比「两批店」更糟。
+        ⚠️ 2026-08-17 晚这条断言翻了个方向。它原来写的是
+           `!= DEMO_REST`（即「必须走 gold 目录」）—— 那是**演示别名存在时**
+           的正确写法。当晚别名被删（它把免鉴权端点接到了真客户生产租户上，
+           owner 裁定只用 MOCK_REST），于是「gold 目录」不再存在。
+        ▎守的性质没变：**解析店名的租户 == 出答案的租户**。
+           变的是这个租户现在就是账号自己。⛔ 所以不是删断言，是改写它。
         """
-        assert demo_data_factory_for_code(None, _DEMO, store_scoped=True) != _DEMO, (
-            "门店名解析不再走 gold 目录 —— 解析出来的店在答案那侧不存在"
+        lookup = demo_data_factory_for_code(None, _DEMO, store_scoped=True)
+        answer = demo_data_factory_for_code(
+            "RESTAURANT_OPS_SALES_SUMMARY", _DEMO, store_scoped=True)
+        assert lookup == answer, (
+            f"门店名在 {lookup!r} 的目录里解析，答案却读 {answer!r} —— "
+            f"解析出来的店在答案那侧不存在，会变成「查无此店」"
         )
 
     def test_non_demo_tenants_are_untouched(self):

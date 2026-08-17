@@ -3905,8 +3905,12 @@ async def test_demo_multi_store_guard_scopes_rls_to_mapped_data_factory():
     # 本例断的是 RLS 映射到数据租户, 不是反问 —— 2026-08-07 起首轮默认全部门店。
     assert guarded.store_scope == "all"
     assert guarded.store_scope_defaulted is True
-    assert pool.conn.rls_factory_id == "RES_3101_009"
-    assert pool.conn.fetched_factory_id == "RES_3101_009"
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert pool.conn.rls_factory_id == "DEMO_REST"
+    assert pool.conn.fetched_factory_id == "DEMO_REST"
 
 
 @pytest.mark.asyncio

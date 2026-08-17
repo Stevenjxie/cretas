@@ -2811,27 +2811,36 @@ def test_range_text_collapses_single_day():
 # --- R8: unified demo data-space mapping per answer family ---
 
 
-@pytest.mark.parametrize("code,expected", [
-    ("RESTAURANT_OPS_SALES_SUMMARY", "RES_3101_009"),
-    ("RESTAURANT_OPS_STORE_MARGIN", "RES_3101_009"),
-    ("RESTAURANT_OPS_TREND_ANALYSIS", "RES_3101_009"),
-    ("RESTAURANT_OPS_GROSS_MARGIN", "RES_3101_009"),
-    # 🔴 2026-08-17: 这两族从 DEMO_REST 改成 gold 租户。
-    #    后厨 resolver 补上门店维度后, 它们变成「换个问法就换租户」——
-    #    与 PR #2773 修的 CHANNEL_MIX 同一个缺陷。一致 > 富度, 理由与代价见
-    #    docs/decisions/2026-08-17-门店宇宙一致性-设计卡.md。
-    ("RESTAURANT_OPS_WASTAGE_TOP", "RES_3101_009"),
-    ("RESTAURANT_OPS_STOCK_SHORTAGE", "RES_3101_009"),
-    ("RESTAURANT_OPS_REQUISITION_TREND", "RES_3101_009"),
+# 🔴 2026-08-17 晚：整族改成「**不重映射**」。
+#
+# 这些用例原来钉的是 `DEMO_REST -> RES_3101_009`。逐环实测发现那条别名把
+# **免鉴权**的 `/api/mobile/auth/demo-login` 接到了**真客户的生产租户**上
+# (RES_3101_009 的租户名就是 `QHJ_PROD`，625,764 笔 POS，门店是
+#  「青花椒南方百联店 / 大丸百货店 / 徐汇光启城店」这类真实存在的店)。
+# owner 裁定：**只用 MOCK_REST**，演示不借道任何真客户租户。
+#
+# ⛔ 用例没有删 —— 主语从「映射到哪个租户」改成「**不映射**」，
+#    它们现在是那条裁定的回归守卫: 别名一旦回来, 这一族立刻红。
+# 判据「演示数据源不许是生产租户」另有专门的闸:
+#    smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+@pytest.mark.parametrize("code", [
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_WASTAGE_TOP",
+    "RESTAURANT_OPS_STOCK_SHORTAGE",
+    "RESTAURANT_OPS_REQUISITION_TREND",
 ])
-def test_demo_data_factory_per_code(code, expected):
-    assert _r.demo_data_factory_for_code(code, "DEMO_REST") == expected
+def test_demo_data_factory_per_code(code):
+    assert _r.demo_data_factory_for_code(code, "DEMO_REST") == "DEMO_REST"
 
 
-def test_demo_data_factory_store_scope_overrides_code():
+def test_demo_data_factory_store_scope_does_not_repoint_either():
+    """连 `store_scoped=True` 也不再改租户 —— 那条路曾是别名的另一半入口。"""
     assert _r.demo_data_factory_for_code(
         "RESTAURANT_OPS_GROSS_MARGIN", "DEMO_REST", store_scoped=True,
-    ) == "RES_3101_009"
+    ) == "DEMO_REST"
 
 
 def test_demo_data_factory_real_tenants_never_mapped():

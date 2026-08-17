@@ -251,8 +251,12 @@ async def test_relevant_store_options_use_period_and_named_dish_activity():
         "青花椒新世界新丸中心店",
         "青花椒徐汇光启城店",
     )
-    assert pool.active_factory == "RES_3101_009" or pool.active_factory is None
-    assert pool.relevant_store_args[0] == "RES_3101_009"
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert pool.active_factory == "DEMO_REST" or pool.active_factory is None
+    assert pool.relevant_store_args[0] == "DEMO_REST"
     assert pool.relevant_store_args[3] == "米饭"
 
 
@@ -277,7 +281,11 @@ async def test_relevant_store_options_without_time_use_only_matching_store_fragm
         "鲜行者打浦桥日月光店",
         "青花椒徐汇日月光店",
     )
-    assert pool.relevant_store_args == ("RES_3101_009", "日月光店")
+    # 2026-08-17: 演示别名(DEMO_REST -> RES_3101_009)已删 —— 它把免鉴权的
+    #   /auth/demo-login 接到了真客户生产租户(QHJ_PROD)上。owner 裁定只用
+    #   MOCK_REST。⇒ 现在**不重映射**, 期望值是 DEMO_REST 自己。
+    #   闸: smartbi/gold/tests/test_demo_never_reads_a_production_tenant.py
+    assert pool.relevant_store_args == ("DEMO_REST", "日月光店")
 
 
 @pytest.mark.asyncio
