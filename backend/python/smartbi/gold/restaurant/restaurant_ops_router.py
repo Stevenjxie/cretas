@@ -7509,10 +7509,53 @@ async def resolve_store_margin(
         f"另有 {invalid_cost_count} 个菜品成本值明显异常，已排除；请复核食材单位和最近进价。"
         if invalid_cost_count > 0 else ""
     )
+    # 🔴 2026-08-17 冷启动实测: 老板问「哪几家店在拖后腿」, 这条路**算得出**
+    #    十家店的毛利对比, 却被答案契约挡下 —— 缺的元素是 `profitability_verdict`
+    #    (「是否赚钱的判断」)。实测 2/3 次拒答, 而那一次答上的内容是好的。
+    #
+    # ▎缺口在**生成侧**: 给了对比、给了排名, 却从没说一句「谁在亏钱」——
+    #   而那正是他问的那件事。契约要的不是关键词, 是**这个判断本身**。
+    #
+    # ⛔ 三条不许犯的:
+    #    ① 算不出毛利的门店(`margin_rate is None`)**单独一档**, 绝不并进「赚钱」——
+    #      那就是把「我不知道」说成「是正的」(形态 A¹⁰)。
+    #    ② 必须带上覆盖率口径: 这个毛利只算了有成本卡的那部分营收, 不是整店真实
+    #      盈亏。不说这句, 老板会拿它当「这家店真的在亏」去关店。
+    #    ③ 全都为正时**照样说**(「都还赚钱」), ⛔ 不能只在有亏损时才出现 ——
+    #      那样它就成了一个「只报坏消息」的信号, 而他问的是判断, 不是警报。
+    _rated = [s for s in store_list if s.get("margin_rate") is not None]
+    _loss = [s for s in _rated if s["margin_rate"] < 0]
+    _unknown = len(store_list) - len(_rated)
+    if _rated:
+        if _loss:
+            _names = "、".join(s["name"] for s in _loss[:3])
+            _verdict = (
+                f"- 盈亏判断：{len(store_list)} 家店里 **{len(_loss)} 家在亏钱**"
+                f"（{_names}{'…' if len(_loss) > 3 else ''}），"
+                f"其余 {len(_rated) - len(_loss)} 家赚钱"
+            )
+        else:
+            _verdict = (
+                f"- 盈亏判断：{len(_rated)} 家店**都还赚钱**，"
+                f"差的是快慢不是盈亏"
+            )
+        if _unknown:
+            _verdict += f"；另有 {_unknown} 家成本数据不足，算不出，没有并进上面任何一档"
+        _verdict += (
+            f"。⚠️ 这是按**有成本卡那部分**的营收算的（覆盖率 "
+            f"{coverage_ratio * 100:.1f}%），不等于整店真实盈亏。\n"
+        )
+    else:
+        _verdict = (
+            f"- 盈亏判断：{len(store_list)} 家店的成本数据都不足，"
+            f"**赚没赚钱这次算不出来**，不拿营收高低顶替。\n"
+        )
+
     answer = (
         f"**门店毛利对比（{window_label}，{len(store_list)} 家店）**\n"
         f"- 全部营收 **¥{total_rev:,.2f}**；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
         f"覆盖率 {coverage_ratio * 100:.1f}%\n"
+        f"{_verdict}"
         f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。{invalid_cost_note}\n\n"
         f"毛利前 {len(top_slice)} 名门店:\n\n{top_text}{weak_store_text}\n\n"
         f"> 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；"
