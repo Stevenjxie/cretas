@@ -205,9 +205,17 @@ def test_actual_gold_callable_signatures_match_all_ten_adapters():
         # quantity ranking. Only the NL router passes a question through.
         # ``date_range`` / ``window_label`` 同样是尾部可选(自然语言路径传自定义
         # 窗口时才用), agent runtime 仍按前四个位置参数调用。
+        # ``dimensions`` 2026-08-18 新增, 同样是**尾部可选**(default=()):
+        # 规划器算出的维度此前从来没到过执行器, 于是「最近损耗怎么样」(ingredient)
+        # 与追问「哪家店最多」(store) 返回逐字相同的答案
+        # (📏 MOCK_REST prod, 两轮正文 md5[:8] 同为 bd1d6675, 同为 1249 字)。
+        # agent runtime 仍按前四个位置参数调用; 不传它时产出逐字不变 —— 有阴性
+        # 对照钉着(tests/test_wastage_answers_the_asked_dimension.py::
+        # test_ingredient_dimension_is_byte_identical_to_no_dimension)。
+        # ⚠️ 这道闸为此红过一次, 而它红得对: 它要的就是「新增形参来这里过一眼」。
         "resolve_wastage_top": (
             "smartbi_pool", "factory_id", "days", "top_n", "query",
-            "date_range", "window_label",
+            "date_range", "window_label", "dimensions",
         ),
         "resolve_inventory_warning": ("smartbi_pool", "factory_id", "top_n"),
         "resolve_stock_shortage": (
