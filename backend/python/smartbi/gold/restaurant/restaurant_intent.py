@@ -2636,24 +2636,36 @@ def _build_spec(
             unsupported_requirements,
             requested_metrics,
         )
-    if (
-        code
-        and planned_intents
-        and code not in planned_intents
-        and not clarification_needed
-    ):
-        clarification_needed = True
-        clarification_question = (
-            # ⛔ 2026-08-11 改写: 原文是「我识别到的**问题对象**与准备执行的
-            #    **分析范围**不一致…」—— 那两个是**内部概念名**, 店长读不懂,
-            #    也没法据此做任何事。prod 实测里用户只是打了个不完整的门店名
-            #    (「龙之梦」), 拿到的就是这句话。
-            # 📌 owner:「不能在前端返回输出里面显示置信度这些技术内容。」
-            #    漏出去的比置信度数字更隐蔽 —— 它读起来像中文。
-            # 保留的是**可行动的那一半**: 告诉用户说一个具体的就行。
-            "这次是想看某道菜、某家门店，还是全店汇总？"
-            "说一个就行 —— 我不会拿别的数据顶替。"
-        )
+    # ⛔ 2026-08-17 删掉: `code not in planned_intents` 时**不再**在规划阶段
+    #    自己拼一句通用反问。这里原来写的是:
+    #        「这次是想看某道菜、某家门店，还是全店汇总？说一个就行…」
+    #
+    # ## 为什么它是错的（prod 实测, ⛔ 不是从代码推的）
+    #
+    # 老板问「哪家店成本最高」拿到这句 —— 而**他已经说了是按门店看**。
+    # 真因不是他没说清, 是**能力边界**: `RECIPE_COST` 只服务 `dish`
+    # (成本卡按菜录), 根本没有按门店的成本指标。同句式换个指标词就答得上:
+    #     哪家店【损耗】控制得最差 → wastage     → 不反问
+    #     哪家店【成本】控制得最差 → recipe_cost → 反问 6/6 稳定
+    # ⇒ 把能力边界说成信息不足, 老板回答「门店」照样拿不到 —— 一次白点击。
+    #
+    # ## 为什么删掉是安全的（反事实实测, ⛔ 不改代码就量到了）
+    #
+    # `tiered_answer` 收 `precomputed_spec`, 把 `clarification_needed` 抹掉
+    # 再喂进去 = 「规划层没拦」。16 句铺开:
+    #     被这道闸拦下 2/16 条, 反事实**出数 0 条** —— 全是诚实拒答
+    # 执行层 `_execution_mismatch` 接住同一个条件(`spec.intent not in plan`),
+    # 并且它拼的话把**差在哪一层**说清楚了:
+    #     「…这次这个数我只能按菜品给你, 按门店拿不到。
+    #       换成问「按菜品怎么样」我就能答。」
+    # ⇒ 执行层严格更好, 且**不会悄悄答成别的**(那是比反问更糟的失败, 没发生)。
+    #
+    # ## 这个删除依赖一条不变量, 它被 `test_planning_layer_defers_...` 钉着
+    #
+    # `_execution_mismatch` 第一行 `plan_version != "restaurant-query-plan-v2"
+    # 就 return None` —— 非 v2 计划执行层**接不住**, 那时删掉这道闸就等于放行。
+    # 本函数只有 1 个 return, spec 构造处 `plan_version` 写死成 v2(全包唯一一处),
+    # 所以不变量当前成立。⚠️ 它一旦不成立, 那道闸会红。
     if (
         require_explicit_time
         and code in _TIME_SCOPED_INTENTS
