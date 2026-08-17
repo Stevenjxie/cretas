@@ -135,11 +135,15 @@ class TestItActuallyRuns:
         )
 
     def test_mirror_direction_produces_a_self_consistent_spec(self):
-        """📏 prod 那条 3/3 稳定的形状，跑一次让它自己说。
+        """标签 SALES_SUMMARY 服务不了 dish，计划 GROSS_MARGIN 能 ⇒ 计划赢。
 
-        标签 SALES_SUMMARY 服务不了 dish，计划 GROSS_MARGIN 能 ⇒ 计划赢。
+        ⚠️ 2026-08-18 订正输入：原来用的是 `('sales_volume',)`，
+        那正是 prod 上线后被抓到的「答非所问」那一格 —— **维度对了不等于指标对了**，
+        它现在应当回到拒答（`test_plan_wins_only_when_metrics_are_compatible.py`）。
+        这条守的性质没变（镜像那一支会生效），只是换成一个**指标也兼容**的输入。
+        形态 C‴：断言守的是需求，而需求被订正了 ⇒ 改断言，⛔ 不是回退改动。
         """
-        spec = self._spec(_SALES_SUMMARY, ("dish",), ("sales_volume",))
+        spec = self._spec(_SALES_SUMMARY, ("dish",), ("gross_margin",))
         assert spec.planned_intents, "计划编译成空的, 这条用例测不到东西"
         assert spec.intent in spec.planned_intents, (
             f"交给执行的 spec 仍然自相矛盾: intent={spec.intent} "
@@ -155,7 +159,7 @@ class TestItActuallyRuns:
             TRUSTED_PLANNER_AUTHORITIES,
         )
 
-        spec = self._spec(_SALES_SUMMARY, ("dish",), ("sales_volume",))
+        spec = self._spec(_SALES_SUMMARY, ("dish",), ("gross_margin",))
         assert spec.planner_authority in TRUSTED_PLANNER_AUTHORITIES, (
             f"planner_authority={spec.planner_authority!r} 不在白名单里 —— "
             f"`_execution_mismatch` 会判「这次的问题我没理解到有把握的程度」"
