@@ -703,9 +703,17 @@ public class SalesController {
         return ApiResponse.success("查询成功", result);
     }
 
+    /**
+     * 权限 (2026-08-17 修正): 加 {@code warehouse:read_write / warehouse:read}
+     * (OR-语义, requireAll 保持 false) —— 仓库侧发货确认流程 (Issue #740) 的详情页
+     * (RN {@code warehouseDeliveryApiClient.getDeliveryDetail} → 本接口, 无对应仓库端
+     * 只读接口) 只挂了 sales:* 权限, 仓库员在待确认列表 (warehouse:read) 能看见发货单,
+     * 点进详情却 403 —— 而这个功能本来就是为仓库侧建的。只放宽这一个只读端点, 不放宽
+     * 整个销售模块 (不给 warehouse_worker 加 sales:read)。
+     */
     @GetMapping("/deliveries/{deliveryId}")
     @Operation(summary = "发货单详情")
-    @RequirePermission({"sales:read_write", "sales:read"})
+    @RequirePermission({"sales:read_write", "sales:read", "warehouse:read_write", "warehouse:read"})
     public ApiResponse<SalesDeliveryRecord> getDelivery(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String deliveryId) {
