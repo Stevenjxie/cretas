@@ -476,6 +476,53 @@ const YieldStepReportScreen: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * 提交幂等键 —— 同一次点击的【重试】沿用同一个号，提交成功后换新。
+   *
+   * <p>2026-08-17 生产实测：不带号时提交两次完全相同的领用报工（间隔 37ms），
+   * 两次都成功、库存扣了两次（领 0.5 扣了 1.0）。报工改成<b>提交即入账</b>之后，
+   * 重复提交 = 库存立刻被多扣。
+   *
+   * <p>⚠️ {@code disabled={submitting}} 挡不住这个：网络超时后用户点重试、
+   * 离线重发、进程被杀后重开 —— 都是新的一次点击，但业务上是<b>同一笔</b>。
+   *
+   * <p>⛔ 不用时间窗去重（报工是合法高频动作：分段报工／领两批料／多人分报，
+   * 时间窗会误拦正当操作）。号能区分「重试」和「真的第二笔」。
+   */
+  const idemKeyRef = useRef<string>('');
+  const nextIdemKey = useCallback(() => {
+    if (!idemKeyRef.current) {
+      // 不引第三方 uuid 依赖: 时间戳 + 随机段, 够区分同一台设备上的相邻提交
+      idemKeyRef.current = `rn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    return idemKeyRef.current;
+  }, []);
+  /** 提交成功后调用 —— 下一次是【新的一笔】, 必须换号, 否则会被后端当成重试吞掉。 */
+  const rotateIdemKey = useCallback(() => {
+    idemKeyRef.current = '';
+  }, []);
+
+  /**
+   * 带幂等键提交 —— 所有报工提交都走这里, ⛔ 不要直接调 yieldReportApi.submitReport。
+   *
+   * <p>抽成一处的原因: 屏上有 7 个提交点。逐个加号 = 7 次机会漏掉一个,
+   * 而漏掉的那个恰恰是双扣还会发生的那个 —— 本仓在「只改一半调用点」上栽过多次。
+   *
+   * <p>成功才换号: 失败(网络超时/服务器错)时保持同号, 用户点重试就是同一笔;
+   * 成功之后下一次是新的一笔, 必须换号, 否则会被后端按同工序同号当成重试吞掉。
+   */
+  const submitWithIdem = useCallback(
+    async (bId: number, payload: YieldReportRequest) => {
+      const res = await yieldReportApi.submitReport(bId, {
+        ...payload,
+        clientRequestId: nextIdemKey(),
+      });
+      rotateIdemKey();
+      return res;
+    },
+    [nextIdemKey, rotateIdemKey],
+  );
   const [screenPhase, setScreenPhase] = useState<'reporting' | 'done'>('reporting');
 
   const [productType, setProductType] = useState<string>('');
@@ -1085,7 +1132,7 @@ const YieldStepReportScreen: React.FC = () => {
       };
       setSubmitting(true);
       try {
-        const res = await yieldReportApi.submitReport(batchId, req);
+        const res = await submitWithIdem(batchId, req);
         if (!res.success) {
           appAlert('提交失败', res.message || '请重试');
           return;
@@ -1168,7 +1215,7 @@ const YieldStepReportScreen: React.FC = () => {
     };
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, req);
+      const res = await submitWithIdem(batchId, req);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1244,7 +1291,7 @@ const YieldStepReportScreen: React.FC = () => {
     };
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, req);
+      const res = await submitWithIdem(batchId, req);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1280,7 +1327,7 @@ const YieldStepReportScreen: React.FC = () => {
   const submitOutputWithForce = useCallback(async (req: YieldReportRequest) => {
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, { ...req, forceSubmit: true });
+      const res = await submitWithIdem(batchId, { ...req, forceSubmit: true });
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1351,7 +1398,7 @@ const YieldStepReportScreen: React.FC = () => {
     };
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, req);
+      const res = await submitWithIdem(batchId, req);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1547,7 +1594,7 @@ const YieldStepReportScreen: React.FC = () => {
     };
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, req);
+      const res = await submitWithIdem(batchId, req);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1613,7 +1660,7 @@ const YieldStepReportScreen: React.FC = () => {
     };
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.submitReport(batchId, req);
+      const res = await submitWithIdem(batchId, req);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;

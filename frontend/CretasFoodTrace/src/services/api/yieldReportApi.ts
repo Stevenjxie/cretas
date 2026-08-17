@@ -173,6 +173,18 @@ export interface WipRowDTO {
 // mirror backend dto/yield/YieldReportRequest.java:11-26
 export interface YieldReportRequest {
   workProcessTaskId: number;
+  /**
+   * 提交幂等键 —— 同一次点击的【重试】必须带同一个号。
+   *
+   * 2026-08-17 生产实测: 不带号时提交两次完全相同的领用报工(间隔 37ms),
+   * 两次都成功、库存扣了两次(领 0.5 扣了 1.0)。报工改成【提交即入账】之后,
+   * 重复提交 = 库存立刻被多扣。前端 disabled={submitting} 挡不住网络重试/
+   * 离线重发/进程被杀后重开。
+   *
+   * 后端作用域 = (工厂, 工序任务, 号): 同号同工序=重试(拦), 同号不同工序=两件事(放行)。
+   * 不传 = 旧行为, 不拦(向后兼容)。
+   */
+  clientRequestId?: string;
   inputQuantity: number;            // 本道投入 (前端预填上道产出, 可改)
   inputUnit?: string;
   outputQuantity: number;           // 本道产出 (必填)
