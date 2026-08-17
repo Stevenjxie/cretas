@@ -260,14 +260,10 @@ export function WHInventoryDetailScreen() {
 
       {/* 顶部操作按钮 */}
       <View style={styles.topActions}>
-        <Button
-          mode="outlined"
-          onPress={() => navigation.dispatch(CommonActions.navigate("WHInventoryTransfer"))}
-          style={styles.topActionBtn}
-          labelStyle={styles.topActionLabel}
-        >
-          {t('inventory.quickActions.transfer')}
-        </Button>
+        {/* 🔴 2026-08-17 摘掉「调拨」按钮 —— WHInventoryTransferScreen 是原型屏:
+            库位下拉写死、单位硬编码 kg、executeTransfer 只改批次的 storageLocation 字段,
+            用户输入的调拨数量完全不参与, 不产生调拨单。点完显示「调拨成功」而什么都没调走。
+            成因与接回方案见 WHInventoryListScreen 里同日的那段注释。 */}
         <Button
           mode="outlined"
           onPress={() => navigation.dispatch(CommonActions.navigate("WHExpireHandle"))}

@@ -17,7 +17,7 @@
 
 import React, { useCallback, useRef, useState } from "react";
 import { View, StyleSheet, TouchableOpacity, Alert, Vibration } from "react-native";
-import { Text, Surface, Button } from "react-native-paper";
+import { Text, Surface, Button, Portal, Dialog, TextInput } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
@@ -53,15 +53,8 @@ interface PurchaseOrderLookup {
   orderNumber?: string;
 }
 
-type AlertPrompt = (
-  title: string,
-  message?: string,
-  buttons?: Array<{ text: string; style?: "default" | "cancel" | "destructive"; onPress?: (text: string) => void }>,
-  type?: "plain-text" | "secure-text" | "login-password",
-  defaultValue?: string,
-  keyboardType?: string,
-) => void;
-type AlertWithPrompt = typeof Alert & { prompt?: AlertPrompt };
+// 🔴 2026-08-17 删掉了 AlertPrompt / AlertWithPrompt 两个类型 —— 它们只为 Alert.prompt 存在,
+// 而那是 iOS 独有 API。手动输入改用本组件自己的 Dialog(见 handleManualInput)。
 
 const SCAN_COOLDOWN_MS = 2000; // 同一扫码冷却, 防 onBarcodeScanned 高频重复触发
 
@@ -87,6 +80,9 @@ export function WHScanOperationScreen() {
   const [resolving, setResolving] = useState(false);
   const [scannedCount, setScannedCount] = useState(0);
   const [lastScan, setLastScan] = useState<string | null>(null);
+  // 手动输入弹窗 (三端一致; 替代只有 iOS 有的 Alert.prompt, 见 handleManualInput 注释)
+  const [manualVisible, setManualVisible] = useState(false);
+  const [manualText, setManualText] = useState("");
   const lastScanAtRef = useRef<number>(0);
 
   const modeConfig = {
@@ -172,24 +168,28 @@ export function WHScanOperationScreen() {
     resolveScan(result.data);
   }, [resolveScan, resolving]);
 
+  /**
+   * 打开手动输入弹窗。
+   *
+   * 🔴 2026-08-17: 这里曾经用 {@code Alert.prompt} —— 那是 **iOS 独有的 API**。
+   * Android 和 Web 上 {@code typeof Alert.prompt !== "function"}, 走 else 分支弹
+   * 「当前平台不支持手动输入弹窗, 请使用扫码功能」。
+   * 而**工人用的就是 Android**, 同屏说明里还白纸黑字写着「如无法扫码, 可点击"手动输入"」——
+   * 于是标签牌脏了/光线不好扫不出来时, 现场**没有任何退路**。
+   *
+   * ⇒ 改用本组件自己的受控弹窗, 三端行为一致。⛔ 不要退回 Alert.prompt。
+   */
   const handleManualInput = useCallback(() => {
-    const promptFn = (Alert as AlertWithPrompt).prompt;
-    if (typeof promptFn === "function") {
-      promptFn(
-        mode === "inbound" ? "手动输入采购订单号" : "手动输入批次号",
-        mode === "inbound" ? "示例: PO-20260514-001" : "示例: MB-20260514-001",
-        [
-          { text: "取消", style: "cancel" },
-          { text: "确定", onPress: (text: string) => text && resolveScan(text) },
-        ],
-        "plain-text",
-        "",
-        "default",
-      );
-    } else {
-      Alert.alert("提示", "当前平台不支持手动输入弹窗, 请使用扫码功能");
-    }
-  }, [mode, resolveScan]);
+    setManualText("");
+    setManualVisible(true);
+  }, []);
+
+  const submitManualInput = useCallback(() => {
+    const text = manualText.trim();
+    if (!text) return;          // 空值不提交 —— 事先拦住, 不是提交后报错
+    setManualVisible(false);
+    resolveScan(text);
+  }, [manualText, resolveScan]);
 
   const toggleCamera = useCallback(async () => {
     if (cameraActive) {
@@ -305,6 +305,42 @@ export function WHScanOperationScreen() {
           </View>
         </View>
       </View>
+
+      {/* 手动输入弹窗 —— 三端一致。⛔ 不要换回 Alert.prompt(仅 iOS 有)。 */}
+      <Portal>
+        <Dialog
+          visible={manualVisible}
+          onDismiss={() => setManualVisible(false)}
+          testID="wh-scan-manual-dialog"
+        >
+          <Dialog.Title>
+            {mode === "inbound" ? "手动输入采购订单号" : "手动输入批次号"}
+          </Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              mode="outlined"
+              autoFocus
+              value={manualText}
+              onChangeText={setManualText}
+              placeholder={mode === "inbound" ? "示例: PO-20260514-001" : "示例: MB-20260514-001"}
+              onSubmitEditing={submitManualInput}
+              testID="wh-scan-manual-input"
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setManualVisible(false)} testID="wh-scan-manual-cancel">
+              取消
+            </Button>
+            <Button
+              onPress={submitManualInput}
+              disabled={!manualText.trim()}
+              testID="wh-scan-manual-confirm"
+            >
+              确定
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </SafeAreaView>
   );
 }
