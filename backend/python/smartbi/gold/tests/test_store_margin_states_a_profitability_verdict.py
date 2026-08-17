@@ -45,6 +45,29 @@ def _resolver_src():
     return inspect.getsource(router.resolve_store_margin)
 
 
+def _dish_resolver_src():
+    from smartbi.gold.restaurant import restaurant_ops_router as router
+    return inspect.getsource(router.resolve_gross_margin)
+
+
+def _dish_verdict_reaches_the_answer() -> int:
+    """菜品那条路的判断句**被拼进 answer** 的次数。
+
+    ⚠️ 2026-08-17: 门店那条修完之后, 「哪道菜不赚钱」仍然 3/3 被拒 ——
+       **同一个缺口长在另一个载体上**(`resolve_gross_margin`)。
+       修一处时要问一句: 这个形状还有没有别的载体。
+    """
+    tree = ast.parse(_dish_resolver_src())
+    n = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", None) == "answer" for t in node.targets):
+            for x in ast.walk(node.value):
+                if isinstance(x, ast.Name) and x.id == "_dish_verdict":
+                    n += 1
+    return n
+
+
 def _verdict_reaches_the_answer() -> int:
     """判断句**被拼进 answer** 的次数。
 
@@ -101,6 +124,30 @@ class TestTheVerdictIsPartOfTheAnswer:
     def test_all_unknown_says_it_cannot_tell(self):
         """一家都算不出时要明说算不出, ⛔ 不拿营收高低顶替。"""
         assert "不拿营收高低顶替" in _resolver_src()
+
+
+class TestTheDishPathHasTheSameVerdict:
+    """同一个缺口的第二个载体 —— 菜品毛利。"""
+
+    def test_dish_verdict_is_interpolated_into_the_answer(self):
+        assert _dish_verdict_reaches_the_answer() == 1, (
+            "菜品毛利的 answer 里没有拼进盈亏判断 —— 「哪道菜不赚钱」会继续被"
+            "契约以 profitability_verdict 缺失拒答(实测 3/3)"
+        )
+
+    def test_dish_unknown_cost_is_not_counted_as_profitable(self):
+        src = _dish_resolver_src()
+        assert "没有成本卡，赚没赚**算不出**" in src, (
+            "没有成本卡的菜没被单独说明 —— 那是把「我不知道」说成「是正的」"
+        )
+
+    def test_dish_verdict_speaks_when_nothing_loses_money(self):
+        assert "没有卖一份亏一份的" in _dish_resolver_src(), (
+            "一道都不亏时没有判断句 —— 老板问的是判断, 不是警报"
+        )
+
+    def test_dish_all_unknown_says_it_cannot_tell(self):
+        assert "不拿销量高低顶替" in _dish_resolver_src()
 
 
 class TestTheContractWouldNowAccept:

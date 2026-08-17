@@ -5376,9 +5376,47 @@ async def resolve_gross_margin(
     _fill_offer_lines = "".join(
         f"{i}. {o}\n" for i, o in enumerate(_offer_texts(_offers), 1))
 
+    # 🔴 2026-08-17 冷启动实测: 老板问「哪道菜不赚钱」, 这条路**算得出**每道菜的
+    #    毛利, 却被答案契约挡下 3/3 次 —— 缺的是 `profitability_verdict`。
+    #    与门店那条(`resolve_store_margin`)**同一个缺口、另一个载体**:
+    #    给了排行、给了低毛利清单, 却从没说一句「有没有菜在亏」。
+    # ⛔ 三条纪律与门店那条完全一致(⚠️ 措辞不同但判据同源):
+    #    ① `has_cost` 为假的菜**单独一档**, 绝不并进「赚钱」(形态 A¹⁰);
+    #    ② 必须带覆盖率口径 —— 这是按成本卡理论用量估的, 不是实际盈亏;
+    #    ③ 一道都不亏时**照样说**, ⛔ 不做只报坏消息的警报。
+    _dish_rated = [e for e in enriched if e.get("has_cost")]
+    _dish_loss = [e for e in _dish_rated if (e.get("gross_profit") or 0) < 0]
+    _dish_unknown = len(enriched) - len(_dish_rated)
+    if _dish_rated:
+        if _dish_loss:
+            _dish_names = "、".join(e["name"] for e in _dish_loss[:3])
+            _dish_verdict = (
+                f"- 盈亏判断：{len(_dish_rated)} 道有成本卡的菜里 "
+                f"**{len(_dish_loss)} 道在亏钱**"
+                f"（{_dish_names}{'…' if len(_dish_loss) > 3 else ''}），"
+                f"其余 {len(_dish_rated) - len(_dish_loss)} 道赚钱"
+            )
+        else:
+            _dish_verdict = (
+                f"- 盈亏判断：{len(_dish_rated)} 道有成本卡的菜**都还赚钱**，"
+                f"没有卖一份亏一份的"
+            )
+        if _dish_unknown:
+            _dish_verdict += (
+                f"；另有 {_dish_unknown} 道没有成本卡，赚没赚**算不出**，"
+                f"没有并进上面任何一档"
+            )
+        _dish_verdict += "。\n"
+    else:
+        _dish_verdict = (
+            f"- 盈亏判断：{len(enriched)} 道菜都没有成本卡，"
+            f"**赚没赚钱这次算不出来**，不拿销量高低顶替。\n"
+        )
+
     answer = (
         f"**菜品毛利分析（{window_label}）**\n"
         + render_headline(_headline_cell, window_label) + "\n"
+        f"{_dish_verdict}"
         # ⚠️ 只报覆盖率百分比, ⛔ 不再把 item 口径的「可计算毛利的营收」金额摆出来:
         #    它是 749,009 而上面的实收是 717,883 —— 并排放会读成「其中」比「全部」还大。
         f"- 实收营收 **¥{total_rev:,.2f}**\n\n"
