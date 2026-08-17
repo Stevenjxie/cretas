@@ -59,14 +59,13 @@ class TestEveryStoreCapableResolverIsAccountedFor:
 
     def test_the_exception_list_is_a_ratchet(self):
         """存量豁免只许变短。⚠️ 这条钉的是**方向**，不是数量本身。"""
-        # 2026-08-17: 2 -> 3 -> 5。后厨三张表(损耗/盘点/领料)当天先后变成
-        # store-capable, 各自走了闸给的「显式登记并写理由」那一支
-        # (理由见常量注释: 进映射表会让 DEMO_REST 改读一个**同样没有门店**
-        #  的租户, 只会更空)。⚠️ 每次上调都必须像这样带**具名理由**,
-        # 否则这个上限就成了橡皮筋。
-        # 🔑 解冻条件已写死: demo 那条管线(`seed_demo_rest_ops.py`)改成门店
-        #    感知之后, 这三条要重新裁一次 —— 那时名单应当变短。
-        assert len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED) <= 5, (
+        # 2026-08-17: 2 -> 3 -> 5 -> **0**。
+        # 当天晚些时候核那笔「登记未核」的债时发现: 名单上的每一个都
+        # 「换个问法就换租户」—— 与 PR #2773 修的是同一个缺陷。
+        # ⇒ 全部并入映射表, 名单清空(设计卡:
+        #   docs/decisions/2026-08-17-门店宇宙一致性-设计卡.md)。
+        # ⚠️ 上限钉回 0: 再要往里加, 必须先证明它**不会**随问法换租户。
+        assert len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED) <= 0, (
             f"存量豁免涨到 {len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED)} 个: "
             f"{sorted(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED)} —— "
             f"它在变成一张「反正也没人看」的名单"
@@ -98,14 +97,34 @@ class TestChannelMixNowSharesTheStoreUniverse:
         """缺陷的长相是「同一个 resolver，问法不同 ⇒ 租户不同」。
 
         `store_scoped` 由问句推出来，⛔ 不该决定读哪个租户的门店宇宙。
+
+        🔴 2026-08-17 晚扩面：这条原来**只钉 CHANNEL_MIX**（我当时修的那一个），
+           于是另外 5 个 store-capable resolver 带着**同一个缺陷**活了下来，
+           直到我去核那笔「登记未核」的债才发现。
+
+        ▎**修一个实例时，闸要钉那个形状，不是钉那个实例。**
+           ⇒ 改成遍历**所有** store-capable resolver。
         """
-        scoped = demo_data_factory_for_code(
-            "RESTAURANT_OPS_CHANNEL_MIX", _DEMO, store_scoped=True)
-        plain = demo_data_factory_for_code(
-            "RESTAURANT_OPS_CHANNEL_MIX", _DEMO, store_scoped=False)
-        assert scoped == plain, (
-            f"问法不同就换了租户: store_scoped=True -> {scoped!r}, "
-            f"False -> {plain!r} —— 老板会看到两套门店数"
+        offenders = []
+        for code in sorted(_store_capable()):
+            scoped = demo_data_factory_for_code(code, _DEMO, store_scoped=True)
+            plain = demo_data_factory_for_code(code, _DEMO, store_scoped=False)
+            if scoped != plain:
+                offenders.append(f"{code}: True->{scoped} / False->{plain}")
+        assert not offenders, (
+            "这些 resolver 问法不同就换了租户 —— 老板同一件事问两遍会拿到"
+            "两套门店数:\n  " + "\n  ".join(offenders)
+        )
+
+    def test_store_name_lookup_still_resolves_against_the_gold_catalogue(self):
+        """⛔ 阴性对照：`code is None` 那条(门店名解析)**必须**仍然走 gold 租户。
+
+        它是 `store_scoped` 参数的承重用途 —— 老板说的店名在 gold 目录里查。
+        若把 `store_scoped` 从判据里整个拿掉, 这一条会红, 而后果是
+        「查无此店」, 比「两批店」更糟。
+        """
+        assert demo_data_factory_for_code(None, _DEMO, store_scoped=True) != _DEMO, (
+            "门店名解析不再走 gold 目录 —— 解析出来的店在答案那侧不存在"
         )
 
     def test_non_demo_tenants_are_untouched(self):

@@ -2816,8 +2816,13 @@ def test_range_text_collapses_single_day():
     ("RESTAURANT_OPS_STORE_MARGIN", "RES_3101_009"),
     ("RESTAURANT_OPS_TREND_ANALYSIS", "RES_3101_009"),
     ("RESTAURANT_OPS_GROSS_MARGIN", "RES_3101_009"),
-    ("RESTAURANT_OPS_WASTAGE_TOP", "DEMO_REST"),
-    ("RESTAURANT_OPS_STOCK_SHORTAGE", "DEMO_REST"),
+    # 🔴 2026-08-17: 这两族从 DEMO_REST 改成 gold 租户。
+    #    后厨 resolver 补上门店维度后, 它们变成「换个问法就换租户」——
+    #    与 PR #2773 修的 CHANNEL_MIX 同一个缺陷。一致 > 富度, 理由与代价见
+    #    docs/decisions/2026-08-17-门店宇宙一致性-设计卡.md。
+    ("RESTAURANT_OPS_WASTAGE_TOP", "RES_3101_009"),
+    ("RESTAURANT_OPS_STOCK_SHORTAGE", "RES_3101_009"),
+    ("RESTAURANT_OPS_REQUISITION_TREND", "RES_3101_009"),
 ])
 def test_demo_data_factory_per_code(code, expected):
     assert _r.demo_data_factory_for_code(code, "DEMO_REST") == expected

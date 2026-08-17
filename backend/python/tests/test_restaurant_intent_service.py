@@ -2040,8 +2040,17 @@ async def test_explicit_read_choice_answer_keeps_non_execution_notice(
 @pytest.mark.asyncio
 async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(monkeypatch):
     """R8 contract: revenue/store/trend answers for the demo tenant read the
-    seeded gold tenant (consistent store universe with the Java rank tools);
-    ops KPIs keep the trusted tenant's own seed."""
+    seeded gold tenant (consistent store universe with the Java rank tools).
+
+    🔴 2026-08-17 契约改了后半句。原文是「ops KPIs keep the trusted tenant's
+       own seed」—— 那一半**实测站不住**: 后厨 resolver 补上门店维度后,
+       它们变成「换个问法就换租户」(普通问法 -> DEMO_REST, 带门店的问法 ->
+       RES_3101_009), 与 PR #2773 修的 CHANNEL_MIX 是同一个缺陷。
+       ⛔ 不能靠拿掉 `store_scoped` 来修 —— 那个参数是**门店名解析**在用的
+          (老板说的店名在 gold 目录里查), 拿掉会从「两批店」变成「查无此店」。
+       ⇒ 一致 > 富度: 后厨 KPI 也读 gold 租户。
+       代价(demo 后厨变空)与理由见
+       docs/decisions/2026-08-17-门店宇宙一致性-设计卡.md。"""
     captured = {}
 
     async def _fake_resolve(code, pool, factory_id, **kwargs):
@@ -2067,7 +2076,10 @@ async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(mon
 
     monkeypatch.setattr(svc, "parse_restaurant_query", _parse_wastage)
     await tiered_answer("损耗最多的食材", object(), "DEMO_REST", None)
-    assert captured["RESTAURANT_OPS_WASTAGE_TOP"] == "DEMO_REST"
+    # 2026-08-17: 后厨 KPI 也读 gold 租户了(理由见上面的 docstring)。
+    # ⚠️ 这一行同时是**回归守卫**: 它若变回 "DEMO_REST", 就说明后厨那一族
+    #    又从映射表里掉出去了 —— 那时「换个问法就换租户」会一起回来。
+    assert captured["RESTAURANT_OPS_WASTAGE_TOP"] == "RES_3101_009"
 
 
 @pytest.mark.asyncio

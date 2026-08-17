@@ -1829,31 +1829,38 @@ _DEMO_GOLD_MAPPED_CODES = frozenset({
     #    声明「我这个答案是按门店的」, 而我给 CHANNEL_MIX 加门店表时**没有人告诉
     #    租户解析这件事**。加能力要同时问一句: 它有没有进入某个「必须一致」的族。
     "RESTAURANT_OPS_CHANNEL_MIX",
-})
-
-#: 能按门店分组、但**刻意没有**进上面那张表的 resolver。
-#: ⛔ 这不是豁免, 是**留痕**: 它们的门店宇宙与排行/汇总那一族可能对不上,
-#:    只是还没有人核过。⚠️ 棘轮 —— 这张表只许变短。
-#: (2026-08-17 建表时的存量。新写的 store-capable resolver 一律进映射表,
-#:  除非有人核过并写明理由。)
-_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED = frozenset({
+    # 🔴 2026-08-17 晚，实测把这 5 个也并了进来。
+    #
+    # 它们此前登记在下面那张「刻意不映射」表里，理由是「进了会让 DEMO_REST 的
+    # 后厨答案改读 RES_3101_009，演示反而更空」。**那个理由不成立** ——
+    # 实测发现它们全都「换个问法就换租户」:
+    #     普通问法       -> DEMO_REST
+    #     带门店的问法   -> RES_3101_009
+    # 与 PR #2773 修的 CHANNEL_MIX 是**同一个缺陷**，我当时只修了那一个。
+    #
+    # ⛔ 不能靠「把 store_scoped 从判据里拿掉」来修: `store_scoped` 有承重用途 ——
+    #    `demo_data_factory_for_code(None, fid, store_scoped=True)` 是**门店名解析**
+    #    在用(restaurant_intent.py:4806/4836, 在 dim_store 里查老板说的店名)。
+    #    老板说的店名是在 gold 租户目录里解析的; 答案若读另一个租户, 那家店
+    #    在那边根本不存在 —— 会从「两批店」退化成「查无此店」, 严格更糟。
+    #
+    # ⇒ 一致 > 富度。那份「富度」是假数据(seeder 每天 1 条损耗), 它的价值只是
+    #   让演示不空; 而不一致伤的是「这东西说的话能不能信」。
+    # ⚠️ 代价: DEMO_REST 问「最近损耗怎么样」会变成「一条记录都没有…最后一次是
+    #    2026-06-08」—— 诚实且可行动, 但演示确实变空。**那正是下一刀的动机**
+    #    (demo seeder 门店感知 + 提量)。设计卡:
+    #    docs/decisions/2026-08-17-门店宇宙一致性-设计卡.md
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
     "RESTAURANT_OPS_STAFFING_ADVICE",
-    # 2026-08-17 新登记（⚠️ 这条是**做了决定**才进来的，不是顺手加的）:
-    # 损耗当天起能按门店拆，于是它成了 store-capable，闸要求二选一。
-    # ⛔ 选「不进映射表」的理由: 进了的话 DEMO_REST 的损耗会改读 RES_3101_009,
-    #    而那边只有 10 行(DEMO_REST 自己的 seed 有 214 行) —— 演示反而更空。
-    # ⚠️ 代价说清楚: demo 账号的损耗门店宇宙与营收/排行**不是同一批店**。
-    #    目前不构成矛盾, 因为 demo 那条管线的损耗**根本没有门店**
-    #    (`seed_demo_rest_ops.py` 只生成 section_code 这类厨房档口)。
-    #    ⇒ 等 demo seeder 改成门店感知之后, 这一条要重新裁一次。
     "RESTAURANT_OPS_WASTAGE_TOP",
-    # 2026-08-17 同批: 盘点/领料也补上了门店维度, 理由与 WASTAGE_TOP 完全相同
-    # (进映射表会让 DEMO_REST 改读 RES_3101_009, 而那条 demo 管线的后厨单据
-    #  **同样没有门店** —— 换过去只会更空)。⚠️ 代价一并登记, 见上。
     "RESTAURANT_OPS_STOCK_SHORTAGE",
     "RESTAURANT_OPS_REQUISITION_TREND",
 })
+
+#: 能按门店分组、但**刻意没有**进上面那张表的 resolver。
+#: ⛔ 这不是豁免, 是**留痕**: 它们的门店宇宙与排行/汇总那一族可能对不上。
+#: ⚠️ 棘轮 —— 这张表只许变短。2026-08-17 晚已**清空**(见上面那段说明)。
+_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED: frozenset = frozenset()
 
 
 def demo_data_factory_for_code(
