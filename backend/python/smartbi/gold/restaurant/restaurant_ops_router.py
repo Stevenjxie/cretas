@@ -1842,6 +1842,26 @@ def demo_data_factory_for_code(
     return factory_id
 
 
+# 疑问词是**有限封闭集合**, 所以这是结构判据, 不是又一份黑名单。
+#
+# 2026-07-30 prod 实测(生产的两轮链路, 带 session_key + session_summary):
+#   turn1 「哪个菜最赚钱」 → 澄清: 你想看哪个时间范围？
+#   turn2 「最近30天」     → **没有找到名为「哪个菜最」的菜品**
+# 「哪个菜最」是原文子串, 所以反幻觉守卫放行; 占位符黑名单里又没有它。
+# 靠往黑名单里加词堵不住 —— 那要求穷举「所有不是菜/店的名词」, 是无界集合。
+# 带疑问词的片段**永远不可能是专名**, 按这一条拒绝, 集合是封闭的。
+#
+# ⚠️ 与「名字不存在」是两回事: 「红烧肉卖了多少」而菜单上没有红烧肉, 仍然应该
+# 答「查无此菜」—— 那是用户真的当名字用了。这里拒的是用户**根本没当名字用**的词。
+#
+# 🏠 定义在 router(低层)而不是 restaurant_intent —— import 方向是
+#    restaurant_intent → restaurant_ops_router, 反向没有。放在这里两边都能用,
+#    **只有一份**(形态 D: 同一个东西有两份, 它一定会漂)。
+_INTERROGATIVE_MARKERS: Tuple[str, ...] = (
+    "哪", "什么", "多少", "怎么", "为什么", "是否", "有没有",
+)
+
+
 def extract_store_mentions(query: Optional[str]) -> list[str]:
     """Pull one or more explicit store names from free text."""
     if not query:
@@ -1873,9 +1893,22 @@ def extract_store_mentions(query: Optional[str]) -> list[str]:
                 for fragment in _GENERIC_STORE_SCOPE_FRAGMENTS
             ):
                 continue
-            # 疑问词/排名词残留 ("上个月哪家店"/"客单价最高的店") 不是店名 (R20/R27)。
-            if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有",
-                                                "最高", "最低", "最好", "最差",
+            # 疑问词残留 ("上个月哪家店") 不是店名 —— 用**封闭集合**判, 不是黑名单。
+            # 2026-08-17 owner 裁定「疑问词直接退役」: 原来这里列着
+            # 哪家/哪个/哪些/有没有, 而「哪几家店」不在其中, 于是
+            # 「哪几家店在拖后腿」被当成店名去查, 答「没有找到名为『哪几家店』的门店」。
+            # 往黑名单里补「哪几家」只会等下一个变体(哪间/哪位/哪一家)。
+            # 判据换成 `_INTERROGATIVE_MARKERS`: 「哪」一个字盖住全部变体。
+            #
+            # 📏 换之前量过误伤(prod `dim_store`, 逐租户 set_config):
+            #    RES_3101_009 38 家 / DEMO_REST 27 / R_XMX_CHAIN 1 / R_GML_DEMO 132
+            #    = **198 个真店名, 封闭集合命中 0 个**(现行黑名单也命中 0)。
+            if any(marker in candidate for marker in _INTERROGATIVE_MARKERS):
+                continue
+            # ⚠️ 下面这些**不是**疑问词, 是排名/极值词和指标名, 属于另外两类:
+            #    排名/极值 → 另一个封闭集合; 指标名 → 应由 METRICS 登记表推导。
+            #    本轮**只退役疑问词**(去黑话只动黑话), 这两类单独登记、单独做。
+            if any(tok in candidate for tok in ("最高", "最低", "最好", "最差",
                                                 "排名", "排行", "客单价", "营收")):
                 continue
             candidate = candidate[:160]

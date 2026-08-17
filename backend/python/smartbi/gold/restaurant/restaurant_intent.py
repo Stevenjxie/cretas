@@ -54,6 +54,7 @@ from smartbi.gold.restaurant.metric_registry import (
     render_metric_vocabulary as _render_metric_vocabulary,
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
+    _INTERROGATIVE_MARKERS,
     _KITCHEN_OPS_NOUNS,
     catalogue_has_no_dish_mention as _catalogue_has_no_dish_mention,
     _is_explicit_sales_period_comparison,
@@ -5620,21 +5621,10 @@ def _parse_t3_time_range(time_range: Any) -> str:
     return ""
 
 
-# 疑问词是**有限封闭集合**, 所以这是结构判据, 不是又一份黑名单。
-#
-# 2026-07-30 prod 实测(生产的两轮链路, 带 session_key + session_summary):
-#   turn1 「哪个菜最赚钱」 → 澄清: 你想看哪个时间范围？
-#   turn2 「最近30天」     → **没有找到名为「哪个菜最」的菜品**
-# 「哪个菜最」是原文子串, 所以反幻觉守卫放行; 下面那份占位符黑名单里又没有它。
-# 靠往黑名单里加词堵不住 —— 那要求穷举「所有不是菜的名词」, 是无界集合(本仓库
-# 在 restaurant_ops_router 的注释里已经吃过这个亏)。带疑问词的片段**永远不可能
-# 是专名**, 按这一条拒绝, 集合是封闭的。
-#
-# ⚠️ 与「菜名不存在」是两回事: 「红烧肉卖了多少」而菜单上没有红烧肉, 仍然应该
-# 答「查无此菜」—— 那是用户真的当名字用了。这里拒的是用户根本没当名字用的词。
-_INTERROGATIVE_MARKERS: Tuple[str, ...] = (
-    "哪", "什么", "多少", "怎么", "为什么", "是否", "有没有",
-)
+# `_INTERROGATIVE_MARKERS` 从 restaurant_ops_router import(见文件顶部 import 块)。
+# 2026-08-17 从这里搬走: 门店抽取器也要用同一份判据, 而 import 方向是
+# restaurant_intent → restaurant_ops_router, 所以它的家在 router。
+# ⛔ 不要在这里重新定义一份 —— 两份一定会漂(形态 D)。
 
 
 def _verbatim_entity(value: Any, query: str) -> Optional[str]:
