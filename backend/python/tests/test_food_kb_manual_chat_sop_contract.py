@@ -12,6 +12,8 @@ from food_kb.api.manual_chat import (
     _FACTORY_BATCH_ADJUSTMENT_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
+    _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
+    _FACTORY_REALTIME_WIP_ANSWER,
     _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
     _FACTORY_MATERIAL_SALES_ANSWER,
     _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER,
@@ -28,14 +30,17 @@ from food_kb.api.manual_chat import (
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+    _RESTAURANT_ATTRIBUTION_BASELINE_ANSWER,
     _RESTAURANT_COST_CATEGORY_ANSWER,
     _RESTAURANT_DISCOUNT_GUIDE_ANSWER,
     _RESTAURANT_DATA_AVAILABILITY_ANSWER,
     _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER,
     _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
+    _RESTAURANT_FOLLOWUP_WINDOW_ANSWER,
     _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
     _RESTAURANT_LIVE_COMMAND_ANSWER,
+    _RESTAURANT_DIMENSION_GAP_ANSWER,
     _RESTAURANT_METRIC_ENTITY_ANSWER,
     _RESTAURANT_MONTHLY_REPORT_ANSWER,
     _RESTAURANT_PLAN_ALERT_ANSWER,
@@ -57,6 +62,8 @@ from food_kb.api.manual_chat import (
     _needs_factory_batch_adjustment_guard,
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
+    _needs_factory_purchase_oa_receipt_guard,
+    _needs_factory_realtime_wip_guard,
     _needs_factory_form_assistant_result_guard,
     _needs_factory_material_sales_guard,
     _needs_factory_transfer_physical_stock_guard,
@@ -73,14 +80,17 @@ from food_kb.api.manual_chat import (
     _needs_multi_output_warehouse_receipt_guard,
     _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
+    _needs_restaurant_attribution_baseline_guard,
     _needs_restaurant_cost_category_guard,
     _needs_restaurant_discount_guide_guard,
     _needs_restaurant_data_availability_guard,
     _needs_restaurant_data_progress_followup_guard,
     _needs_restaurant_department_stocktake_guard,
     _needs_restaurant_flywheel_governance_guard,
+    _needs_restaurant_followup_window_guard,
     _needs_restaurant_guide_boundary_guard,
     _needs_restaurant_live_command_guard,
+    _needs_restaurant_dimension_gap_guard,
     _needs_restaurant_metric_entity_guard,
     _needs_restaurant_monthly_report_guard,
     _needs_restaurant_plan_alert_guard,
@@ -1198,7 +1208,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-16" in html
+    assert "origin/main · SOP sync 2026-08-17" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
     assert "调整后应剩多少的绝对值" in html
@@ -1637,6 +1647,70 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("guard", "questions"),
+    [
+        (
+            _needs_factory_purchase_oa_receipt_guard,
+            [
+                "供应商采购包装规格加载失败还能下单吗？",
+                "采购财务待审入口下线后去待我审批吗？",
+                "采购入库先上传照片还是先创建 DRAFT？",
+            ],
+        ),
+        (
+            _needs_factory_realtime_wip_guard,
+            [
+                "planned_quantity 为 0 的报工会自动完成批次吗？",
+                "报工 WIP 是提交时还是审批时入账？",
+                "半成品 SECONDARY_CONSUME 出库流水为什么是负数？",
+            ],
+        ),
+        (
+            _needs_restaurant_attribution_baseline_guard,
+            [
+                "营收归因的订单量贡献、客单价贡献和交叉项怎么算？",
+                "月初至今做环比该选什么不重叠基线？",
+                "上半年营收为什么变化，基线用哪个自然半年？",
+            ],
+        ),
+        (
+            _needs_restaurant_followup_window_guard,
+            [
+                "追问 chip 的短标签会发送完整问题吗？",
+                "今天到现在和到今天为止是不是同一个时间窗？",
+                "实际数据窗口覆盖不足时什么时候要提示？",
+            ],
+        ),
+        (
+            _needs_restaurant_dimension_gap_guard,
+            [
+                "不支持按菜品维度时能降级成门店汇总吗？",
+                "缺少这个拆分粒度时应该怎样改问？",
+                "能看门店层但不能看菜品层时会暴露内部字段吗？",
+            ],
+        ),
+    ],
+)
+def test_20260817_reviewed_guards_cover_equivalent_questions(guard, questions):
+    assert all(guard(question) for question in questions)
+
+
+def test_20260817_reviewed_answers_keep_current_non_negotiable_contracts():
+    assert "PURCHASE_APPROVAL_OA_ONLY" in _FACTORY_PURCHASE_OA_RECEIPT_ANSWER
+    assert "DRAFT" in _FACTORY_PURCHASE_OA_RECEIPT_ANSWER
+    assert "PURCHASE_RECEIVE" in _FACTORY_PURCHASE_OA_RECEIPT_ANSWER
+    assert "提交报工" in _FACTORY_REALTIME_WIP_ANSWER
+    assert "SECONDARY_CONSUME" in _FACTORY_REALTIME_WIP_ANSWER
+    assert "UNJUDGEABLE" in _LABEL_QC_REVIEW_ANSWER
+    assert "150 px" in _LABEL_QC_REVIEW_ANSWER
+    assert "ΔR = ΔQ×P0 + Q0×ΔP + ΔQ×ΔP" in _RESTAURANT_ATTRIBUTION_BASELINE_ANSWER
+    assert "30%" in _RESTAURANT_ATTRIBUTION_BASELINE_ANSWER
+    assert "今天到现在" in _RESTAURANT_FOLLOWUP_WINDOW_ANSWER
+    assert "不替用户计算或分析经营数据" in _RESTAURANT_FOLLOWUP_WINDOW_ANSWER
+    assert "不能悄悄改答另一个汇总层" in _RESTAURANT_DIMENSION_GAP_ANSWER
+
+
+@pytest.mark.parametrize(
     ("question", "category", "expected_answer", "source"),
     [
         (
@@ -1673,6 +1747,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "标签质检复核台的盒子白标彩标参考框怎么用？",
             "factory",
             _LABEL_QC_REVIEW_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "采购收货为什么要先建 DRAFT 再上传凭证，财务去哪里审批？",
+            "factory",
+            _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "报工 WIP 是提交时还是审批时入账，半成品出库流水怎么追？",
+            "factory",
+            _FACTORY_REALTIME_WIP_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
@@ -1925,6 +2011,24 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "打烊后问今天怎么样会回答什么？",
             "restaurant",
             _RESTAURANT_DAILY_CLOSE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "门店营收归因的订单量、客单价和交叉项怎样选不重叠基线？",
+            "restaurant",
+            _RESTAURANT_ATTRIBUTION_BASELINE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "追问 chip 为什么显示短标签却要发送带门店和时间的完整问题？",
+            "restaurant",
+            _RESTAURANT_FOLLOWUP_WINDOW_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "当前不支持按菜品维度时，为什么不能降级成门店汇总并该怎么改问？",
+            "restaurant",
+            _RESTAURANT_DIMENSION_GAP_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
     ],

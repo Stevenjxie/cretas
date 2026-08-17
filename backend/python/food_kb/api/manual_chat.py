@@ -252,8 +252,29 @@ _LABEL_QC_REVIEW_ANSWER = """\
 2. 按盒子分别确认白标/彩标为“有、缺、看不清”，并可移动、改类、删除或补画框。切换盒子或照片时自动校验并保存当前盒子，不再要求重复点“本盒已核对”；存在“标记有但无框”、坐标越界或父盒不一致时阻止切换并保留草稿。
 3. 整图提交后，只有人工最终认可的盒子按审核快照生成幂等单盒裁切队列；拒绝或无法判断的盒子不裁切。平台标注员在单盒坐标系精修白标/彩标或标记无法判断，切换队列项即保存，但不能回写或覆盖工厂整图盒子真值。
 4. 原始 AI 提议、工厂人工盒子/标签真值、裁切算法版本、审核 SHA、平台精修和回到原图的坐标变换都要可追溯；训练批准仍只允许导出，不会自动训练或发布模型。
+5. 托盘或标签侧视图裁切短边小于当前可靠阈值时只能标记 `UNJUDGEABLE`（无法可靠判断），并继续保留为人工复核候选；不能把小图误判成“白标和彩标都缺”，也不能当成干净合格样本。当前生产默认最小可靠裁切为 150 px，实际阈值仍以运行时配置回读为准。
 
 **边界：** 普通质检附件成功不等于标签审核通过；工厂整图审核、单盒裁切和平台标签精修是三份隔离的状态与版本，任何一层都不能静默覆盖上一层真值。"""
+
+_FACTORY_PURCHASE_OA_RECEIPT_ANSWER = """\
+采购下单、财务审批、手机收货和批次追溯是同一条链上的四个独立事实，不能用其中一步成功冒充下一步完成。
+
+1. **采购包装规格：** RN 新建采购单在供应商存在有效采购包装规格时必须选择该规格；规格仍在加载、读取失败或必选但未选时一律 fail closed。选择后由规格锁定采购单位、价格和换算因子，`purchasePackagingSpecId` 与旧的 `materialPackagingSpecId` 只能二选一，不能同时提交。
+2. **采购财务审批：** 采购财务节点只在“工作台 → 待我审批”处理。旧“财务待审采购单”菜单、页面和 RN 财审入口已经退役；AI 的旧采购财审动作返回 410 `PURCHASE_APPROVAL_OA_ONLY`，只给正确去处，不会替财务同意或驳回。
+3. **手机收货顺序：** 先创建采购入库 DRAFT，取得收货单 ID 后再上传供应商供货单或收货凭证，最后才确认收货。上传前不能因还没有照片阻止创建草稿；但成功上传数为 0、仍在上传或有失败时不能确认，草稿保留并提示到详情补传。
+4. **批次追溯：** 确认收货后形成的物料批次记录来源 `PURCHASE_RECEIVE` 和采购入库单 ID，由该 ID 可继续追溯采购订单、供应商与收货凭证；DRAFT 或仅上传附件都不增加库存。
+
+**验收结果：** 下单行回读所选供应商规格和单位；OA 回读审批人与时间；收货回读 DRAFT → 附件 → 确认的顺序；最终批次可沿来源 ID 追到采购入库、采购单和供应商。"""
+
+_FACTORY_REALTIME_WIP_ANSWER = """\
+当前逐道报工在“正式提交报工”时形成实时 WIP 事实，审批只复核该事实，不再负责补记库存。
+
+1. `planned_quantity = 0` 表示计划量未知，不表示零产量，也不能因为任一工序报工一次就自动完成整批；未来计划匹配同样不能把未知计划量当成已完全匹配。
+2. 正式报工提交成功时立即记录本工序 WIP 产出；后续审批是审核，不重复过账。批次只有在全部任务都完成后才可结束，`SKIPPED` 和 `CANCELLED` 视为已处理任务，其余未完成任务继续阻止结批。
+3. 下游正式消耗半成品时必须持久化 WIP 出库流水：方向 `OUT`、类型 `SECONDARY_CONSUME`、数量为负，并保留来源报工 ID；用入库与出库流水核对实时余额，不能只看当前库存数。
+4. 中间工序存在未完成下游任务但没有配置 `semi_finished_output_code` 时，本次报工仍可成功，但必须返回非阻塞告警并明确下一步去配置半成品输出码；终端工序、已配置或下游均完成时不显示该告警。
+
+**验收结果：** 提交报工后即能回读 WIP 入账，审批不会重复入账；下游消耗产生可追溯负向流水；未知计划量不触发假完成，缺半成品码只留下清楚且可行动的告警。"""
 _WORKFLOW_ACTUAL_IO_ANSWER = """\
 Workflow 和 BOM 都不预设某一次报工的实际选择：Workflow 维护工序拓扑与可能投入/产出，BOM 维护主料、替代料、辅料、包材、用量和成本；生产计划固定两者的精确版本。
 
@@ -447,9 +468,39 @@ _RESTAURANT_DAILY_PRESENTATION_ANSWER = """\
 2. **输出偏好：**未明确时默认文字 + 表格；“只用文字 / 别用表格 / 不要表格，文字就行”只返回文字，“别用图，用表格”保留文字 + 表格。否定词先于肯定词生效，不能因为句中出现“表格”二字反向锁死表格。
 3. **日结菜品表：**打烊摘要在表格偏好生效时显示“菜品、营收、成本、毛利”四列，不显示单菜毛利率列；缺成本卡的成本和毛利明确写“缺成本卡”，不能填 0、空白或横线。默认按营收列前 10 道，并在必要时补列份数最多的菜；份数口径是系统推断，必须明说。
 4. **覆盖与差额：**表格必须紧贴披露成本卡覆盖率、理论成本依据、未列菜品造成的截断差额，以及套餐和单品暂不能拆分。表内毛利合计与抬头毛利的差额必须能由未列且有卡菜品解释；无卡菜不能按行业默认成本率伪造单菜毛利。
-5. **异常动作：**成本高于营收的有卡菜最多点名 3 道，并说明数量、单位或整锅/整箱录入可能错误；下一步是先核这些成本卡，不能直接据此调价、下架或砍菜。
+5. **移动端与异常动作：**420 px 宽的手机上四列必须同时可见，默认不依赖横向滚动，覆盖说明移出菜名列。成本高于营收的有卡菜最多点名 3 道，并说明数量、单位或整锅/整箱录入可能错误；下一步是先核这些成本卡，不能直接据此调价、下架或砍菜。
+6. **成本卡下一步：**缺卡提示同时保留菜品/营收覆盖百分比，并把后果和收益说成钱，例如“仍有 ¥X 营收无法计算毛利；补齐后可把这部分纳入理论毛利参考”，不能只写抽象的“提升覆盖率”。
 
 餐饮导览助手只解释以上方法并指向 SmartBI 餐饮 AI，不替用户读取、计算或分析真实门店数据。"""
+
+_RESTAURANT_ATTRIBUTION_BASELINE_ANSWER = """\
+门店营收变化归因使用可复核的确定性恒等式，不让大模型编一个“主要原因”。
+
+1. 同一门店、同一可比窗口的营收变化拆为 `ΔR = ΔQ×P0 + Q0×ΔP + ΔQ×ΔP`：分别是订单量贡献、客单价贡献和交叉项；交叉项必须单列，不能强塞给量或价。
+2. 默认做环比而不是同比，并在答案中点名基线：单日对上周同日；不超过 7 天对紧邻的等长前窗；完整自然月对上月；月初至今对上月相同日序；完整自然季度对上季度；完整上/下半年对前一个自然半年；其它窗口对紧邻等长前窗。基线与当前窗不得重叠。
+3. 交叉项绝对贡献超过总变化绝对值的 30% 时，只说明量价联动明显，不编造单一主因；没有有效、不重叠的基线时明确“当前无法归因”，不降级为一个看似精确的结论。
+4. “上半年 / 下半年”始终按自然半年；“今天到现在”只查今天，“到今天为止”才表示从既定起点累计到今天。
+
+餐饮导览助手只解释归因公式、基线选择和提问方法；真实门店的金额与原因必须进入 SmartBI 餐饮 AI 查询。"""
+
+_RESTAURANT_FOLLOWUP_WINDOW_ANSWER = """\
+餐饮连续追问必须把用户看到的短按钮和真正发送的完整问题分开，且始终保留当前业务上下文。
+
+1. 手机端最多显示 4 个可点击追问 chip；chip 可以用短标签，但点击发送的是包含原指标、门店和时间窗的完整问题，不能只发送“本月”“这家店”等碎片，也不能误用上一主题的计划缓存。
+2. “今天到现在”只表示今天 00:00 至当前时刻；“到今天为止”保留问题已有起点并累计至今天；“上半年 / 下半年”按自然半年。无法确定的表达先澄清，不把时间词当菜名。
+3. 数据确有实质缺口时，答案同时披露用户请求窗口和实际可用窗口；仅起点被截断或覆盖不足 50% 才主动强调。正常 ETL 的尾日/尾周延迟保持安静，不制造假警报。
+4. 代码解析漏掉、但模型能明确解析的时间短语只进入待人工提升语料；运行时不会自动修改规则。只有人工审查、代码补丁、测试和发布完成后，才能成为新的确定性规则。
+
+餐饮导览助手只讲怎么问、窗口怎么解释以及去哪个板块，不替用户计算或分析经营数据。"""
+
+_RESTAURANT_DIMENSION_GAP_ANSWER = """\
+当当前 resolver 不支持用户要求的维度时，系统必须守住问题的业务粒度，不能悄悄改答另一个汇总层。
+
+1. 用店长能懂的业务词说明“目前能看哪一层、不能看哪一层”，例如能看门店汇总但不能按菜品拆分；不展示内部字段名、resolver key 或查询计划。
+2. 给出一条当前能力真实可回答的完整改问，例如“看这家店最近 7 天的总营收”；如果用户仍要原维度，说明需要补什么数据或等待哪项能力。
+3. 不能删除缺失维度后继续返回一个不同聚合的数字，也不能用 0、行业均值或模型估算冒充原问题答案。
+
+餐饮导览助手只负责说明支持层级和正确入口，不替用户执行查询或分析真实业务数据。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -789,6 +840,36 @@ def _needs_label_qc_review_guard(query: str) -> bool:
         )
     )
     return mentions_label and mentions_review
+
+
+def _needs_factory_purchase_oa_receipt_guard(query: str) -> bool:
+    """Keep purchase specs, OA-only finance review and receipt order deterministic."""
+    normalized = (query or "").lower()
+    purchase = any(term in normalized for term in ("采购", "供应商", "收货", "入库"))
+    contract = any(
+        term in normalized
+        for term in (
+            "包装规格", "采购规格", "计价单位", "待我审批", "财务待审",
+            "purchase_approval_oa_only", "410", "凭证", "照片", "draft",
+            "先上传", "先确认", "purchase_receive", "来源追溯",
+        )
+    )
+    return purchase and contract
+
+
+def _needs_factory_realtime_wip_guard(query: str) -> bool:
+    """Explain submit-time WIP posting, downstream OUT ledgers and completion gates."""
+    normalized = (query or "").lower()
+    reporting = any(term in normalized for term in ("报工", "工序", "wip", "半成品"))
+    runtime = any(
+        term in normalized
+        for term in (
+            "计划量为 0", "计划数量为 0", "planned_quantity", "提交时", "审批时",
+            "何时入账", "出库流水", "secondary_consume", "负数", "实时余额",
+            "结批", "自动完成", "半成品输出码", "semi_finished_output_code",
+        )
+    )
+    return reporting and runtime
 
 
 def _needs_workflow_actual_io_guard(query: str) -> bool:
@@ -1283,6 +1364,67 @@ def _needs_restaurant_daily_presentation_guard(query: str) -> bool:
         term in normalized for term in ("时间窗", "最近30天", "本月", "按日期")
     )
     return daily_table or output_negation or time_window or button_context
+
+
+def _needs_restaurant_attribution_baseline_guard(query: str) -> bool:
+    """Keep revenue attribution and non-overlapping baselines deterministic."""
+    normalized = (query or "").lower()
+    attribution = any(
+        term in normalized
+        for term in (
+            "营收归因", "变化归因", "订单量贡献", "客单价贡献", "交叉项",
+            "主要原因", "基线", "环比", "同比", "对比周期",
+        )
+    )
+    window = any(
+        term in normalized
+        for term in (
+            "单日", "上周同日", "等长", "月初至今", "自然月", "季度",
+            "上半年", "下半年", "今天到现在", "到今天为止", "不重叠",
+        )
+    )
+    return attribution or ("营收" in normalized and window and "为什么" in normalized)
+
+
+def _needs_restaurant_followup_window_guard(query: str) -> bool:
+    """Explain contextual chips, exact time phrases and material coverage gaps."""
+    normalized = (query or "").lower()
+    followup = any(term in normalized for term in ("chip", "短标签", "完整问题")) or (
+        "追问" in normalized
+        and any(term in normalized for term in ("手机", "最多 4", "最多4", "四个", "短", "完整发送"))
+    )
+    exact_time = any(
+        term in normalized
+        for term in (
+            "今天到现在", "到今天为止", "上半年", "下半年", "时间词",
+            "时间短语", "当成菜名", "语料", "自动修改规则",
+        )
+    )
+    coverage = any(
+        term in normalized
+        for term in (
+            "请求窗口", "实际数据窗口", "实际可用窗口", "覆盖不足", "尾日",
+            "尾周", "etl", "数据截断",
+        )
+    )
+    return followup or exact_time or coverage
+
+
+def _needs_restaurant_dimension_gap_guard(query: str) -> bool:
+    """Fail closed when the requested dimension is unsupported."""
+    normalized = (query or "").lower()
+    dimension = any(
+        term in normalized
+        for term in ("维度", "按菜品", "按门店", "菜品层", "门店层", "拆分", "粒度")
+    )
+    gap = any(
+        term in normalized
+        for term in (
+            "不支持", "缺少", "没有这个维度", "降级", "汇总层", "改问",
+            "能看哪一层", "不能看哪一层", "内部字段",
+        )
+    )
+    return dimension and gap
 
 
 def _needs_restaurant_data_availability_guard(query: str) -> bool:
@@ -2249,6 +2391,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _LABEL_QC_REVIEW_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_purchase_oa_receipt_guard(request.question)
+    ):
+        guard_answer = _FACTORY_PURCHASE_OA_RECEIPT_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_multi_output_warehouse_receipt_guard(request.question)
     ):
         guard_answer = _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
@@ -2299,6 +2446,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_realtime_wip_guard(request.question)
+    ):
+        guard_answer = _FACTORY_REALTIME_WIP_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_current_gates_guard(request.question)
     ):
         # A current-gates question can intentionally combine Workflow skuId,
@@ -2332,6 +2484,21 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_attribution_baseline_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_ATTRIBUTION_BASELINE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_followup_window_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_FOLLOWUP_WINDOW_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_dimension_gap_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DIMENSION_GAP_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_daily_presentation_guard(request.question)
