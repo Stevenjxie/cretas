@@ -223,6 +223,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     public ProcessSheetRowResult submitRow(String factoryId, String planId,
                                             ProcessSheetRowRequest req, Long userId) {
         assertAuthenticatedPlan(factoryId, planId, userId);
+        // 🔴 2026-08-18 复验发现: 这条校验原来只放在 saveRow 里, 而 submitRow 在调 saveRow **之前**
+        //    还要跑 workflow 端口校验 —— 于是拿 36 字符 processCode 探针打上去, 先撞到的是
+        //    「Workflow 端口选择组不满足 AT_LEAST_ONE」, 我的前置校验**一次都没被执行到**。
+        //    ⚠️ 这正是「变异没打到被测行为上」的同一形状: 探针没到达那行, 读数就不作数。
+        //    ⇒ 前置校验必须放在**这条路径的最前面**, 否则它只是名义上的"前置"。
+        assertColumnLimits(req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
                     .withCode("PROCESS_SHEET_PROCESS_DATE_REQUIRED")
