@@ -2541,6 +2541,49 @@ def _build_spec(
                 sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
                 list(dimensions),
             )
+    # 🔴 这次覆盖是【用户自己的话】造成的, 还是【模型的猜测】造成的?
+    #
+    # 下面那条 `_repair_backed_by_user_wording` 守的正是这件事, 但它只会问一种
+    # 证据 —— **指标**。而计划编译器还会被别的用户措辞信号驱动, 其中之一是环比
+    # (`_plan_requested_intents` 的 `elif comparison:` 分支)。闸问错了证据, 就把
+    # "用户明明说了" 判成 "模型编的", 于是修复放弃, code 与 planned_intents 就此
+    # **保持矛盾** —— 而下游 `_execution_mismatch` 正是拿这个矛盾拒答。
+    #
+    # ⇒ "放弃修复" 与 "拒答" 成了同一件事, 尽管上面那条日志写的是"保留 planner
+    #   的判断"。2026-08-17 MOCK_REST 实测(每句 2 轮, 全部稳定复现):
+    #     「这个月比上个月好还是差」 code=TREND_ANALYSIS plan=(SALES_SUMMARY,) → 拒答
+    #     「这周比上周怎么样」       同上                                      → 拒答
+    #     「最近生意好还是差」       无环比词 ⇒ code=SALES_SUMMARY 一致        → 正常答
+    #   老板问的最基础的一件事(比上个月好还是差)答不了。
+    #
+    # ⛔ 修法【不是】无条件让计划赢 —— 那会把 2026-07-30(采购) / 07-31(盘点) 两条
+    #   事故重新打开(实测这两句现在都正常答)。也【不是】再写第 4 个一次性补丁。
+    #
+    # ✅ 反事实归因: 把那个信号关掉重编译一次, 计划变了 ⇒ 这个信号是决定性的。
+    #   而 `comparison` 已证明是 `_detect_comparison(text)` 纯文本抽的(「这个月」+
+    #   「上个月」/「比上周」/「同比」/「环比」), 零 LLM 参与 ⇒ 决定性 + 用户措辞
+    #   ⇒ 这次覆盖正当。
+    #
+    #   这条对**未来任何新分支**自动生效: 新分支只要用了 comparison, 归因自然覆盖
+    #   到它, ⛔ 不需要在 20 个分支里各记一份"我是被谁驱动的"(那正是形态 D)。
+    #   对两条历史事故句天然无效: 它们句子里没有任何环比词, 关掉也不变。
+    comparison_drove_the_plan = False
+    if (
+        comparison
+        and code
+        and code not in planned_intents
+        and _detect_comparison(effective_query) is not None
+    ):
+        comparison_drove_the_plan = planned_intents != _plan_requested_intents(
+            effective_query,
+            code,
+            requested_metrics,
+            dimensions,
+            store_scope,
+            analysis_action,
+            None,           # ← 唯一的变量: 把环比拿掉
+            llm_dish or deterministic_dish,
+        )
     if (
         len(planned_intents) == 1
         and (not code or code not in planned_intents)
@@ -2580,6 +2623,8 @@ def _build_spec(
         and (
             not code
             or _repair_backed_by_user_wording(effective_query, supported_requested_metrics)
+            # 环比是用户自己说的词, 且它决定了这次编译结果 —— 与指标背书同源, 见上。
+            or comparison_drove_the_plan
         )
         and repair_target_serves_dimensions
         and all(
