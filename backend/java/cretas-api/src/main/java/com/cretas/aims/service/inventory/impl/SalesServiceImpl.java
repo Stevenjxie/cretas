@@ -51,6 +51,7 @@ import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
 import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -2591,7 +2592,8 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal remaining = ordered.subtract(arranged).max(BigDecimal.ZERO);
                 if (requestedLine.getValue().compareTo(remaining) > 0) {
                     throw new BusinessException(409,
-                            "发货数量超过订单行剩余可安排数量（剩余 " + remaining + source.getUnit() + "）")
+                            "发货数量超过订单行剩余可安排数量（剩余 " + remaining
+                                    + UnitDisplayNames.display(source.getUnit()) + "）")
                             .withCode("DELIVERY_QUANTITY_EXCEEDS_REMAINING")
                             .withHint("请刷新订单后按剩余可安排数量创建发货单")
                             .withHintTarget("deliveredQuantity");
@@ -2807,7 +2809,8 @@ public class SalesServiceImpl implements SalesService {
             BigDecimal remaining = parentQty.subtract(arranged).max(BigDecimal.ZERO);
             if (requested.getQuantity() == null || requested.getQuantity().compareTo(BigDecimal.ZERO) <= 0
                     || requested.getQuantity().compareTo(remaining) > 0) {
-                throw new BusinessException(409, "子发运数量超过母单剩余可安排数量（剩余 " + remaining + source.getUnit() + "）")
+                throw new BusinessException(409, "子发运数量超过母单剩余可安排数量（剩余 " + remaining
+                        + UnitDisplayNames.display(source.getUnit()) + "）")
                         .withCode("SHIPMENT_QUANTITY_EXCEEDS_PARENT_REMAINING")
                         .withHintTarget("quantity");
             }
@@ -3258,8 +3261,8 @@ public class SalesServiceImpl implements SalesService {
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             if (recommendedTotal.compareTo(required) != 0) {
                 throw new BusinessException(409, "产品 " + item.getProductName()
-                        + " 的客户预留库存不足：需 " + required + item.getUnit()
-                        + "，可匹配 " + recommendedTotal + item.getUnit())
+                        + " 的客户预留库存不足：需 " + required + UnitDisplayNames.display(item.getUnit())
+                        + "，可匹配 " + recommendedTotal + UnitDisplayNames.display(item.getUnit()))
                         .withCode("PRESTOCKED_RESERVATION_INSUFFICIENT")
                         .withHint("请核对销售订单预留数量，或把实发数量改为本次实际可发数量；系统未扣减任何库存")
                         .withHintTarget("仓储管理 → 出货管理");
@@ -3775,7 +3778,7 @@ public class SalesServiceImpl implements SalesService {
         }
         if (remaining.compareTo(java.math.BigDecimal.ZERO) > 0) {
             throw new BusinessException(409, "物料库存不足, 无法发货: " + item.getProductName()
-                    + " 还差 " + remaining.toPlainString() + " " + item.getUnit())
+                    + " 还差 " + remaining.toPlainString() + " " + UnitDisplayNames.display(item.getUnit()))
                     .withCode("MATERIAL_STOCK_INSUFFICIENT")
                     .withHint("请先入库或调整发货数量");
         }

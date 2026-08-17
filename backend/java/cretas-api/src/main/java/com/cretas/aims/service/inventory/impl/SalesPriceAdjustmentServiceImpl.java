@@ -93,7 +93,8 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
         if (deliveredQty.compareTo(BigDecimal.ZERO) > 0) {
             throw new BusinessException(409,
                     "行 " + lineId + " 已有发货数量 (" + deliveredQty.stripTrailingZeros().toPlainString()
-                            + " " + line.getUnit() + ")，不允许改价")
+                            + " " + com.cretas.aims.service.unit.UnitDisplayNames.display(line.getUnit())
+                            + ")，不允许改价")
                     .withHint("已发货行价格已锁定，如需修改请先撤回发货记录")
                     .withHintTarget("deliveredQuantity");
         }

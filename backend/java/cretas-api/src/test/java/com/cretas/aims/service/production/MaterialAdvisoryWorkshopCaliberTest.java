@@ -168,4 +168,49 @@ class MaterialAdvisoryWorkshopCaliberTest {
         List<ProductionPlanMaterialAdvisoryDTO.Item> items = advise("200", null);
         assertTrue(items.isEmpty(), "resolver 炸了却当成生产仓 0: " + items);
     }
+
+    // ================================================================
+    // 「没算成的那部分」—— 一条预警都没有, 不等于每一行都算过
+    // ================================================================
+
+    /** BOM 里没有标准用量的行 —— 算不出需求量, 只能跳过。 */
+    private static BomRecipeItem bomItemWithoutStandardQty(String name) {
+        BomRecipeItem it = new BomRecipeItem();
+        it.setMaterialTypeId("RMT_NO_QTY");
+        it.setMaterialName(name);
+        it.setUnit("kg");
+        return it;                                  // standardQuantity 保持 null
+    }
+
+    private String summaryWith(java.util.List<BomRecipeItem> items, String factoryStock) {
+        BomRecipeItemRepository repo = mock(BomRecipeItemRepository.class);
+        when(repo.findCurrentByProduct(eq(F), eq(PRODUCT))).thenReturn(items);
+        ReflectionTestUtils.setField(service, "bomRecipeItemRepository", repo);
+        ReflectionTestUtils.setField(service, "productionPlanRepository",
+                mock(com.cretas.aims.repository.ProductionPlanRepository.class));
+        when(batchRepo.sumAvailableRawStockQuantityByMaterialType(eq(F), anyString()))
+                .thenReturn(new BigDecimal(factoryStock));
+        when(batchRepo.sumAvailableRawStockQuantityByMaterialTypeAndWarehouse(eq(F), anyString(), eq(WORKSHOP)))
+                .thenReturn(new BigDecimal(factoryStock));
+        Object scan = ReflectionTestUtils.invokeMethod(service, "scanMaterialAdvisory", F, plan());
+        @SuppressWarnings("unchecked")
+        List<String> unc = (List<String>) ReflectionTestUtils.invokeMethod(scan, "uncomputable");
+        return String.join("、", unc);
+    }
+
+    @Test
+    @DisplayName("阳性对照: 有标准用量的行不算进「没算成」")
+    void computableLinesAreNotCountedAsSkipped() {
+        assertEquals("", summaryWith(List.of(bomItem()), "500"),
+                "有标准用量的行被误算成「未参与核算」");
+    }
+
+    @Test
+    @DisplayName("🔴 没有标准用量的行必须被记下来 —— 否则「无预警」会盖住「一行都没算」")
+    void linesWithoutStandardQuantityAreRecorded() {
+        String unc = summaryWith(
+                List.of(bomItem(), bomItemWithoutStandardQty("黄油鸡-原料B")), "500");
+        assertTrue(unc.contains("黄油鸡-原料B"),
+                "跳过的行没有留痕, 界面会说「暂无缺料预警」而其实那一行从来没算过: [" + unc + "]");
+    }
 }

@@ -1016,12 +1016,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 plan.getId(), plan.getProductTypeId(), plannedQty, bomItems.size());
     }
 
+    /**
+     * 缺料核算的结果 + <b>没算成的那部分</b>。
+     *
+     * <p>⚠️ {@code uncomputable} 只进汇总语的<b>口径说明</b>, <b>不</b>做成预警项 ——
+     * 实测全库 ACTIVE BOM 里 F006 有 69.2% 的行没有标准用量(7 个配方中 6 个受影响),
+     * 做成预警就是天天误报, 而天天误报的提示最终会被人忽略掉(形态 E)。
+     * 它要解决的是「一条预警都没有」同时表示「都够」和「一行都没算」这个歧义, 不是催人去配数据。
+     */
+    private record AdvisoryScan(List<ProductionPlanMaterialAdvisoryDTO.Item> items,
+                                List<String> uncomputable) { }
+
     private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
+        return scanMaterialAdvisory(factoryId, plan).items();
+    }
+
+    private AdvisoryScan scanMaterialAdvisory(String factoryId, ProductionPlan plan) {
         if (bomRecipeItemRepository == null
                 || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
                 || plan.getPlannedQuantity() == null
                 || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList());
         }
 
         List<BomRecipeItem> bomItems;
@@ -1029,17 +1044,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, plan.getProductTypeId());
         } catch (Exception e) {
             log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList());
         }
         if (bomItems == null || bomItems.isEmpty()) {
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList());
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity();
         BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId(), bomItems);
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
+        // 🔴 2026-08-18: 没有标准用量的行**算不出需求量**, 只能跳过 —— 但跳过的条数必须留痕,
+        //    否则「一条预警都没有」会同时表示「都够」和「一行都没算」(硬约束 4 的同一个坑)。
+        //    实测 F006 黄油鸡 BOM 7 行里, 4 个原料的 standardQuantity 全是 null,
+        //    于是缺料预警对这个计划的原料**从来没生效过**, 而界面说「暂无缺料预警」。
+        List<String> uncomputable = new ArrayList<>();
         for (BomRecipeItem item : bomItems) {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
+                uncomputable.add(resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName()));
                 continue;
             }
             String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
@@ -1120,7 +1141,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .build());
             }
         }
-        return warnings;
+        return new AdvisoryScan(warnings, uncomputable);
     }
 
     /**
@@ -2423,7 +2444,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("当前生产计划不属于该工厂, 无法查看");
         }
 
-        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = buildMaterialAdvisoryItems(factoryId, plan);
+        AdvisoryScan scan = scanMaterialAdvisory(factoryId, plan);
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = scan.items();
+        // 🔴 没算成的那部分要说出来 —— 否则「一条预警都没有」同时表示「都够」和「一行都没算」。
+        //    实测 F006 黄油鸡 BOM 7 行里 4 个原料没有标准用量, 缺料核算对它们从未生效。
+        //    ⚠️ 只做口径说明, 不做告警(全库 69.2% 的 ACTIVE BOM 行都缺这个数, 告警会天天响)。
+        String uncomputableNote = scan.uncomputable().isEmpty() ? ""
+                : "（其中 " + scan.uncomputable().size() + " 项未配标准用量，未参与核算："
+                        + String.join("、", scan.uncomputable()) + "）";
         // 🔴 2026-08-18: 原来这句只说「暂无缺料预警」, 不说自己量的是哪一层库存。
         //    实测 F006 黄油鸡计划 4 个原料各 200kg 全在原料仓、生产仓 0 —— 这句话说「不缺料」,
         //    点进逐道录入四行全是「0kg / 原料仓另有 200kg，待调拨入生产仓」。数没算错, 是没报口径。
@@ -2441,6 +2469,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         } else {
             message = "原料库存参考: 全厂库存足够（未核对生产仓 —— 本厂未配置生产仓）";
         }
+        message = message + uncomputableNote;
         return ProductionPlanMaterialAdvisoryDTO.builder()
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())
@@ -3414,7 +3443,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (requestedUnit != null && terminalUnit != null && !requestedUnit.equals(terminalUnit)) {
             throw new BusinessException(409, "结单单位与末道产出单位不一致")
                     .withCode("PRODUCTION_SETTLEMENT_OUTPUT_UNIT_MISMATCH")
-                    .withHint("结单单位: " + requestedUnit + ", 末道产出单位: " + terminalUnit)
+                    .withHint("结单单位: " + com.cretas.aims.service.unit.UnitDisplayNames.display(requestedUnit)
+                            + ", 末道产出单位: " + com.cretas.aims.service.unit.UnitDisplayNames.display(terminalUnit))
                     .withHintTarget("成品产出");
         }
         return firstNonBlank(terminalUnit, requestedUnit);
