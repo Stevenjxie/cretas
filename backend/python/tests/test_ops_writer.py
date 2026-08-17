@@ -51,11 +51,25 @@ class _FakeConn:
         self.in_transaction = False
         self.executed = []          # [(sql, args, in_transaction)]
         self.ingredient_upserts = []
+        self.store_lookups = []
         self._next_id = 500
 
     async def execute(self, sql, *args):
         self.executed.append((sql, args, self.in_transaction))
         return "INSERT 0 1"
+
+    async def fetchrow(self, sql, *args):
+        """门店映射查询(2026-08-17 新增)。
+
+        ⚠️ 形状取自真实上游: `SELECT store_id FROM platform_store_map ...`
+           查得到就是**一行带 store_id**, 查不到是 None(那时 `_resolve_store`
+           抛错 —— 那是对的, ⛔ 不建"未知门店"也不静默丢弃)。
+        """
+        self.executed.append((sql, args, self.in_transaction))
+        assert "platform_store_map" in sql, (
+            f"fetchrow 只该用于门店映射: {sql[:60]}")
+        self.store_lookups.append(args)
+        return {"store_id": 77}
 
     async def fetchval(self, sql, *args):
         self.executed.append((sql, args, self.in_transaction))
