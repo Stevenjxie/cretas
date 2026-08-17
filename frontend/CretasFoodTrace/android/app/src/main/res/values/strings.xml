@@ -2,5 +2,10 @@
   <string name="app_name">白垩纪AI Agent</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
-  <string name="expo_runtime_version" translatable="false">1.0.3</string>
+  <!-- ⚠️ 必须与 app.json 的 expo.runtimeVersion 一致 —— 由 nativeVersionConsistencyContract 闸钉住。
+       android/ 是提交在 git 里的, `expo prebuild` 看到目录已存在就不会覆盖这个值,
+       所以升版本时它**不会**自动跟着改。2026-08-09 那次 bump 就漏了这里(停在 1.0.3),
+       导致装着 1.0.4 二进制的机器向 OTA 服务器要 1.0.3 的 bundle, 而推送都进 1.0.4 树 ——
+       零交集, 自那以后 OTA 一次都没送达过任何设备, 而每次推送都报"成功"。 -->
+  <string name="expo_runtime_version" translatable="false">1.0.4</string>
 </resources>

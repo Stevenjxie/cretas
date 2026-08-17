@@ -112,10 +112,25 @@ if [[ ! -f "$APP_DIR/app.json" ]]; then
     exit 2
 fi
 
+# 🔴 2026-08-17: 加这个 override 的理由 —— **原生工程里的 runtimeVersion 会和 app.json 漂**。
+# 实测: app.json 写 "1.0.4", 而 android/app/src/main/res/values/strings.xml 里的
+# expo_runtime_version 还停在 "1.0.3"(android/ 是跟踪在 git 里的, prebuild 不会重生成它)。
+# 于是**装着 1.0.4 二进制的机器向服务器要 1.0.3 的 bundle**, 而我们每次都推进 1.0.4 树 ——
+# 零交集, 自 1.0.4 发布(8-09)以来 OTA 一次都没送达过。
+# ⇒ 迁移期需要能显式推到「设备实际在要的那棵树」。
+# ⚠️ 用之前必须确认原生依赖没漂(package.json 的 dependencies 一个字没动),
+#    否则就是把不兼容的 JS bundle 推给旧二进制 —— 那正是 v1.0.4 崩溃的同一种病。
+# 判据: 服务器日志 `grep OTA_PULL ... | grep runtime=` 看设备**实际报的**是哪个版本。
+if [[ -n "${OTA_RUNTIME_VERSION_OVERRIDE:-}" ]]; then
+    RUNTIME_VERSION="$OTA_RUNTIME_VERSION_OVERRIDE"
+    echo "[push-bundle] ⚠️ runtimeVersion 被 OTA_RUNTIME_VERSION_OVERRIDE 覆盖为 '$RUNTIME_VERSION'" >&2
+    echo "[push-bundle] ⚠️ (app.json 声明的是 $(cd "$APP_DIR" && npx expo config --json | jq -r '.runtimeVersion // .version'))" >&2
+else
 RUNTIME_VERSION="$(
     cd "$APP_DIR"
     npx expo config --json | jq -r '.runtimeVersion // .version'
 )"
+fi
 if [[ -z "$RUNTIME_VERSION" || "$RUNTIME_VERSION" == "null" ]]; then
     echo "ERROR: cannot resolve runtimeVersion from Expo config" >&2
     exit 2
