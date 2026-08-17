@@ -28,6 +28,22 @@
 |---|---|
 | `ENTITY`   判用户说的是哪个实体/范围 | 换成**对租户目录校验**(查得到/查不到), ⛔ 不是补词表 |
 | `INTENT`   判用户的意图/动作 | 本来是 planner 的活; 要动得先量出 planner 在同样输入上更准 |
+
+⚠️ **`INTENT` 这批词表【不是】抢在 LLM 前面短路的** —— 这一点实测核过, ⛔ 别照
+「关键词命中就 return 一个 intent」那种直觉去改::
+
+    门店成本怎么提高毛利   LLM 规划器被调用 1 次  authority='llm'  intent=BUSINESS_OPTIMIZATION
+    这周营收怎么提升       LLM 规划器被调用 1 次  authority='llm'
+    哪家店卖得最好(对照)   LLM 规划器被调用 1 次
+
+若真有短路, 计数应为 0。而且 `BUSINESS_OPTIMIZATION` 这个判断**是 LLM 自己做的**。
+最大的那张 `_OPTIMIZATION_OBJECTIVE_TOKENS`(33 条)在 `parse_restaurant_query`
+的第 7011 行被消费, 而 LLM 规划器在 6885 行 —— 它在**后面**, 且作用是**反过来的**:
+命中就 `return None`(= 不要反问)。
+
+⇒ 这批词表的真实岗位是「LLM 之后追加/抑制反问、补 LLM 没给的槽」。
+  退役它们要回答的问题不是「该不该让 LLM 判」(已经是 LLM 在判了), 而是
+  **「LLM 判完之后, 拿什么来验」** —— 与 `ENTITY` 那批是同一个问题的两半。
 | `SAFETY`   写操作/变更意图的 fail-closed 闸 | ⛔ **不许退役** —— 漏判的代价是执行写操作 |
 | `LEXICAL`  天然就是词法的(时间词、餐段词) | 「本月」就是「本月」, 退役没意义 |
 
