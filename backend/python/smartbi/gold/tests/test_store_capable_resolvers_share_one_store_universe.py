@@ -59,7 +59,10 @@ class TestEveryStoreCapableResolverIsAccountedFor:
 
     def test_the_exception_list_is_a_ratchet(self):
         """存量豁免只许变短。⚠️ 这条钉的是**方向**，不是数量本身。"""
-        assert len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED) <= 2, (
+        # 2026-08-17: 2 -> 3。WASTAGE_TOP 当天变成 store-capable, 走了闸给的
+        # 「显式登记并写理由」那一支(理由见常量注释)。⚠️ 每次上调都必须像这样
+        # 带一条**具名理由**, 否则这个上限就成了橡皮筋。
+        assert len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED) <= 3, (
             f"存量豁免涨到 {len(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED)} 个: "
             f"{sorted(_STORE_CAPABLE_BUT_NOT_DEMO_MAPPED)} —— "
             f"它在变成一张「反正也没人看」的名单"

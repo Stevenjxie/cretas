@@ -42,7 +42,6 @@ def _spec(dimensions):
 
 # (计划, 老板问的维度) —— 都是 prod 上真撞到过的组合
 CASES = [
-    pytest.param(("RESTAURANT_OPS_WASTAGE_TOP",), ("store",), id="损耗按门店"),
     pytest.param(("RESTAURANT_OPS_RECIPE_COST",), ("store",), id="成本按门店"),
     pytest.param(("RESTAURANT_OPS_TREND_ANALYSIS",), ("dish",), id="趋势按菜"),
 ]
@@ -104,6 +103,12 @@ class TestItStillSaysSomethingWhenThereIsAGap:
         )
         assert _dimension_gap_advice(
             _spec(("channel", "store")), ("RESTAURANT_OPS_CHANNEL_MIX",)) == ""
+        # 2026-08-17: 「损耗按门店」同样从 CASES 毕业 —— 当天补上了门店维度。
+        # ⛔ 同样不是删掉, 挪来当回归守卫。
+        assert _dimension_gap_advice(
+            _spec(("store",)), ("RESTAURANT_OPS_WASTAGE_TOP",)) == "", (
+            "损耗按门店又变成缺口了 —— store_id 接线或能力表声明被改没了"
+        )
 
     def test_partial_overlap_keeps_the_split_advice(self):
         """asked ∩ supported 非空时走另一支(先问能算的那层), 不受本次改动影响。"""
