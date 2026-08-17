@@ -395,7 +395,10 @@ describe('YieldStepReportScreen 完工出成 — 损耗自动计算展示 (缺�
     ).toBeTruthy();
     // 阴性对照: 不许再出现旧版的跨单位假等式.
     expect(screen.queryByText(/= 19盒/)).toBeNull();
-    expect(screen.queryByText(/损耗 \(自动\)/)).toBeNull();
+    // ⚠️ 2026-08-18: 原来这里断言的是「不出现 `损耗 (自动)`」, 而那句措辞现在**整个界面都没有了**
+    //    ⇒ 这条阴性断言变成了恒真式(本仓形态 B′)。换成断言"差额那句话在这一支不出现" ——
+    //    它在同单位分支才该出现, 跨单位分支必须走换算提示。
+    expect(screen.queryByText(/未说明去向/)).toBeNull();
   });
 
   it('同单位但产出大于投入时不印假的 "=0", 改为核对提示', async () => {
@@ -418,8 +421,17 @@ describe('YieldStepReportScreen 完工出成 — 损耗自动计算展示 (缺�
     await waitFor(() => {
       expect(screen.getByTestId('output-auto-waste')).toBeTruthy();
     });
-    expect(
-      screen.getByText('损耗 (自动) = 投入 99kg − 产出 64kg = 35kg'),
-    ).toBeTruthy();
+    // 🔴 2026-08-18 改口径, 不是改断言取巧 —— 原断言钉的是字面 `损耗 (自动) = ... = 35kg`,
+    //    而真机走查 + 查库确证: 后端**没有**把这个差额记成损耗
+    //    (INPUT/OUTPUT 两条报工的 waste_quantity 都是 NULL), 它把缺口当成
+    //    "未说明的物料平衡偏差" 并要求核对。界面叫它「损耗」= 界面在说后端没在记的事。
+    //    ⇒ 断言从「字面」抬到「性质」: 三个数和单位都对, 且差额单位与相减两侧一致。
+    // ⚠️ 不要 JSON.stringify(banner.props.children) —— React fiber 有循环引用, 直接 TypeError。
+    //    用 RNTL 的文本匹配, 它会把子节点拍平成一个字符串再比。
+    expect(screen.getByText(/投入 99kg − 产出 64kg = 35kg/)).toBeTruthy();
+    // 阳性: 必须如实说明这笔差额还没被解释
+    expect(screen.getByText(/未说明去向/)).toBeTruthy();
+    // 阴性对照: 那个已被判定为误导的措辞不许回来
+    expect(screen.queryByText(/损耗 \(自动\)/)).toBeNull();
   });
 });

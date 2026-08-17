@@ -1323,7 +1323,10 @@ const YieldStepReportScreen: React.FC = () => {
       buildPhotoAnnotations]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
-  const handleSubmitSegment = useCallback(async () => {
+  const handleSubmitSegment = useCallback(async (forceDuplicate?: unknown) => {
+    // ⚠️ 这个函数直接挂在 onPress 上, RN 会把 GestureResponderEvent 当第一个参数传进来 ——
+    //    所以**必须**严格比 true, 不能写 `if (forceDuplicate)`(那样每次点按钮都会被当成"确认重复")。
+    const force = forceDuplicate === true;
     if (!currentTask) return;
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
@@ -1354,6 +1357,30 @@ const YieldStepReportScreen: React.FC = () => {
       // 损耗由后端从 投入−产出 自动计算 (前端 auto-display, 无需操作工手填)
       ...(validSegByproducts.length > 0 ? { byproducts: validSegByproducts } : {}),
     };
+    // 🔴 2026-08-18 真机走查实测: 同一时段可以无限次提交, 后端照单全收 ——
+    //    库里出现两条一模一样的 SEGMENT (07:00~15:00 / 1人), 工时和人工成本直接翻倍。
+    //    submitWithIdem 的幂等键**每次成功后就轮换**, 它防的是"网络重试"不是"内容重复"。
+    //    ⇒ 这里按 (起, 止, 人数) 比已报时段, 命中就先问一句, 不静默接受。
+    const alreadyReported = (currentStepYield?.laborSegments ?? []).some(
+      (s) =>
+        String(s.startTime ?? '') === seg.startTime &&
+        String(s.endTime ?? '') === seg.endTime &&
+        Number(s.headcount ?? -1) === seg.headcount,
+    );
+    if (alreadyReported && !force) {
+      appAlert(
+        '这一段好像已经记过了',
+        `已报时段里已经有 ${seg.startTime}~${seg.endTime} · ${seg.headcount}人。\n` +
+          '如果这是同一段, 不用再记 (再记一次工时会算两遍);\n' +
+          '如果确实又干了一段同样时间的活, 才选「仍要再记一段」。',
+        [
+          { text: '不记了', style: 'cancel' },
+          { text: '仍要再记一段', onPress: () => { void handleSubmitSegment(true); } },
+        ],
+      );
+      return;
+    }
+
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       reportKind: 'SEGMENT',
@@ -1379,6 +1406,16 @@ const YieldStepReportScreen: React.FC = () => {
       setSegNote('');
       setSegByproducts([]);
       setEvidencePhotos([]);
+      // 🔴 2026-08-18 真机走查实测: 成功是**唯一没有反馈的分支** ——
+      //    失败/校验不过每条路径都 appAlert, 唯独成功只是静默清空表单。
+      //    已报时段列表虽然会多一行, 但那行在屏幕外, 操作工看不到 ⇒
+      //    我当时以为没提交, 又点了一次, 同一时段被记了两遍 (库里两条 SEGMENT)。
+      //    工人手一抖, 这一段的工时和人工成本就翻倍。⛔ 不要把这句去掉。
+      appAlert(
+        '本段已记录',
+        `${seg.startTime}~${seg.endTime} · ${seg.headcount}人 已提交。\n` +
+          '可继续加下一段, 或点「本工序已做完, 去填完工出成」。',
+      );
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const { title, msg } = friendlySubmitError(error);
@@ -1395,7 +1432,8 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, evidenceUploading, segStart, segEnd, segHeadcount, segNote,
-      segByproducts, unit, uploadedEvidenceUrls, batchId, refetchYield, buildPhotoAnnotations]);
+      segByproducts, unit, uploadedEvidenceUrls, batchId, refetchYield, buildPhotoAnnotations,
+      currentStepYield]);  // currentStepYield: 重复时段守卫要读已报时段
 
   // ========================= 阶段 2b: 完工出成 (reportKind=OUTPUT) =========================
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
@@ -2620,11 +2658,19 @@ const YieldStepReportScreen: React.FC = () => {
                 disabled={submitting}
               />
 
-              {/* 损耗自动计算提示 (read-only; 投入−产出 由后端算, 操作工无需填) */}
+              {/* 投入−产出 差额提示 (read-only)。
+                  🔴 2026-08-18 实测订正: 这里原文案是「损耗 = 已投入 X − 完工产出 (自动计算)」,
+                  而旁边的注释写着「损耗由后端从 投入−产出 自动计算」—— **那句是假的**。
+                  真机走查后查库: OUTPUT/INPUT 两条报工的 waste_quantity 都是 NULL,
+                  后端把这个差额当成**未说明的物料平衡偏差**并提示核对
+                  (「物料平衡偏差 50% (投入 2, 产出 1, 副产物 0, 损耗 0, 留样 0) — 请核对」)。
+                  ⇒ 界面说「损耗」而后端记 0, 同一个 1kg 两套说法。
+                  后端不自动归类是**对的**(50% 的缺口自动判成损耗更糟), 所以改的是文案。 */}
               {reportedInput != null ? (
                 <View style={styles.autoWasteBanner} testID="auto-waste-banner">
                   <Text style={styles.autoWasteText}>
-                    损耗 = 已投入 {reportedInput}{reportedInputUnit} − 完工产出 (完工时填入后自动计算)
+                    完工时会算出差额: 已投入 {reportedInput}{reportedInputUnit} − 完工产出。
+                    差额要说明去向 (副产物 / 留样), 否则完工时会提示物料平衡偏差。
                   </Text>
                 </View>
               ) : null}
@@ -2788,7 +2834,8 @@ const YieldStepReportScreen: React.FC = () => {
                 return (
                   <View style={styles.autoWasteBanner} testID="output-auto-waste">
                     <Text style={styles.autoWasteText}>
-                      损耗 (自动) = 投入 {inp}{reportedInputUnit} − 产出 {out}{outUnit} = {computed}{reportedInputUnit}
+                      投入 {inp}{reportedInputUnit} − 产出 {out}{outUnit} = {computed}{reportedInputUnit} 未说明去向
+                    {'\n'}可在下方「副产物」「留样」登记; 不登记不影响提交, 但完工时会提示物料平衡偏差。
                     </Text>
                   </View>
                 );
