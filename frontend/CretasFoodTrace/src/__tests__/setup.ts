@@ -146,37 +146,16 @@ jest.mock('@react-navigation/native', () => ({
     selector({ index: 0, routes: [{ key: 'test-0', name: 'Test' }] }),
 }));
 
-// Mock React Native Paper
-jest.mock('react-native-paper', () => {
-  const RealModule = jest.requireActual('react-native-paper');
-  const React = require('react');
-  const { View } = require('react-native');
-  // 2026-08-16: 补 Appbar。整个 integration/screens 目录解禁后, ProcessTaskListScreen:225
-  // 的 <Appbar.Header> 抛 "Cannot read properties of undefined (reading 'Header')"
-  // —— RealModule 在本 jest 环境下拿不到 Appbar。⚠️ 这是 mock 缺口(测试过期),
-  // 不是屏幕回归; 判错方向就会去改屏幕。
-  const passthrough = (name: string) => {
-    const C = ({ children }: any) => React.createElement(View, null, children);
-    C.displayName = name;
-    return C;
-  };
-  // ⚠️ 必须【构造新对象】, 不能往 RealModule.Appbar 上赋值:
-  //    jest.requireActual 返回的是冻结的命名空间对象, `Appbar.Header = x` 会
-  //    【静默失败】(非严格模式下不抛错), 于是 mock 看起来写了却没生效 —— 实测踩过一次。
-  const real: any = RealModule.Appbar ?? {};
-  const Appbar: any = Object.assign(passthrough('Appbar'), {
-    Header: real.Header ?? passthrough('Appbar.Header'),
-    Content: real.Content ?? passthrough('Appbar.Content'),
-    Action: real.Action ?? passthrough('Appbar.Action'),
-    BackAction: real.BackAction ?? passthrough('Appbar.BackAction'),
-  });
-  return {
-    ...RealModule,
-    Appbar,
-    // Portal需要特殊处理
-    Portal: ({ children }: any) => children,
-  };
-});
+// react-native-paper 的替身已经挪到 jest.config.js 的 moduleNameMapper:
+//   '^react-native-paper$' -> src/__tests__/mocks/reactNativePaper.tsx
+//
+// ⛔ 不要在这里再写一条 `jest.mock('react-native-paper', ...)`。
+// 原因(2026-08-17 探针实测): 宽泛正则 'react-native' 把所有 react-native-* 映射到
+// 【同一个解析结果】, 本文件里每多一条 `jest.mock('react-native-xxx', ...)` 就多一个
+// 抢同一个槽的人, 【最后注册的赢】。paper 之前就是这么被 safe-area-context 顶掉的
+// (paperIsSafeArea=true), 症状是 <Appbar.Header> 报 undefined。
+// 上一轮把它误判成「setup.ts 的 paper mock 没写对」, 于是在 mock 上改了两轮都无效 ——
+// 真正要改的是【解析身份】, 不是 mock 内容。
 
 // Mock AsyncStorage - must provide both default and named exports
 // Zustand's persist middleware uses: import AsyncStorage from '...' (default import)
@@ -257,6 +236,23 @@ jest.mock('react-native-safe-area-context', () => {
 
 // Mock expo-av —— DynamicReportScreen 依赖的语音识别 import { Audio } from 'expo-av',
 // 同样走 expo-modules-core 的 native 运行时, 在 jest 里加载期就崩。
+// expo-file-system 必须桩掉: 它的真实入口 `expo-modules-core` 在 node 环境下
+// 拿不到原生桥, 加载时就抛 "Cannot read properties of undefined (reading 'NativeModule')"。
+// 这会让【整个 suite 在加载期死】(DynamicReportScreen 一条断言都跑不到),
+// 而失败长相是 "Test suite failed to run" —— 与断言红完全不同的一类。
+// 链路: DynamicReportScreen -> useReportVoiceInput -> SpeechRecognitionService -> expo-file-system
+jest.mock('expo-file-system', () => ({
+  __esModule: true,
+  readAsStringAsync: jest.fn(async () => ''),
+  writeAsStringAsync: jest.fn(async () => undefined),
+  deleteAsync: jest.fn(async () => undefined),
+  getInfoAsync: jest.fn(async () => ({ exists: false })),
+  makeDirectoryAsync: jest.fn(async () => undefined),
+  EncodingType: { Base64: 'base64', UTF8: 'utf8' },
+  documentDirectory: 'file:///mock-documents/',
+  cacheDirectory: 'file:///mock-cache/',
+}));
+
 jest.mock('expo-av', () => ({
   __esModule: true,
   Audio: {
@@ -270,6 +266,12 @@ jest.mock('expo-av', () => ({
     requestPermissionsAsync: jest.fn(async () => ({ status: 'granted', granted: true })),
     setAudioModeAsync: jest.fn(),
     RecordingOptionsPresets: { HIGH_QUALITY: {} },
+    // 这几个枚举被 SpeechRecognitionService 在【模块顶层】读(构造录音参数常量),
+    // 缺了就是加载期 TypeError, 整个 suite 一条断言都跑不到。
+    AndroidOutputFormat: { DEFAULT: 0, MPEG_4: 2 },
+    AndroidAudioEncoder: { DEFAULT: 0, AAC: 3 },
+    IOSOutputFormat: { LINEARPCM: 'lpcm', MPEG4AAC: 'aac ' },
+    IOSAudioQuality: { MIN: 0, LOW: 32, MEDIUM: 64, HIGH: 96, MAX: 127 },
   },
   InterruptionModeAndroid: { DoNotMix: 1 },
   InterruptionModeIOS: { DoNotMix: 1 },

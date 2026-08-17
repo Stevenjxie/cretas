@@ -78,25 +78,25 @@ module.exports = {
     // 下面两行让这些包跳过宽泛匹配、正常解析到 jest.mock 工厂
     '@react-native-async-storage/async-storage': '@react-native-async-storage/async-storage',
     '@testing-library/react-native': '@testing-library/react-native',
-    // 🔴 已知缺口, 2026-08-16 未解决 —— 留给下一轮, ⛔ 不要照下面的思路直接重试。
+    // ✅ 2026-08-17 已解决(上一轮登记为「已知缺口」的那条)。
     //
-    // 症状: integration/screens 解禁后, ProcessTaskListScreen:225 的
-    //   `import { Appbar } from 'react-native-paper'` 拿到 undefined
-    //   → TypeError: Cannot read properties of undefined (reading 'Header') ×12。
+    // 上一轮的【怀疑】是「宽泛正则把 paper 映射到 react-native 的 mock 上」。
+    // 探针实测证明那个怀疑【方向对、结论错】, 而错的那一半正是修不好的原因:
     //
-    // 诊断: 症状长得像「setup.ts 的 paper mock 没写对」, 但在 mock 上改了两轮都无效
-    //   (含一次真实的坑: jest.requireActual 返回冻结命名空间, `Appbar.Header = x`
-    //    静默失败)。真因怀疑是下面那条【宽泛正则】—— 'react-native' 会子串匹配
-    //   `react-native-paper`, 把整个包映射到 react-native 的 mock 上。
+    //     paperKeys      = SafeAreaProvider|SafeAreaView|useSafeAreaInsets|...
+    //     paperAppbar    = undefined
+    //     paperIsSafeArea= true    <-- paper 和 safe-area-context 是【同一个对象】
+    //     paperIsRN      = false   <-- 而且【不是】react-native 的 mock
     //
-    // ⚠️ 我试过在这里加豁免, 三次都更糟, 每次坏法不同:
-    //   ① 裸串 'react-native-vector-icons' → 吃掉子路径导入, 整套 0 tests
-    //   ② 锚定 '^react-native-paper$' 等 → 3 个 suite 加载期死, 63 → 16 tests
-    //   ⇒ 说明这条宽泛正则和 __mocks__/react-native.js 的耦合比看上去深,
-    //     改它要连着 __mocks__ 一起想, 不是加一行豁免能解决的。
+    // 真因: 宽泛正则把所有 `react-native-*` 映射到【同一个解析结果】, 而 setup.ts
+    // 对其中好几个包各写了一条 `jest.mock(...)` —— 它们注册到同一个 key 上,
+    // 【最后注册的那条赢】。setup.ts 里 safe-area-context(243 行) 排在
+    // paper(150 行) 后面, 所以 paper 拿到的是 safe-area-context 的替身。
     //
-    // 现状: 保持原样(63 tests 收集到, 28 通过), ⛔ 不为了「看起来在推进」而留一个
-    //   把套件搞崩的改动。
+    // ⇒ 修法不是「让 paper 别走宽泛正则」, 而是【给它一个自己的解析身份】。
+    //   上一轮尝试 ② 之所以更糟, 是因为它锚定到【真的】react-native-paper;
+    //   真身在这套 RN mock 下加载不起来。锚定到【手写替身】就不会。
+    '^react-native-paper$': '<rootDir>/src/__tests__/mocks/reactNativePaper.tsx',
     // 宽泛匹配：react-native 本体 + 子路径 + react-native-xxx 三方包 → __mocks__/react-native.js
     'react-native': 'react-native'
   },
