@@ -554,6 +554,21 @@ public class YieldReportServiceImpl implements YieldReportService {
      *
      * <p>只在「后面还有未完成的工序」时出声 —— <b>末道产出的是成品，本来就不该进半成品库</b>，
      * 对它报警是误报，而一道天天误报的提示最终会被无视，那时它的覆盖率归零。
+     *
+     * <h3>🔴 2026-08-17 当晚订正：第一版判据量错了东西</h3>
+     *
+     * <p>第一版问的是「工序上配没配 {@code semiFinishedOutputCode}」，而它想说的是
+     * 「产出进没进半成品库」。两者不等价：{@code outputKind} 为 null 的 legacy/FINISHED 路径
+     * （{@code WipInventoryServiceImpl} 的注释里明写 <b>F006 实际数据全走此路径</b>）
+     * 在没配编号时会自己派生一个编号照样入库。
+     *
+     * <p>生产实测（同一次报工，同一时刻）：界面弹「产出没有进入半成品库，下一道领不到料」，
+     * 而 {@code /wip} 有那一行、第③道 {@code wipAvailable = 2.5 kg} —— <b>下一道领得到</b>。
+     * 对这些租户是 100% 误报，而它的行动指引是「重新报工」，照做就是把同一批产出报两遍。
+     *
+     * <p>⇒ 改成直接问库存：这一道的产出有没有变成下一道领得到的东西。
+     * 判据与它宣称的那句话变成同一件事，「配了没有」不再参与判断（配置与现实会漂，
+     * 而漂的时候用户看到的是一句假话）。
      */
     private String semiOutputNotConfiguredWarning(String factoryId, WorkProcessTask task,
                                                   ProductionReport saved) {
@@ -566,12 +581,16 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (produced == null || produced.compareTo(BigDecimal.ZERO) <= 0) {
             return null;
         }
-        // 已经配了 → 安静
-        String code = Optional.ofNullable(task.getWorkProcessId())
-                .flatMap(processRepo::findById)
-                .map(WorkProcess::getSemiFinishedOutputCode)
-                .orElse(null);
-        if (code != null && !code.isBlank()) {
+        // ⛔ 判据是「产出到底进没进半成品库」, 不是「工序上配没配编号」—— 见方法注释里的订正。
+        //    这一句必须排在 postApprovedOutput 之后 (调用点在本方法之前), 否则读到的是过账前的状态。
+        boolean landedInWip = Optional.ofNullable(task.getProductionBatchId())
+                .map(batchId -> wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId))
+                .orElse(List.of())
+                .stream()
+                .anyMatch(w -> Objects.equals(w.getSourceWorkProcessTaskId(), task.getId())
+                        && w.getProducedQuantity() != null
+                        && w.getProducedQuantity().compareTo(BigDecimal.ZERO) > 0);
+        if (landedInWip) {
             return null;
         }
         // 后面没有未完成的工序(末道) → 安静
@@ -587,8 +606,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (!hasDownstreamPending) {
             return null;
         }
-        return "本道未配「半成品产出编号」，产出没有进入半成品库，下一道领不到料。"
-                + "请在工序管理里配置后重新报工。";
+        // ⛔ 不要写「请重新报工」—— 产出已经记在本次报工里了, 再报一次就是把同一批产出报两遍。
+        return "本道产出没有进入半成品库，下一道领不到料。"
+                + "本次报工已记下，⛔ 不要重复报工；请联系管理员补配本工序的半成品产出配置。";
     }
 
     private String yieldAlert(String workProcessId, BigDecimal yieldRate) {

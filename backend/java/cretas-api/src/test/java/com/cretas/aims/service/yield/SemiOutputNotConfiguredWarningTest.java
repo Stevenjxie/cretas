@@ -49,6 +49,19 @@ import static org.mockito.Mockito.when;
  *
  * <p>⚠️ 判据必须<b>窄</b>：末道产出的是成品，本来就不该进半成品库，对它报警是误报；
  * 一道天天误报的提示会被无视，那时它的覆盖率归零。
+ *
+ * <h2>🔴 2026-08-17 当晚订正：这些断言曾经全绿，而线上是 100% 误报</h2>
+ *
+ * <p>第一版判据问的是「工序配没配 {@code semiFinishedOutputCode}」，
+ * 而它宣称的是「产出进没进半成品库」。{@code outputKind} 为 null 的 legacy 路径
+ * （F006 的全部数据）在没配编号时会自己派生一个编号照样入库 ——
+ * 于是界面弹「下一道领不到料」的同一时刻，下一道 {@code wipAvailable = 2.5 kg}。
+ *
+ * <p><b>这些测试当时为什么没红</b>：夹具把
+ * {@code wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull} 桩成空表，
+ * 且 {@code WipInventoryService} 是 mock（{@code postApprovedOutput} 什么都不做）——
+ * 也就是<b>喂了一个真实上游永远不会给出的形状</b>：产出永不入库。
+ * ⇒ 下面新增 {@code silentWhenLegacyPathAlreadyPostedWip} 复现线上那个形状。
  */
 class SemiOutputNotConfiguredWarningTest {
 
@@ -58,6 +71,7 @@ class SemiOutputNotConfiguredWarningTest {
     private ProductionReportRepository reportRepo;
     private WorkProcessTaskRepository taskRepo;
     private WorkProcessRepository processRepo;
+    private SemiFinishedInventoryRepository wipRepo;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -65,7 +79,7 @@ class SemiOutputNotConfiguredWarningTest {
         reportRepo = mock(ProductionReportRepository.class);
         taskRepo = mock(WorkProcessTaskRepository.class);
         processRepo = mock(WorkProcessRepository.class);
-        SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
+        wipRepo = mock(SemiFinishedInventoryRepository.class);
 
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(anyString(), anyString()))
                 .thenReturn(Optional.empty());
@@ -127,15 +141,15 @@ class SemiOutputNotConfiguredWarningTest {
     }
 
     @Test
-    @DisplayName("🔴 中间道未配半成品产出编号 + 后面还有未完成工序 → 必须出声")
-    void warnsWhenMiddleProcessHasNoSemiCode() {
+    @DisplayName("🔴 中间道产出没进半成品库 + 后面还有未完成工序 → 必须出声")
+    void warnsWhenMiddleProcessOutputDidNotLand() {
         WorkProcessTask t2 = task(1786L, 2, WorkProcessTask.Status.IN_PROGRESS, "WP-LU");
         WorkProcessTask t3 = task(1787L, 3, WorkProcessTask.Status.PENDING, "WP-PACK");
         wire(t2, null, t2, t3);
 
         assertThat(report(t2).get("semiOutputNotConfigured"))
                 .as("下一道还等着领料, 而本道产出无处可入 —— 必须告诉用户")
-                .asString().contains("半成品产出编号").contains("下一道领不到料");
+                .asString().contains("没有进入半成品库").contains("下一道领不到料");
     }
 
     @Test
@@ -150,14 +164,69 @@ class SemiOutputNotConfiguredWarningTest {
                 .isNull();
     }
 
+    /** 造一条「产出已经落进半成品库」的行，挂在 sourceWorkProcessTaskId 上 —— 线上就是这个形状。 */
+    private SemiFinishedInventory landedWip(long sourceTaskId, String no, String qty) {
+        SemiFinishedInventory w = new SemiFinishedInventory();
+        w.setFactoryId(FACTORY);
+        w.setBatchId(BATCH);
+        w.setSourceWorkProcessTaskId(sourceTaskId);
+        w.setIntermediateBatchNo(no);
+        w.setProducedQuantity(new BigDecimal(qty));
+        return w;
+    }
+
     @Test
-    @DisplayName("⛔ 阴性对照: 已配 semiCode 必须安静")
-    void silentWhenConfigured() {
+    @DisplayName("🔴 阴性对照: 没配 semiCode 但 legacy 路径已派生编号入库 → 必须安静(线上那次 100% 误报的形状)")
+    void silentWhenLegacyPathAlreadyPostedWip() {
         WorkProcessTask t2 = task(1786L, 2, WorkProcessTask.Status.IN_PROGRESS, "WP-LU");
         WorkProcessTask t3 = task(1787L, 3, WorkProcessTask.Status.PENDING, "WP-PACK");
-        wire(t2, "SEMI-LUZHI", t2, t3);
+        wire(t2, null, t2, t3);
+        // 派生编号形如 {productTypeId}-B{batchId}-S{order}-{taskId}, 与线上 335 那行同形
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH))
+                .thenReturn(List.of(landedWip(1786L, "PT_F006_LSM-B10759-S2-1786", "2.5")));
 
-        assertThat(report(t2).get("semiOutputNotConfigured")).isNull();
+        assertThat(report(t2).get("semiOutputNotConfigured"))
+                .as("下一道已经领得到了, 还说「领不到料」是假话; 且它叫人「重新报工」= 同一批产出报两遍")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("⛔ 别人那道的 WIP 不算数 —— 只认挂在本道上的")
+    void warnsWhenWipBelongsToAnotherTask() {
+        WorkProcessTask t2 = task(1786L, 2, WorkProcessTask.Status.IN_PROGRESS, "WP-LU");
+        WorkProcessTask t3 = task(1787L, 3, WorkProcessTask.Status.PENDING, "WP-PACK");
+        wire(t2, null, t2, t3);
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH))
+                .thenReturn(List.of(landedWip(1785L, "PT_F006_LSM-B10759-S1-1785", "6")));
+
+        assertThat(report(t2).get("semiOutputNotConfigured"))
+                .as("同批次别的工序有 WIP, 不代表【本道】的产出进去了")
+                .asString().contains("下一道领不到料");
+    }
+
+    @Test
+    @DisplayName("⛔ 产出量为 0 的 WIP 行不算「进去了」")
+    void warnsWhenWipRowHasZeroProduced() {
+        WorkProcessTask t2 = task(1786L, 2, WorkProcessTask.Status.IN_PROGRESS, "WP-LU");
+        WorkProcessTask t3 = task(1787L, 3, WorkProcessTask.Status.PENDING, "WP-PACK");
+        wire(t2, null, t2, t3);
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH))
+                .thenReturn(List.of(landedWip(1786L, "PT_F006_LSM-B10759-S2-1786", "0")));
+
+        assertThat(report(t2).get("semiOutputNotConfigured")).asString().contains("下一道领不到料");
+    }
+
+    @Test
+    @DisplayName("⛔ 告警文案里不许出现「重新报工」—— 照做就是把同一批产出报两遍")
+    void warningMustNotTellUserToReReport() {
+        WorkProcessTask t2 = task(1786L, 2, WorkProcessTask.Status.IN_PROGRESS, "WP-LU");
+        WorkProcessTask t3 = task(1787L, 3, WorkProcessTask.Status.PENDING, "WP-PACK");
+        wire(t2, null, t2, t3);
+
+        assertThat(report(t2).get("semiOutputNotConfigured"))
+                .asString()
+                .doesNotContain("重新报工")
+                .contains("不要重复报工");
     }
 
     @Test

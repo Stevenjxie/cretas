@@ -11,7 +11,9 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessWorkReportingService;
@@ -30,7 +32,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -44,6 +48,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     private final AttachmentRepository attachmentRepository;
     private final WorkProcessTaskRepository workProcessTaskRepository;
     private final WipInventoryService wipInventoryService;
+    private final UserRepository userRepository;
 
     @Override
     @Transactional
@@ -125,8 +130,9 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         Page<ProductionReport> page = reportRepository
                 .findPendingApprovalsForFactory(factoryId, "PENDING", pageable);
         Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, page.getContent());
+        Map<Long, String> workerNames = loadWorkerNames(page.getContent());
         List<Map<String, Object>> content = page.getContent().stream()
-                .map(report -> reportToMap(factoryId, report, evidenceUrls))
+                .map(report -> reportToMap(factoryId, report, evidenceUrls, workerNames))
                 .toList();
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
     }
@@ -137,8 +143,9 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         List<ProductionReport> reports = reportRepository
                 .findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(factoryId, workProcessTaskId);
         Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
+        Map<Long, String> workerNames = loadWorkerNames(reports);
         return reports.stream()
-                .map(report -> reportToMap(factoryId, report, evidenceUrls))
+                .map(report -> reportToMap(factoryId, report, evidenceUrls, workerNames))
                 .toList();
     }
 
@@ -251,10 +258,44 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     //
     // ⛔ 不要在本类恢复过账, 见 approveReport 处的说明。
 
+    /**
+     * 批量把 workerId 解析成姓名 —— 与 {@code loadProductionReportEvidenceUrls} 同一个套路:
+     * 一次查完再逐行组装, ⛔ 不在 {@code reportToMap} 里逐行查 (那一页最多 500 行)。
+     */
+    private Map<Long, String> loadWorkerNames(List<ProductionReport> reports) {
+        Set<Long> ids = reports.stream()
+                .map(ProductionReport::getWorkerId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> names = new HashMap<>();
+        for (User u : userRepository.findByIdIn(ids)) {
+            String n = (u.getFullName() != null && !u.getFullName().isBlank())
+                    ? u.getFullName() : u.getUsername();
+            if (u.getId() != null && n != null && !n.isBlank()) {
+                names.put(u.getId(), n);
+            }
+        }
+        return names;
+    }
+
+    /** 请求带了就用请求的 (代报工时那是被代者的名字); 否则按 workerId 反查; 都没有才 null。 */
+    private String resolveReporterName(ProductionReport report, Map<Long, String> workerNames) {
+        String given = report.getReporterName();
+        if (given != null && !given.isBlank()) {
+            return given;
+        }
+        Long wid = report.getWorkerId();
+        return wid == null ? null : workerNames.get(wid);
+    }
+
     private Map<String, Object> reportToMap(
             String factoryId,
             ProductionReport report,
-            Map<String, List<String>> attachmentUrlsByEntityId) {
+            Map<String, List<String>> attachmentUrlsByEntityId,
+            Map<Long, String> workerNames) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", report.getId());
         map.put("factoryId", report.getFactoryId());
@@ -266,7 +307,14 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("reportKind", report.getReportKind());
         map.put("productTypeId", report.getProductTypeId());
         map.put("workerId", report.getWorkerId());
-        map.put("reporterName", report.getReporterName());
+        // 报工人: 请求里带了就用它, 没带就按 workerId 反查 ——
+        // ⛔ 不许两个都没有就交一个 null 出去。2026-08-17 生产实测: RN 逐道报工屏
+        // 一次都没传过 reporterName (该字段在 API 类型里存在, 屏幕里 0 处), 而后端
+        // 原样 setReporterName(req.getReporterName()) 也不回退 ⇒ App 报出来的每一条,
+        // 文员在「报工审批」页看到的「报工人」都是空白。而身份一直都在: workerId=1310。
+        // 修在这个唯一的 mapper 上, 三个调用点和未来的消费方一起受益 —— 靠每个客户端
+        // 都记得传是【约定】, 这里做的是【机制】。
+        map.put("reporterName", resolveReporterName(report, workerNames));
         map.put("reportDate", report.getReportDate());
         map.put("inputQuantity", report.getInputQuantity());
         map.put("inputUnit", report.getInputUnit());
