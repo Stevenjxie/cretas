@@ -248,17 +248,18 @@ export function WHInboundListScreen() {
       >
         {/* 快捷操作 */}
         <View style={styles.actionBar}>
-          <Button
-            mode="contained"
-            icon="plus"
-            // 原本跳 WHInboundCreate —— 那个屏调已停用的 POST /material-batches(409),
-            // 屏已删。同树里正规的无单入库是 WHUnorderedInboundReceive。
-            onPress={() => navigation.navigate("WHPurchaseReceiveList")}
-            style={[styles.actionButton, { backgroundColor: "#4CAF50" }]}
-            labelStyle={styles.actionButtonLabel}
-          >
-            {t('inbound.list.newInbound')}
-          </Button>
+          {/* 🔴 2026-08-17 删除「新建入库」按钮 —— 它是一块过期的标签牌。
+              原本跳 WHInboundCreate, 那个屏调已停用的 POST /material-batches(409), 屏已删;
+              删屏时把 onPress 改成了 WHPurchaseReceiveList, 但**按钮上的字没改**。
+              于是它和下面那个「待收货任务」跳的是同一行代码, 而仓管点进去看到的是一个空列表
+              (F006 实测: 采购单只有 2 张 COMPLETED, 客户来料通知 1 条已 RECEIVED),
+              读起来就是「新建入库点不动」。
+
+              ⛔ 不要在这里再放一个「新建入库」—— 目前 App 侧**没有**无预告直接建批次的路径:
+              正规无单入库 WHUnorderedInboundReceive 必须带 noticeId, 唯一入口就是
+              WHPurchaseReceiveList 里的预告项。要不要开这个入口是产品决策, 见
+              HANDOFF-2026-08-17b 第七节第 3 问。
+              少一个按钮, 好过一个说谎的按钮。 */}
           <Button
             mode="outlined"
             icon="qrcode-scan"

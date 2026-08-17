@@ -166,7 +166,9 @@ export function WHInventoryListScreen() {
 
   const handlers = useMemo(() => ({
     'view-detail': (e: RowContext) => navigation.navigate('WHInventoryDetail', { inventoryId: e.id }),
-    transfer: () => Alert.alert('调拨', '跳转 WHInventoryTransfer (待接)'),
+    // 🔴 2026-08-17: 原文案是「跳转 WHInventoryTransfer (待接)」—— 把内部屏幕名直接弹给了仓管,
+    // 而它指向的那个屏是原型(只改 storageLocation, 数量不参与)。改成人话 + 说清去哪做。
+    transfer: () => Alert.alert('调拨', '手机端暂不支持调拨, 请在网页端「库存 - 调拨」办理。'),
     'view-price-history': (e: RowContext) => Alert.alert('价格历史', `物料 ${e.id}`),
   }), [navigation]);
 
@@ -186,7 +188,19 @@ export function WHInventoryListScreen() {
 
   const quickActions: QuickAction[] = [
     { key: "check", label: t('inventory.quickActions.check'), icon: "clipboard-check-outline", color: "#4CAF50", screen: "WHInventoryCheck" },
-    { key: "transfer", label: t('inventory.quickActions.transfer'), icon: "swap-horizontal", color: "#2196F3", screen: "WHInventoryTransfer" },
+    // 🔴 2026-08-17 摘掉「调拨」入口 —— WHInventoryTransferScreen 是**原型屏**(文件头注释自称
+    // 「对应原型: warehouse/inventory-transfer.html」), 它:
+    //   · 调入库位下拉是**写死的三条示例**(A区-冷藏库-02/03、B区-冷冻库-01), 与真实库位
+    //     (WH-RAW / WH-WKS / WH-FG …) 无关;
+    //   · 22 处硬编码 kg, 把 片/卷/盒 的批次也印成 kg;
+    //   · executeTransfer 只调 materialBatchApiClient.updateBatch({ storageLocation }) ——
+    //     把批次库位改写成 "A-02" 这种不存在的码, **用户输入的调拨数量完全不参与**,
+    //     也不产生任何调拨单, 根本不走后端的 TransferServiceImpl。
+    // 用户点完会看到「调拨成功」, 而实际上什么都没调走。⛔ 少一个入口, 好过一个说谎的入口。
+    //
+    // 要接回来: RN 侧已经有 `transferApiClient.createTransfer()` 打真实端点
+    // `POST /api/mobile/{factoryId}/transfers`(实测可用, 见 HANDOFF-2026-08-17b 第五节),
+    // 缺的是真实仓库列表 + 用批次自己的单位 + 数量语义。那是一次独立改造, 不在本次范围。
     { key: "location", label: t('inventory.quickActions.location'), icon: "map-marker", color: "#9C27B0", screen: "WHLocationManage" },
     { key: "expire", label: t('inventory.quickActions.expire'), icon: "clock-alert-outline", color: "#FF5722", screen: "WHExpireHandle" },
     { key: "transit", label: "\u4e2d\u8f6c\u786e\u8ba4", icon: "truck-check-outline", color: "#00695C", screen: "WHTransitLedger" },
