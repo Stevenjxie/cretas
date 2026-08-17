@@ -2601,6 +2601,43 @@ def _build_spec(
                     list(dimensions),
                 )
                 planned_intents = (code,)
+        elif (
+            code
+            and code not in planned_intents
+            and not _resolver_serves_dimensions(code, dimensions)
+        ):
+            # ⚠️ 上面那支的**镜像**, 方向相反、判据同一个:
+            #     上面  计划服务不了 ⇒ 标签赢  (planned_intents = (code,))
+            #     这里  标签服务不了 ⇒ 计划赢  (code = repair_candidate)
+            #
+            # 🔴 这一支此前**根本不存在**。PR#2799 只处理了「repair 因维度不足
+            #    而跳过」, 没处理「repair 因别的 guard(措辞背书 / 指标可修复)
+            #    而跳过」—— 后者同样把矛盾原样留给下游, 同样以拒答收场。
+            #
+            # 📏 MOCK_REST prod 2026-08-18(14 条追问链 × 3 轮, 3/3 稳定):
+            #     「哪道菜毛利最高 → 哪个卖得最多」
+            #       code = SALES_SUMMARY   声明 ['store']         —— 它不能按菜品
+            #       plan = (GROSS_MARGIN,) 声明 ['dish','time']   —— **它能**
+            #       dims = ('dish',)  ⇒ 60 字「我准备算的东西跟你问的对不上」
+            #
+            # ⛔ 不无条件让计划赢: 标签能服务时该赢的是标签(上面那支);
+            #    两边都服务不了时那次拒答是正当的(阴性对照钉着)。
+            # ⚠️ authority 复用已在白名单里的 `_contract_repair` 后缀 ——
+            #    `_execution_mismatch` 拿 `planner_authority` 当**白名单**判,
+            #    新造一个字符串会把「修好矛盾」换成另一句拒答。
+            logger.warning(
+                "[restaurant-intent] code realigned to plan %s (label was %s): "
+                "标签只服务 %s, 服务不了本次的 %s, 而计划服务 %s —— "
+                "⛔ 不把矛盾留给下游当拒答理由",
+                repair_candidate, code,
+                sorted(_RESOLVER_DIMENSIONS.get(code, frozenset())),
+                list(dimensions),
+                sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
+            )
+            code = repair_candidate
+            effective_planner_authority = (
+                f"{effective_planner_authority}_contract_repair"
+            )
     # 🔴 这次覆盖是【用户自己的话】造成的, 还是【模型的猜测】造成的?
     #
     # 下面那条 `_repair_backed_by_user_wording` 守的正是这件事, 但它只会问一种
