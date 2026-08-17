@@ -169,8 +169,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 设计卡 docs/decisions/2026-08-17-报工幂等用客户端请求号而非时间窗.md
         String clientRequestId = req.getClientRequestId();
         if (clientRequestId != null && !clientRequestId.isBlank()) {
+            // ⚠️ 作用域必须含【工序】: 2026-08-17 对抗审计第 2 轮实测, 只按 (工厂, 号) 查重时
+            //    用第②道的号提交第③道 → 第③道被静默吞掉(返回第②道的 reportId),
+            //    工人报了、系统说成功、其实什么都没记 —— 比双扣更隐蔽。
+            //    幂等守的是「同一次点击的重试」, 而一次点击必然属于某一道工序。
             Optional<ProductionReport> dup = reportRepo
-                    .findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(factoryId, clientRequestId);
+                    .findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+                            factoryId, req.getWorkProcessTaskId(), clientRequestId);
             if (dup.isPresent()) {
                 log.info("[幂等] 同号重复提交, 返回原报工: factoryId={} clientRequestId={} reportId={}",
                         factoryId, clientRequestId, dup.get().getId());

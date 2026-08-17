@@ -25,8 +25,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
      * <p>2026-08-17 生产实测双扣(领 0.5 扣了 1.0)后加的。
      * 命中就返回原来那条的结果, ⛔ 不新建、不报错。
      */
-    java.util.Optional<ProductionReport> findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(
-            String factoryId, String clientRequestId);
+    java.util.Optional<ProductionReport> findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+            String factoryId, Long workProcessTaskId, String clientRequestId);
 
 
     // ==================== AUDIT-004 辅料按锅平摊 ====================

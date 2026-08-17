@@ -141,7 +141,7 @@ class ReportIdempotencyTest {
         first.setId(70001L);
         first.setFactoryId(FACTORY);
         first.setClientRequestId("req-abc");
-        when(reportRepo.findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(FACTORY, "req-abc"))
+        when(reportRepo.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(FACTORY, 1786L, "req-abc"))
                 .thenReturn(Optional.of(first));
 
         Map<String, Object> out = svc.submitReport(FACTORY, BATCH, 7L, req("req-abc"));
@@ -156,7 +156,7 @@ class ReportIdempotencyTest {
     @Test
     @DisplayName("⛔ 阴性对照: 【不同号】必须放行 —— 正当的第二笔不许被拦")
     void differentKeyIsNotBlocked() {
-        when(reportRepo.findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(eq(FACTORY), anyString()))
+        when(reportRepo.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(eq(FACTORY), any(), anyString()))
                 .thenReturn(Optional.empty());
 
         Map<String, Object> out = svc.submitReport(FACTORY, BATCH, 7L, req("req-second"));
@@ -164,6 +164,47 @@ class ReportIdempotencyTest {
         assertThat(out.get("idempotentReplay")).as("这是真的第二笔, 不是重试").isNull();
         verify(reportRepo, times(1)).save(any(ProductionReport.class));
         verify(wipInventoryService, times(1)).postApprovedOutput(any(), any(), any(), any());
+    }
+
+    /**
+     * 🔴 2026-08-17 对抗审计第 2 轮在生产上抓到的：只按 (工厂, 号) 查重时，
+     * 用第②道的号提交第③道 → 返回 {@code idempotentReplay=true} 和第②道的 reportId，
+     * <b>第③道的报工被静默吞掉</b> —— 工人报了、系统说成功、其实什么都没记。
+     * 比双扣更隐蔽：双扣至少数字不对，这个是活儿白干了。
+     *
+     * <p>成因是把「用户再报一笔时前端重新生成号」当成了保证 ——
+     * 那是<b>约定不是机制</b>，而约定只有人记得才生效。
+     * ⇒ 作用域含工序：同号+同工序=重试（拦），同号+不同工序=两件事（放行）。
+     */
+    @Test
+    @DisplayName("🔴 阴性对照: 同一个号用在【不同工序】上必须放行 —— 不许跨工序吞掉")
+    void sameKeyDifferentTaskIsNotSwallowed() {
+        WorkProcessTask t3 = new WorkProcessTask();
+        t3.setId(1787L); t3.setFactoryId(FACTORY); t3.setProductionBatchId(BATCH);
+        t3.setProcessOrder(3); t3.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+        t3.setWorkProcessId("WP-PACK"); t3.setProductTypeId("PT");
+        when(taskRepo.findByFactoryIdAndId(FACTORY, 1787L)).thenReturn(Optional.of(t3));
+
+        // 第②道用过 req-shared; 第③道用同一个号
+        ProductionReport onTask2 = new ProductionReport();
+        onTask2.setId(70001L);
+        onTask2.setFactoryId(FACTORY);
+        onTask2.setWorkProcessTaskId(1786L);
+        onTask2.setClientRequestId("req-shared");
+        when(reportRepo.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+                FACTORY, 1786L, "req-shared")).thenReturn(Optional.of(onTask2));
+        when(reportRepo.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(
+                FACTORY, 1787L, "req-shared")).thenReturn(Optional.empty());
+
+        YieldReportRequest r = req("req-shared");
+        r.setWorkProcessTaskId(1787L);
+
+        Map<String, Object> out = svc.submitReport(FACTORY, BATCH, 7L, r);
+
+        assertThat(out.get("idempotentReplay"))
+                .as("第③道是另一件事, ⛔ 不许被第②道的号吞掉")
+                .isNull();
+        verify(reportRepo, times(1)).save(any(ProductionReport.class));
     }
 
     @Test
@@ -174,13 +215,13 @@ class ReportIdempotencyTest {
         assertThat(out.get("idempotentReplay")).isNull();
         verify(reportRepo, times(1)).save(any(ProductionReport.class));
         verify(reportRepo, never())
-                .findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(any(), any());
+                .findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(any(), any(), any());
     }
 
     @Test
     @DisplayName("幂等键必须落库 —— 否则下一次重试查不到, 等于没做")
     void keyIsPersisted() {
-        when(reportRepo.findFirstByFactoryIdAndClientRequestIdAndDeletedAtIsNull(eq(FACTORY), anyString()))
+        when(reportRepo.findFirstByFactoryIdAndWorkProcessTaskIdAndClientRequestIdAndDeletedAtIsNull(eq(FACTORY), any(), anyString()))
                 .thenReturn(Optional.empty());
         org.mockito.ArgumentCaptor<ProductionReport> cap =
                 org.mockito.ArgumentCaptor.forClass(ProductionReport.class);
