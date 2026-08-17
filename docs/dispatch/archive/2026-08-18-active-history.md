@@ -19,3 +19,13 @@
 - UX Flow：仓管员不再看到或进入会假成功的移动写路径；在真实仓库、单位、数量和幂等契约完成前不恢复移动端调拨。
 - 验证：目标 Jest `1 suite / 8 tests` 通过；`npx tsc --noEmit --skipLibCheck` 通过；`git diff --check` 通过。未触及 Repository/Entity/JPQL/`@Query`/Flyway，JPA startup gate 不适用。
 - 边界：`NOT_DEPLOYED`；生产业务写入 `0`；未修改 LIUSHANMEN、后端调拨或 Web 调拨。
+
+## AUDIT-CRLF-DIFFCHECK-20260818
+
+- 状态：`review` 候选完成；随本提交归档并释放整日 diff-check scope。
+- Base SHA：`4d4122156ddab06efe5bd75677a62fa1c5c7079c`。
+- 发现：`git diff --check c5219802a80815fa617b415f9aa43c0c65462c85..origin/main` 被 7 个新增 CRLF 文件误报 426 条 trailing-whitespace；`.gitattributes` 原无对应规则。
+- 交付：仅为 `ProcessWorkReportingService.java`、`ProcessTaskListScreen.test.tsx`、`ProcessTaskListScreen.tsx`、`ProcessTaskDetailScreen.tsx`、`materialBatchApiClient.ts`、`ProcessTaskHistoryScreen.tsx`、`ProcessRunOverviewScreen.tsx` 增加 exact-path `whitespace=trailing-space,cr-at-eol`。每条规则都注明在对应文件完成无行为 LF 归一化后删除。
+- 验证：整日 range `git diff --check` 通过；候选 diff-check 通过；提交 hook 的编码完整性门禁待提交时执行。7 个 CRLF 源文件与运行时逻辑均未修改。
+- 集成：当天唯一 daily PR #2808 已合并，因此本 marker 分支不创建第二个 daily PR，留待下一次 daily integration。
+- 边界：`NOT_DEPLOYED`；生产业务写入 `0`；未修改 LIUSHANMEN 或 ACTIVE owner 的业务文件。

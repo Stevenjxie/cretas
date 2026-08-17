@@ -37,3 +37,14 @@ backend/python/tests/test_grouped_margin_allocation.py whitespace=trailing-space
 backend/python/tests/test_margin_parity.py whitespace=trailing-space,cr-at-eol
 docs/decisions/2026-08-15-成本卡录入设计卡.md whitespace=trailing-space,cr-at-eol
 web-admin/capture-new-features.spec.ts whitespace=trailing-space,cr-at-eol
+
+# These 2026-08-18 audit paths still store CRLF blobs. Keep real trailing
+# spaces visible while treating CR as EOL syntax; delete each exact rule after
+# that file is deliberately normalized to LF in a no-behavior-change commit.
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/ProcessWorkReportingService.java whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/__tests__/integration/screens/ProcessTaskListScreen.test.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskListScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskDetailScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/services/api/materialBatchApiClient.ts whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskHistoryScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessRunOverviewScreen.tsx whitespace=trailing-space,cr-at-eol
