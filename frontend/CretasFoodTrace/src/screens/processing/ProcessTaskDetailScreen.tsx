@@ -134,8 +134,10 @@ export default function ProcessTaskDetailScreen() {
   const conversionRate = showIOComparison ? (completedQty / inputQty) * 100 : 0;
   const conversionColor = conversionRate >= 90 ? '#67c23a' : conversionRate >= 80 ? '#e6a23c' : '#f56c6c';
 
-  const progress = task && task.plannedQuantity > 0
-    ? Math.min((task.completedQuantity / task.plannedQuantity) * 100, 100)
+  // 登记「本轮故意不改」: plannedQuantity 可能为 null(未设计划量)。
+  // 本轮只改工序任务列表那一屏, 这里维持按 0 算的原行为。同一缺陷, 待单独一轮。
+  const progress = task && (task.plannedQuantity ?? 0) > 0
+    ? Math.min((task.completedQuantity / (task.plannedQuantity ?? 1)) * 100, 100)
     : 0;
 
   if (loading && !summary) {

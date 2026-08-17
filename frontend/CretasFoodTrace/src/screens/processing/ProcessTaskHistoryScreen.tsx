@@ -58,8 +58,10 @@ export default function ProcessTaskHistoryScreen() {
 
   const renderItem = ({ item }: { item: ProcessTaskItem }) => {
     const status = STATUS_CONFIG[item.status] || { label: item.status, color: '#909399' };
-    const progress = item.plannedQuantity > 0
-      ? Math.min((item.completedQuantity / item.plannedQuantity) * 100, 100)
+    // 登记「本轮故意不改」: plannedQuantity 可能为 null(未设计划量)。
+    // 本轮只改工序任务列表那一屏, 这里维持按 0 算的原行为。同一缺陷, 待单独一轮。
+    const progress = (item.plannedQuantity ?? 0) > 0
+      ? Math.min((item.completedQuantity / (item.plannedQuantity ?? 1)) * 100, 100)
       : 0;
 
     return (
@@ -85,7 +87,7 @@ export default function ProcessTaskHistoryScreen() {
 
           <View style={styles.statsRow}>
             <Text style={styles.stat}>
-              计划 <Text style={styles.statValue}>{item.plannedQuantity}</Text>
+              计划 <Text style={styles.statValue}>{item.plannedQuantity ?? '未设置'}</Text>
             </Text>
             <Text style={styles.stat}>
               完成 <Text style={[styles.statValue, { color: '#67c23a' }]}>{item.completedQuantity}</Text>
