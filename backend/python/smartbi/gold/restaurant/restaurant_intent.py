@@ -41,6 +41,13 @@ from smartbi.gold.customer_text import (
     PLANNER_UNAVAILABLE,
 )
 
+# ⛔ 「这次澄清该不该换成能力拒答模板」**只此一处定义**。注册侧(本模块的
+#    `_maybe_register_pending`)和拒答侧(`restaurant_intent_service:1839`)必须读
+#    同一个函数 —— 两份判据一定会漂, 而漂的表现是「注册侧说不拦、拒答侧说拦」,
+#    症状是会话又开始复读同一份文案, 且**不报错**。
+#    `capability_answer` 没有任何项目内 import(纯叶子), 顶层引入不会成环。
+from smartbi.gold.restaurant.capability_answer import should_use_capability_refusal
+
 # ⛔ 规划器的聚合可选值**只能**来自登记表 —— 手写第二份清单就是第四个膨胀点。
 from smartbi.gold.restaurant.metric_registry import (
     AGGREGATIONS as _AGGREGATIONS,
@@ -4793,8 +4800,45 @@ async def _maybe_register_pending(
     (including for a falsy/empty session_key -- spec section 1 of the
     2026-07-08 design: "session_key 缺失 → 完全不启用续接") on every other
     path, so this is safe to call unconditionally after any fresh (non-
-    continuation) parse outcome."""
+    continuation) parse outcome.
+
+    🔴 2026-08-18: **能力拒答不注册。** 本函数的语义是「我问了你一个问题，
+    等你回答」——而能力拒答（§9.9 模板）**根本没有在问问题**，它说的是
+    「这个我算不了，我这儿有的是 A/B/C」。挂上去之后，会话里**下一句问什么
+    都会被当成对它的回答**。
+
+    📏 MOCK_REST prod 对照实验（唯一变量 session_key，生产入口对同一个
+    sessionId 全程共用一个）：
+
+        A 共用 key   翻台率怎么样 → clar 129 字 316dc92b
+                     营收趋势怎么样 → clar 129 字 316dc92b   ← 原样复读
+                     毛利最低的菜品有哪些 → clar 129 字 316dc92b
+        B 独立 key   营收趋势怎么样 → answer 511 字 / 毛利最低 → answer 2417 字
+
+    而 **LLM 每一轮都判对了**（第 2 轮 intent=TREND_ANALYSIS、
+    clarification_question='你想看哪个时间范围的营收趋势？'）——
+    错的是消费端：`_parse_continuation` 把 `original_query + 新问句` 强制
+    拼接当 effective_query，`requested_metrics` 从那个串里抽，
+    `table_turnover` 于是永远在。
+
+    🔑 判据不是新发明的，它来自一个**本来就存在的不一致**：注册进 pending 的
+    问题是 '你这次最想先看哪件事？'，而老板看到的正文是那 129 字 ——
+    **注册的问题和发出去的话不是同一件事**（形态 D）。
+
+    ⛔ 判据走**拒答侧读的同一个** `should_use_capability_refusal`，
+       ⛔ 不在这里写第二份（两份一定会漂，而漂的表现是会话又开始复读且不报错）。
+    ⚠️ 只拦这一类：缺时间 / 缺门店 / 说不清要看什么 **照旧注册**，
+       否则等于把整个澄清续接关掉（有阴性对照钉着）。
+    ⛔ 未做，显式登记：真反问之后换话题仍会拼接；`resolver_query_seed` 无条件
+       累积也没解决。两者归架构点 25（上下文存 spec 栈，⛔ 不存对话文字）。
+    """
     if session_key and spec is not None and spec.clarification_needed:
+        if should_use_capability_refusal(spec.unsupported_requirements):
+            logger.info(
+                "[restaurant-intent] 能力拒答不挂会话: unsupported=%s query=%r",
+                list(spec.unsupported_requirements), (query or "")[:40],
+            )
+            return
         await _pending_put(
             pool, factory_id, session_key,
             original_query=query, clarification_question=spec.clarification_question,
