@@ -5,6 +5,7 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -31,6 +32,7 @@ class ProcessWorkReportingCanonicalTaskTest {
     @Mock private AttachmentRepository attachmentRepository;
     @Mock private WorkProcessTaskRepository workProcessTaskRepository;
     @Mock private WipInventoryService wipInventoryService;
+    @Mock private UserRepository userRepository;
 
     private ProcessWorkReportingServiceImpl service;
 
@@ -42,7 +44,8 @@ class ProcessWorkReportingCanonicalTaskTest {
                 productTypeRepository,
                 attachmentRepository,
                 workProcessTaskRepository,
-                wipInventoryService);
+                wipInventoryService,
+                userRepository);
     }
 
     @Test
