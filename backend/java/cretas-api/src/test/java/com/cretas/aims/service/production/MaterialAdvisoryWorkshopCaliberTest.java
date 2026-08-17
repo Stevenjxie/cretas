@@ -173,13 +173,32 @@ class MaterialAdvisoryWorkshopCaliberTest {
     // 「没算成的那部分」—— 一条预警都没有, 不等于每一行都算过
     // ================================================================
 
-    /** BOM 里没有标准用量的行 —— 算不出需求量, 只能跳过。 */
-    private static BomRecipeItem bomItemWithoutStandardQty(String name) {
+    /**
+     * BOM 里没有标准用量的行 —— 算不出需求量, 只能跳过。
+     *
+     * @param port 非空 = 绑了 workflow 投料端口(用量由报工决定, <b>设计如此</b>);
+     *             null = 真的漏配了标准用量
+     */
+    private static BomRecipeItem bomItemWithoutStandardQty(String name, String port) {
         BomRecipeItem it = new BomRecipeItem();
         it.setMaterialTypeId("RMT_NO_QTY");
         it.setMaterialName(name);
         it.setUnit("kg");
+        it.setWorkflowInputPortId(port);
         return it;                                  // standardQuantity 保持 null
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> scanField(java.util.List<BomRecipeItem> items, String field) {
+        BomRecipeItemRepository repo = mock(BomRecipeItemRepository.class);
+        when(repo.findCurrentByProduct(eq(F), eq(PRODUCT))).thenReturn(items);
+        ReflectionTestUtils.setField(service, "bomRecipeItemRepository", repo);
+        when(batchRepo.sumAvailableRawStockQuantityByMaterialType(eq(F), anyString()))
+                .thenReturn(new BigDecimal("500"));
+        when(batchRepo.sumAvailableRawStockQuantityByMaterialTypeAndWarehouse(eq(F), anyString(), eq(WORKSHOP)))
+                .thenReturn(new BigDecimal("500"));
+        Object scan = ReflectionTestUtils.invokeMethod(service, "scanMaterialAdvisory", F, plan());
+        return (List<String>) ReflectionTestUtils.invokeMethod(scan, field);
     }
 
     private String summaryWith(java.util.List<BomRecipeItem> items, String factoryStock) {
@@ -199,18 +218,31 @@ class MaterialAdvisoryWorkshopCaliberTest {
     }
 
     @Test
-    @DisplayName("阳性对照: 有标准用量的行不算进「没算成」")
+    @DisplayName("阳性对照: 有标准用量的行两个清单都不进")
     void computableLinesAreNotCountedAsSkipped() {
-        assertEquals("", summaryWith(List.of(bomItem()), "500"),
-                "有标准用量的行被误算成「未参与核算」");
+        assertTrue(scanField(List.of(bomItem()), "uncomputable").isEmpty());
+        assertTrue(scanField(List.of(bomItem()), "byReporting").isEmpty());
     }
 
     @Test
-    @DisplayName("🔴 没有标准用量的行必须被记下来 —— 否则「无预警」会盖住「一行都没算」")
-    void linesWithoutStandardQuantityAreRecorded() {
-        String unc = summaryWith(
-                List.of(bomItem(), bomItemWithoutStandardQty("黄油鸡-原料B")), "500");
-        assertTrue(unc.contains("黄油鸡-原料B"),
-                "跳过的行没有留痕, 界面会说「暂无缺料预警」而其实那一行从来没算过: [" + unc + "]");
+    @DisplayName("🔴 跳过的行必须留痕 —— 否则「无预警」会盖住「这行从来没算过」")
+    void skippedLinesAreRecorded() {
+        List<String> unc = scanField(
+                List.of(bomItem(), bomItemWithoutStandardQty("漏配的辅料", null)), "uncomputable");
+        assertTrue(unc.contains("漏配的辅料"),
+                "跳过的行没有留痕, 界面会说「暂无缺料预警」而其实那一行从来没算过: " + unc);
+    }
+
+    @Test
+    @DisplayName("🔴 绑了投料端口的行要归到「由报工决定」, 不许说成「未配标准用量」")
+    void workflowBoundLinesAreNotBlamedOnMissingData() {
+        List<BomRecipeItem> items = List.of(
+                bomItem(), bomItemWithoutStandardQty("黄油鸡-原料B", "input:1786933018754"));
+        assertTrue(scanField(items, "byReporting").contains("黄油鸡-原料B"),
+                "绑了 workflow 投料端口的行没归到「由报工决定」");
+        // 🔴 阴性对照: 它本来就没有计划用量(实测全库 12 条空标准量的行无一例外都绑着端口),
+        //    说成「未配标准用量」等于诬告用户的数据坏了
+        assertFalse(scanField(items, "uncomputable").contains("黄油鸡-原料B"),
+                "把设计如此的行报成了数据缺失");
     }
 }
