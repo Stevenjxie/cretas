@@ -37,6 +37,26 @@ public interface ProcessWorkReportingService {
     /** 报工详情（替代 legacy {@code GET /work-reporting/reports/{id}}）。 */
     com.cretas.aims.dto.WorkReportResponse getReportDetail(String factoryId, Long reportId);
 
+    /**
+     * 报工看板汇总（替代 legacy {@code GET /work-reporting/summary}）。
+     *
+     * <p>⛔ <b>没有 {@code startDate} / {@code endDate}</b>：legacy 那两个参数只喂
+     * 三个零消费方的字段，本次没有搬过来（逐条登记见
+     * {@link com.cretas.aims.dto.WorkReportSummaryResponse}），留着参数就是一个
+     * 不影响任何返回值的参数。RN 侧唯一调用点 {@code useDashboardData.ts:65}
+     * 本来就是无参调用。
+     */
+    com.cretas.aims.dto.WorkReportSummaryResponse getSummary(String factoryId);
+
+    /**
+     * 某工序近 N 天的产量均值 / 标准差（替代 legacy
+     * {@code GET /work-reporting/reports/historical-average}）。
+     *
+     * @param days 往前推的天数（RN 侧固定传 30）
+     */
+    com.cretas.aims.dto.WorkReportHistoricalAverageResponse getHistoricalAverage(
+            String factoryId, String processCategory, int days);
+
     /** Reports by task */
     List<Map<String, Object>> getReportsByTask(String factoryId, String taskId);
 

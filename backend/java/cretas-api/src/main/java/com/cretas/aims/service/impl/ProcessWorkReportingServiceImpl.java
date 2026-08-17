@@ -190,6 +190,72 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     }
 
     @Override
+    public com.cretas.aims.dto.WorkReportSummaryResponse getSummary(String factoryId) {
+        // 🔴 口径与 legacy WorkReportingServiceImpl.getSummary 逐字一致 —— 迁移的判据是
+        //    「换出口不换数」。⛔ 待审批数用的是 status=SUBMITTED, 不是本 controller
+        //    /pending-approval 那条列表的 approvalStatus='PENDING'; 两者可以不相等,
+        //    统一它是退役第 5 步的产品决定, 不许夹带在「补端点」里。
+        long pendingApprovalCount = reportRepository.countByFactoryIdAndStatusAndDeletedAtIsNull(
+                factoryId, ProductionReport.Status.SUBMITTED);
+
+        java.time.LocalDate today = java.time.LocalDate.now();
+        Map<String, Object> todayProgress = reportRepository.getProgressSummary(factoryId, today, today);
+        BigDecimal todayOutput = BigDecimal.ZERO;
+        BigDecimal todayGood = BigDecimal.ZERO;
+        if (todayProgress != null) {
+            Object outputObj = todayProgress.get("total_output");
+            Object goodObj = todayProgress.get("total_good");
+            if (outputObj != null) {
+                todayOutput = new BigDecimal(outputObj.toString());
+            }
+            if (goodObj != null) {
+                todayGood = new BigDecimal(goodObj.toString());
+            }
+        }
+        // ⚠️ 产出为 0 时是 0 而不是除零 —— 与 legacy 同口径。
+        BigDecimal yieldRate = BigDecimal.ZERO;
+        if (todayOutput.compareTo(BigDecimal.ZERO) > 0) {
+            yieldRate = todayGood.multiply(BigDecimal.valueOf(100))
+                    .divide(todayOutput, 1, java.math.RoundingMode.HALF_UP);
+        }
+
+        return com.cretas.aims.dto.WorkReportSummaryResponse.builder()
+                .pendingApprovalCount(pendingApprovalCount)
+                .todayOutputTotal(todayOutput)
+                .todayYieldRate(yieldRate)
+                .build();
+    }
+
+    @Override
+    public com.cretas.aims.dto.WorkReportHistoricalAverageResponse getHistoricalAverage(
+            String factoryId, String processCategory, int days) {
+        java.time.LocalDate sinceDate = java.time.LocalDate.now().minusDays(days);
+        Map<String, Object> raw = reportRepository.getHistoricalAverageByProcess(
+                factoryId, processCategory, sinceDate);
+        // ⚠️ 这条防御分支在生产上到不了: 那条 native 查询是无 GROUP BY 的聚合,
+        //    空集上照样返回一行(四个值全被 COALESCE 成 0, sample_count 是 COUNT(*) 的 0)。
+        //    留着是为了「上游真给 null 时不 NPE」, ⛔ 不要把它当成「没数据」的表示 ——
+        //    「没数据」的真实长相是 sampleCount=0。
+        if (raw == null) {
+            return null;
+        }
+        return com.cretas.aims.dto.WorkReportHistoricalAverageResponse.builder()
+                .avgOutput(toDoubleOrZero(raw.get("avg_output")))
+                .stddevOutput(toDoubleOrZero(raw.get("stddev_output")))
+                .avgDefect(toDoubleOrZero(raw.get("avg_defect")))
+                .sampleCount(toLongOrZero(raw.get("sample_count")))
+                .build();
+    }
+
+    private static double toDoubleOrZero(Object value) {
+        return value != null ? Double.parseDouble(value.toString()) : 0.0;
+    }
+
+    private static long toLongOrZero(Object value) {
+        return value != null ? Long.parseLong(value.toString()) : 0L;
+    }
+
+    @Override
     public List<Map<String, Object>> getReportsByTask(String factoryId, String taskId) {
         Long workProcessTaskId = parseCanonicalTaskId(taskId);
         List<ProductionReport> reports = reportRepository
