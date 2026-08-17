@@ -46,12 +46,37 @@ public class ProductionStockShortageException extends BusinessException {
                         + sourceLabel(item.getSourceType())
                         + "：需要 " + decimal(item.getRequired()) + unitLabel(item.getUnit())
                         + "，可用 " + decimal(item.getAvailable()) + unitLabel(item.getUnit())
-                        + "，缺少 " + decimal(item.getShortage()) + unitLabel(item.getUnit()))
+                        + "，缺少 " + decimal(item.getShortage()) + unitLabel(item.getUnit())
+                        + causeLabel(item))
                 .collect(Collectors.joining("；"));
         if (mixedUnits) {
             return MESSAGE + "。短缺明细：" + detail + "，请联系仓管补料";
         }
         return summary + "。短缺明细：" + detail;
+    }
+
+    /**
+     * 成因标注 —— 「工厂里有但没领到生产仓」和「工厂里真没有」要给**不同的下一步动作**。
+     *
+     * <p>🔴 2026-08-18 实测: 同一天两条短缺, 当时说的是同一句「请联系仓管补料」:
+     * <ul>
+     *   <li>冻猪蹄: 全厂在手 30kg, 生产仓只有 5kg ⇒ 该做的是**领料**</li>
+     *   <li>2030真空袋: 全厂在手 0 ⇒ 该做的是**采购入库**</li>
+     * </ul>
+     * 一句话覆盖两种处境, 操作工按提示去找仓管, 而仓管手上根本没有货 —— 白跑一趟。
+     *
+     * <p>⚠️ 成因由 {@code factoryOnHand} 推出来, 不是手填; 没算出在手量时(null)不瞎标。
+     */
+    private static String causeLabel(ProductionStockShortageDTO.Item item) {
+        if (item.getCause() == null) {
+            return "";
+        }
+        return switch (item.getCause()) {
+            case NOT_REQUISITIONED -> "（全厂在手 "
+                    + decimal(item.getFactoryOnHand()) + unitLabel(item.getUnit())
+                    + "，只是还没领到生产仓 → 去「生产管理 → 领料」）";
+            case TRULY_OUT_OF_STOCK -> "（全厂在手也是 0 → 需要先采购入库，找仓管补料没用）";
+        };
     }
 
     /**
