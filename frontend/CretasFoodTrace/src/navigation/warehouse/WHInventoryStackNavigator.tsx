@@ -1,6 +1,6 @@
 /**
  * Warehouse 库存 Stack 导航器
- * 包含: 库存列表、库存详情、批次详情、盘点、调拨、库位管理、过期处理、温控监测、出入库统计、批次溯源
+ * 包含: 库存列表、库存详情、批次详情、盘点、库位管理、过期处理、温控监测、出入库统计、批次溯源
  */
 
 import React from "react";
@@ -12,7 +12,6 @@ import WHInventoryListScreen from "../../screens/warehouse/inventory/WHInventory
 import WHInventoryDetailScreen from "../../screens/warehouse/inventory/WHInventoryDetailScreen";
 import WHBatchDetailScreen from "../../screens/warehouse/inventory/WHBatchDetailScreen";
 import WHInventoryCheckScreen from "../../screens/warehouse/inventory/WHInventoryCheckScreen";
-import WHInventoryTransferScreen from "../../screens/warehouse/inventory/WHInventoryTransferScreen";
 import WHLocationManageScreen from "../../screens/warehouse/inventory/WHLocationManageScreen";
 import WHExpireHandleScreen from "../../screens/warehouse/inventory/WHExpireHandleScreen";
 import WHTempMonitorScreen from "../../screens/warehouse/inventory/WHTempMonitorScreen";
@@ -62,13 +61,6 @@ export function WHInventoryStackNavigator() {
         name="WHInventoryCheck"
         component={WHInventoryCheckScreen}
         options={{ title: "库存盘点" }}
-      />
-
-      {/* 调拨 */}
-      <Stack.Screen
-        name="WHInventoryTransfer"
-        component={WHInventoryTransferScreen}
-        options={{ title: "库存调拨" }}
       />
 
       {/* 库位管理 */}

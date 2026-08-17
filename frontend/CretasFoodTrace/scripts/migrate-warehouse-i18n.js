@@ -111,7 +111,6 @@ const filesToMigrate = [
   'src/screens/warehouse/profile/WHProfileEditScreen.tsx',
   'src/screens/warehouse/inventory/WHTempMonitorScreen.tsx',
   'src/screens/warehouse/inventory/WHLocationManageScreen.tsx',
-  'src/screens/warehouse/inventory/WHInventoryTransferScreen.tsx',
   'src/screens/warehouse/inventory/WHInventoryDetailScreen.tsx',
   'src/screens/warehouse/inventory/WHInventoryListScreen.tsx',
   'src/screens/warehouse/inventory/WHIOStatisticsScreen.tsx',

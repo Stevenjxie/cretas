@@ -750,7 +750,6 @@ export type WHInventoryStackParamList = {
   WHInventoryDetail: { materialId?: string; inventoryId?: string };
   WHBatchDetail: { batchId?: string; batchNumber?: string };
   WHInventoryCheck: undefined;
-  WHInventoryTransfer: { batchId?: string };
   WHLocationManage: undefined;
   WHExpireHandle: { batchId?: string; batchNumber?: string };
   WHTempMonitor: undefined;
