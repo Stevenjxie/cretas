@@ -173,16 +173,34 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     /**
      * 全厂在手量 (不限仓库), 用于把「有货没领」和「真没货」分开。
      *
-     * <p>⚠️ 必须与生产仓那一侧**同一套单位匹配规则** ({@code unitMatches} + {@code batchAvailable}) ——
-     * 否则两个数不同口径, 相减出来的「压在别的仓的量」是假的。
-     * 这正是本仓「报一个数的时候把这个数是怎么来的一起报」那条判据。
+     * <p><b>🔴 2026-08-18 订正: 这里用<b>展示版</b>, 与可投量那一侧<b>刻意不同口径</b>。</b>
+     * 本方法上一版写着「必须与生产仓那一侧同一套规则」并用了严格版 —— 那条推理错了,
+     * 因为两个数回答的<b>不是同一个问题</b>:
+     *
+     * <ul>
+     *   <li><b>可投量</b>回答「系统现在能自动扣哪些批次」⇒ 必须严格:
+     *       扣减侧 {@link #kgToStorageQuantity} 对「箱」是原样返回, 放宽会<b>超扣 10 倍</b>。</li>
+     *   <li><b>全厂在手</b>回答「这批货到底在不在这个厂里」⇒ 必须按<b>事实</b>:
+     *       10 箱 × 10kg/箱 就是 100kg 在手, 与系统能不能自动扣它无关。</li>
+     * </ul>
+     *
+     * <p>用严格版数在手量, 会让文案说出一句<b>关于现实的假话</b>: 货明明躺在原料仓,
+     * 提示却是「全厂在手也是 0 → 需要先采购入库，找仓管补料没用」——
+     * 把人支去下采购单。⚠️ 上一轮加成因标注时, 我把原本模糊的一句话
+     * (「请联系仓管补料」) 换成了一句<b>确定的错话</b>, 那比模糊更糟。
+     *
+     * <p>「去领料」这个下一步是走得通的 —— {@code FactoryMaterialRequisitionServiceImpl}
+     * 注入了 {@code MaterialUomConverter} 并调 {@code toComparableQuantity}, 认得
+     * 箱↔kg 的包装规格。所以<b>不需要</b>第三种成因。
+     *
+     * <p>口径关系: 展示版 ⊇ 严格版, 且全厂 ⊇ 生产仓 ⇒ 在手量恒 ≥ 可投量, 成因比较不会翻负。
      */
     private BigDecimal factoryOnHandFor(
             String factoryId, String materialTypeId, String inputUnit, boolean massInput) {
         BigDecimal total = BigDecimal.ZERO;
         for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(
                 factoryId, materialTypeId)) {
-            if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
+            if (!unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                 continue;
             }
             BigDecimal available = batchAvailable(factoryId, batch, massInput);
