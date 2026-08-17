@@ -2,6 +2,21 @@ module.exports = {
   preset: 'react-native',
   testEnvironment: 'node',
 
+  // worker 上限 (2026-08-17) —— 不设它, jest 默认起 `cpus - 1` 个 worker。
+  //
+  // 实测(开发机 32 逻辑核): 一次 `jest` 拉起 30 个 worker, 两分钟内把 commit
+  // 从 129GB 推到 151GB —— 单次 +23GB(约 770MB/worker), commit 用到 95.8%
+  // (limit 157.93GB, 只剩 6.6GB), 此时任何并行任务直接 OOM。
+  // ⚠️ 那台机器物理内存还空着 38GB —— 瓶颈是 commit 不是 RAM, 所以"内存够用"
+  //    这个直觉在这里是错的, 加内存也不解决。
+  //
+  // 本仓常态是多 worktree / 多 agent 并行, 一次测试不该占满整机。
+  // 44 个 suite 用 8 个 worker 绰绰有余(~6GB); CI runner 核少, 用 '50%' 自适应。
+  // 单独跑想快: JEST_MAX_WORKERS=16 npm test
+  maxWorkers: process.env.JEST_MAX_WORKERS
+    ? Number(process.env.JEST_MAX_WORKERS)
+    : (process.env.CI ? '50%' : 8),
+
   // 全局变量定义 - 修复 __DEV__ 未定义错误
   globals: {
     __DEV__: true,
