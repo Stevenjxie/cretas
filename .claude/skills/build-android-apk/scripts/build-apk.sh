@@ -31,11 +31,15 @@ export PATH="$PATH:$ANDROID_HOME/platform-tools"
 echo "ANDROID_HOME: $ANDROID_HOME"
 echo ""
 
-# 1. 检查并安装依赖
-if [ ! -d "node_modules" ]; then
-    echo "安装 npm 依赖..."
-    npm install
-fi
+# 1. 按 lockfile 全量安装依赖
+# 🔴 2026-08-17: 这里曾经是「node_modules 存在就跳过」+ `npm install` ——
+# 打包机上留着的旧依赖被直接拿去打包, 打出的 v1.0.4 APK 一启动就崩(任何设备):
+#   NoSuchMethodError: getDirectConverter(...) in ReturnTypeKt
+#   at expo.modules.font.FontLoaderModule.definition(FontLoaderModule.kt:98)
+# 而 lockfile 一直锁着好版本 ⇒ 那个包不是按锁装出来的。
+# ⇒ 一律 npm ci(先清 node_modules, 再严格按锁装)。⛔ 不要改回 npm install / 不要加跳过分支。
+echo "按 lockfile 全量安装依赖 (npm ci)..."
+npm ci
 
 # 2. 执行 Expo prebuild (如果需要)
 if [ ! -d "android" ]; then

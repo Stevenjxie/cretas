@@ -107,14 +107,20 @@ install_dependencies() {
 
   cd "$FRONTEND_DIR"
 
-  if [ ! -d "node_modules" ]; then
-    print_info "首次运行，安装 npm 依赖..."
-    npm install
-    print_success "npm 依赖安装完成"
-  else
-    print_info "node_modules 已存在，跳过安装"
-    print_warning "如需重新安装，请运行: rm -rf node_modules && npm install"
-  fi
+  # 🔴 2026-08-17: 这里曾经是「node_modules 存在就跳过安装」+ `npm install`。
+  # 两处都出过事:
+  #   · 跳过安装 ⇒ 打包机上留着的那套(可能早已漂过的)依赖被直接拿去打包;
+  #   · `npm install` 会在 lockfile 之外重新解析, 与 `npm ci` 不同。
+  # 实测代价: 分发中的 v1.0.4 APK **一启动就崩, 任何设备都崩** ——
+  #   java.lang.NoSuchMethodError: getDirectConverter(...) in ReturnTypeKt
+  #   at expo.modules.font.FontLoaderModule.definition(FontLoaderModule.kt:98)
+  # 从 APK 的 dex 直接证死(dex 全 ABI 共用): 调用方在、被调方不在。
+  # 而 lockfile 一直锁着好版本(expo-modules-core@2.5.0 / expo-font@13.3.2,
+  # 两个包的源码里都没有 getDirectConverter 这个名字) ⇒ 打出来的包不是按锁装的。
+  # ⇒ 一律 npm ci: 它会先清掉 node_modules, 再严格按 lockfile 装。
+  print_info "按 lockfile 全量安装依赖 (npm ci)..."
+  npm ci
+  print_success "npm 依赖安装完成 (与 package-lock.json 一致)"
 }
 
 prepare_environment() {
