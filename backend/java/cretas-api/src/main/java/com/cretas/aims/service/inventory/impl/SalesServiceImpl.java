@@ -15,6 +15,7 @@ import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.enums.CustomerSource;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
@@ -338,6 +339,7 @@ public class SalesServiceImpl implements SalesService {
     public SalesOrder createSalesOrder(String factoryId, CreateSalesOrderRequest request, Long userId) {
         validateSupplyContract(
                 request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
+        assertItemsAreSellable(factoryId, request.getItems());
         validateSuppliedMaterialPayload(
                 request.getProcessingMode(), request.getMaterialSupplyMode(),
                 normalizeCustomerStockFulfillmentMode(request.getCustomerStockFulfillmentMode()),
@@ -4416,6 +4418,46 @@ public class SalesServiceImpl implements SalesService {
         target.setPackagingUnit(source.getPackagingUnit());
         target.setPackagingBaseUnit(source.getPackagingBaseUnit());
         target.setPackagingFactor(source.getPackagingFactor());
+    }
+
+    /**
+     * 下单行必须是<b>可售</b>的东西 —— 半成品不卖。
+     *
+     * <h3>🔴 为什么有这道守卫 (2026-08-18 prod 实测)</h3>
+     * 销售下拉 {@code GET /product-types/sellable} 已经把半成品排除了, 但<b>后端不校验</b>:
+     * 直接 POST 一条 {@code productTypeId} 指向「SOP-20260817-01-黄油鸡-处理后半成品」的行,
+     * 返回 200「销售订单创建成功」。防呆只在前端下拉里 = 半吊子 ——
+     * 前端换个版本、AI 工具直接调接口、或者从别处复制订单, 都能把半成品卖出去。
+     *
+     * <p>⛔ 判定<b>只用</b> {@link ProductCategory#isSellable} —— 它自己的 javadoc 写着
+     * 「这里是唯一权威, 不要在别处再写一份类别条件」。本方法不重复那个条件。
+     *
+     * <p>⚠️ 只拦<b>确实查得到且确实是半成品</b>的行:
+     * 查不到 productType 的行(原料/辅料/包材走物料字典, 本来就不在 product_types 里)一律放行 ——
+     * 那四类都要能卖(Steve 2026-08-12「出了半成品全开」), 误拦它们比漏拦半成品更糟。
+     */
+    private void assertItemsAreSellable(
+            String factoryId, List<CreateSalesOrderRequest.SalesOrderItemDTO> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        for (CreateSalesOrderRequest.SalesOrderItemDTO item : items) {
+            String pid = item == null ? null : item.getProductTypeId();
+            if (pid == null || pid.isBlank()) {
+                continue;
+            }
+            productTypeRepository.findByIdAndFactoryId(pid, factoryId)
+                    .filter(pt -> !ProductCategory.isSellable(pt.getProductCategory()))
+                    .ifPresent(pt -> {
+                        throw new BusinessException(400,
+                                "半成品不能开销售单: " + pt.getName())
+                                .withCode("SALES_ORDER_ITEM_NOT_SELLABLE")
+                                .withHint("半成品是生产中间物, 请改选成品; "
+                                        + "若确实要外卖这批半成品, 先在产品档案里把它建成可售产品")
+                                .withHintTarget("productTypeId")
+                                .withSeverity("BLOCKING");
+                    });
+        }
     }
 
     private void validateSupplyContract(
