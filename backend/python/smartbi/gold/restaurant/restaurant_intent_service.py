@@ -546,9 +546,22 @@ def _dimension_gap_advice(spec: RestaurantQuerySpec,
             f"这两层的数不在同一张表上，拆不出来。"
             f"想看的话分开问，例如先问「按{_names(both)}怎么样」。"
         )
+    # 🔴 2026-08-17 prod 实测, 这一支原来说的是胡话:
+    #      「哪家店损耗控制得最差」→ extra={store}
+    #      → 「换个问法我大概率能答, 例如把**门店**换成**门店**或菜品」
+    #    建议词「门店或菜品」是**硬编码**的, 与 extra/supported 都没关系,
+    #    于是当 extra 恰好就是门店时, 它建议老板把门店换成门店。
+    # 📌 判据: 建议**必须由 supported 算出来**, ⛔ 不写死 —— 写死的那一刻
+    #    它就与实际能力脱钩了(形态 D: 同一个东西两份, 一定会漂)。
+    if not supported:
+        return (
+            f"你这句要按{_names(extra)}来看，而这次选中的算法不按维度拆，"
+            f"只能给一个整体结论。"
+        )
     return (
-        f"你这句要按{_names(extra)}来看，而这次选中的算法出不了{_names(extra)}"
-        f"这一层。换个问法我大概率能答，例如把{_names(extra)}换成门店或菜品。"
+        f"你这句要按{_names(extra)}来看，而这次这个数我只能按{_names(supported)}"
+        f"给你，按{_names(extra)}拿不到。"
+        f"换成问「按{_names(supported)}怎么样」我就能答。"
     )
 
 
