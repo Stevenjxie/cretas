@@ -30,14 +30,26 @@ export interface MaterialBatch {
   reservedQuantity: number;
   usedQuantity: number;
   /**
-   * 批次的计量单位 (kg / box / slice / roll / case / …)。
+   * ⚠️ 这是【原料类型】的默认计量单位 (MaterialBatchMapper.java:77
+   * `dto.setUnit(batch.getMaterialType().getUnit())`), 不是【这一批】的实际单位 ——
+   * 两者同名 (kg/box/slice/roll/case) 时看不出差别, 一旦某批按包材/规格用了跟
+   * 类型默认不同的单位入库, 这个字段就是错的。判断"这一批用什么单位"应该用
+   * 下面的 `quantityUnit` (批次自己的字段, DB NOT NULL, 更权威)。
    *
-   * 后端一直在返回它, 但这份前端契约副本里从来没声明过 —— 于是消费方要么取不到,
-   * 要么(像 WHInventoryListScreen 那样)干脆硬编码成 'kg'。prod 实测 F006 首页
-   * 50 条批次: kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 unit 5,
-   * 也就是 12/50 不是 kg。⚠️ 可能为空 —— 库里确实有没标单位的批次, 别默认它有值。
+   * 之前这条注释写的是"批次的计量单位"——那是错的, 是同一个前端契约字段名
+   * 被凭直觉当成了批次级字段, 差点在 2026-08-17 的 MaterialBatchPicker 单位显示
+   * 修复里被复用。⛔ 显示"这一批剩余多少"时不要用它, 用 `quantityUnit`。
    */
   unit?: string;
+  /**
+   * 【批次自己的】计量单位 (来自 MaterialBatch.quantityUnit, DB 列
+   * `quantity_unit NOT NULL`) —— `remainingQuantity` / `inboundQuantity` 就是按
+   * 这个单位记的, 这是判断"这一批是 kg 还是 盒/卷/片"唯一权威的字段。
+   * 后端 MaterialBatchDTO 一直在返回 (Jackson 默认序列化, 无 @JsonProperty 改名),
+   * 只是这份前端契约副本之前没声明过 —— 消费方要么取不到, 要么用了同名但语义
+   * 不同的 `unit` (原料类型默认单位, 见上)。
+   */
+  quantityUnit?: string;
   unitPrice: number;
   totalCost: number;
   supplierId: string;

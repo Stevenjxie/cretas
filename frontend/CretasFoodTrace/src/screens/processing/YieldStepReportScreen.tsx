@@ -2679,20 +2679,45 @@ const YieldStepReportScreen: React.FC = () => {
                 testID="yield-output-qty"
               />
 
-              {/* 损耗 auto-computed display: 投入−产出 (read-only, 操作工无需手填) */}
+              {/* 损耗 auto-computed display: 投入−产出 (read-only, 操作工无需手填).
+                  ⚠️ 两侧单位可能不同(如上道半成品 kg vs 本道产出 盒) —— 那种情况下相减是
+                  跨单位算出的假数字(2026-08-17 prod 实测: 99kg − 80盒 = "19盒"),必须
+                  改成诚实说明, 不许印假的 "="。同单位但产出>投入时也不许把负数夹成 0
+                  照样印等号(那会让"填错了"和"投入产出刚好相等"长得一样)。*/}
               {(() => {
                 const inp = reportedInput ?? 0;
                 const out = parseFloat(outputQty);
-                const computed = !Number.isNaN(out) && out > 0 && inp > 0
-                  ? Math.max(0, Number((inp - out).toFixed(2)))
-                  : null;
-                return computed != null ? (
+                if (Number.isNaN(out) || out <= 0 || inp <= 0) return null;
+
+                const sameUnit = reportedInputUnit === outUnit;
+                if (!sameUnit) {
+                  return (
+                    <View style={styles.autoWasteBanner} testID="output-auto-waste">
+                      <Text style={styles.autoWasteText}>
+                        损耗需要换算: 投入 {inp}{reportedInputUnit}, 产出 {out}{outUnit} — 单位不同, 完工后由后端按规格换算
+                      </Text>
+                    </View>
+                  );
+                }
+
+                if (out > inp) {
+                  return (
+                    <View style={styles.hardcapBanner} testID="output-auto-waste">
+                      <Text style={styles.hardcapText}>
+                        产出 {out}{outUnit} 大于投入 {inp}{reportedInputUnit} — 请核对是不是填错了
+                      </Text>
+                    </View>
+                  );
+                }
+
+                const computed = Number((inp - out).toFixed(2));
+                return (
                   <View style={styles.autoWasteBanner} testID="output-auto-waste">
                     <Text style={styles.autoWasteText}>
-                      损耗 (自动) = 投入 {inp}{reportedInputUnit} − 产出 {out}{outUnit} = {computed}{unit}
+                      损耗 (自动) = 投入 {inp}{reportedInputUnit} − 产出 {out}{outUnit} = {computed}{reportedInputUnit}
                     </Text>
                   </View>
-                ) : null;
+                );
               })()}
 
               {outputOverHardCap ? (
