@@ -639,6 +639,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               {visibleRowIndices.map((idx: number) => {
                 const row = rows[idx];
                 if (row == null) return null;
+                // B: 这一行显示用【这个批次自己的单位】, 不是工序单位 —— prod 实测三个批次
+                // (成品盒/封膜卷/外箱片) 统统被显示成工序单位 "kg", 仓管按假单位领错料。
+                // ⚠️ 这里故意用 quantityUnit 不是 unit —— 查过 MaterialBatchMapper.java:77
+                // 之后发现 `unit` 是【原料类型】的默认单位 (dto.setUnit(materialType.getUnit())),
+                // 跟这一批 remainingQuantity 实际记账的单位是两回事; remainingQuantity 对应
+                // 的是 batch.quantityUnit (DB 列 NOT NULL, 批次自己的字段) —— 差点把"工序单位
+                // 的假"换成"物料类型默认单位的假", 同一类缺陷换了个马甲。批次没有
+                // quantityUnit(理论上不该发生, DB 约束非空) 才退回工序单位, 诚实兜底不瞎猜.
+                const rowUnit = row.batch.quantityUnit ?? unit;
                 return (
                 <TouchableOpacity
                   key={row.batch.id}
@@ -666,12 +675,12 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     {row.batch.factoryNumber ? (
                       <Text style={[styles.materialName, { color: '#888', fontSize: 11 }]}>厂号: {row.batch.factoryNumber}</Text>
                     ) : null}
-                    <Text style={styles.remaining}>
-                      剩余 {row.batch.remainingQuantity} {unit}
+                    <Text style={styles.remaining} testID={`material-batch-remaining-${row.batch.id}`}>
+                      剩余 {row.batch.remainingQuantity} {rowUnit}
                     </Text>
                     {row.selected && rowOverLimit(row, !isMultiBatch) ? (
                       <Text style={styles.rowLimitText}>
-                        最多可领 {row.batch.remainingQuantity} {unit}
+                        最多可领 {row.batch.remainingQuantity} {rowUnit}
                       </Text>
                     ) : null}
                   </View>
@@ -693,8 +702,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                         placeholder="用量"
                         placeholderTextColor="#C0C4CC"
                         accessibilityLabel={`批次 ${row.batch.batchNumber} 用量`}
+                        testID={`material-batch-qty-${row.batch.id}`}
                       />
-                      <Text style={styles.qtyUnit}>{unit}</Text>
+                      <Text style={styles.qtyUnit} testID={`material-batch-qty-unit-${row.batch.id}`}>{rowUnit}</Text>
                     </View>
                   ) : row.selected && !isMultiBatch ? (
                     // 单批次: 显示提示, 投入量由屏幕控制
