@@ -10,7 +10,9 @@ import {
   AlertsDashboardData,
   RestaurantDashboardSummary,
 } from '../../../../services/api/dashboardApiClient';
-import { workReportingApiClient } from '../../../../services/api/workReportingApiClient';
+// legacy 报工栈退役第 3 步：改指向 process-work-reporting。
+// 底账与顺序见 docs/decisions/2026-08-17-legacy报工栈退役.md。
+import { processTaskApiClient } from '../../../../services/api/processTaskApiClient';
 import { aiApiClient } from '../../../../services/api/aiApiClient';
 import type { AIInsight } from '../types';
 
@@ -54,7 +56,9 @@ export function useDashboardData(isRestaurantMode: boolean): DashboardDataResult
     try {
       setError(null);
 
-      const fetchPromises: Promise<{ success: boolean; data: unknown }>[] = isRestaurantMode
+      // `data?:` 是可选的 —— processTaskApiClient 的信封把 data 声明成可选,
+      // 而下面每一处读它之前都先判过 `.data` 真值, 所以放宽这里比在调用点加 `!` 诚实。
+      const fetchPromises: Promise<{ success: boolean; data?: unknown }>[] = isRestaurantMode
         ? [
             dashboardAPI.getRestaurantDashboardSummary(),
             dashboardAPI.getAlertsDashboard('week'),
@@ -62,7 +66,7 @@ export function useDashboardData(isRestaurantMode: boolean): DashboardDataResult
         : [
             dashboardAPI.getDashboardOverview('today'),
             dashboardAPI.getAlertsDashboard('week'),
-            workReportingApiClient.getSummary(),
+            processTaskApiClient.getWorkReportSummary(),
           ];
       const results = await Promise.allSettled(fetchPromises);
       const overviewResult = results[0] as PromiseSettledResult<{ success: boolean; data: unknown }>;

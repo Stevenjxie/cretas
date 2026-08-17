@@ -6,9 +6,12 @@
 
 import { renderHook, act } from '@testing-library/react-native';
 
+// 退役第 3 步：这个 hook 已改指向 process-work-reporting。
+// ⛔ 这里的 mock 路径必须跟着换 —— 桩挂在旧模块上的话，真实调用打的是没桩的
+//    processTaskApiClient，长相是「API 没被调用」而不是「改错了」。
 const mockGetHistoricalAverage = jest.fn();
-jest.mock('../../../services/api/workReportingApiClient', () => ({
-  workReportingApiClient: {
+jest.mock('../../../services/api/processTaskApiClient', () => ({
+  processTaskApiClient: {
     getHistoricalAverage: (...args: any[]) => mockGetHistoricalAverage(...args),
   },
 }));

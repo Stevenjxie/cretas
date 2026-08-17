@@ -4,7 +4,9 @@ import { TutorialOverlay } from '../../components/common/TutorialOverlay';
 import { TUTORIAL_MY_REPORTS, useTutorialTarget, useTutorial } from '../../store/tutorialStore';
 import { Text, Appbar, Card, ActivityIndicator, SegmentedButtons } from 'react-native-paper';
 import { useNavigation, CommonActions } from '@react-navigation/native';
-import { workReportingApiClient } from '../../services/api/workReportingApiClient';
+// legacy 报工栈退役第 3 步：改指向 process-work-reporting。
+// 底账与顺序见 docs/decisions/2026-08-17-legacy报工栈退役.md。
+import { processTaskApiClient } from '../../services/api/processTaskApiClient';
 import type { WorkReportResponse } from '../../types/workReporting';
 import { formatNumberWithCommas } from '../../utils/formatters';
 
@@ -50,7 +52,7 @@ export default function MyWorkReportsScreen() {
 
   const loadReports = useCallback(async () => {
     try {
-      const res = await workReportingApiClient.getReports({
+      const res = await processTaskApiClient.getWorkReports({
         page: 1,
         size: 50,
       });
