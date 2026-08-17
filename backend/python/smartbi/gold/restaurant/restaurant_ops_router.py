@@ -1922,6 +1922,51 @@ _INTERROGATIVE_MARKERS: Tuple[str, ...] = (
 )
 
 
+#: 门店之间差多少才值得单独去查。**明写出来的选择, 不是推导出来的。**
+#: ⚠️ 印在正文里(「相差 X%」)就是为了让它可被反驳 —— 藏起来的阈值没人能质疑。
+_STORE_SPREAD_WORTH_CHASING_PCT = 5.0
+
+
+def _advice_line(top_stores, can_see_money: bool) -> str:
+    """按门店差距给建议 —— 差距小就直说别按门店拆。
+
+    🔴 2026-08-17 冷启动实测催生: 这里原来是一句**无条件常量**,
+    四个不同问句拿到的建议一字不差, 且 10 家店只差 2.6% 时它照样说
+    「把低于中位的门店拉出来查客流/客单/折扣」——**老板照着去查会一无所获**。
+
+    ▎读起来很具体、其实与他问的和这次的数据都无关 ⇒ **假建议**。
+    ▎反目标里最重的一条: 一条误发的提示烧掉的是「这东西说的话能信」。
+
+    ⛔ 不压掉建议(那会少一个出口), 而是让它**指向数据支持的那个方向**:
+       差距够大 → 按门店查; 差距很小 → 明说门店之间没东西可追, 换个方向。
+    """
+    if not can_see_money or len(top_stores) < 2:
+        return (
+            "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
+            "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+        )
+    revs = [float(s.get("revenue") or 0.0) for s in top_stores]
+    hi, lo = max(revs), min(revs)
+    if hi <= 0:
+        return (
+            "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
+            "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+        )
+    spread_pct = (hi - lo) / hi * 100.0
+    if spread_pct < _STORE_SPREAD_WORTH_CHASING_PCT:
+        return (
+            f"建议：这段时间门店之间差得很少（最高与最低相差 {spread_pct:.1f}%，"
+            f"低于我们认为值得单独去查的 {_STORE_SPREAD_WORTH_CHASING_PCT:.0f}%），"
+            f"按门店拆多半找不到东西。想找抓手，先看菜品毛利或时段，"
+            f"那两层的差距通常比门店之间大。"
+        )
+    return (
+        f"建议：门店之间最高与最低相差 {spread_pct:.1f}%，值得单独看。"
+        f"先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
+        f"再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+    )
+
+
 def _store_breakdown_block(
     rows, all_total: float, *, title: str, amount_header: str, noun: str,
 ) -> str:
@@ -7926,9 +7971,36 @@ async def resolve_sales_summary(
                 )
             )
 
+    # 🔴 2026-08-17 冷启动实测: MOCK_REST 10 家店营收最高 ¥2,242,922 / 最低
+    #    ¥2,184,720 —— **相差 2.6%**(CV 0.9%)。而产品照样说「表现最强的是 X」
+    #    「低于中位的有 4 家, **先看** Y」, 再加一句「把低于中位的拉出来查
+    #    客流/客单/折扣」。⇒ 老板照着去查, **会一无所获**。
+    #
+    # ▎那正是反目标里最重的一条: **一条误发的提示烧掉的是「这东西说的话能信」**。
+    #
+    # ⛔ 不是压掉排名 —— 2.6% × ¥2.2M ≈ ¥5.8 万, 是真钱, 该不该追是**他的**判断。
+    #    要修的是产品**替他做了那个判断**却没给依据: 说了「谁最强/先看谁」,
+    #    却从没说「差多少」。
+    # ⇒ 把差距量出来接在结论后面, 让他自己判断值不值得追。
+    _spread_note = ""
+    if can_see_money and len(top_stores) >= 2:
+        _revs = [float(s.get("revenue") or 0.0) for s in top_stores]
+        _hi, _lo = max(_revs), min(_revs)
+        if _hi > 0:
+            _spread_pct = (_hi - _lo) / _hi * 100.0
+            _spread_note = (
+                f"最高与最低相差 {_spread_pct:.1f}%"
+                f"（{_money(_hi)} vs {_money(_lo)}）。"
+            )
+
     weak_line = ""
     if weak_stores:
-        weak_line = f"低于中位水平的门店有 {len(weak_stores)} 家，先看{weak_stores[0]}。"
+        weak_line = (
+            f"低于中位水平的门店有 {len(weak_stores)} 家，先看{weak_stores[0]}。"
+            f"{_spread_note}"
+        )
+    elif _spread_note:
+        weak_line = _spread_note
 
     avg_text = _money(float(avg_bill)) if avg_bill is not None else "暂无"
     margin_line = ""
@@ -8145,10 +8217,14 @@ async def resolve_sales_summary(
         comparison_line,
         margin_line,
         weak_line if asks_best_store_revenue else f"{top_line}{weak_line}",
-        (
-            "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
-            "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
-        ),
+        # 🔴 2026-08-17: 这句原来是**无条件常量** —— 四个不同问句
+        #    (「这个月生意怎么样」「昨天营业额多少」「最近30天卖了多少钱」
+        #     「哪家店卖得最好」) 拿到的建议**一字不差**, 且与数据无关:
+        #    10 家店只差 2.6% 时它照样说「把低于中位的拉出来查」。
+        # ▎读起来很具体、其实与他这次问的和这次的数据都没关系 —— 那是**假建议**。
+        # ⇒ 让它随差距变。⚠️ 5% 这个线是**明写出来的选择**, 不是推导出来的:
+        #    把它印在正文里, 老板不同意可以直接反驳 —— ⛔ 藏起来的阈值没法被质疑。
+        _advice_line(top_stores, can_see_money),
         prohibited_actions_line,
     ]
     answer = "\n\n".join(part for part in answer_parts if part)
