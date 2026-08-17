@@ -22,16 +22,43 @@ const CLIENT = 'workReportingApiClient';
 const CLIENT_SELF = path.join('services', 'api', 'workReportingApiClient.ts');
 
 /**
+ * 「消费」的判据是**引入了这个模块**，⛔ 不是「文中出现过这个名字」。
+ *
+ * 🔴 2026-08-17 第 3 步实测：第一版写的是 `content.includes('workReportingApiClient')`，
+ * 于是替代实现里那句「替代 legacy `workReportingApiClient.getReports`」的**注释**
+ * 把 `processTaskApiClient.ts` 判成了新增消费方 —— 闸把自己的说明书数了进去。
+ *
+ * 这不是一次性巧合：整个退役期间，每个迁移点都要在注释里写「替代的是哪个」，
+ * 所以这是一条**会反复误报**的判据，而反复误报的闸的结局是被人 skip 掉。
+ * 收窄到 import/require 语句：仍然抓得住每一个真消费方（存量 5 个全是静态 import），
+ * ⛔ 抓不住动态 `await import()` 拼串那种 —— 本仓一处都没有，写在这里是留痕不是豁免。
+ */
+const IMPORTS_CLIENT = new RegExp(
+  String.raw`(?:from|require\()\s*['"][^'"]*services/api/workReportingApiClient['"]`,
+);
+
+/**
  * 2026-08-17 冻结的存量消费方（源码，不含测试）。
  * ⛔ 只许变短。迁移顺序见设计卡第四节。
+ *
+ * 变短记录：
+ * - 2026-08-17 第 3 步（只读改指向）：8 → 5。迁走的三个是
+ *   `useAnomalyDetection`（getHistoricalAverage）、
+ *   `useDashboardData`（getSummary）、
+ *   `MyWorkReportsScreen`（getReports），它们各自只剩这一处 legacy 调用，
+ *   替代端点已在 `process-work-reporting` 上补齐。
+ *
+ * 剩下 5 个各自缺什么（⛔ 不是「忘了迁」）：
+ * - `useReportWorkflow`        —— getSchema / submitReport，等第 4 步（yield 栈）
+ * - `WorkReportApprovalScreen` —— approveReport，第 5 步整屏删掉
+ * - `DynamicReportScreen`      —— 打卡，等第 6 步（process-checkin）
+ * - `NfcCheckinScreen`         —— 打卡，同上
+ * - `TeamBatchReportScreen`    —— 打卡，同上
  */
 const FROZEN: readonly string[] = [
-  'hooks/useAnomalyDetection.ts',
   'hooks/useReportWorkflow.ts',
-  'screens/factory-admin/home/hooks/useDashboardData.ts',
   'screens/factory-admin/management/WorkReportApprovalScreen.tsx',
   'screens/processing/DynamicReportScreen.tsx',
-  'screens/processing/MyWorkReportsScreen.tsx',
   'screens/processing/NfcCheckinScreen.tsx',
   'screens/processing/TeamBatchReportScreen.tsx',
 ];
@@ -53,7 +80,7 @@ function walk(dir: string, out: string[] = []): string[] {
 function currentConsumers(): string[] {
   return walk(SRC)
     .filter((p) => !p.endsWith(CLIENT_SELF))
-    .filter((p) => fs.readFileSync(p, 'utf8').includes(CLIENT))
+    .filter((p) => IMPORTS_CLIENT.test(fs.readFileSync(p, 'utf8')))
     .map((p) => path.relative(SRC, p).split(path.sep).join('/'))
     .sort();
 }
@@ -78,5 +105,13 @@ describe('legacy 报工栈 冻结棘轮', () => {
 
   it('棘轮只许变短: 当前数量不得超过冻结数量', () => {
     expect(currentConsumers().length).toBeLessThanOrEqual(FROZEN.length);
+  });
+
+  it('⛔ 阴性对照: 判据认的是 import, 不是「文中提到这个名字」', () => {
+    // 收窄之后必须证明它真的窄了 —— 否则下一个人无从判断这条注释是不是过期的。
+    expect(IMPORTS_CLIENT.test("import { workReportingApiClient } from '../services/api/workReportingApiClient';")).toBe(true);
+    expect(IMPORTS_CLIENT.test('// 替代 legacy workReportingApiClient.getReports')).toBe(false);
+    // 阳性对照: CLIENT 这个名字本身还在被用（它就是被冻结的那个东西）
+    expect(CLIENT).toBe('workReportingApiClient');
   });
 });

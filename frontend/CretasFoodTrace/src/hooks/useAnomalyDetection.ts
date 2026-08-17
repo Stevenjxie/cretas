@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { workReportingApiClient } from '../services/api/workReportingApiClient';
+// legacy 报工栈退役第 3 步：改指向 process-work-reporting。
+// 底账与顺序见 docs/decisions/2026-08-17-legacy报工栈退役.md。
+import { processTaskApiClient } from '../services/api/processTaskApiClient';
+import type { HistoricalAverage } from '../services/api/processTaskApiClient';
 
-interface HistoricalStats {
-  avgOutput: number;
-  stddevOutput: number;
-  avgDefect: number;
-  sampleCount: number;
-}
+type HistoricalStats = HistoricalAverage;
 
 interface AnomalyWarning {
   field: 'output' | 'defect';
@@ -29,7 +27,7 @@ export function useAnomalyDetection(factoryId: string | undefined) {
 
     setLoading(true);
     try {
-      const res = await workReportingApiClient.getHistoricalAverage(
+      const res = await processTaskApiClient.getHistoricalAverage(
         processCategory,
         30,
         factoryId

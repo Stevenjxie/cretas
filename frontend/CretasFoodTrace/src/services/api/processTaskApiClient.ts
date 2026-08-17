@@ -1,6 +1,29 @@
 import { apiClient } from './apiClient';
 import { requireFactoryId } from '../../utils/factoryIdHelper';
 import type { PageResponse, WorkProcessTask } from './yieldReportApi';
+import type { WorkReportResponse } from '../../types/workReporting';
+
+/**
+ * 报工看板汇总 —— 后端 `WorkReportSummaryResponse` 的三个字段。
+ *
+ * ⚠️ 只有三个是量出来的：legacy 的 Map 出口有 7 个键，
+ * 其余四个（progressSummary / hoursSummary / weeklyOutput / todayCount）
+ * 在 RN + web-admin 全仓零消费方，随迁移一起砍掉了。
+ */
+export interface WorkReportSummary {
+  /** ⚠️ 口径是 `status = SUBMITTED`，与 `/pending-approval` 列表的 approvalStatus='PENDING' 不是同一个数。 */
+  pendingApprovalCount: number;
+  todayOutputTotal: number;
+  todayYieldRate: number;
+}
+
+/** 工序历史均值 —— 后端 `WorkReportHistoricalAverageResponse`。 */
+export interface HistoricalAverage {
+  avgOutput: number;
+  stddevOutput: number;
+  avgDefect: number;
+  sampleCount: number;
+}
 
 // ========== Types ==========
 
@@ -343,6 +366,57 @@ class ProcessTaskApiClient {
   async batchApprove(reportIds: number[], factoryId?: string) {
     const base = this.getBase(factoryId);
     return apiClient.put(`${base}/process-work-reporting/batch-approve`, reportIds);
+  }
+
+  /**
+   * 报工列表 —— 替代 legacy `workReportingApiClient.getReports`。
+   *
+   * 后端 `ProcessWorkReportingController.listReports`，返回 Spring `Page<WorkReportResponse>`，
+   * 与 legacy 同一个 DTO、同样的四个查询分支、同样的 reportDate 倒序，
+   * 所以消费方读 `data.content` 的写法不用改。
+   *
+   * ⚠️ 与 legacy 的唯一行为差：新 controller 带 `@RequireModule("production_report")`，
+   * 未开该模块的工厂会被挡（legacy 那条没有模块闸）。
+   */
+  async getWorkReports(
+    params: { type?: string; startDate?: string; endDate?: string; page?: number; size?: number } = {},
+    factoryId?: string,
+  ): Promise<ApiEnvelope<PageResponse<WorkReportResponse>>> {
+    const base = this.getBase(factoryId);
+    return apiClient.get<ApiEnvelope<PageResponse<WorkReportResponse>>>(
+      `${base}/process-work-reporting/reports`,
+      { params },
+    );
+  }
+
+  /**
+   * 报工看板汇总 —— 替代 legacy `workReportingApiClient.getSummary`。
+   *
+   * ⛔ 新端点<b>不接受</b> startDate/endDate：legacy 那两个参数只喂三个零消费方的字段
+   * （progressSummary / hoursSummary / weeklyOutput），已随迁移砍掉。
+   * RN 侧本来就是无参调用。
+   */
+  async getWorkReportSummary(factoryId?: string): Promise<ApiEnvelope<WorkReportSummary>> {
+    const base = this.getBase(factoryId);
+    return apiClient.get<ApiEnvelope<WorkReportSummary>>(`${base}/process-work-reporting/summary`);
+  }
+
+  /**
+   * 工序历史均值（异常检测用）—— 替代 legacy `workReportingApiClient.getHistoricalAverage`。
+   *
+   * ⚠️ 「这个工序近 N 天没报过工」的长相是 `sampleCount: 0`，⛔ 不是 null ——
+   * 后端那条聚合是 COUNT(*)，空集上给 0。消费方靠 `sampleCount < 5` 判样本不够。
+   */
+  async getHistoricalAverage(
+    processCategory: string,
+    days: number = 30,
+    factoryId?: string,
+  ): Promise<ApiEnvelope<HistoricalAverage>> {
+    const base = this.getBase(factoryId);
+    return apiClient.get<ApiEnvelope<HistoricalAverage>>(
+      `${base}/process-work-reporting/reports/historical-average`,
+      { params: { processCategory, days } },
+    );
   }
 
   async getReportsByTask(taskId: string, factoryId?: string) {
