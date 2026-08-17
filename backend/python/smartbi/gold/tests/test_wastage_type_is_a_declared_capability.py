@@ -63,13 +63,18 @@ class TestWastageTypeIsDeclared:
             _spec(("ingredient", "wastage_type")), WASTAGE) == ""
 
     def test_a_dimension_it_really_cannot_do_is_still_a_gap(self):
-        """阳性对照：门店它**真的**出不来，那条必须照旧拒。
+        """阳性对照：拿一个它**真的**出不来的维度，那条必须照旧拒。
 
         少了这条，「不再拒答」可能是因为闸被整体打死了。
+
+        ⚠️ 2026-08-17 换了例子：原来用的是「按门店」，而当天门店被做出来了
+           （`V20261101_16` + ops_writer 接线 + `wastage_cost_by_store`）。
+           ⛔ 不是删掉这条对照 —— 换成损耗**确实**拆不出的那一层（渠道：
+           损耗单据里没有堂食/外卖这回事）。
         """
-        advice = _dimension_gap_advice(_spec(("store",)), WASTAGE)
-        assert advice, "按门店看损耗本来就出不来，这条不该被放行"
-        assert "门店" in advice
+        advice = _dimension_gap_advice(_spec(("channel",)), WASTAGE)
+        assert advice, "按渠道看损耗本来就出不来，这条不该被放行"
+        assert "渠道" in advice
 
 
 class TestTheDeclarationStaysHonest:

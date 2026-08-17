@@ -1839,6 +1839,15 @@ _DEMO_GOLD_MAPPED_CODES = frozenset({
 _STORE_CAPABLE_BUT_NOT_DEMO_MAPPED = frozenset({
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
     "RESTAURANT_OPS_STAFFING_ADVICE",
+    # 2026-08-17 新登记（⚠️ 这条是**做了决定**才进来的，不是顺手加的）:
+    # 损耗当天起能按门店拆，于是它成了 store-capable，闸要求二选一。
+    # ⛔ 选「不进映射表」的理由: 进了的话 DEMO_REST 的损耗会改读 RES_3101_009,
+    #    而那边只有 10 行(DEMO_REST 自己的 seed 有 214 行) —— 演示反而更空。
+    # ⚠️ 代价说清楚: demo 账号的损耗门店宇宙与营收/排行**不是同一批店**。
+    #    目前不构成矛盾, 因为 demo 那条管线的损耗**根本没有门店**
+    #    (`seed_demo_rest_ops.py` 只生成 section_code 这类厨房档口)。
+    #    ⇒ 等 demo seeder 改成门店感知之后, 这一条要重新裁一次。
+    "RESTAURANT_OPS_WASTAGE_TOP",
 })
 
 
@@ -3322,6 +3331,27 @@ async def resolve_wastage_top(
             """,
             factory_id, days, window_start, window_end,
         )
+        # 按门店的损耗（2026-08-17 起可用）。
+        # ⚠️ 读 `wastage_cost_by_store` 这个 kpi_kind, `dim_value_id` 是 store_id。
+        # 🔴 存量行的 store_id 是 NULL, ETL 侧已 `WHERE store_id IS NOT NULL` 排除,
+        #    所以这里读到的都是真门店 —— 不会冒出一家 `dim_value_id=0` 的幽灵店。
+        # ⛔ 空结果就是空结果, 不拿「全店合计」顶一行假的门店数据。
+        store_wastage_rows = await conn.fetch(
+            """
+            SELECT s.name AS store_name,
+                   SUM(a.value_num)::float AS cost
+              FROM agg_restaurant_daily_ops a
+              JOIN dim_store s ON s.store_id = a.dim_value_id
+                              AND s.factory_id = a.factory_id
+             WHERE a.factory_id = $1 AND a.kpi_kind = 'wastage_cost_by_store'
+               AND a.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR a.date <= $4::date)
+             GROUP BY s.name
+             ORDER BY cost DESC NULLS LAST
+             LIMIT 20
+            """,
+            factory_id, days, window_start, window_end,
+        )
         # 窗口内一条都没有时, 「最后一次录损耗是哪天」是老板唯一能据以行动的事实。
         # ⛔ 用**同一张**聚合表, 不换口径去问 `fact_restaurant_wastage` ——
         #    上面三条读数都来自 agg 层, 混着问会得出「明明有却说没有」这种自相矛盾。
@@ -3444,11 +3474,25 @@ async def resolve_wastage_top(
             f"{next_step}"
         )
     else:
+        # 各门店损耗排行。⚠️ 只在**有多家店**时出 —— 单店租户一行的表格
+        # 只是多两条竖线(与渠道构成那张表同一条判据)。
+        store_block = ""
+        if len(store_wastage_rows) >= 2:
+            store_rows_rendered = [
+                [i, r["store_name"], f"¥{float(r['cost'] or 0.0):,.2f}"]
+                for i, r in enumerate(store_wastage_rows, 1)
+            ]
+            store_block = "\n".join(
+                [f"\n各门店损耗金额（{len(store_wastage_rows)} 家，从高到低）:"]
+                + _markdown_table(["#", "门店", "损耗金额"],
+                                  store_rows_rendered, right_align={2})
+            ) + "\n"
         answer = (
             f"{window_text}损耗总览:\n"
             f"{totals_line}\n"
             f"- 损耗类型分布: {type_summary}\n\n"
-            f"{top_block}\n\n"
+            f"{top_block}\n"
+            f"{store_block}\n"
             f"建议动作:\n"
             f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
             f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"

@@ -151,14 +151,17 @@ def test_followups_are_capped_and_deduped():
 # 问句格式修对了也没用, **按钮提供的是一个系统答不了的问题**。
 
 def test_no_scope_buttons_when_the_resolver_cannot_split_by_store():
+    # ⚠️ 2026-08-17 换了例子: 原来用 WASTAGE_TOP, 而当天损耗**做出了门店维度**
+    #    (V20261101_16 + ops_writer 接线 + wastage_cost_by_store) ——
+    #    那些「只看某某店」按钮现在是**成立**的, 这条用例的前提没了。
+    #    ⛔ 不是删掉这条对照: 换成仍然拆不出门店的 RECIPE_COST(只服务 dish)。
     got = _suggested_followups({
-        "intent": "RESTAURANT_OPS_WASTAGE_TOP",   # 只服务 ingredient
+        "intent": "RESTAURANT_OPS_RECIPE_COST",   # 只服务 dish
         "store_scope": "all",
         "store_options": ["A店", "B店"],
-        "question_seed": "全部门店最近30天损耗金额最高的食材",
+        "question_seed": "全部门店最近30天成本最高的菜",
     })
-    # 2026-07-31: WASTAGE_TOP 现在会拿到**换时间**按钮(它自 PR#2076 起真按请求的
-    # 窗口取数), 所以整体不再是空列表 —— 这条用例要的是「没有换**门店**按钮」。
+    # 整体不一定是空列表(可能有换时间按钮) —— 这条用例要的是「没有换**门店**按钮」。
     assert not any("A店" in x["question"] or "B店" in x["question"] for x in got), got
 
 
@@ -181,5 +184,9 @@ def test_capability_check_reuses_the_downstream_table():
     「按钮点了报错」。"""
     from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
 
-    assert "store" not in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_WASTAGE_TOP"]
+    # ⚠️ 2026-08-17: WASTAGE_TOP 已**毕业**(当天补上门店维度), 不能再当
+    #    「拆不出门店」的例子。换成 RECIPE_COST —— 成本卡按菜录, 没有门店那一层。
+    assert "store" not in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_RECIPE_COST"]
     assert "store" in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_SALES_SUMMARY"]
+    # 阳性对照(反向): 损耗现在**确实**能按门店 —— 这一行同时是那次改动的回归守卫。
+    assert "store" in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_WASTAGE_TOP"]

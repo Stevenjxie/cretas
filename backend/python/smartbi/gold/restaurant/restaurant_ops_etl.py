@@ -802,6 +802,54 @@ ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE 
     version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
 """
 
+# 按门店的损耗金额（2026-08-17）。
+#
+# ⛔ 不改 `agg_restaurant_daily_ops` 的 schema —— 它是 EAV 形状
+#    `(factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num)`,
+#    新维度只要一个新的 kpi_kind + 把 dim_value_id 当 store_id 用。
+#
+# 🔴 `WHERE store_id IS NOT NULL` 是承重的: 存量行是在 store_id 这一列存在
+#    之前写的, 全是 NULL。不过滤的话它们会聚成 `dim_value_id = 0` 的一坨,
+#    而 0 在这张表里是「无维度」的占位值(见上面几条 `COALESCE(ingredient_id, 0)`)
+#    —— 于是「按门店看损耗」会多出一家叫「0 号店」的幽灵门店, 金额还最大。
+#    ⚠️ 那比拒答糟得多: 它是一个**看起来完全正常的错数**。
+_AGG_WASTAGE_COST_BY_STORE_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'wastage_cost_by_store',
+       store_id, '',
+       SUM(COALESCE(estimated_cost, 0))::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_wastage
+ WHERE factory_id = $1::varchar AND status = 'APPROVED'
+   AND store_id IS NOT NULL
+ GROUP BY factory_id, date, store_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
+# 按门店的损耗数量。理由同上。
+_AGG_WASTAGE_QTY_BY_STORE_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'wastage_qty_by_store',
+       store_id, '',
+       SUM(COALESCE(quantity, 0))::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_wastage
+ WHERE factory_id = $1::varchar AND status = 'APPROVED'
+   AND store_id IS NOT NULL
+ GROUP BY factory_id, date, store_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
 # Stocktaking shortage per ingredient (absolute of negative difference).
 _AGG_STOCK_SHORTAGE_SQL = """
 INSERT INTO agg_restaurant_daily_ops (
@@ -940,6 +988,10 @@ async def materialize_gold_daily_ops(
             r6 = await conn.execute(_AGG_DAILY_TOTALS_SQL, factory_id)
             r7 = await conn.execute(_AGG_PRODUCT_COST_SQL, factory_id)
             r8 = await conn.execute(_AGG_WASTAGE_COST_SQL, factory_id)
+            r10 = await conn.execute(_AGG_WASTAGE_COST_BY_STORE_SQL, factory_id)
+            r11 = await conn.execute(_AGG_WASTAGE_QTY_BY_STORE_SQL, factory_id)
+            stats["wastage_cost_by_store"] = int(r10.split()[-1]) if r10 else 0
+            stats["wastage_qty_by_store"] = int(r11.split()[-1]) if r11 else 0
             stats["requisition_qty"] = int(r1.split()[-1]) if r1 else 0
             stats["requisition_cost"] = int(r2.split()[-1]) if r2 else 0
             stats["wastage_qty"] = int(r3.split()[-1]) if r3 else 0

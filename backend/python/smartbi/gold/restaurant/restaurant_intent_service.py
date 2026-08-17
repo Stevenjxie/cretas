@@ -126,7 +126,11 @@ _RESOLVER_DIMENSIONS = {
     #    能力表比真实能力**窄**, 于是把能算的说成算不出。
     # ⚠️ `_WASTAGE_DIMS` 还列了 `wastage_reason`, ⛔ 本次不补 —— 输出里没有
     #    按原因分的东西, 没有依据。宁可窄而真。
-    "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient", "wastage_type"}),
+    # 2026-08-17 再补 `store`: 门店一路带到写库前被丢掉了(投影丢失),
+    # `V20261101_16` 扩了 schema、ops_writer 接了线、ETL 出了
+    # `wastage_cost_by_store`, 答案里现在真有一张各门店损耗排行表。
+    # ⛔ 依据是它真能出, 不是「希望它能出」。
+    "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient", "wastage_type", "store"}),
     "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
     "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
     # The sales summary resolver returns a real per-store Top-N table in
