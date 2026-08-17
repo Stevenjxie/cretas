@@ -3,9 +3,26 @@ import { defineStore } from 'pinia';
 import { get } from '@/api/request';
 import { getPendingWarehouseReceivingTasks } from '@/api/purchaseReceive';
 import { listCustomerMaterialArrivals } from '@/api/customerMaterialArrival';
+import { usePermissionStore, type ModuleName } from '@/store/modules/permission';
 import type { TableRow } from '@/types/api';
 
 export type TaskBadgeKey = 'salesOrders' | 'warehouseReceiving' | 'unorderedInbound';
+
+/**
+ * 每个角标要读哪个模块 —— 没有该模块读权限就【别发那个请求】。
+ *
+ * ⚠️ 2026-08-17: 角标之前对所有人一视同仁地发三个请求。报工审批页的文员
+ * 没有 sales 读权限, 于是 `/sales/orders` 每轮都 403。
+ * 请求带 `_silent: true` 不弹 toast, 但 403 照样进 console, 而且服务端照样被打。
+ *
+ * ⇒ 权限不足时【不发请求】, 而不是「发了再把错误吞掉」。
+ * 结果对用户是一样的(角标本来就 fail-closed 地隐藏), 少的只是噪声和无效请求。
+ */
+const BADGE_MODULE: Record<TaskBadgeKey, ModuleName> = {
+  salesOrders: 'sales',
+  warehouseReceiving: 'procurement',
+  unorderedInbound: 'warehouse',
+};
 
 interface BadgeState {
   count: number;
@@ -80,11 +97,26 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
     if (!currentFactoryId) return;
     const token = ++loadToken;
     loading.value = true;
-    const loaders: Array<[TaskBadgeKey, Promise<number>]> = [
-      ['salesOrders', loadSales(currentFactoryId)],
-      ['warehouseReceiving', loadReceiving(currentFactoryId)],
-      ['unorderedInbound', loadUnorderedInbound(currentFactoryId)],
-    ];
+
+    const permission = usePermissionStore();
+    const runners: Record<TaskBadgeKey, (fid: string) => Promise<number>> = {
+      salesOrders: loadSales,
+      warehouseReceiving: loadReceiving,
+      unorderedInbound: loadUnorderedInbound,
+    };
+
+    const loaders: Array<[TaskBadgeKey, Promise<number>]> = [];
+    (Object.keys(runners) as TaskBadgeKey[]).forEach((key) => {
+      if (!permission.canAccess(BADGE_MODULE[key])) {
+        // 权限不足 ⇒ 【根本不发这个请求】。角标同样隐藏(与请求失败时一致),
+        // 区别只在于不再制造一条 403。
+        states[key].available = false;
+        states[key].count = 0;
+        return;
+      }
+      loaders.push([key, runners[key](currentFactoryId)]);
+    });
+
     const results = await Promise.allSettled(loaders.map(([, promise]) => promise));
     if (token !== loadToken || currentFactoryId !== factoryId.value) return;
     results.forEach((result, index) => {
