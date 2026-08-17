@@ -131,8 +131,12 @@ _RESOLVER_DIMENSIONS = {
     # `wastage_cost_by_store`, 答案里现在真有一张各门店损耗排行表。
     # ⛔ 依据是它真能出, 不是「希望它能出」。
     "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient", "wastage_type", "store"}),
-    "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
-    "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
+    # 2026-08-17 同批补 `store`: 盘点/领料的答案里现在各有一张按门店的表。
+    # ⛔ 依据同 WASTAGE_TOP —— 门店已真正落到 Silver(V20261101_16 + ops_writer
+    #    接线 + 重放游标回填, prod 实测三张表 store 覆盖 100%), 聚合侧出了
+    #    `stocktaking_shortage_cost_by_store` / `requisition_cost_by_store`。
+    "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient", "store"}),
+    "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient", "store"}),
     # The sales summary resolver returns a real per-store Top-N table in
     # addition to the chain aggregate, so an all-store revenue ranking is a
     # supported store-grain read rather than a resolver mismatch.

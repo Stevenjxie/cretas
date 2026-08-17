@@ -1848,6 +1848,11 @@ _STORE_CAPABLE_BUT_NOT_DEMO_MAPPED = frozenset({
     #    (`seed_demo_rest_ops.py` 只生成 section_code 这类厨房档口)。
     #    ⇒ 等 demo seeder 改成门店感知之后, 这一条要重新裁一次。
     "RESTAURANT_OPS_WASTAGE_TOP",
+    # 2026-08-17 同批: 盘点/领料也补上了门店维度, 理由与 WASTAGE_TOP 完全相同
+    # (进映射表会让 DEMO_REST 改读 RES_3101_009, 而那条 demo 管线的后厨单据
+    #  **同样没有门店** —— 换过去只会更空)。⚠️ 代价一并登记, 见上。
+    "RESTAURANT_OPS_STOCK_SHORTAGE",
+    "RESTAURANT_OPS_REQUISITION_TREND",
 })
 
 
@@ -1890,6 +1895,55 @@ def demo_data_factory_for_code(
 _INTERROGATIVE_MARKERS: Tuple[str, ...] = (
     "哪", "什么", "多少", "怎么", "为什么", "是否", "有没有",
 )
+
+
+def _store_breakdown_block(
+    rows, all_total: float, *, title: str, amount_header: str, noun: str,
+) -> str:
+    """把「按门店拆的那张表」渲染出来，并在覆盖不全时**把差额说出来**。
+
+    ⛔ **只此一处。** 损耗 / 领料 / 盘点三个 resolver 都要这张表, 各写一份
+       就是形态 D —— 而漂的表现是「有的表说了覆盖度、有的没说」, 不报错。
+
+    ## 🔴 覆盖度那句话是承重的（2026-08-17 实测，我自己当天造的缺陷）
+
+    给损耗答案加完门店表, 上线后 prod 实测:
+
+        抬头(30 天全部): ¥317,441.84 / 31 天
+        门店表合计:      ¥  6,828.07 /  1 天      ← 只有总额的 2%
+
+    成因: 存量行在 `store_id` 这一列存在之前写的、全是 NULL, 聚合侧
+    `WHERE store_id IS NOT NULL` 把它们排除了(那个排除是**对的** ——
+    不排会聚成 `dim_value_id = 0` 的幽灵门店, 金额还最大)。
+
+    ▎老板会把这张表读成「各店几乎不损耗」。
+    ▎**每个数都对, 合起来是谎** —— 这正是「看起来完全正常的错数」。
+
+    ⇒ 覆盖不全就说出来。⛔ 不许默默只显示一部分。
+    ⚠️ 这条**不会**随回填完成而失效: 任何新接入的租户、任何一段没记门店的
+       历史都会再次覆盖不全。它守的是「不完整就说」, 不是「这次差多少」。
+
+    ⚠️ 一家店不出表 —— 一行的表格只是多两条竖线(与渠道构成同一条判据)。
+    """
+    if len(rows) < 2:
+        return ""
+    rendered = [
+        [i, r["store_name"], f"¥{float(r['cost'] or 0.0):,.2f}"]
+        for i, r in enumerate(rows, 1)
+    ]
+    store_total = sum(float(r["cost"] or 0.0) for r in rows)
+    coverage_note = ""
+    if all_total > 0 and store_total < all_total * 0.995:
+        pct = store_total / all_total * 100
+        coverage_note = (
+            f"\n> ⚠️ 这张表只覆盖了 ¥{store_total:,.2f}"
+            f"（占上面总额的 {pct:.0f}%）—— 其余单据没有记门店，"
+            f"分不到店上。⛔ 别拿这张表当全部{noun}看。"
+        )
+    return "\n".join(
+        [f"\n{title}（{len(rows)} 家，从高到低）:"]
+        + _markdown_table(["#", "门店", amount_header], rendered, right_align={2})
+    ) + coverage_note + "\n"
 
 
 def extract_store_mentions(query: Optional[str]) -> list[str]:
@@ -3476,17 +3530,9 @@ async def resolve_wastage_top(
     else:
         # 各门店损耗排行。⚠️ 只在**有多家店**时出 —— 单店租户一行的表格
         # 只是多两条竖线(与渠道构成那张表同一条判据)。
-        store_block = ""
-        if len(store_wastage_rows) >= 2:
-            store_rows_rendered = [
-                [i, r["store_name"], f"¥{float(r['cost'] or 0.0):,.2f}"]
-                for i, r in enumerate(store_wastage_rows, 1)
-            ]
-            store_block = "\n".join(
-                [f"\n各门店损耗金额（{len(store_wastage_rows)} 家，从高到低）:"]
-                + _markdown_table(["#", "门店", "损耗金额"],
-                                  store_rows_rendered, right_align={2})
-            ) + "\n"
+        store_block = _store_breakdown_block(
+            store_wastage_rows, float(total["total_cost"] or 0.0),
+            title="各门店损耗金额", amount_header="损耗金额", noun="损耗")
         answer = (
             f"{window_text}损耗总览:\n"
             f"{totals_line}\n"
@@ -3611,6 +3657,24 @@ async def resolve_stock_shortage(
             """,
             factory_id, days, window_start, window_end,
         )
+        # 按门店的盘亏金额（2026-08-17）。⛔ 同一条纪律: ETL 侧已排除
+        # `store_id IS NULL` 的存量行, 这里读到的都是真门店。
+        store_rows = await conn.fetch(
+            """
+            SELECT s.name AS store_name, SUM(a.value_num)::float AS cost
+              FROM agg_restaurant_daily_ops a
+              JOIN dim_store s ON s.store_id = a.dim_value_id
+                              AND s.factory_id = a.factory_id
+             WHERE a.factory_id = $1
+               AND a.kpi_kind = 'stocktaking_shortage_cost_by_store'
+               AND a.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR a.date <= $4::date)
+             GROUP BY s.name
+             ORDER BY cost DESC NULLS LAST
+             LIMIT 20
+            """,
+            factory_id, days, window_start, window_end,
+        )
 
     # 2026-08-11: 编号列表改 markdown 表格(全站唯一拼装点 `_markdown_table`)。
     # ⚠️ 原来把金额与数量揉进一个单元格「¥123.00（4.50 kg）」, 拆成两列;
@@ -3629,11 +3693,16 @@ async def resolve_stock_shortage(
 
     # 金额是唯一能跨食材相加的维度 —— 数量总计会把 kg 和 L 加到一起(实测
     # DEMO_REST 41.45kg + 45.00L), 所以总计只给金额, 数量只逐项给且必带单位。
+    store_block = _store_breakdown_block(
+        store_rows, float(total["shortage_cost"] or 0.0),
+        title="各门店盘亏金额", amount_header="盘亏金额", noun="盘亏")
+
     answer = (
         f"{window_text}盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏金额 **¥{total['shortage_cost']:.2f}**, "
         f"盘盈金额 ¥{total['surplus_cost']:.2f}\n\n"
-        f"{top_block}\n\n"
+        f"{top_block}\n"
+        f"{store_block}\n"
         f"建议动作:\n"
         f"1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
         f"2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
@@ -4065,6 +4134,24 @@ async def resolve_requisition_trend(
             """,
             factory_id, days, top_n, window_start, window_end,
         )
+        # 按门店的领料金额（2026-08-17）。⛔ 与损耗那张表同一条纪律:
+        # ETL 侧已 `WHERE store_id IS NOT NULL`, 所以这里读到的都是真门店,
+        # 不会冒出一家 `dim_value_id=0` 的幽灵店。
+        store_rows = await conn.fetch(
+            """
+            SELECT s.name AS store_name, SUM(a.value_num)::float AS cost
+              FROM agg_restaurant_daily_ops a
+              JOIN dim_store s ON s.store_id = a.dim_value_id
+                              AND s.factory_id = a.factory_id
+             WHERE a.factory_id = $1 AND a.kpi_kind = 'requisition_cost_by_store'
+               AND a.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR a.date <= $4::date)
+             GROUP BY s.name
+             ORDER BY cost DESC NULLS LAST
+             LIMIT 20
+            """,
+            factory_id, days, window_start, window_end,
+        )
 
     total_qty = sum(r["qty"] or 0 for r in trend)
     total_cost = sum(r["cost"] or 0 for r in trend)
@@ -4080,10 +4167,15 @@ async def resolve_requisition_trend(
     ) if top else ["", f"({window_text}无领料记录)"]
     top_block = "\n".join([f"领用食材前 {len(top)} 名:"] + top_lines)
 
+    store_block = _store_breakdown_block(
+        store_rows, float(total_cost or 0.0),
+        title="各门店领料金额", amount_header="领料金额", noun="领料")
+
     answer = (
         f"{window_text}领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 **¥{total_cost:.2f}**, {len(trend)} 天有活动\n\n"
-        f"{top_block}\n\n"
+        f"{top_block}\n"
+        f"{store_block}\n"
         f"建议动作:\n"
         f"1. 把领用靠前的食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
         f"2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"
