@@ -20,7 +20,7 @@ import mimetypes
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from ota.config import OTASettings, get_settings
@@ -65,8 +65,43 @@ def health(settings: OTASettings = Depends(get_settings)):
     }
 
 
+#: 每条 manifest 拉取都打这个前缀 —— 运维靠 `grep OTA_PULL` 数「现场有没有活着的 App」。
+#: 🔴 2026-08-17 加这个的理由: 当时**根本答不出「有没有设备拉过」**。
+#: uvicorn 的访问日志经反代之后, 82 条 manifest 请求全部显示来自同一个前端 IP,
+#: 既没有设备标识, 也没有 runtime 版本 ⇒ 「工人手机上的 App 是不是活的」只能靠去现场问。
+#: ⚠️ 这里**不采集任何设备唯一标识**, 只采集 App 自己发来的版本/渠道头 + 反代透传的客户端 IP。
+_PULL_LOG_PREFIX = "OTA_PULL"
+
+
+def _log_pull(
+    outcome: str,
+    *,
+    platform: Optional[str],
+    runtime_version: Optional[str],
+    channel: Optional[str],
+    current_update_id: Optional[str],
+    client_ip: Optional[str],
+) -> None:
+    """记一条 OTA 拉取。outcome ∈ {update, no-update, rollback, rollback-noop}。
+
+    ⛔ 不要把这行改成 debug 级 —— prod 的日志级别是 INFO, 降级等于把这个读数关掉。
+    """
+    _logger.info(
+        "%s outcome=%s platform=%s runtime=%s channel=%s current=%s ip=%s",
+        _PULL_LOG_PREFIX,
+        outcome,
+        platform or "-",
+        runtime_version or "-",
+        channel or "-",
+        # update id 是 UUID, 截断到前 8 位足够区分「换没换 bundle」, 又不至于刷屏
+        (current_update_id or "-")[:8],
+        client_ip or "-",
+    )
+
+
 @router.get("/manifest")
 def manifest(
+    request: Request,
     expo_protocol_version: Optional[str] = Header(default=None),
     expo_platform: Optional[str] = Header(default=None),
     expo_runtime_version: Optional[str] = Header(default=None),
@@ -84,6 +119,23 @@ def manifest(
         return _bad_request("No runtime-version provided")
 
     channel = expo_channel_name or settings.default_channel
+
+    # 反代把真实客户端藏在 X-Forwarded-For 里; 直连时退回 request.client。
+    _xff = request.headers.get("x-forwarded-for")
+    client_ip = (_xff.split(",")[0].strip() if _xff else None) or (
+        request.client.host if request.client else None
+    )
+
+    def _audit(outcome: str) -> None:
+        _log_pull(
+            outcome,
+            platform=expo_platform,
+            runtime_version=expo_runtime_version,
+            channel=channel,
+            current_update_id=expo_current_update_id,
+            client_ip=client_ip,
+        )
+
     try:
         bundle_dir = storage.find_latest_bundle(
             settings.base_path, expo_runtime_version, channel
@@ -130,12 +182,14 @@ def manifest(
         if not expo_embedded_update_id:
             return _bad_request("Rollback requires expo-embedded-update-id header")
         if expo_current_update_id == expo_embedded_update_id:
+            _audit("rollback-noop")
             directive = directives.no_update_available()
             d_str = signing.canonicalize_for_signing(directive)
             body, ct = multipart.build_directive_response(
                 d_str, signature_header=_maybe_sign(d_str)
             )
             return Response(content=body, media_type=ct, headers=common_headers)
+        _audit("rollback")
         commit_time = _file_mtime_iso_z(bundle_dir / "rollback")
         directive = directives.rollback_to_embedded(commit_time)
         d_str = signing.canonicalize_for_signing(directive)
@@ -164,6 +218,7 @@ def manifest(
         )
 
     if expo_current_update_id == manifest_dict["id"]:
+        _audit("no-update")
         directive = directives.no_update_available()
         d_str = signing.canonicalize_for_signing(directive)
         body, ct = multipart.build_directive_response(
@@ -171,6 +226,7 @@ def manifest(
         )
         return Response(content=body, media_type=ct, headers=common_headers)
 
+    _audit("update")
     manifest_str = signing.canonicalize_for_signing(manifest_dict)
     extensions_str = signing.canonicalize_for_signing({"assetRequestHeaders": {}})
     body, ct = multipart.build_normal_update_response(
