@@ -86,7 +86,7 @@ class PurchaseServiceImplSuggestionTest {
             var normalizerField = PurchaseServiceImpl.class.getDeclaredField("salesOrderPlanQuantityNormalizer");
             normalizerField.setAccessible(true);
             normalizerField.set(service, new SalesOrderPlanQuantityNormalizer(
-                    com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade()));
+                    com.cretas.aims.service.unit.TestUnitContractFactory.contract()));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

@@ -13,6 +13,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 调拨的单位比较必须「中英写法互认, 但不合并 只/个/件」。
@@ -174,6 +175,129 @@ class TransferUnitVocabularyTest {
         assertThat(item.getPackageToBaseFactorSnapshot())
                 .isEqualByComparingTo(new java.math.BigDecimal("10"));
     }
+    /**
+     * 🔴 2026-08-17 生产实测(F006「新建调拨单 / 调拨物料」): 5 行物料全部选的是**基本单位**,
+     * 顶部仍连报 {@code 422 调拨包装单位必须选择具体规格}。
+     *
+     * <p>成因是 {@code normalizeRawTransferPackaging} 里**紧挨着**已修那处的另一处字面比较:
+     * {@code else if (!transactionUnit.equals(baseUnit))}。主档存「盒」, 而前端
+     * {@code canonicalUnitCode} 把它转成 {@code box} 再提交 —— 同一个单位判不等, 于是走进
+     * 「必须选包装规格」那条分支。而这三个物料**一条包装规格都没有**(实测 0 条), 所以
+     * {@code matches.size() != 1} 恒成立: 用户看到的下拉里只有「基本单位」一项,
+     * **他选什么都过不去**, 这是死路而不是「没选」。
+     *
+     * <p>⚠️ 判据与文案对不上: 判据问的是「这个单位能不能唯一定位到一条包装规格」,
+     * 文案说的是「你必须去选一个规格」—— 而用户根本没在用包装单位。
+     *
+     * <p>受影响面(实测, 只读生产库): 非质量单位的物料里 283/316 个 F006 物料没有任何启用中的
+     * 包装规格; 质量单位(kg/g/…)不受影响, 因为 {@code canonicalTransferUnit} 会把两侧
+     * 都归一成码, 字面比较恰好成立 —— 这正是「同一个缺陷只在计数/包装单位上显形」的原因。
+     */
+    @Test
+    @DisplayName("🔒 真实调用点: 主档「盒」+ 客户端送 box + 零包装规格 → 按基本单位放行")
+    void realCallSiteAcceptsTheBaseUnitSpelledInEnglishWhenNoPackagingSpecExists() {
+        String materialTypeId = "RMT_BOX";
+        com.cretas.aims.entity.RawMaterialType material = new com.cretas.aims.entity.RawMaterialType();
+        material.setId(materialTypeId);
+        material.setFactoryId(FACTORY);
+        material.setUnit("盒");                 // ← 主档是中文
+        org.mockito.Mockito.when(materialTypeRepository.findById(materialTypeId))
+                .thenReturn(java.util.Optional.of(material));
+        // 这三个物料在生产库里一条启用中的包装规格都没有
+        org.mockito.Mockito.when(specRepository
+                        .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                FACTORY, materialTypeId))
+                .thenReturn(java.util.List.of());
+        ReflectionTestUtils.setField(service, "materialPackagingSpecRepository", specRepository);
+
+        com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO item =
+                new com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO();
+        item.setItemType("RAW_MATERIAL");
+        item.setMaterialTypeId(materialTypeId);
+        item.setUnit("box");                    // ← 前端 canonicalUnitCode('盒') 的产物
+        item.setQuantity(new java.math.BigDecimal("1100"));
+
+        ReflectionTestUtils.invokeMethod(
+                service, "normalizeRawTransferPackaging", FACTORY, item, materialTypeId);
+
+        assertThat(item.getMaterialPackagingSpecId())
+                .as("按基本单位调拨不该被塞进一条包装规格").isNull();
+        assertThat(item.getPackageToBaseFactorSnapshot()).isEqualByComparingTo("1");
+        assertThat(item.getQuantity())
+                .as("基本单位调拨不该被换算系数放大").isEqualByComparingTo("1100");
+        assertThat(item.getUnit())
+                .as("落库仍走主数据写法「盒」, 不存客户端送来的 box").isEqualTo("盒");
+        assertThat(item.getPackageUnitSnapshot())
+                .as("快照同样必须是主数据写法「盒」—— 存 box 就是 LIUSHANMEN 事故的形状")
+                .isEqualTo("盒");
+    }
+
+    /**
+     * 阴性对照: 真·包装单位(与基本单位不同)且找不到唯一规格时, 必须**照旧拒绝**。
+     * 否则上面那条放行就是把闸整个拆了。
+     */
+    @Test
+    @DisplayName("🔒 反向: 送的确实是包装单位「箱」而无规格可定位 → 仍然拒绝")
+    void realCallSiteStillRejectsAGenuinePackagingUnitThatResolvesToNoSpec() {
+        String materialTypeId = "RMT_CASE";
+        com.cretas.aims.entity.RawMaterialType material = new com.cretas.aims.entity.RawMaterialType();
+        material.setId(materialTypeId);
+        material.setFactoryId(FACTORY);
+        material.setUnit("盒");
+        org.mockito.Mockito.when(materialTypeRepository.findById(materialTypeId))
+                .thenReturn(java.util.Optional.of(material));
+        org.mockito.Mockito.when(specRepository
+                        .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                FACTORY, materialTypeId))
+                .thenReturn(java.util.List.of());
+        ReflectionTestUtils.setField(service, "materialPackagingSpecRepository", specRepository);
+
+        com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO item =
+                new com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO();
+        item.setItemType("RAW_MATERIAL");
+        item.setMaterialTypeId(materialTypeId);
+        item.setUnit("箱");                     // 箱 ≠ 盒, 是真的包装层级
+        item.setQuantity(new java.math.BigDecimal("10"));
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                service, "normalizeRawTransferPackaging", FACTORY, item, materialTypeId))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("TRANSFER_MATERIAL_PACKAGING_SPEC_REQUIRED");
+    }
+
+    /**
+     * 阴性对照: 放宽比较**不得**把 只/个/件 合并。主档「只」而客户端送 {@code pcs} 时仍须拒绝 ——
+     * 一旦这里放行, 就是 LIUSHANMEN 2026-07-30 事故(快照与主档写法不一致)的入口。
+     */
+    @Test
+    @DisplayName("🔒 反向: 主档「只」+ 客户端送 pcs 仍然不算同一个单位")
+    void realCallSiteStillRefusesToMergeDistinctChineseCountLabels() {
+        String materialTypeId = "RMT_ZHI";
+        com.cretas.aims.entity.RawMaterialType material = new com.cretas.aims.entity.RawMaterialType();
+        material.setId(materialTypeId);
+        material.setFactoryId(FACTORY);
+        material.setUnit("只");
+        org.mockito.Mockito.when(materialTypeRepository.findById(materialTypeId))
+                .thenReturn(java.util.Optional.of(material));
+        org.mockito.Mockito.when(specRepository
+                        .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                FACTORY, materialTypeId))
+                .thenReturn(java.util.List.of());
+        ReflectionTestUtils.setField(service, "materialPackagingSpecRepository", specRepository);
+
+        com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO item =
+                new com.cretas.aims.dto.inventory.CreateTransferRequest.TransferItemDTO();
+        item.setItemType("RAW_MATERIAL");
+        item.setMaterialTypeId(materialTypeId);
+        item.setUnit("pcs");
+        item.setQuantity(new java.math.BigDecimal("5"));
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                service, "normalizeRawTransferPackaging", FACTORY, item, materialTypeId))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+    }
+
     @Test
     @DisplayName("🔒 落库语义不得变: 计数/包装单位仍保持字面 (LIUSHANMEN 2026-07-30 事故的防线)")
     void storageSemanticsMustStayLiteral() {
