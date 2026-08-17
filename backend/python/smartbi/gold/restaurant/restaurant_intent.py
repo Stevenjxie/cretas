@@ -2610,6 +2610,37 @@ def _build_spec(
             code
             and code not in planned_intents
             and not _resolver_serves_dimensions(code, dimensions)
+            # 🔴 2026-08-18 收紧(prod 真跑后立刻加): **维度对了不等于指标对了**。
+            #
+            # 📏 上线后实测(MOCK_REST, 3/3 稳定): 「哪道菜毛利最高 → 哪个卖得最多」
+            #    从 60 字拒答变成 **2479 字菜品毛利分析**(md5 0bbbf5de) ——
+            #    排行按【绝对毛利】排(鲈鱼/水煮牛肉/藤椒鸡…), 而老板问的是【销量】,
+            #    正文里一处按销量排的表或结论都没有。
+            #    ▎老板很可能把第一名「鲈鱼」读成卖得最多的那道菜。
+            #    ▎那是一条**经不起他去查的**结论 —— 比拒答更糟。
+            #    ⇒ 按取舍顺序(能不能决定 > 数字准不准), 拒答严格好于答非所问。
+            #
+            # 判据读**既有**的 `_default_metrics_for_code`, ⛔ 不新造第二张
+            # 「哪个 resolver 出哪些指标」的表(形态 D)。
+            # ⚠️ 两侧都过 `_canonical_metrics` 再比 —— 登记表写 `food_cost`,
+            #    管线里叫 `recipe_cost`; 不归一就是「口径不同的两个集合求交」,
+            #    结果恒空, 会把本来该修的那一格也挡掉(同一个坑上面维度那条
+            #    注释里已经栽过一次)。
+            # ⚠️ `requested_metrics` 为空 = 老板没点名指标 ⇒ 没有可冲突的东西, 放行。
+            # ⛔ 诚实登记: 这一支**没有变异对照** —— 变异掉它(改成不放行)测试全绿。
+            #    成因不是「断言在守空气」, 是**这一格离线构造不到**: 指标为空时
+            #    `_plan_requested_intents` 回落到 code 自己, 于是
+            #    `code not in planned_intents` 恒假, 镜像分支根本进不来; prod 上
+            #    也没观测到过。留着是防御性的(意图: 老板没点名指标时不该被指标
+            #    判据挡住), ⛔ 但不许把它说成「守住了什么」。
+            and (
+                not requested_metrics
+                or bool(
+                    set(_canonical_metrics(requested_metrics))
+                    & set(_canonical_metrics(
+                        _default_metrics_for_code(repair_candidate, wants_margin)))
+                )
+            )
         ):
             # ⚠️ 上面那支的**镜像**, 方向相反、判据同一个:
             #     上面  计划服务不了 ⇒ 标签赢  (planned_intents = (code,))
