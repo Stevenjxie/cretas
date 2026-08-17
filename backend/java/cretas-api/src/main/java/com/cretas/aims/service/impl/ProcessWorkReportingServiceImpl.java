@@ -151,6 +151,45 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     }
 
     @Override
+    public org.springframework.data.domain.Page<com.cretas.aims.dto.WorkReportResponse> listReports(
+            String factoryId, String reportType,
+            java.time.LocalDate startDate, java.time.LocalDate endDate, int page, int size) {
+        // 与 legacy WorkReportingServiceImpl.getReports 同语义(同样的四个分支、同样的排序),
+        // 只是出口换成 DTO。⛔ 分支不许合并简化 —— 那会改变没传参时的口径。
+        org.springframework.data.domain.PageRequest pageRequest =
+                org.springframework.data.domain.PageRequest.of(Math.max(0, page - 1), size,
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Direction.DESC, "reportDate"));
+        org.springframework.data.domain.Page<ProductionReport> reports;
+        if (reportType != null && startDate != null && endDate != null) {
+            reports = reportRepository.findByFactoryIdAndReportTypeAndReportDateBetweenAndDeletedAtIsNull(
+                    factoryId, reportType, startDate, endDate, pageRequest);
+        } else if (reportType != null) {
+            reports = reportRepository.findByFactoryIdAndReportTypeAndDeletedAtIsNull(
+                    factoryId, reportType, pageRequest);
+        } else if (startDate != null && endDate != null) {
+            reports = reportRepository.findByFactoryIdAndReportDateBetweenAndDeletedAtIsNull(
+                    factoryId, startDate, endDate, pageRequest);
+        } else {
+            reports = reportRepository.findByFactoryIdAndDeletedAtIsNull(factoryId, pageRequest);
+        }
+        return reports.map(com.cretas.aims.service.report.WorkReportResponseMapper::toResponse);
+    }
+
+    @Override
+    public com.cretas.aims.dto.WorkReportResponse getReportDetail(String factoryId, Long reportId) {
+        ProductionReport report = reportRepository.findById(reportId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "ProductionReport", "id", String.valueOf(reportId)));
+        // ⛔ 跨租户必须挡住 —— legacy 那版也挡, 这里不能因为换了出口就丢掉。
+        if (!factoryId.equals(report.getFactoryId())) {
+            throw new BusinessException(403, "报工记录不属于当前工厂")
+                    .withHint("当前报工记录不属于该工厂, 无法查看");
+        }
+        return com.cretas.aims.service.report.WorkReportResponseMapper.toResponse(report);
+    }
+
+    @Override
     public List<Map<String, Object>> getReportsByTask(String factoryId, String taskId) {
         Long workProcessTaskId = parseCanonicalTaskId(taskId);
         List<ProductionReport> reports = reportRepository

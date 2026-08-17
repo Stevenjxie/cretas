@@ -82,6 +82,33 @@ public class ProcessWorkReportingController {
         return ApiResponse.success(service.batchApprove(factoryId, reportIds, approvedBy));
     }
 
+    @GetMapping("/reports")
+    @Operation(summary = "报工列表", description = "替代 legacy GET /work-reporting/reports")
+    @RequirePermission("work_report:read")
+    public ApiResponse<org.springframework.data.domain.Page<com.cretas.aims.dto.WorkReportResponse>> listReports(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate startDate,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate endDate,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(service.listReports(factoryId, type, startDate, endDate, page, size));
+    }
+
+    @GetMapping("/reports/{id}")
+    @Operation(summary = "报工详情", description = "替代 legacy GET /work-reporting/reports/{id}")
+    @RequirePermission("work_report:read")
+    public ApiResponse<com.cretas.aims.dto.WorkReportResponse> getReportDetail(
+            @PathVariable String factoryId, @PathVariable Long id) {
+        return ApiResponse.success(service.getReportDetail(factoryId, id));
+    }
+
     @GetMapping("/by-task/{taskId}")
     @Operation(summary = "Reports by process task")
     public ApiResponse<List<Map<String, Object>>> getReportsByTask(

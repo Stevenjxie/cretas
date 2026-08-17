@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.WorkReportSubmitRequest;
 import com.cretas.aims.dto.WorkReportResponse;
+import com.cretas.aims.service.report.WorkReportResponseMapper;
 import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.ProductionBatch;
@@ -486,35 +487,9 @@ public class WorkReportingServiceImpl {
                 factoryId, ProductionReport.Status.SUBMITTED);
     }
 
+    /** 映射已抽到 {@link WorkReportResponseMapper} —— 新的 process-work-reporting
+     *  只读端点也要用它。⛔ 不许在这里再留一份, 两份必然漂。 */
     private WorkReportResponse toResponse(ProductionReport r) {
-        return WorkReportResponse.builder()
-                .id(r.getId())
-                .factoryId(r.getFactoryId())
-                .batchId(r.getBatchId())
-                .workerId(r.getWorkerId())
-                .reportType(r.getReportType())
-                .schemaId(r.getSchemaId())
-                .reportDate(r.getReportDate())
-                .reporterName(r.getReporterName())
-                .processCategory(r.getProcessCategory())
-                .productName(r.getProductName())
-                .outputQuantity(r.getOutputQuantity())
-                .goodQuantity(r.getGoodQuantity())
-                .defectQuantity(r.getDefectQuantity())
-                .totalWorkMinutes(r.getTotalWorkMinutes())
-                .totalWorkers(r.getTotalWorkers())
-                .operationVolume(r.getOperationVolume())
-                .hourEntries(r.getHourEntries())
-                .nonProductionEntries(r.getNonProductionEntries())
-                .productionStartTime(r.getProductionStartTime())
-                .productionEndTime(r.getProductionEndTime())
-                .customFields(r.getCustomFields())
-                .photos(r.getPhotos())
-                .status(r.getStatus())
-                .rejectionReason(r.getRejectionReason())
-                .syncedToSmartbi(r.getSyncedToSmartbi())
-                .createdAt(r.getCreatedAt())
-                .updatedAt(r.getUpdatedAt())
-                .build();
+        return WorkReportResponseMapper.toResponse(r);
     }
 }
