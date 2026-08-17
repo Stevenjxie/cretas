@@ -92,7 +92,12 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": frozenset(
         {"store", "dish", "ingredient", "channel", "customer", "time"}
     ),
-    "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
+    # 2026-08-17 补 `store`: 渠道构成现在**同时**出一张各门店的表(按外卖占比排序),
+    # 与 SALES_SUMMARY「per-store Top-N table in addition to the chain aggregate」
+    # 同一个形状。⛔ 依据是它真能出 —— prod 实测 `fact_pos_transaction.store_id`
+    # 空值 **0**、渠道空值 **0**(RES_3101_009 61,933 单/30 店, DEMO_REST 55,376/27)。
+    # 🔑 此前「哪家店外卖占比最高」这类问句撞维度闸被拒, 而数据一直都在。
+    "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel", "store"}),
     # 折扣总额来自 agg_daily 的全店日汇总, 构成来自 agg_discount 的月粒度 ——
     # ⛔ 两个来源都**不带门店/菜品粒度**, 所以这里声明空集(声明的是真能出的粒度,
     #    不是希望它能出的)。问「哪家店折扣最多」会因此不落到这个 resolver。

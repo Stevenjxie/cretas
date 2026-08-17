@@ -44,7 +44,6 @@ def _spec(dimensions):
 CASES = [
     pytest.param(("RESTAURANT_OPS_WASTAGE_TOP",), ("store",), id="损耗按门店"),
     pytest.param(("RESTAURANT_OPS_RECIPE_COST",), ("store",), id="成本按门店"),
-    pytest.param(("RESTAURANT_OPS_CHANNEL_MIX",), ("store",), id="渠道按门店"),
     pytest.param(("RESTAURANT_OPS_TREND_ANALYSIS",), ("dish",), id="趋势按菜"),
 ]
 
@@ -95,6 +94,16 @@ class TestItStillSaysSomethingWhenThereIsAGap:
             _spec(("store",)), ("RESTAURANT_OPS_STORE_MARGIN",)) == ""
         assert _dimension_gap_advice(
             _spec(("dish",)), ("RESTAURANT_OPS_RECIPE_COST",)) == ""
+        # 2026-08-17: 「渠道按门店」原本列在上面的 CASES 里当缺口用例，
+        # 而渠道构成现在真出各门店的表了 ⇒ 它**不再是缺口**。
+        # ⛔ 不是删掉那条用例了事 —— 挪到这里当**回归守卫**:
+        #    哪天门店表被拿掉、能力表被改窄，这一行会红。
+        assert _dimension_gap_advice(
+            _spec(("store",)), ("RESTAURANT_OPS_CHANNEL_MIX",)) == "", (
+            "渠道按门店又变成缺口了 —— 各门店渠道表或能力表声明被改没了"
+        )
+        assert _dimension_gap_advice(
+            _spec(("channel", "store")), ("RESTAURANT_OPS_CHANNEL_MIX",)) == ""
 
     def test_partial_overlap_keeps_the_split_advice(self):
         """asked ∩ supported 非空时走另一支(先问能算的那层), 不受本次改动影响。"""
