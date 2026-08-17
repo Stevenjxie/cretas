@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -39,6 +41,56 @@ def config(root: Path) -> dict:
 
 
 class VisionLabTests(unittest.TestCase):
+    def test_export_parity_uses_matching_square_cpu_preprocessing(self):
+        class FakeTensor:
+            def __init__(self, values):
+                self.values = values
+
+            def cpu(self):
+                return self
+
+            def tolist(self):
+                return self.values
+
+        class FakeYolo:
+            calls = []
+
+            def __init__(self, model_path, task):
+                self.model_path = model_path
+                self.task = task
+
+            def predict(self, image, **kwargs):
+                self.calls.append((self.model_path, image, kwargs))
+                class FakeBoxes:
+                    cls = FakeTensor([0.0, 1.0])
+                    conf = FakeTensor([0.8, 0.9])
+
+                    def __len__(self):
+                        return 2
+
+                boxes = FakeBoxes()
+                return [SimpleNamespace(boxes=boxes)]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            validation = root / "validation"
+            validation.mkdir()
+            (validation / "wide.jpg").write_bytes(b"image")
+            pt = root / "best.pt"
+            onnx = root / "label.onnx"
+            pt.write_bytes(b"pt")
+            onnx.write_bytes(b"onnx")
+            fake_ultralytics = SimpleNamespace(YOLO=FakeYolo)
+
+            with mock.patch.dict(sys.modules, {"ultralytics": fake_ultralytics}):
+                mismatches = vision_lab.verify_export_parity(pt, onnx, validation, 0.2)
+
+        self.assertEqual(mismatches, 0)
+        self.assertEqual(len(FakeYolo.calls), 2)
+        for _, _, kwargs in FakeYolo.calls:
+            self.assertEqual(kwargs["device"], "cpu")
+            self.assertIs(kwargs["rect"], False)
+
     def test_training_source_forces_offline_without_amp_probe(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
