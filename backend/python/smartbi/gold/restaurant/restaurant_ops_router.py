@@ -9381,21 +9381,47 @@ async def resolve_channel_mix(
         else:
             channel_rows.append([name, f"{bills:,}", f"{bill_pct:.1f}%"])
         kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
+    # 🔴 2026-08-18 prod 实测(MOCK_REST, 直接查 fact_pos_transaction):
+    #      groupon 6,085 单 / 营收 ¥2,078,299.07 / net_amount 空值 **0**
+    #    金额完完整整在库里, 而这里原先**无条件**打「—」。后果不是"少一个数":
+    #    `total_rev`(营收占比的分母)是**含团购的**, 于是表上三行营收占比加起来
+    #    只有 90.5% —— 老板一加就发现对不上, 而那个「—」在说"没有这个数"。
+    #    ⇒ 产品用一个破折号说了句假话(与"这两层的数不在同一张表上"同一形状)。
+    #    ⚠️ 原注释写着「其它渠道只有单量」—— 那句话本身就是被实测否掉的那一句。
+    #       ⛔ 不从注释推断行为。
+    #    ⛔ 仍然保留"真的没有金额"那一态: 那时 total_rev 也不含它, 剩下几行的
+    #       占比自洽, 只需要一句说明(形态 A¹⁰: 不把"不知道"翻译成 0)。
+    channels_without_money: List[Tuple[str, int]] = []
     for name, r in typed.items():
         if name not in ("堂食", "外卖"):
             other_bills = int(r["bills"])
+            other_rev = float(r["revenue"] or 0.0)
             other_pct = other_bills / total_bills * 100 if total_bills else 0.0
-            if can_see_money:
+            if not can_see_money:
+                channel_rows.append([name, f"{other_bills:,}", f"{other_pct:.1f}%"])
+            elif other_rev > 0:
+                other_rev_pct = other_rev / total_rev * 100 if total_rev else 0.0
+                channel_rows.append([name, f"¥{other_rev:,.0f}",
+                                     f"{other_rev_pct:.1f}%",
+                                     f"{other_bills:,}", f"{other_pct:.1f}%"])
+            else:
+                channels_without_money.append((name, other_bills))
                 channel_rows.append([name, "—", "—", f"{other_bills:,}",
                                      f"{other_pct:.1f}%"])
-            else:
-                channel_rows.append([name, f"{other_bills:,}", f"{other_pct:.1f}%"])
     if channel_rows:
         lines.extend(_markdown_table(
             (["渠道", "营收", "营收占比", "单量", "单量占比"] if can_see_money
              else ["渠道", "单量", "单量占比"]),
             channel_rows,
             right_align={1, 2, 3, 4} if can_see_money else {1, 2}))
+    if channels_without_money:
+        lines.append("")
+        lines.append(
+            "> "
+            + "、".join(f"{n}（{b:,} 单）" for n, b in channels_without_money)
+            + " 没有金额数据 —— 上面的营收占比只在**有金额**的渠道之间分，"
+            "⛔ 不是把它当成 ¥0 算进去了。"
+        )
     if untyped_bills:
         lines.append("")
         lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
@@ -9439,6 +9465,21 @@ async def resolve_channel_mix(
         lines.extend(_markdown_table(
             headers, store_table_rows,
             right_align={1, 2, 3, 4} if can_see_money else {1, 2, 3}))
+        # 交付定义②「说一件他没想到的事」: 他问的是"各占多少", 没问"门店之间差多少",
+        # 而那张表里已经有答案了 —— 📏 prod 实测 10 家店 27.3%~28.5%, 产品一个字没说。
+        # ⛔ 只陈述极差, **不下"差异很小/很大"的判断** —— 那要一个我拍脑袋的阈值,
+        #    而反目标说"宁可这一类先不提示"。1.2 个百分点还是 20 个, 老板自己看得出来。
+        top_name, top_v = ranked[0]
+        bot_name, bot_v = ranked[-1]
+        def _tk_pct(v):
+            tot = v["堂食"] + v["外卖"] + v["其它"]
+            return v["外卖"] / tot * 100 if tot else 0.0
+        hi, lo = _tk_pct(top_v), _tk_pct(bot_v)
+        lines.append("")
+        lines.append(
+            f"各门店的外卖占比：最高 {top_name} {hi:.1f}%、"
+            f"最低 {bot_name} {lo:.1f}%，相差 {hi - lo:.1f} 个百分点。"
+        )
 
     lines.append("")
     lines.append(_closing("CHANNEL_MIX_CLOSING", query))
