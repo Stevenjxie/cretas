@@ -280,7 +280,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                         productWorkProcess != null ? productWorkProcess.getDefaultCostCategory() : null)
                 .processOrder(task.getProcessOrder())
                 .plannedUnit(projectReportingUnits
-                        ? outputDescriptors.getFirst().getUnit()
+                        ? primaryOutput(outputDescriptors).getUnit()
                         : task.getPlannedUnit())
                 // 🔴 客户张权 2026-08-02: 这里原来是 `upstreamInputCount > 1`, 即**无视用户在
                 // Workflow 画布上配的 allowMultipleUpstreamSources, 当场按端口数重算一遍**。
@@ -298,9 +298,30 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                         .map(port -> toPortDescriptor(
                                 factoryId, port, projectReportingUnits, allowedSkuIdsByPort))
                         .toList())
-                .output(outputDescriptors.isEmpty() ? null : outputDescriptors.get(0)) // 向后兼容单产出 FE
+                .output(primaryOutput(outputDescriptors)) // 向后兼容单产出 FE
                 .outputs(outputDescriptors)
                 .build();
+    }
+
+    /**
+     * 单产出契约 / plannedUnit 用哪个端口 —— **第一个非副产**产出。
+     *
+     * <p>原来直接取 {@code outputDescriptors.get(0)}: 副产端口的 ordinal 只要排在前面,
+     * 顶层 productTypeId 和 plannedUnit 就会变成副产的, 而副产是「附带出来的物料」,
+     * 不该替这道工序回答「产出的是什么、按什么单位计划」。
+     *
+     * <p>全是副产时回落第一个 —— 那种图在别处已经被判为配置错误 (画布只配副产没配主产出),
+     * 这里不额外抛, 免得一个配置问题让整张报工单打不开。
+     */
+    private static WorkflowClerkSheetConfigDTO.PortDescriptor primaryOutput(
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors) {
+        if (outputDescriptors.isEmpty()) {
+            return null;
+        }
+        return outputDescriptors.stream()
+                .filter(descriptor -> !Boolean.TRUE.equals(descriptor.getByproduct()))
+                .findFirst()
+                .orElse(outputDescriptors.getFirst());
     }
 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(

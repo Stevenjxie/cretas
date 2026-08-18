@@ -22,6 +22,13 @@ const props = defineProps<{
   showCostAllocation: boolean;
   /** 标题右侧的说明文字; 卡片/表格两种视图措辞不同。 */
   hint: string;
+  /**
+   * 画布上只配了副产、没有主产出时的说明。
+   *
+   * ⛔ 这一态不能静默: 没有主产出行就没地方挂副产区, 副产被提升成独立行 ——
+   * 用户必须知道这是配置缺口而不是本来就长这样。
+   */
+  orphanByproductNotice?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -56,6 +63,11 @@ function gridStyle(): Record<string, string> {
     <div class="sp-io-title">
       <span><b>③</b> 产出明细 — {{ views.length }} 项</span>
       <span>{{ hint }}</span>
+    </div>
+
+    <div v-if="orphanByproductNotice" class="sp-io-orphan" data-testid="byproduct-orphan-notice">
+      <el-icon><Warning /></el-icon>
+      <span>{{ orphanByproductNotice }}</span>
     </div>
 
     <div class="sp-io-table">
@@ -97,8 +109,17 @@ function gridStyle(): Record<string, string> {
               data-testid="output-specification"
               class="sp-output-spec"
             >{{ view.specLabel }}</span>
-            <el-tag size="small" :type="view.line.finished ? 'success' : 'warning'">
-              {{ view.line.finished ? '成品' : '半成品' }}
+            <!--
+              三态, 不是两态。副产节点在画布上的 kind 仍是 SEMI_FINISHED (刻意没有第 5 个
+              kind, 副产与材质分类正交), 所以 `finished` 一个人回答不了「这是不是副产」——
+              只按它渲染就会把画布上标成副产的物料显示成「半成品」, 那正是本次要修的缺陷。
+            -->
+            <el-tag
+              size="small"
+              data-testid="output-role-tag"
+              :type="view.line.isByproduct ? 'info' : (view.line.finished ? 'success' : 'warning')"
+            >
+              {{ view.line.isByproduct ? '副产' : (view.line.finished ? '成品' : '半成品') }}
             </el-tag>
             <span v-if="view.line.batchNumber" class="sp-batch-num">{{ view.line.batchNumber }}</span>
           </span>
@@ -189,8 +210,52 @@ function gridStyle(): Record<string, string> {
         </div>
 
         <div v-show="detailOpen(view.line.workflowPortId)" class="sp-io-detail">
-          <div class="sp-io-detail-title">按需填写：副产与成本分摊</div>
-          <div class="sp-io-detail-fields">
+          <div class="sp-io-detail-title">
+            {{ view.byproductMode === 'BOUND' ? '按需填写：本工序副产与成本分摊' : '按需填写：副产与成本分摊' }}
+          </div>
+          <!--
+            二选一, 不并存 (同一个事实两份必然漂):
+            画布上绑了副产 Cell → 逐条列出, SKU 只读, 只填数量/回收单价;
+            没绑 → 沿用原来那对手填字段。
+            ⚠️ 多个副产 Cell 时**全部**列出, 不取第一个了事。
+          -->
+          <div v-if="view.byproductMode === 'BOUND'" class="sp-io-detail-fields" data-testid="byproduct-bound-list">
+            <div
+              v-for="bp in view.line.boundByproducts"
+              :key="bp.workflowPortId"
+              class="sp-byproduct-bound"
+              data-testid="byproduct-bound-item"
+            >
+              <span class="sp-byproduct-name" data-testid="byproduct-bound-name">
+                <el-tag size="small" type="info">副产</el-tag>
+                <strong>{{ bp.materialName }}</strong>
+              </span>
+              <label>数量
+                <span class="sp-inline-input" role="group" :aria-label="`${bp.materialName} 副产数量与单位`">
+                  <el-input-number
+                    v-model="bp.quantity"
+                    :min="0"
+                    :precision="6"
+                    controls-position="right"
+                    size="small"
+                    :aria-label="`${bp.materialName} 副产数量`"
+                  />
+                  <span class="sp-fixed-unit">{{ bp.unit }}</span>
+                </span>
+              </label>
+              <label>回收单价
+                <el-input-number
+                  v-model="bp.unitPrice"
+                  :min="0"
+                  :precision="4"
+                  controls-position="right"
+                  size="small"
+                  :aria-label="`${bp.materialName} 副产回收单价`"
+                />
+              </label>
+            </div>
+          </div>
+          <div v-else class="sp-io-detail-fields">
             <label data-testid="byproduct-quantity">副产数量
               <span class="sp-inline-input" role="group" aria-label="副产数量与单位">
                 <el-input-number
@@ -212,6 +277,13 @@ function gridStyle(): Record<string, string> {
                 size="small"
               />
             </label>
+          </div>
+
+          <!--
+            成本分摊比例与重量提示与「副产怎么录」无关, 所以放在二选一之外 ——
+            放进任一分支都会让另一种模式下它凭空消失。
+          -->
+          <div class="sp-io-detail-fields">
             <label v-if="showCostAllocation" data-testid="cost-allocation-ratio">成本分摊比例(%)
               <el-input-number
                 v-model="view.line.costAllocationRatio"
@@ -247,6 +319,20 @@ function gridStyle(): Record<string, string> {
   font-weight: 400;
   font-size: 11px;
 }
+
+.sp-io-orphan {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 6px;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sp-io-orphan .el-icon { flex: none; }
 
 .sp-io-table {
   border: 1px solid #e4e9f2;
@@ -342,6 +428,26 @@ function gridStyle(): Record<string, string> {
   font-weight: 600;
 }
 .sp-io-weight-hint { color: #909399; font-size: 11px; }
+
+/* 画布绑定的副产: 一条一行, 品名只读在最左, 数量/单价跟在后面。 */
+.sp-byproduct-bound {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 16px;
+  width: 100%;
+  padding: 4px 0;
+}
+.sp-byproduct-bound + .sp-byproduct-bound { border-top: 1px dashed #eef1f6; }
+.sp-byproduct-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+  padding-bottom: 2px;
+  font-size: 12px;
+  color: #303133;
+}
 
 .sp-inline-input { display: inline-flex; align-items: center; gap: 4px; }
 .sp-fixed-unit {

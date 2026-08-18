@@ -586,6 +586,10 @@ export const put = <T = ApiData>(url: string, data?: object, config?: object): P
   return request.put(url, data, config);
 };
 
+export const patch = <T = ApiData>(url: string, data?: object, config?: object): Promise<ApiResponse<T>> => {
+  return request.patch(url, data, config);
+};
+
 export const del = <T = ApiData>(url: string, config?: object): Promise<ApiResponse<T>> => {
   return request.delete(url, config);
 };
