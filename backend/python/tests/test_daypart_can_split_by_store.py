@@ -140,6 +140,22 @@ async def test_the_cross_table_has_one_column_per_daypart():
 
 
 @pytest.mark.asyncio
+async def test_price_role_sees_money_as_money():
+    """阳性对照：价格角色的门店表里，金额得**长得像钱**。
+
+    ⚠️ 补写的：变异「`_fmt` 无条件用不带 ¥ 的格式」在原来那批用例上**全绿** ——
+       所有 RBAC 断言都在问「非价格角色**看不看得到**」，一条都没问
+       「价格角色**看到的是不是钱**」。阴性对照齐了，阳性对照缺了。
+    """
+    ans = await _answer(dimensions=("store",), role=_BOSS)
+    text = ans.answer_text
+    assert "晚市营收" in text, "价格角色的列头不是营收\n" + text
+    assert "¥1,461,700" in text, (
+        "价格角色的门店表里金额没带货币符号 —— 那是一串没有单位的数\n" + text
+    )
+
+
+@pytest.mark.asyncio
 async def test_meta_carries_the_store_projection():
     """机器可读侧也要有 —— 正文有表而 meta 没有就是投影丢失（形态 B 第 7 例）。"""
     ans = await _answer(dimensions=("store",))
