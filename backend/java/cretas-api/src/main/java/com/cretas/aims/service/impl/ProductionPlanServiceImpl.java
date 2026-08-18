@@ -2865,12 +2865,63 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
         boolean hasSubmitted = rows != null && rows.stream().anyMatch(this::isUsableProcessSheetRow);
+        // 🔴 2026-08-18: 逐道报工有【两条腿】—— web 的逐道录入写 process_sheet_rows,
+        //    App 的报工写 production_reports + work_process_tasks + 半成品台账。
+        //    这道闸原来只看前者, 于是「工人在 App 把两道工都报完、任务 COMPLETED、审批也过了」
+        //    的计划, 文员点「核对结单」照样被拒 409「必须先完成并正式提交逐道报工」——
+        //    prod 实测 (PLAN-1786954657305, 报工 23832/23833 均 APPROVED)。
+        //    ⇒ 纯用 App 报完的 workflow 计划**永远结不了单**, 这正是判据里那种「为什么点不动」。
+        //
+        // ⚠️ 闸的**意图**是「逐道报工做完了没有」, 不是「web 那张表有没有行」——
+        //    量的对象错了(形态 A)。这里补上另一条腿, 意图不变、不放松:
+        //    仍要求每一道工序任务都 COMPLETED, 只是承认 App 报工也算数。
+        if (!hasSubmitted) {
+            hasSubmitted = hasCompletedTaskLevelReporting(factoryId, plan);
+        }
         if (!hasSubmitted) {
             throw new BusinessException(409, "workflow 计划必须先完成并正式提交逐道报工")
                     .withCode("WORKFLOW_REPORTING_REQUIRED")
-                    .withHint("请逐道录入并提交后，再核对结单")
+                    .withHint("请在 web 逐道录入并提交，或让操作员在 App 上把每道工序都报完，再核对结单")
                     .withHintTarget("核对结单");
         }
+    }
+
+    /**
+     * App 那条腿：本计划的批次下，工序任务是否<b>全部</b>报完（COMPLETED）。
+     *
+     * <p>⛔ 要求「全部」而不是「有一条」—— 与 web 那条腿等价严格。web 侧
+     * {@code isUsableProcessSheetRow} 只要一行已提交就放行, 是因为那张表按行提交、
+     * 行数不等于工序数; 而任务表天然一工序一行, 所以这边用「全部完成」才是同一个标准,
+     * 放宽成 anyMatch 会让只报了第一道的计划也能结单。
+     *
+     * <p>⚠️ 没有任务 → 返回 false（不是 true）。「一条任务都没有」是<b>量不到</b>,
+     * 不能当成「报完了」(硬约束 4: 别把没量到折叠进没问题)。
+     */
+    private boolean hasCompletedTaskLevelReporting(String factoryId, ProductionPlan plan) {
+        if (workProcessTaskRepository == null || plan == null || plan.getId() == null) {
+            return false;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+        if (batches == null || batches.isEmpty()) {
+            return false;
+        }
+        boolean sawAnyTask = false;
+        for (ProductionBatch b : batches) {
+            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks =
+                    workProcessTaskRepository
+                            .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, b.getId());
+            if (tasks == null || tasks.isEmpty()) {
+                continue;
+            }
+            sawAnyTask = true;
+            for (com.cretas.aims.entity.workprocess.WorkProcessTask t : tasks) {
+                if (t.getStatus() != com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED) {
+                    return false;   // 还有工序没报完 → 不放行
+                }
+            }
+        }
+        return sawAnyTask;
     }
 
     private boolean isWorkflowPlan(ProductionPlan plan) {
