@@ -38,6 +38,30 @@ from smartbi.scripts._probe_bootstrap import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _restore_tenant_contextvar():
+    """🔴 `bootstrap_probe` 会 `set_factory_id()` —— 那是个**全局 ContextVar**。
+
+    本文件是第一个在单测里调 `bootstrap_probe` 的，于是它把 `MOCK_REST`
+    泄漏给了后面的 `test_tenant_ctx_plumbing.py::test_contextvar_propagates_across_awaits`
+    （那条断言 `get_factory_id() is None`）。CI 红，而**本地绿** —— 只是执行顺序不同。
+
+    ⚠️ 「本地绿」在这里不是证据：跨测试的全局状态污染，是否暴露取决于收集顺序。
+
+    ⛔ **不能用 `set_factory_id(before)` 恢复** —— 第一版就是那么写的，照样红。
+       `set_factory_id(None)` 不是「恢复成未设置」，它设成 `INTERNAL_SENTINEL`
+       （`"__internal__"`）。⇒ 又一次「兜底的默认值把『没设』翻译成了别的东西」
+       （形态 A¹⁰）。要恢复只能用 ContextVar 自己的 Token。
+    """
+    from smartbi import tenant_ctx
+
+    token = tenant_ctx.current_factory_id.set(tenant_ctx.current_factory_id.get())
+    try:
+        yield
+    finally:
+        tenant_ctx.current_factory_id.reset(token)
+
+
 class _Spec:
     """只带判据要读的那个字段 —— ⛔ 不桩整个 spec。"""
 
