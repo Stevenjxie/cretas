@@ -9901,6 +9901,53 @@ async def resolve_supplier_price(
     )
 
 
+#: 「前几种」的切片宽度 —— 不是阈值判断, 只是「够不够多才值得说集中度」
+#: 这道阴性对照的分界(见 `_discount_concentration_sentence` docstring)。
+_DISCOUNT_CONCENTRATION_TOP_N = 3
+
+
+def _discount_concentration_sentence(items) -> str:
+    """折扣构成里，是不是少数几种占了大头 —— 他没问，但表里已经有答案。
+
+    ## 交付定义② 缺口(📏 2026-08-18 prod 实测,「折扣力度多大」n=448)
+
+    prod 原文只念了他问的数：占营收比 + 总额 + 一张构成表。表里其实已经有
+    答案 —— 金额最高的前三种合计占了折扣总额六成以上 —— 但那需要读者自己
+    把表格前三行的百分比加起来，没人会替他做这道加法。这句话替他做。
+
+    ⛔ 只陈述事实 + 一个直接推论(「没有平均分布」)，⛔ 不下「该不该谈判/
+       该不该砍」的判断 —— 那是他的决定(反目标)。
+    ⛔ 不拍一个阈值说「这个百分比算高」—— 库里没有行业基准，那是编
+       (同 `resolve_discount_summary` docstring 的 DESCRIPTIVE only 约束)。
+
+    ## 阴性对照：类型数 ≤ `_DISCOUNT_CONCENTRATION_TOP_N` 时不说
+
+    这种情况下「前三种」等于「全部」——「前三种占了 100%」不提供任何信息，
+    是一句经不起查的废话(反目标：排在最前面的命中要经得起他去查)。
+
+    ⚠️ `rest_pct` 用 `100 - top_pct`，⛔ 不是 `sum(items[N:])`：`items` 可能
+       被 `discount_summary(top_n=10)` 截断，而每一项 `share_pct` 的分母是
+       **未截断的**折扣总额(`gold.queries.discount_summary` 的 I2 注释)，
+       所以 `100 - top_pct` 才是「除前几种外剩下全部」的真值——
+       `sum(items[N:])` 在类型数 > 10 时会漏掉没进 `items` 的那些类型。
+
+    百分比不是价格权限数据(与「折扣占营收」同一条契约，两者都是比例不是
+    绝对额)——⛔ 不按 `can_see_money` 拦这句话，非价格角色也该看到。
+    """
+    if len(items) <= _DISCOUNT_CONCENTRATION_TOP_N:
+        return ""
+    top = items[:_DISCOUNT_CONCENTRATION_TOP_N]
+    names = "、".join(str(it.get("discount_name") or "未命名") for it in top)
+    top_pct = sum(float(it.get("share_pct") or 0.0) for it in top)
+    rest_pct = max(0.0, 100.0 - top_pct)
+    return (
+        f"折扣没有平均分布在各种促销上：金额最高的前 "
+        f"{_DISCOUNT_CONCENTRATION_TOP_N} 种（{names}）"
+        f"合计占折扣总额的 **{top_pct:.1f}%**，其余所有类型加起来只占 "
+        f"{rest_pct:.1f}%。"
+    )
+
+
 async def resolve_discount_summary(
     smartbi_pool, factory_id: str, days: int = 30, *,
     role: Optional[str] = None, query: Optional[str] = None,
@@ -9996,6 +10043,13 @@ async def resolve_discount_summary(
     if items:
         lines.append("")
         lines.append("**构成：**")
+        # 🔴 2026-08-18 交付定义② 补口: 构成表本身已经是答案(前几种占了大头),
+        #    但没人会替他把表格前几行的百分比加起来。这句话放在表**上面**——
+        #    与 `_store_lead_sentence` 同一条判据(判据是「他没想到的事有没有
+        #    被直接说出来」, ⛔ 不是「那个数在不在表里」)。
+        concentration = _discount_concentration_sentence(items)
+        if concentration:
+            lines.append(concentration)
         # 2026-08-11: 项目符号改 markdown 表格 —— 构成本来就是「类型 / 金额 / 占比」
         # 三列。⛔ 只转**构成**这一段: 上面「折扣占营收」「折扣总额」是两条单条事实,
         # 表格化反而更差(两行一列的表比一句话难读)。
