@@ -3249,17 +3249,32 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 "如本次生产领用了其他计划产出的外部半成品库存, 请在“半成品实际领用”处手工添加; 本计划内部自产自耗的中间品无需在此填写。",
                 "semiFinishedConsumptions"));
 
+        // 🔴 2026-08-18: 这条(App 报工)腿原来【不建 terminalOutputs】, 而 web 那条腿建。
+        //    @Builder.Default 让它是空 list ⇒ persistWorkflowSettlementOutputs 看到
+        //    reportedOutputs.isEmpty() 就抛 409 WORKFLOW_OUTPUT_SET_MISMATCH ⇒
+        //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
+        //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
+        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
+                deriveTerminalOutputsFromReports(plan, allReports);
+        if (terminalOutputs.isEmpty()) {
+            issues.add(issue("FINISHED_OUTPUT_MISSING",
+                    "末道报工没有可用的产出(数量或产品缺失), 无法自动带入实际成品产量; 请在产出核对处手工填写。",
+                    "terminalOutputs"));
+        }
+
         ProductionSettlementRequest prefill = ProductionSettlementRequest.builder()
                 .idempotencyKey(null) // 前端生成, 防呆 Rule 4 (打开 dialog 一次性生成)
                 .actualFinishedQuantity(actualFinished)
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
-                .quantityUnit(null) // ProductionPlan 无单位字段; 前端提交时从行数据(unit/quantityUnit)补
+                // 单位从末道产出取, 与 web 那条腿同一个 helper —— ⛔ 不留 null 让前端猜
+                .quantityUnit(resolveTerminalOutputUnit(terminalOutputs))
                 .quantityVarianceReason(varianceReason)
                 .laborDeferredReason(laborDeferredReason)
                 .rawMaterialConsumptions(rawLines)
                 .semiFinishedConsumptions(new ArrayList<>())
                 .auxiliaryConsumptions(new ArrayList<>())
                 .laborSegments(laborSegments)
+                .terminalOutputs(terminalOutputs)
                 .build();
 
         return buildPrefillResponse(prefill, issues);
@@ -3841,14 +3856,89 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /** 末道工序产出量: 取最大 processOrder 的全部报工, 汇总其 outputQuantity。 */
-    private BigDecimal deriveLastStepOutput(List<ProductionReport> reports) {
+    /**
+     * 末道工序序号 —— {@link #deriveLastStepOutput} 与
+     * {@link #deriveTerminalOutputsFromReports} 共用，⛔ 不要各写一份。
+     *
+     * <p>返回 null 表示报工上没有 processOrder（老数据），调用方按「全部都算末道」退化。
+     */
+    private static Integer lastStepOrder(List<ProductionReport> reports) {
         Integer maxOrder = null;
         for (ProductionReport r : reports) {
             Integer order = r.getProcessOrder();
             if (order != null && (maxOrder == null || order > maxOrder)) {
-                maxOrder = maxOrder == null ? order : Math.max(maxOrder, order);
+                maxOrder = order;
             }
         }
+        return maxOrder;
+    }
+
+    /**
+     * 末道产出 → {@code terminalOutputs}（App 报工那条路径）。
+     *
+     * <h3>🔴 为什么必须有它（2026-08-18 prod 实测）</h3>
+     * {@code getSettlementPrefill} 有两条腿：web 逐道电子表格、App 逐道报工。
+     * <b>web 那条建了 {@code terminalOutputs}，App 这条没建</b> ——
+     * {@code @Builder.Default} 让它是空 list，于是 {@code persistWorkflowSettlementOutputs}
+     * 看到 {@code reportedOutputs.isEmpty()} 就抛 {@code 409 WORKFLOW_OUTPUT_SET_MISMATCH}。
+     *
+     * <p>后果：工人在 App 把每道工都报完、任务 COMPLETED、审批也过了，
+     * 文员点「核对结单」仍然结不了单 —— 这正是判据里那种「为什么点不动」。
+     *
+     * <p>⚠️ 那句报错还会误导人：它说「提交的末道产出与计划固定的 Workflow 末道集合不一致」，
+     * 听起来像<b>用户传错了</b>；实际是<b>服务端自己推导为空</b>（workflow 计划的结单请求
+     * 会被 {@code deriveConfirmedSettlementRequest} 整个替换掉，客户端传什么都不参与判定）。
+     * 判别实验：不传 / 传对 / 传错 {@code terminalOutputs} 三次报错完全相同。
+     *
+     * <h3>口径</h3>
+     * <ul>
+     *   <li>只取<b>末道</b>工序的报工（与 {@link #deriveLastStepOutput} 同一个判定，共用 helper）</li>
+     *   <li>按 <b>(SKU, 单位)</b> 分组求和 —— ⛔ 不跨单位相加（同一 SKU 出现 kg 和 盒 时
+     *       各自成行，让上游的「多单位」提示照常出得来）</li>
+     *   <li>报工没带 productTypeId 时回落计划的产品；<b>两者都没有就跳过</b>
+     *       —— 造一条 SKU 为空的产出行会让下游的集合比对恒不相等</li>
+     * </ul>
+     */
+    private List<ProductionSettlementRequest.OutputLine> deriveTerminalOutputsFromReports(
+            ProductionPlan plan, List<ProductionReport> reports) {
+        if (reports == null || reports.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Integer maxOrder = lastStepOrder(reports);
+        String planProduct = plan == null ? null : trimToNull(plan.getProductTypeId());
+        // key = SKU + NUL + unit —— 分隔符用 NUL(与本文件既有写法一致, 见 workflowInputPortId 那处),
+        //       它不可能出现在业务串里, 避免 "A"+"BC" 与 "AB"+"C" 撞成同一个 key
+        Map<String, ProductionSettlementRequest.OutputLine> bySkuAndUnit = new LinkedHashMap<>();
+        for (ProductionReport r : reports) {
+            if (r == null) {
+                continue;
+            }
+            if (maxOrder != null && !maxOrder.equals(r.getProcessOrder())) {
+                continue;
+            }
+            BigDecimal qty = r.getOutputQuantity();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            String sku = firstNonBlank(trimToNull(r.getProductTypeId()), planProduct);
+            if (isBlank(sku)) {
+                continue;   // 见上: 空 SKU 的产出行会让集合比对恒不相等
+            }
+            String unit = trimToNull(r.getOutputUnit());
+            String key = sku + " " + (unit == null ? "" : unit);
+            ProductionSettlementRequest.OutputLine line = bySkuAndUnit.get(key);
+            if (line == null) {
+                bySkuAndUnit.put(key, ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId(sku).quantity(qty).unit(unit).build());
+            } else {
+                line.setQuantity(line.getQuantity().add(qty));
+            }
+        }
+        return new ArrayList<>(bySkuAndUnit.values());
+    }
+
+    private BigDecimal deriveLastStepOutput(List<ProductionReport> reports) {
+        Integer maxOrder = lastStepOrder(reports);
         BigDecimal sum = null;
         for (ProductionReport r : reports) {
             // maxOrder 为 null (报工无 processOrder) → 退化为汇总全部 outputQuantity
