@@ -9819,22 +9819,33 @@ async def resolve_daypart_performance(
         by_store: Dict[str, Dict[str, Any]] = {}
         for r in store_rows:
             slot = by_store.setdefault(
-                r["store_name"], {"bills": {}, "revenue": {}, "total": 0.0})
+                r["store_name"], {"bills": {}, "revenue": {}})
             slot["bills"][r["daypart"]] = int(r["bills"])
             slot["revenue"][r["daypart"]] = float(r["revenue"] or 0.0)
-            slot["total"] += slot[money_key][r["daypart"]]
         store_cross_total = sum(
             float(r["revenue"] or 0.0) for r in store_rows)
 
-        ranked = sorted(by_store.items(), key=lambda kv: kv[1]["total"], reverse=True)
-        # 首段: 在**生意最好的那个时段**里点名最强的门店 + 极差。
-        # ⛔ 极差走 `_store_revenue_spread` —— 门店极差只此一处计算(形态 D)。
+        # 🔴 排序键**只此一个**: 首位时段的值。首段和表格必须按同一个口径排,
+        #    否则首段点名的店不是表格第一行 —— 老板扫一眼就觉得矛盾。
+        #
+        # 📏 prod 实测(2026-08-18, 表格原来按**总计**排):
+        #      首段:      按门店看晚市: 陆家嘴正大店最强 ¥1,480,432
+        #      表格第一行: 徐汇美罗城店  晚市 ¥1,470,600 / 午市 ¥724,470
+        #    徐汇总计 2,195,070 > 陆家嘴 2,188,797, 而**晚市**陆家嘴更高。
+        #    两个数各自都对、口径也都标了 —— ⛔ 但「说的话能不能信」是要守的东西,
+        #    而让人多看两眼去核对，就是在花那笔本钱。
+        def _top_slot_value(d) -> float:
+            return float(d[money_key].get(top, 0) or 0.0)
+
         top_slot_rows = [
-            {"store_name": name, "revenue": d[money_key].get(top, 0)}
+            {"store_name": name, "revenue": _top_slot_value(d)}
             for name, d in by_store.items()
         ]
         top_slot_rows.sort(key=lambda r: r["revenue"], reverse=True)
+        # ⛔ 极差走 `_store_revenue_spread` —— 门店极差只此一处计算(形态 D)。
         spread = _store_revenue_spread(top_slot_rows)
+        ranked = sorted(by_store.items(),
+                        key=lambda kv: _top_slot_value(kv[1]), reverse=True)
 
         lines.append("")
         unit = "营收" if can_see_money else "单量"
@@ -9858,6 +9869,9 @@ async def resolve_daypart_performance(
                     f"其余的单归不到具体门店 —— 别拿它当全部生意看。"
                 )
 
+        lines.append("")
+        # ⛔ 排序口径要**写出来** —— 一张不说自己怎么排的表, 读的人得自己去推。
+        lines.append(f"各门店分时段{unit}（按{top}{unit}从高到低）:")
         lines.append("")
         headers = ["门店"] + [f"{d}{unit}" for d in dayparts]
         table_rows = []
