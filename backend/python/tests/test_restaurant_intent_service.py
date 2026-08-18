@@ -998,6 +998,49 @@ async def test_tiered_answer_capture_omits_source_without_java_tool_name(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_tiered_answer_wires_history_into_capture(monkeypatch):
+    """飞轮 A 第 10 项 (2026-08-18): history 列靠 run_capture_with_history
+    在这个模块的 3 个 log_intent_capture 调用点补上 -- log_intent_capture
+    本身定义在 restaurant_intent.py, 不接受 history 参数 (本任务禁碰那个
+    文件, 见 llm_fallback_logger.run_capture_with_history 的模块级注释)。
+
+    这条断言钉的是**接线**，不是 run_capture_with_history 自己的行为
+    (那部分在 test_llm_fallback_logger.py 里单测过): tiered_answer 收到的
+    history 必须原样传给 run_capture_with_history，不能在中间被吞掉/替换 --
+    这正是 形态B「机制在、没接上」要防的那类缺陷。"""
+    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS")
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        return OpsAnswer(
+            code=code, title="营收趋势", answer_text="营收趋势: 2026-01 上涨",
+            charts=[], kpis=[], meta={},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+    wrap_mock = AsyncMock(return_value=1)
+    monkeypatch.setattr(svc, "run_capture_with_history", wrap_mock)
+
+    history = [{"role": "user", "content": "上个月呢"}]
+    await tiered_answer(
+        "营收趋势", object(), "QHJ01", "restaurant_manager", history=history,
+    )
+    await asyncio.sleep(0)
+
+    assert wrap_mock.call_args is not None, (
+        "run_capture_with_history 没被调用 -- log_intent_capture 的成功路径"
+        "调用点没有走 history 补丁的包装, history 列会继续是 0")
+    # asyncio.create_task(run_capture_with_history(log_intent_capture(...), pool, history))
+    assert wrap_mock.call_args.args[-1] is history, (
+        f"run_capture_with_history 收到的 history 不是 tiered_answer 的入参: "
+        f"{wrap_mock.call_args.args!r}")
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
     spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS")
 
