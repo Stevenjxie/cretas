@@ -342,6 +342,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
                 .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
+        // 调料用量是 g / kg【投入原料】, 所以先要有「本单计划投多少 kg 原料」。
+        // ⛔ 不重新从 BOM 算一遍 —— 上面那个循环已经把每行的 requiredQty 连同单位换算做完了,
+        //    直接复用它, 否则同一个数会有两份实现, 迟早漂 (本仓形态 D)。
+        BigDecimal plannedRawInputKg = plannedRawInputKg(mr);
         int added = 0;
         for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasonings) {
             String mtId = s.getMaterialTypeId();
@@ -354,9 +358,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setMaterialTypeId(mtId);
             item.setMaterialName(resolveLiveMaterialName(mtId, s.getName()));
             item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
-            item.setRequiredQty(null);                       // 见上: 推不出投入 kg, 留空不拦单
             String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
             item.setUnit(stockUnit != null ? stockUnit : "kg");
+            // 🔴 2026-08-18: 需求量原来一律留空("推不出投入 kg"), 于是拣货员只能猜。
+            //    实测: 80kg 投料 × 10g/kg 正确答案是 0.8kg, 操作员填的是 1。
+            //    投入 kg 是算得出来的 —— 见 plannedRawInputKg 的说明。
+            item.setRequiredQty(seasoningRequiredQty(s, plannedRawInputKg, item.getUnit()));
             // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
             //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
             mr.getItems().add(item);
@@ -366,6 +373,95 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         if (added > 0) {
             log.info("[领料单] 追加调料 {} 行 recipe={}", added, recipeId);
         }
+    }
+
+    /**
+     * 本单计划投入的原料质量 (kg) —— 调料用量的分母。
+     *
+     * <p>直接汇总<b>已经算好的</b> RAW 明细行（上面那个循环已做过单位换算），
+     * ⛔ 不从 BOM 再算一遍：同一个数两份实现迟早漂（本仓形态 D）。
+     *
+     * <p>只认质量单位。计数单位的原料（个 / 只 / 件）与 kg 之间<b>没有通用换算</b>，
+     * 硬折就是编数 —— 这类行不计入分母。
+     *
+     * @return 算不出时返回 {@code null}（⛔ 不返回 0：0 会让下游算出「需要 0 kg 调料」，
+     *         那是个看起来很确定的假答案）
+     */
+    private BigDecimal plannedRawInputKg(FactoryMaterialRequisition mr) {
+        if (mr == null || mr.getItems() == null) {
+            return null;
+        }
+        BigDecimal total = null;
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            if (it == null
+                    || it.getMaterialCategory() != FactoryMaterialRequisitionItem.MaterialCategory.RAW
+                    || it.getRequiredQty() == null) {
+                continue;
+            }
+            BigDecimal kg = massToKg(it.getRequiredQty(), it.getUnit());
+            if (kg == null) {
+                continue;   // 计数单位的原料: 不硬折
+            }
+            total = total == null ? kg : total.add(kg);
+        }
+        return total != null && total.signum() > 0 ? total : null;
+    }
+
+    /** 质量单位 → kg。⛔ 不是质量单位就返回 null, 不猜。 */
+    private BigDecimal massToKg(BigDecimal qty, String unit) {
+        if (qty == null || unit == null) {
+            return null;
+        }
+        String u = unit.trim();
+        if ("kg".equalsIgnoreCase(u) || "千克".equals(u) || "公斤".equals(u)) {
+            return qty;
+        }
+        if ("g".equalsIgnoreCase(u) || "克".equals(u)) {
+            return qty.divide(new BigDecimal("1000"), 6, java.math.RoundingMode.HALF_UP);
+        }
+        if ("t".equalsIgnoreCase(u) || "吨".equals(u)) {
+            return qty.multiply(new BigDecimal("1000"));
+        }
+        if ("jin".equalsIgnoreCase(u) || "斤".equals(u)) {
+            return qty.divide(new BigDecimal("2"), 6, java.math.RoundingMode.HALF_UP);
+        }
+        return null;
+    }
+
+    /**
+     * 单条调料的需求量。
+     *
+     * <p><b>口径是「单锅基准」</b>：{@code dosagePerKgG} × 投入 kg ÷ 1000。
+     * 计划阶段还不知道会分几锅，所以<b>不含</b> {@code subsequentPotRatio} 那一层放大
+     * —— 报工时 {@code ProcessSheetServiceImpl} 会按真实锅次重算，那才是权威值。
+     * 这里给的是<b>下限</b>，让拣货员有个数可依，而不是从零开始猜。
+     *
+     * <p>⛔ 算不出就返回 {@code null}（保持原来的留空行为），不返回 0。
+     * 与报工侧一致：{@code COOKING} 段且 {@code countInSeasoning=false} 的不计入。
+     */
+    private BigDecimal seasoningRequiredQty(com.cretas.aims.entity.bom.BomSeasoningItem s,
+                                            BigDecimal plannedRawInputKg, String targetUnit) {
+        if (s == null || plannedRawInputKg == null || plannedRawInputKg.signum() <= 0) {
+            return null;
+        }
+        if (com.cretas.aims.entity.bom.BomSeasoningItem.SECTION_COOKING.equals(s.getSection())
+                && !Boolean.TRUE.equals(s.getCountInSeasoning())) {
+            return null;   // 与报工侧同口径: 这类不计入调料成本, 也不该出现在需求量上
+        }
+        BigDecimal dosage = s.getDosagePerKgG();
+        if (dosage == null || dosage.signum() <= 0) {
+            return null;
+        }
+        BigDecimal grams = dosage.multiply(plannedRawInputKg);
+        String u = targetUnit == null ? "kg" : targetUnit.trim();
+        if ("g".equalsIgnoreCase(u) || "克".equals(u)) {
+            return grams.setScale(3, java.math.RoundingMode.HALF_UP);
+        }
+        if ("kg".equalsIgnoreCase(u) || "千克".equals(u) || "公斤".equals(u)) {
+            return grams.divide(new BigDecimal("1000"), 3, java.math.RoundingMode.HALF_UP);
+        }
+        // ⛔ 调料的库存单位不是质量单位(袋/包/瓶…)时不硬折 —— 留空让人填
+        return null;
     }
 
     /**
