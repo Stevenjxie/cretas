@@ -3033,7 +3033,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (!orderBaseUnit.equals(selection.baseUnit())) {
             throw new BusinessException(409, "实际到货包装与采购单的库存基本单位不一致")
                     .withCode("PURCHASE_RECEIPT_BASE_UNIT_MISMATCH")
-                    .withHint("请选择换算到 " + orderBaseUnit + " 的包装规格");
+                    .withHint("请选择换算到 "
+                            + com.cretas.aims.service.unit.UnitDisplayNames.display(orderBaseUnit)
+                            + " 的包装规格");
         }
         return selection;
     }

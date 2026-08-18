@@ -960,7 +960,10 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "g", "g", "克", "gram", "grams");
         alias(aliases, "kg", "kg", "公斤", "千克", "kgs", "kilogram", "kilograms");
         alias(aliases, "jin", "jin", "斤");
-        alias(aliases, "t", "t", "吨");
+        // ton / tonne 是英文单词, 不是 SI 符号(吨的符号是 t) —— 契约原来不认它,
+        // 于是 material_packaging_specs 里那条 LIUSHANMEN 的 `ton → kg ×1000`
+        // 归一不到 t, canonicalNativeUnit 回落字面, 用户看到的就是 "ton"。
+        alias(aliases, "t", "t", "吨", "ton", "tons", "tonne", "tonnes");
         alias(aliases, "ml", "ml", "毫升");
         alias(aliases, "l", "l", "升");
         alias(aliases, "mm", "mm", "毫米", "公厘", "millimeter", "millimeters");

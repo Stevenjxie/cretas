@@ -3370,11 +3370,20 @@ function getPlanAdvisory(row: TableRow) {
   return materialAdvisoryMap.value[String(row.id || '')];
 }
 
+/**
+ * 无预警时的文案**以后端为准**，前端不再自己写一份。
+ *
+ * 🔴 2026-08-18: 这里原来硬编码 `'原料库存参考: 暂无缺料预警'`，于是后端说什么都不算数 ——
+ * 后端把这句话改成带口径的三态（全厂够且生产仓已备料 / 全厂够但没核对生产仓 / 有预警），
+ * 这一列照旧显示「暂无缺料预警」。形态 D：同一句话两份，一定会漂；
+ * 这次是后端先动，前端那份把它盖掉了。
+ *
+ * ⚠️ 兜底串只在后端**没给 message** 时用（老版本后端 / 字段缺失），不是默认路径。
+ */
 function getPlanAdvisorySummary(row: TableRow) {
   const advisory = getPlanAdvisory(row);
   if (!advisory) return '';
-  if (!advisory.hasWarning) return '原料库存参考: 暂无缺料预警';
-  return advisory.message;
+  return advisory.message || '原料库存参考: 暂无缺料预警';
 }
 
 function advisoryNeedsUnitConfig(advisory: ProductionPlanMaterialAdvisory | null | undefined): boolean {

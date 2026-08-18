@@ -26,9 +26,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 或者反过来, 明明只差一次领料, 却被当成缺货去下采购单。
  *
  * <p>⚠️ 这道闸只钉**文案与成因一致**。成因本身是否算对(全厂在手量的口径)
- * 由 {@code ProductionStockAllocationServiceImpl#factoryOnHandFor} 保证 ——
- * 它必须与生产仓那一侧用同一套单位匹配规则, 否则两个数不同口径, 相减出来的
- * 「压在别的仓的量」是假的。
+ * 由 {@code ProductionStockAllocationServiceImpl#factoryOnHandFor} 保证,
+ * 它自己的闸是 {@link FactoryOnHandCaliberTest}。
+ *
+ * <p>🔴 <b>2026-08-18 订正</b>: 本段原来写的是「它必须与生产仓那一侧用同一套单位
+ * 匹配规则」—— <b>那条推理是错的</b>, 而且当时确实照它写成了严格版。后果:
+ * 原料仓躺着 10 箱(=100kg)时, 在手量算成 0, 文案说「全厂在手也是 0 → 需要先采购入库」,
+ * 把人支去下采购单。两个数回答的不是同一个问题, 所以<b>刻意不同口径</b>:
+ * 可投量问「能不能自动扣」(严格, 放宽会超扣), 在手量问「货在不在厂里」(按事实, 认包装规格)。
  */
 class ProductionStockShortageCauseTest {
 

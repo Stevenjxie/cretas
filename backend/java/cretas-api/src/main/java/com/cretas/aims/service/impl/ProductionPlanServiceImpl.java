@@ -1023,12 +1023,28 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 plan.getId(), plan.getProductTypeId(), plannedQty, bomItems.size());
     }
 
+    /**
+     * 缺料核算的结果 + <b>没算成的那部分</b>。
+     *
+     * <p>⚠️ {@code uncomputable} 只进汇总语的<b>口径说明</b>, <b>不</b>做成预警项 ——
+     * 实测全库 ACTIVE BOM 里 F006 有 69.2% 的行没有标准用量(7 个配方中 6 个受影响),
+     * 做成预警就是天天误报, 而天天误报的提示最终会被人忽略掉(形态 E)。
+     * 它要解决的是「一条预警都没有」同时表示「都够」和「一行都没算」这个歧义, 不是催人去配数据。
+     */
+    private record AdvisoryScan(List<ProductionPlanMaterialAdvisoryDTO.Item> items,
+                                List<String> byReporting,
+                                List<String> uncomputable) { }
+
     private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
+        return scanMaterialAdvisory(factoryId, plan).items();
+    }
+
+    private AdvisoryScan scanMaterialAdvisory(String factoryId, ProductionPlan plan) {
         if (bomRecipeItemRepository == null
                 || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
                 || plan.getPlannedQuantity() == null
                 || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
 
         List<BomRecipeItem> bomItems;
@@ -1036,17 +1052,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, plan.getProductTypeId());
         } catch (Exception e) {
             log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
         if (bomItems == null || bomItems.isEmpty()) {
-            return Collections.emptyList();
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity();
         BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId(), bomItems);
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
+        // 🔴 2026-08-18: 没有标准用量的行**算不出需求量**, 只能跳过 —— 但跳过的条数必须留痕,
+        //    否则「一条预警都没有」会同时表示「都够」和「一行都没算」(硬约束 4 的同一个坑)。
+        //    实测 F006 黄油鸡 BOM 7 行里, 4 个原料的 standardQuantity 全是 null,
+        //    于是缺料预警对这个计划的原料**从来没生效过**, 而界面说「暂无缺料预警」。
+        List<String> byReporting = new ArrayList<>();
+        List<String> uncomputable = new ArrayList<>();
         for (BomRecipeItem item : bomItems) {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
+                String skippedName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
+                // ⚠️ 分两类, 措辞完全不同 —— 绑了 workflow 投料端口的行【本来就没有计划用量】,
+                //    投多少由报工当场决定。把它说成「未配标准用量」等于诬告用户的数据坏了。
+                //    实测: 全库 ACTIVE BOM 里 12 条空标准量的行 **无一例外** 都绑着端口
+                //    (标准量为空 && 未绑端口 的组合是 0 条) ⇒ 这是设计, 不是缺失。
+                if (item.getWorkflowInputPortId() != null && !item.getWorkflowInputPortId().isBlank()) {
+                    byReporting.add(skippedName);
+                } else {
+                    uncomputable.add(skippedName);
+                }
                 continue;
             }
             String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
@@ -1096,15 +1128,88 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .availableQuantity(available)
                         .shortageQuantity(shortageQty)
                         .unit(unit)
+                        .kind(ProductionPlanMaterialAdvisoryDTO.Kind.FACTORY_SHORTAGE)
                         .message(String.format("%s: 需要 %s%s, 可用 %s%s, 缺口 %s%s",
                                 materialName,
                                 totalRequired.stripTrailingZeros().toPlainString(), unit,
                                 available.stripTrailingZeros().toPlainString(), unit,
                                 shortageQty.stripTrailingZeros().toPlainString(), unit))
                         .build());
+                continue;
+            }
+
+            // 🔴 全厂够, 再看**生产仓**够不够 —— 「忘了调拨」是一种独立的处境, 下一步是领料而非采购。
+            BigDecimal workshopAvailable = resolveWorkshopRawStock(factoryId, plan, item.getMaterialTypeId());
+            if (workshopAvailable != null && workshopAvailable.compareTo(totalRequired) < 0) {
+                warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                        .materialTypeId(item.getMaterialTypeId())
+                        .materialName(materialName)
+                        .requiredQuantity(totalRequired)
+                        .availableQuantity(available)
+                        .workshopAvailableQuantity(workshopAvailable)
+                        .shortageQuantity(totalRequired.subtract(workshopAvailable))
+                        .unit(unit)
+                        .kind(ProductionPlanMaterialAdvisoryDTO.Kind.NOT_IN_WORKSHOP)
+                        .message(String.format(
+                                "%s: 全厂有 %s%s, 但生产仓只有 %s%s。逐道报工按生产仓扣料，请先领料或调拨 %s%s",
+                                materialName,
+                                available.stripTrailingZeros().toPlainString(), unit,
+                                workshopAvailable.stripTrailingZeros().toPlainString(), unit,
+                                totalRequired.subtract(workshopAvailable).stripTrailingZeros().toPlainString(), unit))
+                        .build());
             }
         }
-        return warnings;
+        return new AdvisoryScan(warnings, byReporting, uncomputable);
+    }
+
+    /**
+     * 生产仓这一层<b>量得到吗</b> —— 与 {@link #resolveWorkshopRawStock} 的可判定条件同源。
+     *
+     * <p>存在的唯一理由是让「无预警」那句话分得清「生产仓没问题」和「没量生产仓」。
+     */
+    private boolean workshopCaliberAvailable(String factoryId, ProductionPlan plan) {
+        if (warehouseResolver == null) {
+            return false;
+        }
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return false;
+        }
+        try {
+            String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+            return workshopId != null && !workshopId.isBlank();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 生产仓可用量; 无法判定时返回 {@code null}（<b>不是 0</b>）。
+     *
+     * <p>⛔ 读不到就返回 null 让调用方跳过 —— 兜底成 0 会把「我不知道」翻译成「一粒都没有」,
+     * 于是每个计划都长出一条假的「请先领料」。本仓形态 A¹⁰。
+     *
+     * <p>返回 null 的情形: 没配生产仓 / resolver 不可用 / 客户来料计划(那类走另一套归属校验,
+     * 仓库维度的结论不适用)。
+     */
+    private BigDecimal resolveWorkshopRawStock(String factoryId, ProductionPlan plan, String materialTypeId) {
+        if (warehouseResolver == null || materialTypeId == null) {
+            return null;
+        }
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return null;
+        }
+        String workshopId;
+        try {
+            workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+        } catch (RuntimeException e) {
+            log.debug("[advisory] 生产仓解析失败 factory={}: {}", factoryId, e.getMessage());
+            return null;
+        }
+        if (workshopId == null || workshopId.isBlank()) {
+            return null;
+        }
+        return materialBatchRepository.sumAvailableRawStockQuantityByMaterialTypeAndWarehouse(
+                factoryId, materialTypeId, workshopId);
     }
 
     /**
@@ -2357,12 +2462,41 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("当前生产计划不属于该工厂, 无法查看");
         }
 
-        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = buildMaterialAdvisoryItems(factoryId, plan);
-        String message = warnings.isEmpty()
-                ? "原料库存参考: 暂无缺料预警"
-                : "原料库存参考: " + warnings.stream()
-                        .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
-                        .collect(Collectors.joining("; "));
+        AdvisoryScan scan = scanMaterialAdvisory(factoryId, plan);
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = scan.items();
+        // 🔴 没算成的那部分要说出来 —— 否则「一条预警都没有」同时表示「都够」和「一行都没算」。
+        //    实测 F006 黄油鸡 BOM 7 行里 4 个原料没有标准用量, 缺料核算对它们从未生效。
+        //    ⚠️ 只做口径说明, 不做告警(全库 69.2% 的 ACTIVE BOM 行都缺这个数, 告警会天天响)。
+        StringBuilder note = new StringBuilder();
+        if (!scan.byReporting().isEmpty()) {
+            note.append("（其中 ").append(scan.byReporting().size())
+                    .append(" 项投料量由报工当场决定，不参与事前核算：")
+                    .append(String.join("、", scan.byReporting())).append("）");
+        }
+        if (!scan.uncomputable().isEmpty()) {
+            note.append("（其中 ").append(scan.uncomputable().size())
+                    .append(" 项未配标准用量，未参与核算：")
+                    .append(String.join("、", scan.uncomputable())).append("）");
+        }
+        String uncomputableNote = note.toString();
+        // 🔴 2026-08-18: 原来这句只说「暂无缺料预警」, 不说自己量的是哪一层库存。
+        //    实测 F006 黄油鸡计划 4 个原料各 200kg 全在原料仓、生产仓 0 —— 这句话说「不缺料」,
+        //    点进逐道录入四行全是「0kg / 原料仓另有 200kg，待调拨入生产仓」。数没算错, 是没报口径。
+        //    本仓判据「报一个数的时候, 把这个数是怎么来的一起报」。
+        //
+        // ⚠️ 三态, 不是两态 (硬约束 4): 「没量到生产仓」不能折叠进「生产仓没问题」——
+        //    没配生产仓的工厂照样会走到这里, 那时宣称「生产仓也已备料」就是一句没量就下的结论。
+        String message;
+        if (!warnings.isEmpty()) {
+            message = "原料库存参考: " + warnings.stream()
+                    .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
+                    .collect(Collectors.joining("; "));
+        } else if (workshopCaliberAvailable(factoryId, plan)) {
+            message = "原料库存参考: 全厂库存足够, 生产仓也已备料";
+        } else {
+            message = "原料库存参考: 全厂库存足够（未核对生产仓 —— 本厂未配置生产仓）";
+        }
+        message = message + uncomputableNote;
         return ProductionPlanMaterialAdvisoryDTO.builder()
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())
@@ -2805,12 +2939,63 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
         boolean hasSubmitted = rows != null && rows.stream().anyMatch(this::isUsableProcessSheetRow);
+        // 🔴 2026-08-18: 逐道报工有【两条腿】—— web 的逐道录入写 process_sheet_rows,
+        //    App 的报工写 production_reports + work_process_tasks + 半成品台账。
+        //    这道闸原来只看前者, 于是「工人在 App 把两道工都报完、任务 COMPLETED、审批也过了」
+        //    的计划, 文员点「核对结单」照样被拒 409「必须先完成并正式提交逐道报工」——
+        //    prod 实测 (PLAN-1786954657305, 报工 23832/23833 均 APPROVED)。
+        //    ⇒ 纯用 App 报完的 workflow 计划**永远结不了单**, 这正是判据里那种「为什么点不动」。
+        //
+        // ⚠️ 闸的**意图**是「逐道报工做完了没有」, 不是「web 那张表有没有行」——
+        //    量的对象错了(形态 A)。这里补上另一条腿, 意图不变、不放松:
+        //    仍要求每一道工序任务都 COMPLETED, 只是承认 App 报工也算数。
+        if (!hasSubmitted) {
+            hasSubmitted = hasCompletedTaskLevelReporting(factoryId, plan);
+        }
         if (!hasSubmitted) {
             throw new BusinessException(409, "workflow 计划必须先完成并正式提交逐道报工")
                     .withCode("WORKFLOW_REPORTING_REQUIRED")
-                    .withHint("请逐道录入并提交后，再核对结单")
+                    .withHint("请在 web 逐道录入并提交，或让操作员在 App 上把每道工序都报完，再核对结单")
                     .withHintTarget("核对结单");
         }
+    }
+
+    /**
+     * App 那条腿：本计划的批次下，工序任务是否<b>全部</b>报完（COMPLETED）。
+     *
+     * <p>⛔ 要求「全部」而不是「有一条」—— 与 web 那条腿等价严格。web 侧
+     * {@code isUsableProcessSheetRow} 只要一行已提交就放行, 是因为那张表按行提交、
+     * 行数不等于工序数; 而任务表天然一工序一行, 所以这边用「全部完成」才是同一个标准,
+     * 放宽成 anyMatch 会让只报了第一道的计划也能结单。
+     *
+     * <p>⚠️ 没有任务 → 返回 false（不是 true）。「一条任务都没有」是<b>量不到</b>,
+     * 不能当成「报完了」(硬约束 4: 别把没量到折叠进没问题)。
+     */
+    private boolean hasCompletedTaskLevelReporting(String factoryId, ProductionPlan plan) {
+        if (workProcessTaskRepository == null || plan == null || plan.getId() == null) {
+            return false;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+        if (batches == null || batches.isEmpty()) {
+            return false;
+        }
+        boolean sawAnyTask = false;
+        for (ProductionBatch b : batches) {
+            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks =
+                    workProcessTaskRepository
+                            .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, b.getId());
+            if (tasks == null || tasks.isEmpty()) {
+                continue;
+            }
+            sawAnyTask = true;
+            for (com.cretas.aims.entity.workprocess.WorkProcessTask t : tasks) {
+                if (t.getStatus() != com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED) {
+                    return false;   // 还有工序没报完 → 不放行
+                }
+            }
+        }
+        return sawAnyTask;
     }
 
     private boolean isWorkflowPlan(ProductionPlan plan) {
@@ -3403,7 +3588,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (requestedUnit != null && terminalUnit != null && !requestedUnit.equals(terminalUnit)) {
             throw new BusinessException(409, "结单单位与末道产出单位不一致")
                     .withCode("PRODUCTION_SETTLEMENT_OUTPUT_UNIT_MISMATCH")
-                    .withHint("结单单位: " + requestedUnit + ", 末道产出单位: " + terminalUnit)
+                    .withHint("结单单位: " + com.cretas.aims.service.unit.UnitDisplayNames.display(requestedUnit)
+                            + ", 末道产出单位: " + com.cretas.aims.service.unit.UnitDisplayNames.display(terminalUnit))
                     .withHintTarget("成品产出");
         }
         return firstNonBlank(terminalUnit, requestedUnit);

@@ -135,20 +135,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 //    2030真空袋全厂 0 (真没货)。当时两者的提示是同一句「请联系仓管补料」,
                 //    而正确动作一个是「去领料」、一个是「去采购」。
                 //    ⇒ 这里同时算一份**全厂在手量**, 用同一套单位匹配规则, 让成因可推导。
-                BigDecimal factoryOnHand = factoryOnHandFor(
-                        factoryId, materialTypeId, inputUnit, massInput);
-                shortageItems.add(new ProductionStockShortageDTO.Item(
-                        materialTypeId,
-                        materialName(factoryId, materialTypeId),
-                        "RAW_MATERIAL",
-                        required,
-                        availableForInput,
-                        remaining,
-                        allocationUnit,
-                        factoryOnHand,
-                        factoryOnHand.compareTo(availableForInput) > 0
-                                ? ProductionStockShortageDTO.Cause.NOT_REQUISITIONED
-                                : ProductionStockShortageDTO.Cause.TRULY_OUT_OF_STOCK));
+                shortageItems.add(withCause(
+                        factoryId, materialTypeId, materialName(factoryId, materialTypeId),
+                        "RAW_MATERIAL", required, availableForInput, remaining,
+                        allocationUnit, inputUnit, massInput));
             }
         }
 
@@ -171,18 +161,70 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     }
 
     /**
+     * 造一条短缺明细，<b>顺便把成因算出来</b>。
+     *
+     * <h3>🔴 为什么要有这个 helper（2026-08-18）</h3>
+     * 短缺明细在本类有<b>三个</b>构造点：自动分摊(plan)、指定批次投料、BOM 自动投料。
+     * 上一轮加成因标注时<b>只改了第一处</b>，于是 prod 实测走 web 逐道录入撞到辅料短缺时，
+     * 返回的还是 {@code factoryOnHand: null / cause: null}，文案退回那句模糊的
+     * 「请联系仓管补料」—— 而全厂原料仓那两样各有 20kg。
+     *
+     * <p>本仓硬约束 8「改共享结构前先数，改完再数」的原形：BEFORE=3，我改了 1。
+     * ⇒ 收敛成一处，三个构造点都走它，不再有第四份口径。
+     */
+    private ProductionStockShortageDTO.Item withCause(
+            String factoryId, String materialTypeId, String materialName, String sourceType,
+            BigDecimal required, BigDecimal available, BigDecimal shortage,
+            String allocationUnit, String matchUnit, boolean massInput) {
+        BigDecimal factoryOnHand = null;
+        try {
+            factoryOnHand = factoryOnHandFor(factoryId, materialTypeId, matchUnit, massInput);
+        } catch (RuntimeException e) {
+            // ⛔ 算不出在手量不能把短缺本身吞掉 —— 那才是用户真正要看到的东西。
+            //    算不出就留 null, 文案退回不带成因的版本(见 causeLabel: cause==null 返回空串)。
+            log.warn("[短缺成因] 全厂在手量算不出 material={}: {}", materialTypeId, e.getMessage());
+        }
+        return new ProductionStockShortageDTO.Item(
+                materialTypeId, materialName, sourceType,
+                required, available, shortage, allocationUnit,
+                factoryOnHand,
+                factoryOnHand == null ? null
+                        : (factoryOnHand.compareTo(available) > 0
+                                ? ProductionStockShortageDTO.Cause.NOT_REQUISITIONED
+                                : ProductionStockShortageDTO.Cause.TRULY_OUT_OF_STOCK));
+    }
+
+    /**
      * 全厂在手量 (不限仓库), 用于把「有货没领」和「真没货」分开。
      *
-     * <p>⚠️ 必须与生产仓那一侧**同一套单位匹配规则** ({@code unitMatches} + {@code batchAvailable}) ——
-     * 否则两个数不同口径, 相减出来的「压在别的仓的量」是假的。
-     * 这正是本仓「报一个数的时候把这个数是怎么来的一起报」那条判据。
+     * <p><b>🔴 2026-08-18 订正: 这里用<b>展示版</b>, 与可投量那一侧<b>刻意不同口径</b>。</b>
+     * 本方法上一版写着「必须与生产仓那一侧同一套规则」并用了严格版 —— 那条推理错了,
+     * 因为两个数回答的<b>不是同一个问题</b>:
+     *
+     * <ul>
+     *   <li><b>可投量</b>回答「系统现在能自动扣哪些批次」⇒ 必须严格:
+     *       扣减侧 {@link #kgToStorageQuantity} 对「箱」是原样返回, 放宽会<b>超扣 10 倍</b>。</li>
+     *   <li><b>全厂在手</b>回答「这批货到底在不在这个厂里」⇒ 必须按<b>事实</b>:
+     *       10 箱 × 10kg/箱 就是 100kg 在手, 与系统能不能自动扣它无关。</li>
+     * </ul>
+     *
+     * <p>用严格版数在手量, 会让文案说出一句<b>关于现实的假话</b>: 货明明躺在原料仓,
+     * 提示却是「全厂在手也是 0 → 需要先采购入库，找仓管补料没用」——
+     * 把人支去下采购单。⚠️ 上一轮加成因标注时, 我把原本模糊的一句话
+     * (「请联系仓管补料」) 换成了一句<b>确定的错话</b>, 那比模糊更糟。
+     *
+     * <p>「去领料」这个下一步是走得通的 —— {@code FactoryMaterialRequisitionServiceImpl}
+     * 注入了 {@code MaterialUomConverter} 并调 {@code toComparableQuantity}, 认得
+     * 箱↔kg 的包装规格。所以<b>不需要</b>第三种成因。
+     *
+     * <p>口径关系: 展示版 ⊇ 严格版, 且全厂 ⊇ 生产仓 ⇒ 在手量恒 ≥ 可投量, 成因比较不会翻负。
      */
     private BigDecimal factoryOnHandFor(
             String factoryId, String materialTypeId, String inputUnit, boolean massInput) {
         BigDecimal total = BigDecimal.ZERO;
         for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(
                 factoryId, materialTypeId)) {
-            if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
+            if (!unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                 continue;
             }
             BigDecimal available = batchAvailable(factoryId, batch, massInput);
@@ -314,12 +356,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal available = stock.subtract(pending).max(BigDecimal.ZERO);
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
-                shortageItems.add(new ProductionStockShortageDTO.Item(
-                        batch.getMaterialTypeId(),
+                shortageItems.add(withCause(
+                        factoryId, batch.getMaterialTypeId(),
                         materialName(factoryId, batch.getMaterialTypeId()),
                         metadata.getSourceType() == null ? "RAW_MATERIAL" : metadata.getSourceType(),
                         required, available,
-                        required.subtract(available).max(BigDecimal.ZERO), allocationUnit));
+                        required.subtract(available).max(BigDecimal.ZERO),
+                        allocationUnit, batchUnit, massBatch));
                 continue;
             }
             allocations.add(new PlannedAllocation(
@@ -440,14 +483,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 }
             }
             if (remaining.signum() > 0) {
-                shortages.add(new ProductionStockShortageDTO.Item(
-                        requirement.materialTypeId(),
-                        requirement.materialName(),
-                        requirement.sourceType(),
-                        requiredQuantity,
-                        availableForItem,
-                        remaining,
-                        allocationUnit));
+                shortages.add(withCause(
+                        factoryId, requirement.materialTypeId(), requirement.materialName(),
+                        requirement.sourceType(), requiredQuantity, availableForItem, remaining,
+                        allocationUnit, requiredUnit, massRequirement));
             }
         }
         if (!shortages.isEmpty()) {

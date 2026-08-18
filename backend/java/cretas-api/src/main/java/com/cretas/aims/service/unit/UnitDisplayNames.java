@@ -27,10 +27,26 @@ import java.util.Map;
 public final class UnitDisplayNames {
 
     /**
-     * 计数/包装码 → 中文展示名。
-     * 只收「用户读不懂的码」; WEIGHT / VOLUME / LENGTH 的符号一律不进这张表。
+     * 码 → 中文展示名。只收<b>用户读不懂的码</b>。
+     *
+     * <p>⛔ 国际通行的计量<b>符号</b>(kg / g / mg / L / ml / mm / cm / m / km)一律不进这张表 ——
+     * 秤上、单据上、国标上都这么写。
+     *
+     * <p>🔴 2026-08-18 补 {@code jin}: 它虽然挂在质量量纲下, 却<b>不是</b>符号, 是<b>拼音</b> ——
+     * 用户输入「斤」会被归一成码 {@code jin}, 再原样丢回给他看。判一个码该不该进这张表的
+     * 标准是<b>「用户认不认得这个写法」</b>, 不是「它属于哪个量纲」;
+     * 原来的注释写成了后者(「WEIGHT/VOLUME/LENGTH 的符号一律不进这张表」),
+     * 拼音码就顺着量纲被放过了。
+     *
+     * <p>⚠️ 同批<b>克制</b>: {@code t} 没有进表。它是 GB 3100 里吨的法定符号,
+     * 既有断言 {@code UnitDisplayNamesTest#keepsScientificSymbolsAsIs} 明确守着它,
+     * 那条断言守的是<b>需求</b>不是历史 —— 去黑话只动黑话, 顺手改措辞只会白白弄红既有断言。
+     *
+     * <p>覆盖面由 {@code UnitDisplayNameCoverageTest} 钉住: 契约里每个非 CJK 的码,
+     * 要么在符号白名单上, 要么在这张表里且与契约的 displayName 一致。
      */
     private static final Map<String, String> COUNTING_DISPLAY = Map.ofEntries(
+            Map.entry("jin", "斤"),
             Map.entry("pcs", "件"),
             Map.entry("portion", "份"),
             Map.entry("box", "盒"),

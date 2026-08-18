@@ -61,6 +61,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
+    /** 调料表 —— 与 BOM 行不是同一张表, 见 {@code appendSeasoningItems}。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
+
     /** T144: 读库存单位 (回退用 RawMaterialType.unit). required=false. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
@@ -279,10 +283,89 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             mr.getItems().add(item);
         }
 
+        appendSeasoningItems(factoryId, bomItems, mr);
+
         FactoryMaterialRequisition saved = repository.save(mr);
         log.info("✅ 生成物料需求单: {} factory={} plan={} items={}",
                 saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size());
         return saved;
+    }
+
+    /**
+     * 把配方里的<b>调料</b>也列进领料单。
+     *
+     * <h3>🔴 为什么要有这一段（2026-08-18 prod 实测）</h3>
+     * 调料不在 {@code bom_recipe_items} 里，它们有自己的表 {@code bom_seasoning_items}
+     * （按「每 kg 投入多少克」登记）。而本方法原来<b>只展开 BOM 行</b> ⇒ 调料从来不出现在领料单上。
+     *
+     * <p>但报工那一侧 {@code ProcessSheetServiceImpl#buildAutomaticBomRequirements} <b>会</b>读调料表
+     * 并按实际投入量算出需求，向<b>生产仓</b>要货。于是实测：
+     * <pre>
+     * 文员按计划生成领料单 → 7 行（4 原料 + 3 包材），没有调料
+     * 仓管照单拣货、转运、收货
+     * 报工                → 409「需要 1.6kg，可用 0kg，请联系仓管补料」
+     *                        香辛料 0.8kg / 黄油调味料 0.8kg（= 10 g/kg × 80kg 投入）
+     * </pre>
+     * 而全厂原料仓那两样各有 20kg —— <b>货在，只是领料单上根本没有这一行</b>，
+     * 用户无从知道要把它们领进生产仓。这正是「凡是拦住人的地方都要告诉他下一步」被违反的地方。
+     *
+     * <p>普遍性: F006 有 21 条调料行、LIUSHANMEN 15 条，不是个例。
+     *
+     * <h3>用量为什么留空</h3>
+     * 调料按「每 kg <b>投入</b>」计量，而领料单只知道<b>计划产出</b>（80 盒）；
+     * 这个产品的 BOM 原料行又是 workflow 驱动（无标准用量），推不出投入 kg。
+     * ⇒ 与本方法对原料/辅料的既有口径一致：<b>留空而不是拦单</b>，
+     * 把每 kg 用量写进备注让仓管有据可依。防短料的闸在 {@code transferToFactory}（留空的行
+     * 必须录了实际领用量才准调拨），不在这个参考数字上。
+     */
+    private void appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
+                                      FactoryMaterialRequisition mr) {
+        if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
+            return;
+        }
+        String recipeId = bomItems.get(0).getRecipeId();
+        if (recipeId == null || recipeId.isBlank()) {
+            return;
+        }
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings;
+        try {
+            seasonings = bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+        } catch (RuntimeException e) {
+            // ⛔ 调料读不到不能把整张领料单拦掉 —— 原料那几行照样有用。
+            log.warn("[领料单] 调料读取失败 recipe={}: {}", recipeId, e.getMessage());
+            return;
+        }
+        if (seasonings == null || seasonings.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> already = mr.getItems().stream()
+                .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        int added = 0;
+        for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasonings) {
+            String mtId = s.getMaterialTypeId();
+            // ⚠️ 没绑物料档案的调料行只是配方文本, 领不出实物 —— 跳过, 不造一条领不动的行。
+            if (mtId == null || mtId.isBlank() || already.contains(mtId)) {
+                continue;
+            }
+            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
+            item.setRequisition(mr);
+            item.setMaterialTypeId(mtId);
+            item.setMaterialName(resolveLiveMaterialName(mtId, s.getName()));
+            item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+            item.setRequiredQty(null);                       // 见上: 推不出投入 kg, 留空不拦单
+            String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
+            item.setUnit(stockUnit != null ? stockUnit : "kg");
+            // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
+            //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
+            mr.getItems().add(item);
+            already.add(mtId);
+            added++;
+        }
+        if (added > 0) {
+            log.info("[领料单] 追加调料 {} 行 recipe={}", added, recipeId);
+        }
     }
 
     /**

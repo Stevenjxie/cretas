@@ -703,8 +703,7 @@ public class TransferServiceImpl implements TransferService {
         for (InternalTransferItem item : transfer.getItems()) {
             try {
                 BigDecimal stock = null;
-                if (item.getItemType() == TransferItemType.RAW_MATERIAL
-                        || item.getItemType() == TransferItemType.PACKAGING_MATERIAL) {
+                if (storedAsMaterialBatch(item)) {
                     if (item.getMaterialTypeId() != null) {
                         stock = sourceWarehouseId != null
                                 ? materialBatchRepository.sumAvailableQuantityByMaterialTypeAndWarehouse(
@@ -1383,7 +1382,7 @@ public class TransferServiceImpl implements TransferService {
         // B1: 检查用户是否预选批次 (status=APPROVED 阶段写入). 若 SHIPPED+ 后被回填则也允许走 preselected 分支.
         String preselectedBatchId = item.getSourceBatchId();
 
-        if (item.getItemType() == TransferItemType.RAW_MATERIAL || item.getItemType() == TransferItemType.PACKAGING_MATERIAL) {
+        if (storedAsMaterialBatch(item)) {
             // FEFO 扣减原料/包材库存（先到期先出）— D1: filter by source warehouse if available
             List<MaterialBatch> fefoBatches = sourceWarehouseId != null
                     ? materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
@@ -1592,7 +1591,7 @@ public class TransferServiceImpl implements TransferService {
         String sourceFactoryId = transfer.getSourceFactoryId();
 
         List<Map<String, Object>> result = new ArrayList<>();
-        if (item.getItemType() == TransferItemType.RAW_MATERIAL || item.getItemType() == TransferItemType.PACKAGING_MATERIAL) {
+        if (storedAsMaterialBatch(item)) {
             List<MaterialBatch> batches = sourceWarehouseId != null
                     ? materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
                             sourceFactoryId, item.getMaterialTypeId(), sourceWarehouseId)
@@ -1722,7 +1721,7 @@ public class TransferServiceImpl implements TransferService {
         String sourceWarehouseId = transfer.getSourceWarehouseId();
         String sourceFactoryId = transfer.getSourceFactoryId();
 
-        if (item.getItemType() == TransferItemType.RAW_MATERIAL || item.getItemType() == TransferItemType.PACKAGING_MATERIAL) {
+        if (storedAsMaterialBatch(item)) {
             MaterialBatch b = materialBatchRepository.findById(batchId).orElse(null);
             if (b == null) {
                 throw new BusinessException(409, "批次不存在: " + batchId)
@@ -1788,6 +1787,32 @@ public class TransferServiceImpl implements TransferService {
      * D1: warehouse strategy per PR #310 §5 — 调拨确认在 target warehouse 创建批次.
      * targetWarehouseId null 时 fallback 默认 WH-LOG (兼容老调拨单).
      */
+    /**
+     * 这条明细的库存<b>存在哪张表</b> —— 物料批次({@code material_batches}) 还是成品批次。
+     *
+     * <h3>🔴 为什么抽成一处（2026-08-18 线上事故）</h3>
+     * 这个判断原来<b>写了两遍</b>，而且漂了：
+     * <pre>
+     * 扣减侧 deductSourceInventory : RAW_MATERIAL || PACKAGING_MATERIAL  → 物料批次 ✅
+     * 建仓侧 createTargetInventory : 只有 RAW_MATERIAL                   → 包材掉进成品批次 ❌
+     * </pre>
+     *
+     * <p>后果（F006 TRF-20260818-0897，成品盒 1100 盒，原料仓→生产仓）：
+     * 确认入库时源批次扣得好好的，到了建仓那步给包材造了一个 {@code FinishedGoodsBatch}，
+     * 而它的 {@code productTypeId} 有 {@code @NotBlank} —— 包材是物料，只有 materialTypeId，
+     * productTypeId 是空的 ⇒ <b>flush 时 Bean Validation 失败</b>（不产生 SQL 错误，
+     * 所以日志里只有一句 {@code Could not commit JPA transaction}，用户看到通用报错 + 追踪码）。
+     *
+     * <p>⚠️ 这个失败是<b>确定性</b>的 —— 用户「刷新、新建都不行」正是因为每次都撞同一条校验。
+     *
+     * <p>⛔ 不要再在别处写第三份类型判断。形态 D：同一个东西两份，它一定会漂。
+     */
+    private static boolean storedAsMaterialBatch(InternalTransferItem item) {
+        return item != null
+                && (item.getItemType() == TransferItemType.RAW_MATERIAL
+                        || item.getItemType() == TransferItemType.PACKAGING_MATERIAL);
+    }
+
     private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item, Long userId) {
         BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : item.getQuantity();
 
@@ -1796,8 +1821,8 @@ public class TransferServiceImpl implements TransferService {
                 ? targetWarehouseId
                 : warehouseResolver.resolveLogisticsId(targetFactoryId);  // raw material 默认 WH-LOG
 
-        if (item.getItemType() == TransferItemType.RAW_MATERIAL) {
-            // 调入方创建原料批次
+        if (storedAsMaterialBatch(item)) {
+            // 调入方创建原料/包材批次
             MaterialBatch batch = new MaterialBatch();
             batch.setId(UUID.randomUUID().toString());
             batch.setFactoryId(targetFactoryId);

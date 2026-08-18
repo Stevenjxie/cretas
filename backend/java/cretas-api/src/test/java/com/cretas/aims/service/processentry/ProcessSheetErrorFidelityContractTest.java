@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <h2>口径</h2>
  * 这道闸只钉**报错说的和它检查的是同一件事**。写入链路本身由既有集成测试覆盖。
  */
-class ProcessSheetErrorFidelityTest {
+class ProcessSheetErrorFidelityContractTest {
 
     private static ProcessSheetRowRequest req(String processCode, String clientRowId) {
         ProcessSheetRowRequest r = new ProcessSheetRowRequest();
