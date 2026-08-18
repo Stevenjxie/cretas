@@ -135,20 +135,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 //    2030真空袋全厂 0 (真没货)。当时两者的提示是同一句「请联系仓管补料」,
                 //    而正确动作一个是「去领料」、一个是「去采购」。
                 //    ⇒ 这里同时算一份**全厂在手量**, 用同一套单位匹配规则, 让成因可推导。
-                BigDecimal factoryOnHand = factoryOnHandFor(
-                        factoryId, materialTypeId, inputUnit, massInput);
-                shortageItems.add(new ProductionStockShortageDTO.Item(
-                        materialTypeId,
-                        materialName(factoryId, materialTypeId),
-                        "RAW_MATERIAL",
-                        required,
-                        availableForInput,
-                        remaining,
-                        allocationUnit,
-                        factoryOnHand,
-                        factoryOnHand.compareTo(availableForInput) > 0
-                                ? ProductionStockShortageDTO.Cause.NOT_REQUISITIONED
-                                : ProductionStockShortageDTO.Cause.TRULY_OUT_OF_STOCK));
+                shortageItems.add(withCause(
+                        factoryId, materialTypeId, materialName(factoryId, materialTypeId),
+                        "RAW_MATERIAL", required, availableForInput, remaining,
+                        allocationUnit, inputUnit, massInput));
             }
         }
 
@@ -168,6 +158,40 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         }
 
         return List.copyOf(allocations);
+    }
+
+    /**
+     * 造一条短缺明细，<b>顺便把成因算出来</b>。
+     *
+     * <h3>🔴 为什么要有这个 helper（2026-08-18）</h3>
+     * 短缺明细在本类有<b>三个</b>构造点：自动分摊(plan)、指定批次投料、BOM 自动投料。
+     * 上一轮加成因标注时<b>只改了第一处</b>，于是 prod 实测走 web 逐道录入撞到辅料短缺时，
+     * 返回的还是 {@code factoryOnHand: null / cause: null}，文案退回那句模糊的
+     * 「请联系仓管补料」—— 而全厂原料仓那两样各有 20kg。
+     *
+     * <p>本仓硬约束 8「改共享结构前先数，改完再数」的原形：BEFORE=3，我改了 1。
+     * ⇒ 收敛成一处，三个构造点都走它，不再有第四份口径。
+     */
+    private ProductionStockShortageDTO.Item withCause(
+            String factoryId, String materialTypeId, String materialName, String sourceType,
+            BigDecimal required, BigDecimal available, BigDecimal shortage,
+            String allocationUnit, String matchUnit, boolean massInput) {
+        BigDecimal factoryOnHand = null;
+        try {
+            factoryOnHand = factoryOnHandFor(factoryId, materialTypeId, matchUnit, massInput);
+        } catch (RuntimeException e) {
+            // ⛔ 算不出在手量不能把短缺本身吞掉 —— 那才是用户真正要看到的东西。
+            //    算不出就留 null, 文案退回不带成因的版本(见 causeLabel: cause==null 返回空串)。
+            log.warn("[短缺成因] 全厂在手量算不出 material={}: {}", materialTypeId, e.getMessage());
+        }
+        return new ProductionStockShortageDTO.Item(
+                materialTypeId, materialName, sourceType,
+                required, available, shortage, allocationUnit,
+                factoryOnHand,
+                factoryOnHand == null ? null
+                        : (factoryOnHand.compareTo(available) > 0
+                                ? ProductionStockShortageDTO.Cause.NOT_REQUISITIONED
+                                : ProductionStockShortageDTO.Cause.TRULY_OUT_OF_STOCK));
     }
 
     /**
@@ -332,12 +356,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal available = stock.subtract(pending).max(BigDecimal.ZERO);
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
-                shortageItems.add(new ProductionStockShortageDTO.Item(
-                        batch.getMaterialTypeId(),
+                shortageItems.add(withCause(
+                        factoryId, batch.getMaterialTypeId(),
                         materialName(factoryId, batch.getMaterialTypeId()),
                         metadata.getSourceType() == null ? "RAW_MATERIAL" : metadata.getSourceType(),
                         required, available,
-                        required.subtract(available).max(BigDecimal.ZERO), allocationUnit));
+                        required.subtract(available).max(BigDecimal.ZERO),
+                        allocationUnit, batchUnit, massBatch));
                 continue;
             }
             allocations.add(new PlannedAllocation(
@@ -458,14 +483,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 }
             }
             if (remaining.signum() > 0) {
-                shortages.add(new ProductionStockShortageDTO.Item(
-                        requirement.materialTypeId(),
-                        requirement.materialName(),
-                        requirement.sourceType(),
-                        requiredQuantity,
-                        availableForItem,
-                        remaining,
-                        allocationUnit));
+                shortages.add(withCause(
+                        factoryId, requirement.materialTypeId(), requirement.materialName(),
+                        requirement.sourceType(), requiredQuantity, availableForItem, remaining,
+                        allocationUnit, requiredUnit, massRequirement));
             }
         }
         if (!shortages.isEmpty()) {
