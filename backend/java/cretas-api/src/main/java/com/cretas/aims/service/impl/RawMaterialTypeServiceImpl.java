@@ -212,6 +212,22 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Override
     @Transactional
     @CacheEvict(value = "materialTypes", key = "#factoryId")
+    public RawMaterialTypeDTO markByproduct(String factoryId, String id, boolean isByproduct) {
+        log.info("标记原材料副产: factoryId={}, id={}, isByproduct={}", factoryId, id, isByproduct);
+
+        RawMaterialType materialType = materialTypeRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在: " + id));
+        if (!materialType.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权限操作此原材料类型")
+                    .withHint("当前原材料类型不属于该工厂, 无法操作");
+        }
+        materialType.setIsByproduct(isByproduct);
+        return convertToDTO(materialTypeRepository.save(materialType));
+    }
+
+    @Override
+    @Transactional
+    @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO updateMaterialType(String factoryId, String id, RawMaterialTypeDTO dto) {
         log.info("更新原材料类型: factoryId={}, id={}", factoryId, id);
 

@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.ByproductMarkRequest;
 import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
@@ -92,6 +93,26 @@ public class RawMaterialTypeController {
             @RequestBody @Valid @Parameter(description = "更新的原材料类型信息") RawMaterialTypeDTO dto) {
         log.info("更新原材料类型: factoryId={}, id={}", factoryId, id);
         RawMaterialTypeDTO result = materialTypeService.updateMaterialType(factoryId, id, dto);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 标记 / 取消标记副产。
+     *
+     * <p>独立于 {@code PUT /{id}} 的窄动作 —— 见 {@link ByproductMarkRequest} 的注释:
+     * 走 PUT 只发 {@code isByproduct} 一个字段会被 {@code RawMaterialTypeDTO} 上的
+     * {@code @NotBlank name} 在 {@code @Valid} 阶段拒成 400「原材料名称不能为空」。
+     */
+    @RequirePermission({"production:read_write"})
+    @PatchMapping("/{id}/byproduct")
+    @Operation(summary = "标记原材料为副产", description = "只翻转 isByproduct 标记，不改动物料的任何其它字段")
+    public ApiResponse<RawMaterialTypeDTO> markByproduct(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @PathVariable @Parameter(description = "原材料类型ID", example = "RMT-F001-001") String id,
+            @RequestBody @Valid @Parameter(description = "副产标记") ByproductMarkRequest request) {
+        log.info("标记原材料副产: factoryId={}, id={}, isByproduct={}", factoryId, id, request.getIsByproduct());
+        RawMaterialTypeDTO result = materialTypeService.markByproduct(
+                factoryId, id, Boolean.TRUE.equals(request.getIsByproduct()));
         return ApiResponse.success(result);
     }
 

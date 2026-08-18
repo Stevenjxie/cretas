@@ -25,6 +25,17 @@ public interface RawMaterialTypeService {
      * 更新原材料类型
       */
     RawMaterialTypeDTO updateMaterialType(String factoryId, String id, RawMaterialTypeDTO dto);
+
+    /**
+     * 只翻转「是不是副产」这一个标记, 不碰任何其它字段。
+     *
+     * <p>为什么不复用 {@link #updateMaterialType} 的部分更新: 那条路的 DTO
+     * ({@code RawMaterialTypeDTO}) 带 {@code @NotBlank name}, 而控制器上的 {@code @Valid}
+     * **在进 service 之前**就跑完了。于是「只发 isByproduct 一个字段」的请求恒定被
+     * 400「原材料名称不能为空」挡在门外 —— service 里那套 null-tolerant 分支根本到不了。
+     * 画布上「标记并选入」按钮点不动就是这个原因。
+     */
+    RawMaterialTypeDTO markByproduct(String factoryId, String id, boolean isByproduct);
      /**
      * 删除原材料类型
       */
