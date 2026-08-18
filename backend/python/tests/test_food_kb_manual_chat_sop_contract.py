@@ -1714,6 +1714,7 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
                 "渠道和损耗能不能按门店排行？",
                 "哪家店领料最多，只有部分记录有门店时覆盖怎么说？",
                 "各店盘点亏损对比是否支持门店维度？",
+                "门店时段表按什么排序，首段和第一行怎样保持一致？",
             ],
         ),
     ],
@@ -1743,6 +1744,9 @@ def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
     assert "反向冲销" in _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER
     assert "当前租户的门店目录" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
     assert "覆盖不全必须先说" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
+    assert "门店×时段排序必须同源" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
+    assert "首段点名的最强门店必须就是表格第一行" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
+    assert "无金额权限按该时段单量排序" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
     assert "工厂/F006 source 不参与餐饮回答" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
 
 
@@ -1901,6 +1905,12 @@ def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
         ),
         (
             "渠道、损耗、领料和盘点能不能按门店排行，覆盖不全怎么说？",
+            "restaurant",
+            _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "门店时段表按什么排序，首段和第一行怎样保持一致？",
             "restaurant",
             _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER,
             "restaurant-full-chain-sop.html",
