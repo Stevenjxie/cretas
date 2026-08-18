@@ -4069,19 +4069,39 @@ async def _resolve_food_cost_ratio(
         "scope_matches_request": True,
     }
 
+    # ── 📏 2026-08-18 逐条读 prod 原文后重写的三段文案 ──────────────────────
+    # 🔴 原文（n=158）满是数仓黑话:「净营收**事实**」「食材成本**事实**」
+    #    「理论成本快照」「同口径」—— 而最后半句连语法都不通:
+    #      「可信的期间计算方法应先补齐…再除以**用同一种算法**净营收。」
+    #    成因是 `customer_text.py` 的去黑话替换 `("同口径", "用同一种算法")`
+    #    打在一个当定语用的词上。
+    #    ⛔ 修法不是去改那条替换（它是全站共享的，改它会牵动别处）——
+    #       **把模板本身写成老板的话，替换就没得改**。
+    # 🔴 第二个缺陷（交付定义⑤）: 三件事只有两件 ——
+    #    缺什么 ✅ / 怎么拿到 ✅（但用的是黑话）/ **他自己要干什么 ❌**。
+    #    「盘点」是系统里真有的实体（`agg_restaurant_daily_totals.stocktaking_count`），
+    #    所以那是他真能做、系统真收得到的动作，⛔ 不是我编出来的一句场面话。
+    # ⚠️ 措辞是**陈述前提**不是**布置任务** —— 盘点频率的取舍是老板的经营决定
+    #    （`fill_offers.py` 里 owner 已经挂账过这一条），⛔ 不推着他去做。
     if revenue <= 0:
         answer = (
-            f"{window_text}全店食材成本率暂时无法计算：没有可用的 POS 净营收事实。"
-            "本次不会用其他期间或单菜配方成本替代。"
+            f"{window_text}的食材成本率算不出来 —— 这段时间收银台一笔营业额都没有。"
+            "先确认收银数据有没有同步过来。"
+            "⛔ 我不会拿别的时间段或配方成本凑一个数给你。"
         )
         meta = {**window_meta, "no_pos_data": True}
         kpis: List[Dict[str, Any]] = []
     elif food_cost is None or line_count == 0:
         answer = (
-            f"{window_text}全店食材成本率暂时无法计算：已有 POS 净营收事实"
-            f"（¥{revenue:,.2f}，{transaction_count:,} 笔），但没有同一期间的食材成本事实。"
-            "本次不会用单菜配方成本榜、理论成本快照或 0 替代。可信的期间口径应先补齐"
-            "“期初库存 + 本期采购 − 期末库存”或经核验的期间食材成本事实，再除以同口径净营收。"
+            f"**{window_text}的食材成本率算不出来。**\n\n"
+            f"营收这一侧有：¥{revenue:,.2f}（{transaction_count:,} 单）。\n\n"
+            "缺的是**这段时间实际用掉多少食材的钱**。系统里只有每道菜的配方成本，"
+            "那是「照配方应该用多少」，不是「实际用了多少」——"
+            "⛔ 我不会拿它冒充，也不会当成 0。\n\n"
+            "实际用掉的 = 开始那天的库存金额 ＋ 这段时间的进货金额 − 结束那天的库存金额。"
+            "进货金额系统里已经有了，缺的是**两次盘点**。\n\n"
+            "所以这个数的前提是：这段时间的**头和尾各盘一次库**。"
+            "盘点数据进了系统，这个数就能算。"
         )
         meta = {
             **window_meta,
@@ -4090,17 +4110,18 @@ async def _resolve_food_cost_ratio(
             "transaction_count": transaction_count,
         }
         kpis = [
-            {"title": "POS 净营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
-            {"title": "期间食材成本", "value": "暂无事实", "rawValue": None},
+            {"title": "营收", "value": f"¥{revenue:,.2f}", "rawValue": revenue},
+            {"title": "这段时间的食材成本", "value": "还没有", "rawValue": None},
         ]
     else:
         ratio = food_cost / revenue * 100
         answer = (
-            f"{window_text}已登记期间食材成本为 ¥{food_cost:,.2f}，POS 净营收为 "
-            f"¥{revenue:,.2f}，食材成本占净营收 **{ratio:.2f}%**。\n\n"
-            "这是“已登记期间食材成本 ÷ 同期 POS 净营收”的参考比率；只有成本事实已按"
-            "“期初库存 + 本期采购 − 期末库存”核验时，才能作为可信的期间实际口径。"
-            "它不是单菜真实毛利率，也不由当前单菜配方成本快照推算。"
+            f"{window_text}的食材成本是 ¥{food_cost:,.2f}，营收 ¥{revenue:,.2f}，"
+            f"食材成本占营收 **{ratio:.2f}%**。\n\n"
+            "⚠️ 这个数是拿系统里登记的这段时间的食材成本，除以同一段时间的营收。"
+            "只有当那笔成本是按「开始那天的库存 ＋ 进货 − 结束那天的库存」盘出来的，"
+            "它才等于真实用掉的钱；如果是别的来源录进来的，只能当参考看。\n\n"
+            "⛔ 它不是单道菜的毛利率，也不是拿配方成本推出来的。"
         )
         meta = {
             **window_meta,
@@ -9381,21 +9402,47 @@ async def resolve_channel_mix(
         else:
             channel_rows.append([name, f"{bills:,}", f"{bill_pct:.1f}%"])
         kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
+    # 🔴 2026-08-18 prod 实测(MOCK_REST, 直接查 fact_pos_transaction):
+    #      groupon 6,085 单 / 营收 ¥2,078,299.07 / net_amount 空值 **0**
+    #    金额完完整整在库里, 而这里原先**无条件**打「—」。后果不是"少一个数":
+    #    `total_rev`(营收占比的分母)是**含团购的**, 于是表上三行营收占比加起来
+    #    只有 90.5% —— 老板一加就发现对不上, 而那个「—」在说"没有这个数"。
+    #    ⇒ 产品用一个破折号说了句假话(与"这两层的数不在同一张表上"同一形状)。
+    #    ⚠️ 原注释写着「其它渠道只有单量」—— 那句话本身就是被实测否掉的那一句。
+    #       ⛔ 不从注释推断行为。
+    #    ⛔ 仍然保留"真的没有金额"那一态: 那时 total_rev 也不含它, 剩下几行的
+    #       占比自洽, 只需要一句说明(形态 A¹⁰: 不把"不知道"翻译成 0)。
+    channels_without_money: List[Tuple[str, int]] = []
     for name, r in typed.items():
         if name not in ("堂食", "外卖"):
             other_bills = int(r["bills"])
+            other_rev = float(r["revenue"] or 0.0)
             other_pct = other_bills / total_bills * 100 if total_bills else 0.0
-            if can_see_money:
+            if not can_see_money:
+                channel_rows.append([name, f"{other_bills:,}", f"{other_pct:.1f}%"])
+            elif other_rev > 0:
+                other_rev_pct = other_rev / total_rev * 100 if total_rev else 0.0
+                channel_rows.append([name, f"¥{other_rev:,.0f}",
+                                     f"{other_rev_pct:.1f}%",
+                                     f"{other_bills:,}", f"{other_pct:.1f}%"])
+            else:
+                channels_without_money.append((name, other_bills))
                 channel_rows.append([name, "—", "—", f"{other_bills:,}",
                                      f"{other_pct:.1f}%"])
-            else:
-                channel_rows.append([name, f"{other_bills:,}", f"{other_pct:.1f}%"])
     if channel_rows:
         lines.extend(_markdown_table(
             (["渠道", "营收", "营收占比", "单量", "单量占比"] if can_see_money
              else ["渠道", "单量", "单量占比"]),
             channel_rows,
             right_align={1, 2, 3, 4} if can_see_money else {1, 2}))
+    if channels_without_money:
+        lines.append("")
+        lines.append(
+            "> "
+            + "、".join(f"{n}（{b:,} 单）" for n, b in channels_without_money)
+            + " 没有金额数据 —— 上面的营收占比只在**有金额**的渠道之间分，"
+            "⛔ 不是把它当成 ¥0 算进去了。"
+        )
     if untyped_bills:
         lines.append("")
         lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
@@ -9439,6 +9486,21 @@ async def resolve_channel_mix(
         lines.extend(_markdown_table(
             headers, store_table_rows,
             right_align={1, 2, 3, 4} if can_see_money else {1, 2, 3}))
+        # 交付定义②「说一件他没想到的事」: 他问的是"各占多少", 没问"门店之间差多少",
+        # 而那张表里已经有答案了 —— 📏 prod 实测 10 家店 27.3%~28.5%, 产品一个字没说。
+        # ⛔ 只陈述极差, **不下"差异很小/很大"的判断** —— 那要一个我拍脑袋的阈值,
+        #    而反目标说"宁可这一类先不提示"。1.2 个百分点还是 20 个, 老板自己看得出来。
+        top_name, top_v = ranked[0]
+        bot_name, bot_v = ranked[-1]
+        def _tk_pct(v):
+            tot = v["堂食"] + v["外卖"] + v["其它"]
+            return v["外卖"] / tot * 100 if tot else 0.0
+        hi, lo = _tk_pct(top_v), _tk_pct(bot_v)
+        lines.append("")
+        lines.append(
+            f"各门店的外卖占比：最高 {top_name} {hi:.1f}%、"
+            f"最低 {bot_name} {lo:.1f}%，相差 {hi - lo:.1f} 个百分点。"
+        )
 
     lines.append("")
     lines.append(_closing("CHANNEL_MIX_CLOSING", query))
@@ -9936,11 +9998,54 @@ async def resolve_daypart_performance(
     if untimed_bills:
         lines.append("")
         lines.append(f"> 另有 {untimed_bills:,} 单没有下单时间，不在以上拆分内。")
+    # ── 交付定义②「说一件他没想到的事」: 差距来自**人数**还是**每单消费** ────
+    # 📏 prod 实测(2026-08-18, MOCK_REST): 表里营收占比 62.6% 与单量占比 62.7%
+    #    几乎相同、客单价 ¥374.5 vs ¥376.4(午市**还略高**) —— 答案全在那张表里,
+    #    而产品**一个字没说**, 只念了他问的那个数。
+    # 🔴 而原来那句收尾「弱时段适合用套餐或时段价拉客流」是**没看数据就给的**:
+    #    若差距真的来自每单消费, 那句建议是错的。反目标第一条 ——
+    #    ▎一条误发的提示, 烧掉的是「这东西说的话能信」。
+    # ⛔ 标签由**实际值算出来**, 不写死(本仓记过: 结论标签硬编码 = 内容对、标签假)。
+    gap_line = ""
+    driver = ""
+    if can_see_money and len(ordered) >= 2:
+        q1, q2 = int(ordered[0]["bills"]), int(ordered[-1]["bills"])
+        r1, r2 = float(ordered[0]["revenue"]), float(ordered[-1]["revenue"])
+        bot = ordered[-1]["daypart"]
+        if q1 > 0 and q2 > 0 and r1 != r2:
+            p1, p2 = r1 / q1, r2 / q2
+            # 量价分解: (Q1-Q2)·P2 + (P1-P2)·Q1 == Q1·P1 - Q2·P2, 两项之和恒等于
+            # 营收差 —— ⛔ 不是两个各自估出来的数, 所以老板加一下必然对得上。
+            vol_effect = (q1 - q2) * p2
+            price_effect = (p1 - p2) * q1
+            driver = "来了多少人" if abs(vol_effect) >= abs(price_effect) else "每单花多少钱"
+            gap_line = (
+                f"{top}比{bot}多 ¥{r1 - r2:,.0f}。拆开看："
+                f"单量{'多' if q1 >= q2 else '少'} {abs(q1 - q2):,} 单"
+                f"（折合 ¥{vol_effect:,.0f}），"
+                f"每单平均消费{'高' if p1 >= p2 else '低'} ¥{abs(p1 - p2):,.1f}"
+                f"（折合 ¥{price_effect:,.0f}）"
+                f" —— 差距主要来自**{driver}**。"
+            )
     lines.append("")
-    lines.append(
-        f"生意最好的是**{top}**。时段差距大时先看排班与备货是否跟着时段走；"
-        "弱时段适合用套餐或时段价拉客流，不必按全天平均去配人。"
-    )
+    if gap_line:
+        lines.append(gap_line)
+        lines.append("")
+    if driver == "来了多少人":
+        lines.append(
+            f"生意最好的是**{top}**。差在人数上 —— 想把弱时段做起来，"
+            "先拉客流（套餐、时段价、外卖时段投放），⛔ 提价帮不上忙。"
+        )
+    elif driver == "每单花多少钱":
+        lines.append(
+            f"生意最好的是**{top}**。人数差得不多，差在每单消费上 —— "
+            "先看弱时段的菜单结构和加菜引导，⛔ 光拉客流填不平这个差。"
+        )
+    else:
+        lines.append(
+            f"生意最好的是**{top}**。时段差距大时先看排班与备货是否跟着时段走；"
+            "弱时段适合用套餐或时段价拉客流，不必按全天平均去配人。"
+        )
     return OpsAnswer(
         code="RESTAURANT_OPS_DAYPART_PERFORMANCE",
         title=f"时段表现（{window_label}）",
@@ -9952,7 +10057,10 @@ async def resolve_daypart_performance(
               # (投影丢失): 数据在产出端, 消费端找不到。
               "by_store": bool(store_rows),
               "store_count": len({r["store_name"] for r in store_rows}),
-              "store_covered_revenue": store_cross_total},
+              "store_covered_revenue": store_cross_total,
+              # 正文有而 meta 没有 = 形态 B 第 7 例(投影丢失)。⛔ 空串不写成 None,
+              # 它是「这次没分解」的合法状态, 与「不知道」不同。
+              "gap_driver": driver},
     )
 
 
