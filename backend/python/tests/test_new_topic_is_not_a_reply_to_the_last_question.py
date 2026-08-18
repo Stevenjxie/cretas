@@ -83,9 +83,15 @@ _NEW_TOPICS = {
     "哪道菜毛利最高": _Spec("RESTAURANT_OPS_GROSS_MARGIN", False),
 }
 
-#: 缺陷场景里续接产出的 intent（📏 实测 `STORE_MARGIN`）——
-#: 与新问句独立编译的 `BUSINESS_OPTIMIZATION` 不同，所以判成换话题。
-_CONTINUED_INTENT = "RESTAURANT_OPS_STORE_MARGIN"
+#: 🔴 缺陷场景里续接产出的 intent（📏 prod 插桩实测）——
+#: 它与新问句独立编译的 intent **相同**（都是 `BUSINESS_OPTIMIZATION`）。
+#:
+#: ⚠️ 我第一版写的是「不同」（以为续接会给 `STORE_MARGIN`），**被 prod 读数否掉**：
+#:    续接**已经认出了正确的意图**，问题不在意图，在**槽位** ——
+#:    pending 的「哪组门店 / 哪个时间范围」被套到了这句话上。
+#: ▎同一个意图，单独问**不需要**澄清，接在 pending 后面**却需要** ——
+#: ▎那些澄清需求是**继承来的**，不是这句话自己的。
+_CONTINUED_INTENT = "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
 
 
 async def _judge(monkeypatch, q, table, continued_intent=_CONTINUED_INTENT):
@@ -119,19 +125,17 @@ async def test_the_daypart_word_needs_both_conditions(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("q", sorted(_NEW_TOPICS))
 async def test_a_complete_question_is_a_new_topic(monkeypatch, q):
-    # ⚠️ 逐条给一个**与它自己不同**的 continued_intent —— 否则「哪道菜毛利最高」
-    #    会与默认的 STORE_MARGIN 撞不上，而是与自己的 GROSS_MARGIN 撞。
-    other = ("RESTAURANT_OPS_STORE_MARGIN"
-             if _NEW_TOPICS[q].intent != "RESTAURANT_OPS_STORE_MARGIN"
-             else "RESTAURANT_OPS_WASTAGE_TOP")
-    assert await _judge(monkeypatch, q, _NEW_TOPICS, other) is True, q
+    # 续接与独立编译**同一个** intent —— 那正是这个场景的形状。
+    assert await _judge(
+        monkeypatch, q, _NEW_TOPICS, _NEW_TOPICS[q].intent) is True, q
 
 
 @pytest.mark.asyncio
 async def test_the_north_star_question_specifically(monkeypatch):
     """🔴 这一问是整条改动的理由：老板要做一个决定。
 
-    📏 实测：独立编译 `BUSINESS_OPTIMIZATION` vs 续接 `STORE_MARGIN`。
+    📏 prod 插桩实测：独立编译 `BUSINESS_OPTIMIZATION`、`clar=False`；
+    续接**同一个** intent 但 `clar=True`（槽位是从 pending 继承的）。
     """
     assert await _judge(
         monkeypatch, "我要不要关掉最差的那家店", _NEW_TOPICS) is True
@@ -140,14 +144,15 @@ async def test_the_north_star_question_specifically(monkeypatch):
 # ── 🔴 阴性对照：同一件事，不是换话题 ──────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_the_same_intent_is_not_a_new_topic(monkeypatch):
-    """语义上真正的那一条：**换话题 = 问的是另一件事。**
+async def test_a_different_intent_means_the_continuation_already_switched(monkeypatch):
+    """阴性对照：续接的 intent 与独立编译**不同** ⇒ ⛔ 不走这条路。
 
-    续接产出的 intent 与新问句独立编译的 intent **相同** ⇒ 同一件事 ⇒ 不是换话题。
+    那种情况说明续接自己就改了主意（contract-repair 之类），
+    ▎本判据只管一种形状：**同一个意图，槽位是从 pending 继承来的**。
     """
     assert await _judge(
         monkeypatch, "哪道菜毛利最高", _NEW_TOPICS,
-        "RESTAURANT_OPS_GROSS_MARGIN") is False
+        "RESTAURANT_OPS_WASTAGE_TOP") is False
 
 
 # ── 🔴 阴性对照：缓存命中不算「这句话完整」 ────────────────────────────────
@@ -166,7 +171,8 @@ async def test_a_cache_hit_is_not_evidence_that_the_sentence_is_complete(
     ▎⛔ 不是「这句话以前出现过」。缓存命中只说明后者。
     """
     table = {"本月": _Spec("RESTAURANT_OPS_GROSS_MARGIN", False, tier)}
-    assert await _judge(monkeypatch, "本月", table) is False, tier
+    assert await _judge(
+        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is False, tier
 
 
 @pytest.mark.asyncio
@@ -176,7 +182,8 @@ async def test_the_same_sentence_from_t3_would_be_a_new_topic(monkeypatch):
     ⛔ 少了它，上面那条「缓存命中判 False」可能只是因为判据整个坏了。
     """
     table = {"本月": _Spec("RESTAURANT_OPS_GROSS_MARGIN", False, "llm")}
-    assert await _judge(monkeypatch, "本月", table) is True
+    assert await _judge(
+        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is True
 
 
 # ── 保守方向：判不出来时**照旧走续接** ─────────────────────────────────────

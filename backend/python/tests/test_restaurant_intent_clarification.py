@@ -2073,7 +2073,37 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
         "clarification_question": None,
         "clarification_options": [],
     }
-    planner = AsyncMock(side_effect=[first_plan, second_plan, third_plan])
+    # 🔴 2026-08-18 插进来的第三个条目：孤立的「本月」。
+    #
+    # `side_effect` 是**顺序队列** —— `_is_new_topic_not_a_reply` 在第二轮多调
+    # 一次 T3（判「他是不是换话题了」），不补这一条的话它会**吃掉 third_plan**，
+    # 于是「本月」被判成一句完整问句、多轮链当场断掉。
+    #
+    # ⚠️ 这一条的形状取自 prod 实测（形态 B‴：桩要给真实上游会给的形状）：
+    #    7 条槽位回答（上个月 / 最近30天 / 陆家嘴店 / 全部门店 / 晚市 / 按食材 …）
+    #    **孤立编译全部** `intent=None, clarification_needed=True`，0 条误判。
+    #    ⛔ 不能沿用 `third_plan` —— 那是「回答完门店之后」的形状，不是
+    #    「孤立看『本月』」的形状。
+    alone_month_plan = {
+        "intent": None,
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": [],
+        "analysis_action": None,
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.2,
+        "clarification_needed": True,
+        "missing_fields": ["intent"],
+        "clarification_question": "你想看哪方面的数据？",
+        "clarification_options": [],
+    }
+    planner = AsyncMock(
+        side_effect=[first_plan, second_plan, alone_month_plan, third_plan])
 
     with patch(
         "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",

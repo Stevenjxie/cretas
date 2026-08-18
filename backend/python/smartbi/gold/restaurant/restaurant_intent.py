@@ -4983,7 +4983,13 @@ async def _is_new_topic_not_a_reply(
         and alone.intent
         and not alone.clarification_needed
         and getattr(alone, "source_tier", None) == "llm"
-        and alone.intent != (continued_intent or "")
+        # 🔴 `intent` **相同**才是这个场景 —— 我第一版写的是「不同」，被 prod 读数否掉:
+        #    实测续接**已经认出了正确的 intent**(BUSINESS_OPTIMIZATION)，
+        #    问题不在意图，在**槽位**：pending 的「哪组门店 / 哪个时间范围」
+        #    被套到了这句话上。
+        # ▎同一个意图，单独问**不需要**澄清，接在 pending 后面**却需要** ——
+        # ▎那些澄清需求是**继承来的**，不是这句话自己的。
+        and alone.intent == (continued_intent or "")
     )
 
 
