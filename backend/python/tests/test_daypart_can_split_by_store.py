@@ -171,12 +171,26 @@ async def test_the_daypart_table_itself_is_unchanged():
 
 @pytest.mark.asyncio
 async def test_non_price_role_gets_bills_not_money():
-    """非价格角色只看单量 —— ⛔ 门店表不能成为绕过 RBAC 的新出口。"""
+    """非价格角色只看单量 —— ⛔ 门店表不能成为绕过 RBAC 的新出口。
+
+    🔴 **这条断言第一版只看 `¥`，被变异 M4 打穿。**
+       M4 把表格取值改成无条件读 `revenue`，而 `can_see_money` 仍是 False ⇒
+       格式化照样走「不带 ¥」那一支，于是营收数字**原样印出来只是没有货币符号**。
+    ▎断言在守「有没有 ¥ 这个符号」，而被守的行为是「不许看到金额**数值**」。
+    ⇒ 改成钉数值本身：该出现的是单量，营收那串数字一个都不许出现。
+    """
     ans = await _answer(dimensions=("store",), role=_KITCHEN)
     text = ans.answer_text
     assert "陆家嘴正大店" in text, "非价格角色连门店都看不到就过头了\n" + text
     assert "晚市单量" in text, "非价格角色的列头不是单量\n" + text
-    assert "¥" not in text, "非价格角色看到了金额\n" + text
+    assert "¥" not in text, "非价格角色看到了货币符号\n" + text
+    # 承重：印出来的必须是单量的数
+    assert "4,037" in text, "非价格角色没看到单量\n" + text
+    # 阴性：营收那串数字一个都不许出现（M4 就是从这里漏的）
+    for leaked in ("1,461,700", "1461700", "1,456,843", "4,153,144"):
+        assert leaked not in text, (
+            f"非价格角色看到了金额数值 {leaked} —— 只是没带 ¥\n{text}"
+        )
 
 
 @pytest.mark.asyncio

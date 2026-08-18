@@ -9804,6 +9804,17 @@ async def resolve_daypart_performance(
     #    整张交叉表给他, 哪一列他自己认得。⛔ 不替他做判断。
     store_cross_total = 0.0
     if store_rows:
+        # ⛔ 「看金额还是看单量」这个决定**只此一处** —— 首段 / 排序 / 表格三处
+        #    各写一遍 `revenue if can_see_money else bills` 就是形态 D, 而漂的
+        #    长相是**非价格角色在其中一处看到钱**。
+        # 🔴 实测催生: 变异「表格无条件读 revenue」第一轮**全绿** —— 因为
+        #    `can_see_money` 仍是 False, 格式化照样走「不带 ¥」那一支, 于是
+        #    营收数字原样印出来只是没有货币符号。三处各判一次时, 打穿一处就够了。
+        money_key = "revenue" if can_see_money else "bills"
+
+        def _fmt(v) -> str:
+            return f"¥{v:,.0f}" if can_see_money else f"{v:,}"
+
         dayparts = [r["daypart"] for r in ordered]
         by_store: Dict[str, Dict[str, Any]] = {}
         for r in store_rows:
@@ -9811,8 +9822,7 @@ async def resolve_daypart_performance(
                 r["store_name"], {"bills": {}, "revenue": {}, "total": 0.0})
             slot["bills"][r["daypart"]] = int(r["bills"])
             slot["revenue"][r["daypart"]] = float(r["revenue"] or 0.0)
-            slot["total"] += (float(r["revenue"] or 0.0) if can_see_money
-                              else int(r["bills"]))
+            slot["total"] += slot[money_key][r["daypart"]]
         store_cross_total = sum(
             float(r["revenue"] or 0.0) for r in store_rows)
 
@@ -9820,8 +9830,7 @@ async def resolve_daypart_performance(
         # 首段: 在**生意最好的那个时段**里点名最强的门店 + 极差。
         # ⛔ 极差走 `_store_revenue_spread` —— 门店极差只此一处计算(形态 D)。
         top_slot_rows = [
-            {"store_name": name, "revenue": (d["revenue"] if can_see_money
-                                             else d["bills"]).get(top, 0)}
+            {"store_name": name, "revenue": d[money_key].get(top, 0)}
             for name, d in by_store.items()
         ]
         top_slot_rows.sort(key=lambda r: r["revenue"], reverse=True)
@@ -9833,11 +9842,9 @@ async def resolve_daypart_performance(
                 if top_slot_rows else "")
         if head and spread:
             hi, lo, pct = spread
-            head += (f"，{unit}"
-                     + (f"¥{hi:,.2f}" if can_see_money else f"{hi:,.0f}")
-                     + f"；最弱的是 {top_slot_rows[-1]['store_name']} "
-                     + (f"¥{lo:,.2f}" if can_see_money else f"{lo:,.0f}")
-                     + f"，相差 {pct:.1f}%")
+            head += (f"，{unit}{_fmt(hi)}"
+                     f"；最弱的是 {top_slot_rows[-1]['store_name']} {_fmt(lo)}"
+                     f"，相差 {pct:.1f}%")
         if head:
             lines.append(head + "。")
 
@@ -9855,10 +9862,8 @@ async def resolve_daypart_performance(
         headers = ["门店"] + [f"{d}{unit}" for d in dayparts]
         table_rows = []
         for name, d in ranked:
-            src = d["revenue"] if can_see_money else d["bills"]
             table_rows.append(
-                [name] + [(f"¥{src.get(dp, 0):,.0f}" if can_see_money
-                           else f"{src.get(dp, 0):,}") for dp in dayparts])
+                [name] + [_fmt(d[money_key].get(dp, 0)) for dp in dayparts])
         lines.extend(_markdown_table(
             headers, table_rows,
             right_align=set(range(1, len(headers)))))
