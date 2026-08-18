@@ -13,11 +13,14 @@ import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.ProductionSettlementOutputLine;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProductionSettlementOutputLineRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.ProductionPlanService;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +72,24 @@ class ProductionWarehouseReceiptMobileControllerTest {
     private PermissionService permissionService;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private ProductTypeRepository productTypeRepository;
+    @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Mock
+    private WarehouseResolver warehouseResolver;
+
+    /**
+     * 品名解析 / 成品仓解析所需的三个协作者是 2026-08-18 「待确认入库屏显示内部标识」
+     * 那次修复引入的。本文件的用例不针对它们, 未打桩时返回空列表 / null,
+     * controller 会落到「查不到」那一支 —— 展示口径由
+     * {@link TransitLedgerDisplayIdentityContractTest} 专门守。
+     */
+    private ProductionWarehouseReceiptMobileController newController() {
+        return new ProductionWarehouseReceiptMobileController(
+                settlementRepository, outputLineRepository, productionPlanService,
+                productTypeRepository, rawMaterialTypeRepository, warehouseResolver);
+    }
 
     @AfterEach
     void tearDown() {
@@ -78,9 +99,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Test
     @DisplayName("GET pending confirmations queries only current factory pending warehouse receipts")
     void listTransitLedgers_queriesCurrentFactoryPendingWarehouseReceipts() {
-        ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(
-                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionWarehouseReceiptMobileController controller = newController();
         ProductionSettlement settlement = pendingSettlement("F006", "PLAN-1", "PP-001");
         when(settlementRepository.findByFactoryIdAndPostingStatusAndDeletedAtIsNull(
                 "F006", "PENDING_WAREHOUSE_RECEIPT")).thenReturn(List.of(settlement));
@@ -119,9 +138,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Test
     @DisplayName("GET mixed-unit Workflow receipt exposes lines without inventing a scalar unit")
     void listTransitLedgers_mixedWorkflowOutputsRemainLineBased() {
-        ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(
-                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionWarehouseReceiptMobileController controller = newController();
         ProductionSettlement settlement = pendingSettlement("F006", "PLAN-1", "PP-001");
         settlement.setActualFinishedQuantity(null);
         settlement.setQuantityUnit(null);
@@ -158,9 +175,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Test
     @DisplayName("POST confirm wraps RN body and delegates to existing warehouse receipt service")
     void confirmTransitLedger_delegatesToExistingConfirmWarehouseReceipt() {
-        ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(
-                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionWarehouseReceiptMobileController controller = newController();
         setCurrentUser(27L);
         ProductionWarehouseReceiptMobileConfirmRequest body =
                 new ProductionWarehouseReceiptMobileConfirmRequest();
@@ -202,9 +217,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Test
     @DisplayName("POST confirm over tolerance propagates existing 409 instead of swallowing")
     void confirmTransitLedger_overTolerancePropagatesConflict() {
-        ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(
-                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionWarehouseReceiptMobileController controller = newController();
         setCurrentUser(27L);
         ProductionWarehouseReceiptMobileConfirmRequest body =
                 new ProductionWarehouseReceiptMobileConfirmRequest();
@@ -232,9 +245,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Test
     @DisplayName("operator without warehouse:read_write gets 403 before confirm service is called")
     void confirmTransitLedger_operatorWithoutWarehousePermissionGets403() throws Exception {
-        ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(
-                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionWarehouseReceiptMobileController controller = newController();
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(permissionService, userRepository, new ObjectMapper()))
                 .build();

@@ -6,6 +6,12 @@ export type TransitLedgerStatus = 'PENDING_CONFIRMATION' | string;
 
 export interface TransitOutputLine {
   productTypeId: string;
+  /**
+   * 后端解析好的真实品名。仓管逐行核对看的是这个，不是 productTypeId 那串 UUID。
+   * 后端查不到时会给一句说明性的中文（不会回落成 UUID / 空串），所以这里不需要前端兜底。
+   * 仅在对接旧版后端时才可能是 undefined。
+   */
+  productName?: string;
   batchNumber: string;
   reportedQuantity: number;
   receivedQuantity?: number | null;

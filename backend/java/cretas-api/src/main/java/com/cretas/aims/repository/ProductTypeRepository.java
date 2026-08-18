@@ -234,6 +234,17 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
     List<ProductType> findByIdIn(java.util.Collection<String> ids);
 
     /**
+     * 批量查询 + 工厂隔离。与 {@link #findByIdIn} 的区别是**不会跨厂命中** ——
+     * 用于「把 productTypeId 翻成品名」这类展示场景: 拿不到就该诚实地说拿不到,
+     * 而不是回落成别的工厂的同名产品, 更不是把 UUID 直接显示给用户。
+     *
+     * @param factoryId 工厂ID
+     * @param ids 产品类型ID集合
+     * @return 该工厂下命中的产品类型 (未命中的 id 不会出现在结果里)
+     */
+    List<ProductType> findByFactoryIdAndIdIn(String factoryId, java.util.Collection<String> ids);
+
+    /**
      * 根据工厂ID和产品名称查找
      * 用于Excel导入时按名称解析产品类型
      */
