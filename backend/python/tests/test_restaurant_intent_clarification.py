@@ -1017,7 +1017,17 @@ async def test_continuation_keyword_candidate_still_requires_llm_plan():
     assert spec.planner_authority == "llm"
     assert spec.confidence == 0.94
     assert spec.is_clarification_continuation is True
-    assert llm.await_count == 1
+    # 1 = 续接本身那一次；+1 = `_is_new_topic_not_a_reply` 的独立编译。
+    #
+    # ⚠️ 2026-08-18 从 `== 1` 改成 `== 2`。**本条的主张一个字没变** ——
+    #    它守的是「关键词候选仍然要走 LLM 计划」，上面 5 条断言原样保留。
+    #    变的是**代价**：续接后仍需澄清时，多花一次编译去判「他是不是换话题了」。
+    # 📏 代价量过：全景 24×2（生产形态）拒答 8/48 = **17%** 的轮次，
+    #    下一轮才可能付这一次，**而收益正落在同一批轮次里**。
+    # 📏 换来的是：老板问「我要不要关掉最差的那家店」不再被反问「哪家门店」
+    #    （四组对照，唯一变量是前置问句，阳性对照无前置组 answer 948）。
+    # 设计卡：`docs/decisions/2026-08-18-换话题不该被当成回答反问-设计卡.md`
+    assert llm.await_count == 2
     assert pool.tenant_gate_calls == 1
 
 
@@ -2003,7 +2013,7 @@ async def test_semantic_first_store_choice_is_merged_and_not_asked_twice():
     # ⚠️ 第二轮「兄弟土菜馆」原本是对门店反问的**回答**; 首轮不再反问之后它成了
     #    一个裸店名的新问句, T3 拿不到原问句上下文, 于是自己再问一次。
     #    这是本次改动的已知残余(与「收窄要重走一次 T3」同源), 彻底修法是独立的
-    #    refinement context —— 见交接。这里只断言 T3 确实被调了两次(链路没断)。
+    #    refinement context —— 见交接。这里只断言 T3 确实被调了(链路没断)。
     assert planner.await_count == 2
     assert planner.await_args_list[0].kwargs["hint"] is None
     assert planner.await_args_list[1].kwargs["hint"] is None
@@ -2063,7 +2073,37 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
         "clarification_question": None,
         "clarification_options": [],
     }
-    planner = AsyncMock(side_effect=[first_plan, second_plan, third_plan])
+    # 🔴 2026-08-18 插进来的第三个条目：孤立的「本月」。
+    #
+    # `side_effect` 是**顺序队列** —— `_is_new_topic_not_a_reply` 在第二轮多调
+    # 一次 T3（判「他是不是换话题了」），不补这一条的话它会**吃掉 third_plan**，
+    # 于是「本月」被判成一句完整问句、多轮链当场断掉。
+    #
+    # ⚠️ 这一条的形状取自 prod 实测（形态 B‴：桩要给真实上游会给的形状）：
+    #    7 条槽位回答（上个月 / 最近30天 / 陆家嘴店 / 全部门店 / 晚市 / 按食材 …）
+    #    **孤立编译全部** `intent=None, clarification_needed=True`，0 条误判。
+    #    ⛔ 不能沿用 `third_plan` —— 那是「回答完门店之后」的形状，不是
+    #    「孤立看『本月』」的形状。
+    alone_month_plan = {
+        "intent": None,
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": [],
+        "analysis_action": None,
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.2,
+        "clarification_needed": True,
+        "missing_fields": ["intent"],
+        "clarification_question": "你想看哪方面的数据？",
+        "clarification_options": [],
+    }
+    planner = AsyncMock(
+        side_effect=[first_plan, second_plan, alone_month_plan, third_plan])
 
     with patch(
         "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
@@ -2118,7 +2158,15 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
     # 还在问门店 -> 会话上挂着待续的反问, 下一句才能作为延续被消费。
     assert pool.pending != {}
     # 两轮各调一次 T3(原来的第三轮已不需要, 调用已删)。
-    assert planner.await_count == 2
+    # ⚠️ 2026-08-18 从 2 改成 3: 多出来的那一次是 `_is_new_topic_not_a_reply`
+    #    的独立编译(只在续接后仍需澄清时发生)。**本条主张一个字没变** ——
+    #    上面「seed 必须仍含原始问句」那两条断言原样保留, 且实测判据在这条链上
+    #    返回 False(「本月」独立编译命中计划缓存 ⇒ source_tier != llm ⇒ 不判换话题),
+    #    链路没被改道。
+    # 📏 代价量过: 全景 24×2(生产形态)拒答 8/48 = **17%** 的轮次, 下一轮才可能
+    #    付这一次, **而收益正落在同一批轮次里**。
+    # 设计卡: `docs/decisions/2026-08-18-换话题不该被当成回答反问-设计卡.md`
+    assert planner.await_count == 3
 
 
 @pytest.mark.asyncio
