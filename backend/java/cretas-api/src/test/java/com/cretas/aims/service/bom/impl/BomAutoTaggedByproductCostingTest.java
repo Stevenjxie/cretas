@@ -15,6 +15,7 @@ import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import com.cretas.aims.service.validation.ProductConfigurationReadinessService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -71,6 +72,21 @@ class BomAutoTaggedByproductCostingTest {
 
     @InjectMocks
     private BomRecipeServiceImpl service;
+
+    /**
+     * 权威出口 {@code resolveOutputCostPolicy} / {@code creditsAsByProduct} 是<b>组合</b>判据,
+     * 它内部再调 {@code targetProducedUnderActualIoSemantics} —— 本类桩的正是那一片叶子。
+     *
+     * <p>让组合走真实现, 桩的叶子才驱动得了结果。⛔ 不这么做的话, mock 对未桩方法返回
+     * 默认 false, ACTUAL_IO 豁免会<b>静默失效</b>, 而失效的样子和「没修好」一模一样。</p>
+     */
+    @BeforeEach
+    void delegateCompositeCostPolicyToRealComposition() {
+        lenient().when(bomWorkflowRevisionService.resolveOutputCostPolicy(any(), any()))
+                .thenCallRealMethod();
+        lenient().when(bomWorkflowRevisionService.creditsAsByProduct(any(), any()))
+                .thenCallRealMethod();
+    }
 
     /**
      * 客户 2026-07-31 现场那个 family(拓扑成品C + 拓扑成品D, 两个都是正经成品)。

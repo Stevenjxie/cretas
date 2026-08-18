@@ -1291,6 +1291,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
 
+    /**
+     * 给用户看的成品名 —— ⛔ 不要把 productTypeId(UUID) 甩到界面上。
+     *
+     * <p>与 {@link #resolveLiveMaterialName} 同形: 先问主数据活值, 再退回 BOM 快照名。
+     * 两者都拿不到时才退回 id, 并且明说那是「未命名成品」, 不假装那串 UUID 是个名字。</p>
+     */
+    private String resolveFinishedGoodLabel(String productTypeId, String snapshotName) {
+        if (productTypeRepository != null && productTypeId != null) {
+            try {
+                var pt = productTypeRepository.findById(productTypeId).orElse(null);
+                if (pt != null && pt.getName() != null && !pt.getName().isBlank()) {
+                    return pt.getName();
+                }
+            } catch (RuntimeException error) {
+                log.debug("读取成品名失败 {} ({})", productTypeId, error.getMessage());
+            }
+        }
+        if (snapshotName != null && !snapshotName.isBlank()) {
+            return snapshotName;
+        }
+        return "未命名成品";
+    }
+
     private String resolveLiveMaterialName(String materialTypeId, String snapshotName) {
         if (rawMaterialTypeRepository != null && materialTypeId != null) {
             try {
@@ -3014,9 +3037,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (!isWorkflowPlan(plan)) {
             return;
         }
-        if (productionSettlementOutputLineRepository == null || bomRecipeRepository == null) {
-            throw new BusinessException(500, "Workflow output settlement authority is unavailable")
-                    .withCode("WORKFLOW_OUTPUT_SETTLEMENT_UNAVAILABLE");
+        if (productionSettlementOutputLineRepository == null || bomRecipeRepository == null
+                || bomWorkflowRevisionService == null) {
+            // ⛔ 读不到权威口径就炸, 不许退回一个「看起来能跑」的默认判据 ——
+            //    那正是坎 4 的成因(两处各自判「是不是副产物」)。
+            throw new BusinessException(500, "产出成本口径服务未装配, 不能结单")
+                    .withCode("WORKFLOW_OUTPUT_SETTLEMENT_UNAVAILABLE")
+                    .withHint("请联系管理员检查 production_settlement_output_lines 迁移与 BOM 工艺服务装配");
         }
         Map<String, String> recipeIds = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
                 .orElseGet(Map::of);
@@ -3072,31 +3099,60 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     outputUnits.get(productTypeId), recipe.getOutputUnit()));
             if (!unit.equals(expectedUnit)) {
                 throw new BusinessException(409,
-                        "Reported output unit does not match the pinned Workflow/BOM output unit")
+                        "成品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」的报产单位与工艺/BOM 约定的产出单位不一致")
                         .withCode("WORKFLOW_OUTPUT_UNIT_MISMATCH")
-                        .withHint("SKU " + productTypeId + ": expected " + expectedUnit + ", received " + unit);
+                        .withHint("工艺约定按「" + expectedUnit + "」报产, 本次提交的是「" + unit
+                                + "」。请回到报工页把该产出的单位改成「" + expectedUnit + "」后重新结单")
+                        .withHintTarget("terminalOutputs");
             }
             if (isBlank(recipe.getTargetTerminalNodeId()) || recipe.getOutputRole() == null) {
-                throw new BusinessException(409, "Pinned BOM output policy is incomplete")
-                        .withCode("PINNED_BOM_OUTPUT_POLICY_INCOMPLETE");
+                throw new BusinessException(409,
+                        "成品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」的 BOM 没有记录它在工艺图上的产出位置和角色, 不能结单")
+                        .withCode("PINNED_BOM_OUTPUT_POLICY_INCOMPLETE")
+                        .withHint("请前往 BOM成本管理 打开该成品的 BOM, 重新选择工艺修订并激活新版本后重试")
+                        .withHintTarget("bom");
             }
             if (!Objects.equals(recipe.getTargetTerminalNodeId(), trimToNull(output.getMaterialNodeId()))) {
                 throw new BusinessException(409,
-                        "Reported output is not from the pinned Workflow terminal node")
+                        "成品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」报的不是 BOM 钉住的那个工艺终端产出")
                         .withCode("WORKFLOW_TERMINAL_NODE_MISMATCH")
-                        .withHint("SKU " + productTypeId + ": expected terminal node "
-                                + recipe.getTargetTerminalNodeId());
+                        .withHint("请回到报工页重新选择该成品对应的终端产出后重新结单; "
+                                + "若工艺图改过, 请先在 BOM成本管理 升级到最新工艺并激活")
+                        .withHintTarget("terminalOutputs");
             }
-            if (recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
-                if (recipe.getByproductNrvUnitPrice() == null
-                        || recipe.getByproductNrvUnitPrice().signum() <= 0) {
-                    throw new BusinessException(409, "By-product NRV price is required")
-                            .withCode("BYPRODUCT_NRV_REQUIRED");
+            // 🔴 坎 4: 「这是不是副产物」只问一处 —— BomWorkflowRevisionService#resolveOutputCostPolicy。
+            //    这里原来只判 outputRole == BY_PRODUCT, 而 BOM 侧那两处还会再问一句
+            //    targetProducedUnderActualIoSemantics 把自动编号出来的占位角色豁免掉,
+            //    净效果是 NRV 被这道闸要求、被那道闸禁止 → 多成品计划结不了单。
+            // ⚠️ 三态缺一不可: 只豁免 NRV 那一支的话, 占位产出下一步就会撞上
+            //    OUTPUT_COST_ALLOCATION_RATIO_REQUIRED(它的 ratio 是自动置 0 的) —— 拒答只是挪了一格。
+            switch (bomWorkflowRevisionService.resolveOutputCostPolicy(factoryId, recipe)) {
+                case BY_PRODUCT_NRV -> {
+                    if (recipe.getByproductNrvUnitPrice() == null
+                            || recipe.getByproductNrvUnitPrice().signum() <= 0) {
+                        throw new BusinessException(409,
+                                "副产品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」还没有单位可变现净值, 成本无法抵扣, 不能结单")
+                                .withCode("BYPRODUCT_NRV_REQUIRED")
+                                .withHint("请前往 BOM成本管理 打开该 BOM Family 的「产出成本」, "
+                                        + "为这个副产品填写单位可变现净值(预计售价扣除后续加工与销售费用), 再重新结单")
+                                .withHintTarget("byproductNrvUnitPrice");
+                    }
                 }
-            } else if (recipe.getCostAllocationRatio() == null
-                    || recipe.getCostAllocationRatio().signum() <= 0) {
-                throw new BusinessException(409, "Main/co-product cost allocation ratio is required")
-                        .withCode("OUTPUT_COST_ALLOCATION_RATIO_REQUIRED");
+                case ALLOCATION_RATIO -> {
+                    if (recipe.getCostAllocationRatio() == null
+                            || recipe.getCostAllocationRatio().signum() <= 0) {
+                        throw new BusinessException(409,
+                                "成品「" + resolveFinishedGoodLabel(productTypeId, recipe.getProductName()) + "」还没有成本分摊比例, 不能结单")
+                                .withCode("OUTPUT_COST_ALLOCATION_RATIO_REQUIRED")
+                                .withHint("请前往 Workflow 配置, 为该工序的每个产出设置角色与成本分摊比例(合计 100%), "
+                                        + "再回到 BOM成本管理 重新生成并激活 BOM")
+                                .withHintTarget("costAllocationRatio");
+                    }
+                }
+                case ACTUAL_IO_PLACEHOLDER -> {
+                    // 角色与比例都是系统按节点顺序自动编号出来的占位值, 用户从没被问过 ——
+                    // 这里既不能要 NRV 也不能要 ratio > 0。成本口径由入库那步的分摊器统一裁定。
+                }
             }
 
             ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
@@ -4697,7 +4753,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal byproductCost = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
         for (Map.Entry<String, List<ProductionSettlementOutputLine>> entry : byProduct.entrySet()) {
             ProductionSettlementOutputLine authority = entry.getValue().getFirst();
-            if (authority.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) {
+            // 与结单闸同一条判据的行级形态 —— ⛔ 不要在这里重新发明一次「是不是副产物」。
+            com.cretas.aims.service.bom.BomWorkflowRevisionService.OutputCostPolicy policy =
+                    com.cretas.aims.service.bom.BomWorkflowRevisionService.settlementLineCostPolicy(
+                            authority.getOutputRole(), authority.getByproductNrvUnitPrice());
+            if (policy == com.cretas.aims.service.bom.BomWorkflowRevisionService
+                    .OutputCostPolicy.ACTUAL_IO_PLACEHOLDER) {
+                // 这一行的角色/比例是系统自动编号出来的占位值(MAIN 100% / BY_PRODUCT 0%),
+                // 不是任何人授权的成本口径。⛔ 既不能按 NRV 抵扣(没有 NRV, 原来这里直接 NPE),
+                // 也不能按 0% 分摊 —— 那等于把「算不出」写成 ¥0, 后续会按零成本结转 COGS。
+                throw new BusinessException(409,
+                        "这批产出的成本分摊口径还没有人定过, 不能自动分摊成本")
+                        .withCode("OUTPUT_COST_ALLOCATION_POLICY_UNAUTHORED")
+                        .withHint("当前工艺是「按实际投入产出记录」模式, 系统只按节点顺序给产出编了占位角色"
+                                + "(第一个 100%, 其余 0%), 这不是真实成本口径。"
+                                + "请前往 Workflow 配置为每个产出显式设置角色与成本分摊比例(合计 100%), "
+                                + "或前往 BOM成本管理 为副产品填写单位可变现净值, 再重新入库")
+                        .withHintTarget("costAllocationRatio");
+            }
+            if (policy != com.cretas.aims.service.bom.BomWorkflowRevisionService
+                    .OutputCostPolicy.BY_PRODUCT_NRV) {
                 continue;
             }
             BigDecimal productQuantity = entry.getValue().stream()

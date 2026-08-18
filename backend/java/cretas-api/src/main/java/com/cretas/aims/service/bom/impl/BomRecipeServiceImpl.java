@@ -502,11 +502,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      */
     private void validateByProductCreditRules(List<BomRecipe> family) {
         for (BomRecipe member : family) {
-            if (member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
-            if (bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
-                    member.getFactoryId(), member)) {
-                continue;
-            }
+            // 唯一权威出口 —— 与 creditingByproductIds / 结单闸同一条判据。
+            if (!bomWorkflowRevisionService.creditsAsByProduct(member.getFactoryId(), member)) continue;
             if (member.getCostAllocationRatio() == null
                     || member.getCostAllocationRatio().compareTo(BigDecimal.ZERO) != 0) {
                 throw bomError(409,
@@ -3280,12 +3277,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private Set<String> creditingByproductIds(List<BomRecipe> targets) {
         Set<String> ids = new LinkedHashSet<>();
         for (BomRecipe target : targets) {
-            if (target.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
-            if (bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
-                    target.getFactoryId(), target)) {
-                continue;
+            // 唯一权威出口 —— 这里不再自己判「是不是副产物」, 见
+            // BomWorkflowRevisionService#resolveOutputCostPolicy 的成因说明。
+            if (bomWorkflowRevisionService.creditsAsByProduct(target.getFactoryId(), target)) {
+                ids.add(target.getId());
             }
-            ids.add(target.getId());
         }
         return ids;
     }

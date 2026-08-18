@@ -87,10 +87,17 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                     && !"WORKFLOW_SHARED_OUTPUT_NOT_FOUND".equals(error.getErrorCode())) {
                 throw error;
             }
+            // 🔴 这条路把异常拍成一个 DTO, 而 DTO **只有 message 没有 hint** ——
+            //    诊断出来的下一步走到这里会被静默丢掉(机制在、没接上)。
+            //    发现方式: ProductWorkflowUnifiedResolutionTest
+            //    #multiSelectionWithoutSharedWorkflowReturnsGuidance 当场变红, 它的名字就叫
+            //    「ReturnsGuidance」—— 原来的 guidance 本来就在 message 里。
             return WorkflowOutputResolutionDTO.builder()
                     .requestedProductTypeIds(requested)
                     .resolutionMode("NONE")
-                    .message(error.getMessage())
+                    .message(error.getActionHint() == null
+                            ? error.getMessage()
+                            : error.getMessage() + "。" + error.getActionHint())
                     .candidates(List.of())
                     .build();
         }
@@ -193,7 +200,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .filter(row -> java.util.Objects.equals(row.getActiveDefinitionVersion(), definitionVersion))
                 .orElseThrow(this::staleSelection);
         ResolvedWorkflow resolved = loadResolved(factoryId, activation);
-        if (resolved == null) throw noMatchingWorkflow(targets.size());
+        if (resolved == null) throw noMatchingWorkflow(factoryId, targets);
         if (!matchesExactly(resolved.topology, new HashSet<>(targets))) {
             throw exactOutputSetRequired(targets, resolved.topology);
         }
@@ -352,7 +359,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                                 ? LocalDateTime.MIN : candidate.activatedAt,
                         Comparator.reverseOrder())
                 .thenComparing(candidate -> candidate.rw.workflow.getId()));
-        if (matches.isEmpty()) throw noMatchingWorkflow(requested.size());
+        if (matches.isEmpty()) throw noMatchingWorkflow(factoryId, requested);
         boolean hasExact = matches.stream().anyMatch(candidate -> candidate.exact);
         if (hasExact) {
             return matches.stream().filter(candidate -> candidate.exact).toList();
@@ -371,14 +378,14 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private ResolvedWorkflow requireResolutionForAnchor(
             String factoryId, String ownerProductTypeId, List<String> requested) {
         if (ownerProductTypeId == null || ownerProductTypeId.isBlank()) {
-            throw noMatchingWorkflow(requested.size());
+            throw noMatchingWorkflow(factoryId, requested);
         }
         ProductProcessWorkflowActivation activation = activationRepository
                 .findByFactoryIdAndProductTypeId(factoryId, ownerProductTypeId)
                 .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
-                .orElseThrow(() -> noMatchingWorkflow(requested.size()));
+                .orElseThrow(() -> noMatchingWorkflow(factoryId, requested));
         ResolvedWorkflow resolved = loadResolved(factoryId, activation);
-        if (resolved == null) throw noMatchingWorkflow(requested.size());
+        if (resolved == null) throw noMatchingWorkflow(factoryId, requested);
         if (!matchesExactly(resolved.topology, new HashSet<>(requested))) {
             throw exactOutputSetRequired(requested, resolved.topology);
         }
@@ -779,17 +786,147 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .withSeverity("warning");
     }
 
-    private BusinessException noMatchingWorkflow(int requestedCount) {
-        if (requestedCount == 1) {
-            return new BusinessException(409, "未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置")
-                    .withCode("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND")
-                    .withHintTarget("productTypeId")
-                    .withSeverity("warning");
+    /**
+     * 一张工艺相对于「这次要的这组成品」的覆盖情况 —— 诊断的输入事实。
+     *
+     * @param terminalSkuIds 该工艺的终端产出 SKU 集合
+     * @param enabled        该工艺当前是否被启用(有 enabled 的 activation 指向它)
+     * @param usable         启用之外还要它当前可用(已发布 / 版本对得上 / 单位契约有效 / 图能解析)
+     */
+    record WorkflowCoverage(Set<String> terminalSkuIds, boolean enabled, boolean usable) { }
+
+    /** 「找不到工艺」的<b>真实</b>原因。⛔ 四种原因四种下一步, 不许一律说「请前往 Workflow 配置」。 */
+    enum MissingWorkflowCause {
+        /** 工艺存在且可用, 但它一锅同时产出多个成品 —— 必须整组一起选。 */
+        NEEDS_SIBLING_OUTPUTS(true),
+        /** 工艺存在且启用, 但当前版本不可用(未发布 / 版本漂移 / 单位契约失效 / 图解析不了)。 */
+        ENABLED_BUT_UNUSABLE(true),
+        /** 工艺存在(可能还是草稿), 只是没启用。 */
+        NOT_ENABLED(true),
+        /** 真的没有任何一张工艺覆盖这组成品。 */
+        TRULY_ABSENT(false);
+
+        private final boolean workflowAlreadyExists;
+
+        MissingWorkflowCause(boolean workflowAlreadyExists) {
+            this.workflowAlreadyExists = workflowAlreadyExists;
         }
-        return new BusinessException(409, "未找到共享的工序 Workflow，请分开创建生产计划")
-                .withCode("WORKFLOW_SHARED_OUTPUT_NOT_FOUND")
-                .withHintTarget("targetFinishedGoodIds")
+
+        /**
+         * 已经有一张覆盖这组成品的工艺了吗?
+         *
+         * <p>为 true 的成因<b>一律不许</b>把用户送去新建工艺 —— 那正是这次要修的那句话。
+         * 判据挂在成因上(结构), 不是靠文案里有没有某个词(文本)。</p>
+         */
+        boolean workflowAlreadyExists() {
+            return workflowAlreadyExists;
+        }
+    }
+
+    /** TRULY_ABSENT 专属的那句祈使 —— 只有它才配说「去新建一张」。 */
+    static final String CREATE_WORKFLOW_INSTRUCTION = "请前往 Workflow 配置新建工艺并发布启用";
+
+    /**
+     * 🔴 2026-08-18: 这句提示原来<b>把人送去建一个已经存在的东西</b>。
+     *
+     * <p>「未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置」是一句**断言**, 而它有
+     * <b>四个</b>互不相同的成因(见 {@link MissingWorkflowCause}), 其中三个的下一步都不是「去建一张」。
+     * 本仓的账: <b>状态码/错误码是分类, 不是定位</b> —— 一句话同时服务四个成因, 就有三个成因被说错。</p>
+     *
+     * <p>纯函数, 便于直接断言每一条分支; 取事实的那一步(扫工艺、判可用)留在
+     * {@link #describeCoverage} 里。</p>
+     */
+    static MissingWorkflowCause diagnoseMissingWorkflow(
+            Set<String> requested, List<WorkflowCoverage> coverages) {
+        if (requested == null || requested.isEmpty() || coverages == null) {
+            return MissingWorkflowCause.TRULY_ABSENT;
+        }
+        List<WorkflowCoverage> covering = coverages.stream()
+                .filter(coverage -> coverage.terminalSkuIds() != null
+                        && coverage.terminalSkuIds().containsAll(requested))
+                .toList();
+        if (covering.isEmpty()) {
+            return MissingWorkflowCause.TRULY_ABSENT;
+        }
+        // 覆盖得了、启用了、也可用 —— 那么挡住这次的只可能是「还差同胞产出没勾」。
+        if (covering.stream().anyMatch(coverage -> coverage.enabled() && coverage.usable())) {
+            return MissingWorkflowCause.NEEDS_SIBLING_OUTPUTS;
+        }
+        if (covering.stream().anyMatch(WorkflowCoverage::enabled)) {
+            return MissingWorkflowCause.ENABLED_BUT_UNUSABLE;
+        }
+        return MissingWorkflowCause.NOT_ENABLED;
+    }
+
+    /** 把诊断结论翻译成「说清现状 + 说清下一步」的那句话。 */
+    static String missingWorkflowHint(
+            MissingWorkflowCause cause, List<String> missingSiblings) {
+        return switch (cause) {
+            case NEEDS_SIBLING_OUTPUTS -> missingSiblings.isEmpty()
+                    ? "已有工艺覆盖这些成品，但它同时还产出别的成品，必须整组一起选；请回到成品选择重新勾选，或分开创建生产计划"
+                    : "这些成品由一张联产工艺一锅同时产出，请把 " + String.join("、", missingSiblings)
+                            + " 一并勾选，或分开创建生产计划";
+            case ENABLED_BUT_UNUSABLE ->
+                    "工艺已存在且已启用，但当前版本不可用（未发布、版本与启用记录对不上、单位契约已失效，或图解析不了）。"
+                            + "⛔ 不需要新建工艺；请打开该工艺重新发布，或在单位主数据变更后重新校验并启用";
+            case NOT_ENABLED ->
+                    "工艺已存在但没有启用。⛔ 不需要新建工艺；请前往 Workflow 配置把它发布并启用后重试";
+            case TRULY_ABSENT ->
+                    "当前工厂没有任何一张工艺覆盖这些成品，" + CREATE_WORKFLOW_INSTRUCTION;
+        };
+    }
+
+    private BusinessException noMatchingWorkflow(
+            String factoryId, List<String> requested) {
+        Set<String> requestedSet = new HashSet<>(requested);
+        List<WorkflowCoverage> coverages = describeCoverage(factoryId);
+        MissingWorkflowCause cause = diagnoseMissingWorkflow(requestedSet, coverages);
+        List<String> missingSiblings = smallestMissingSiblings(
+                requestedSet,
+                coverages.stream()
+                        .filter(WorkflowCoverage::enabled)
+                        .filter(WorkflowCoverage::usable)
+                        .map(WorkflowCoverage::terminalSkuIds)
+                        .toList());
+        String message = cause == MissingWorkflowCause.TRULY_ABSENT
+                ? (requested.size() == 1
+                        ? "未找到覆盖该产品的工序 Workflow"
+                        : "未找到同时覆盖这批成品的工序 Workflow")
+                : "已有工艺覆盖该产品，但当前用不了";
+        return new BusinessException(409, message)
+                .withCode(requested.size() == 1
+                        ? "WORKFLOW_SINGLE_OUTPUT_NOT_FOUND"
+                        : "WORKFLOW_SHARED_OUTPUT_NOT_FOUND")
+                .withHint(missingWorkflowHint(cause, missingSiblings))
+                .withHintTarget(requested.size() == 1 ? "productTypeId" : "targetFinishedGoodIds")
                 .withSeverity("warning");
+    }
+
+    /**
+     * 扫本工厂全部工艺, 得出每张图对「这次要的成品」的覆盖情况。
+     *
+     * <p>⚠️ 只在**错误路径**上调用 —— 它会解析全厂工艺的 JSON, 不能放进正常流程。</p>
+     */
+    private List<WorkflowCoverage> describeCoverage(String factoryId) {
+        Map<Long, ProductProcessWorkflowActivation> enabledByWorkflowId =
+                activationRepository.findByFactoryIdAndEnabledTrue(factoryId).stream()
+                        .filter(row -> row.getActiveWorkflowId() != null)
+                        .collect(Collectors.toMap(
+                                ProductProcessWorkflowActivation::getActiveWorkflowId,
+                                java.util.function.Function.identity(),
+                                (left, right) -> left));
+        List<WorkflowCoverage> coverages = new ArrayList<>();
+        for (ProductProcessWorkflow workflow
+                : workflowRepository.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(factoryId)) {
+            WorkflowTopology topology = parseTopology(workflow);
+            Set<String> terminals = new HashSet<>(topology.terminalOutputSkuIds());
+            if (terminals.isEmpty()) continue;
+            ProductProcessWorkflowActivation activation = enabledByWorkflowId.get(workflow.getId());
+            boolean enabled = activation != null;
+            boolean usable = enabled && loadResolved(factoryId, activation) != null;
+            coverages.add(new WorkflowCoverage(terminals, enabled, usable));
+        }
+        return coverages;
     }
 
     private static final class ResolvedWorkflow {
