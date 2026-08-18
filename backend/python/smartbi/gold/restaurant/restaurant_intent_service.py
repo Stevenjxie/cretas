@@ -109,7 +109,14 @@ _RESOLVER_DIMENSIONS = {
     # 餐段本身就是这个 resolver 的输出粒度 —— 2026-08-09 放开 `meal_period` 维度后
     # 补上它。⛔ 补的依据是**它真能出**(结果按午市/晚市/夜宵分), 不是为了让某条
     #    用例过; 能力表写的是真能出的粒度, 写宽了下游会拿它当承诺。
-    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time", "meal_period"}),
+    # 2026-08-18 补 `store`。⛔ 依据同上：**它真能出** —— 同一个 commit 里
+    #    `resolve_daypart_performance` 加了门店 × 时段交叉表（JOIN dim_store，
+    #    与主表同源）。prod 实测 fact_pos_transaction 99792 行、store_id 与时段
+    #    两者零 NULL、门店×时段 20 个非空组合。
+    # 🔴 补它的直接原因是**产品在说假话**：「哪家店晚市最好」原来拿到
+    #    「这两层的数不在同一张表上」——而两层就在这一张表上。
+    #    那句话已删（改成说算法），这里补上真能出的那一半。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time", "meal_period", "store"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
@@ -121,7 +128,9 @@ _RESOLVER_DIMENSIONS = {
     #                   破损 ¥1413.95、加工损耗 ¥1141.00
     #   5 种全带金额, 与库里 `count(DISTINCT wastage_type)=5` 对得上。
     # 🔴 漏登的代价是**产品在对老板说假话**: 问「损耗都是哪些类型造成的」拿到
-    #    「按损耗类型拿不到」「这两层的数不在同一张表上」—— 而同一个 resolver
+    #    「按损耗类型拿不到」「这两层的数不在同一张表上」(⚠️ 后面那句 2026-08-18
+    #    已从 `_dimension_gap_advice` 删掉 —— 它是硬编码的机制, 实测是假的;
+    #    留在这里是**当时的原话**, 不是现在的文案) —— 而同一个 resolver
     #    的输出里就印着那张分布。这是形态 D(两份漂了)最贵的一种长相:
     #    能力表比真实能力**窄**, 于是把能算的说成算不出。
     # ⚠️ `_WASTAGE_DIMS` 还列了 `wastage_reason`, ⛔ 本次不补 —— 输出里没有
@@ -589,9 +598,24 @@ def _dimension_gap_advice(spec: RestaurantQuerySpec,
 
     both = asked & supported
     if both:
+        # 🔴 2026-08-18 prod 实测: 这一支原来断言「这两层的数**不在同一张表上**」——
+        #    那是一句**硬编码的机制**, 与 asked/supported/plan 全都无关, 对任何
+        #    维度组合都照打。实测它是假的:
+        #      「哪家店晚市最好」→ both={门店} extra={餐段}
+        #      而 `fact_pos_transaction` 上 store_id 与时段**同源**(99792 行,
+        #      两者零 NULL, 门店×餐段 20 个非空组合) —— 就在同一张表上。
+        #
+        # 📌 判据与本函数下面那条同源: **说出来的东西必须是算出来的**。
+        #    系统知道的是「这次选中的算法不服务这一层」(能力表), ⛔ 它**不知道**
+        #    数据为什么拆不出来 —— 编一个机制出来, 老板会照着它去查数据接入,
+        #    白跑一趟, 然后不再信这里说的话。
+        #
+        # ⚠️ 同一句假话本文件 124 行已经记过一次(漏登 wastage_type 那次),
+        #    当时的修法是**补登能力表**, 而这句话本身没动 ⇒ 它换个组合继续说。
+        #    这次改的是**话**, 不是某一条登记。
         return (
             f"按{_names(both)}我能算，但你这句还要求再按{_names(extra)}拆一层，"
-            f"这两层的数不在同一张表上，拆不出来。"
+            f"这次选中的算法拆不出这一层。"
             f"想看的话分开问，例如先问「按{_names(both)}怎么样」。"
         )
     # 🔴 2026-08-17 prod 实测, 这一支原来说的是胡话:
@@ -1478,9 +1502,13 @@ def _resolver_kwargs(
         # ⚠️ 只发出来还不够 —— `resolve_by_code` 按**签名**过滤 kwargs, 没声明
         #    这个形参的 resolver 照样**静默**丢掉。两半都要接, 见
         #    `tests/test_wastage_answers_the_asked_dimension.py` 的前两条。
-        # ⚠️ 今天只有 `resolve_wastage_top` 消费它; 其余 17 个 resolver **故意
-        #    不改**(登记在那份用例的模块 docstring 里), 它们收不到这个键的行为
-        #    与改动前逐字相同 —— 5 个带 **kwargs 的会收到但不读, 12 个被过滤掉。
+        # ⚠️ 消费它的 resolver 是**逐个加**的, 不是一次全改:
+        #      2026-08-18  `resolve_wastage_top`            门店损耗排行
+        #      2026-08-18  `resolve_daypart_performance`    门店 × 时段交叉表
+        #    其余 16 个**故意不改**, 它们收不到这个键的行为与改动前逐字相同
+        #    —— 带 **kwargs 的会收到但不读, 其余被签名过滤掉。
+        # ⛔ 加一个就要同时补登 `_RESOLVER_DIMENSIONS`, 而**依据是它真能出**;
+        #    只发不接 = 假承诺, 只接不登 = 能算的被说成算不出。两边都要动。
         "dimensions": tuple(spec.dimensions),
     }
     start, end = spec.date_range
