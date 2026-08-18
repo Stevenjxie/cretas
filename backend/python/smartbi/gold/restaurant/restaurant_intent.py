@@ -2470,9 +2470,7 @@ def _build_spec(
         store_scope = None
         store_slots = ()
         clarification_needed = True
-        clarification_question = (
-            f"请问您指的是哪家「{deterministic_store}」？请选择具体门店。"
-        )
+        clarification_question = partial_store_alias_question(deterministic_store)
         missing_slot = "store"
         clarification_options = tuple(store_options)
     dimension_list = list(
@@ -3614,6 +3612,7 @@ async def _replay_zero_token_plan(
     available_stores: Sequence[str],
     suggested_stores: Sequence[str],
     allow_stale: bool,
+    store_resolution: Optional["StoreMentionResolution"] = None,
 ) -> Optional[Tuple[RestaurantQuerySpec, str]]:
     """Rebuild an executable plan for `query` without calling the planner.
 
@@ -3631,6 +3630,7 @@ async def _replay_zero_token_plan(
                 query,
                 available_stores=available_stores,
                 suggested_stores=suggested_stores,
+                store_resolution=store_resolution,
                 authority_index=0,
             )
             if spec is not None:
@@ -3703,6 +3703,7 @@ async def _replay_zero_token_plan(
             query,
             available_stores=available_stores,
             suggested_stores=suggested_stores,
+            store_resolution=store_resolution,
             authority_index=1,
         )
         if spec is not None:
@@ -3732,6 +3733,7 @@ def _replay_plan_spec(
     available_stores: Sequence[str],
     suggested_stores: Sequence[str],
     authority_index: int,
+    store_resolution: Optional["StoreMentionResolution"] = None,
 ) -> Optional[RestaurantQuerySpec]:
     """Compile a stored raw plan against TODAY and re-seal it under the
     replay authority. None when the stored plan no longer satisfies the
@@ -3741,6 +3743,10 @@ def _replay_plan_spec(
         query,
         available_stores=available_stores,
         suggested_stores=suggested_stores,
+        # 🔴 回放路径**也要**归一。少了这一行, 同一句「宝山店的营收」第一次走
+        #    规划器答对、第二次命中计划缓存就丢掉门店 —— 而两次都不报错。
+        #    (形态 D: 同一个东西两份, 漂的那一份跑起来完全正常。)
+        store_resolution=store_resolution,
         # 🔴 2026-08-13 owner 裁定, 上面那条(原文保留在下方)**作废**。
         #
         #    原文: 「零 token 回放不许发明默认窗口。人审批准的是「这句话 → 这个意图」，
@@ -5160,6 +5166,137 @@ async def _load_store_options(
     )
 
 
+@dataclass(frozen=True)
+class StoreMentionResolution:
+    """老板打的那几个字 → 库里的全名。**三态**，⛔ 静默丢弃不在其中。
+
+    ▎`aliases`   唯一命中 → 归一成库里全名（抬头用全名，⛔ 不用他打的字）
+    ▎`ambiguous` 多条命中 → **确认式反问**，列候选让他选（⛔ 不静默挑一个）
+    ▎两个都没有 → 走今天的路（fail-open，⛔ 绝不静默丢掉）
+
+    ⛔ 这个对象是**只读的事实**，不是指令：它只说「这几个字对上了什么」，
+       要不要反问由 `_semantic_spec_from_t3` 决定。
+    """
+
+    aliases: Tuple[Tuple[str, str], ...] = ()
+    ambiguous: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+
+    def first_ambiguous(self) -> Optional[Tuple[str, Tuple[str, ...]]]:
+        return self.ambiguous[0] if self.ambiguous else None
+
+    def __bool__(self) -> bool:
+        return bool(self.aliases or self.ambiguous)
+
+
+#: 既有那份「部分别名对上多家门店」反问的措辞。**只此一处定义** ——
+#: 产出端(`_build_spec` 的 `ambiguous_partial_store`)和先行判据
+#: (`_semantic_spec_from_t3` 末尾)读同一个模板, 措辞改了两边一起改。
+#: ⛔ 抽出来之前它是一句内联 f-string, 而先行判据要认它 —— 那就成了第二份。
+_PARTIAL_STORE_ALIAS_TEMPLATE = "请问您指的是哪家「{mention}」？请选择具体门店。"
+_PARTIAL_STORE_ALIAS_PREFIX = _PARTIAL_STORE_ALIAS_TEMPLATE.split("{mention}")[0]
+
+
+def partial_store_alias_question(mention: str) -> str:
+    """既有那份消歧的问句。⛔ 不要在别处再拼一遍这句话。"""
+    return _PARTIAL_STORE_ALIAS_TEMPLATE.format(mention=mention)
+
+
+def is_partial_store_alias_question(question: Optional[str]) -> bool:
+    """这句反问是不是**既有那份**产出的 —— 前缀由同一个模板派生, 不会漂。
+
+    ⛔ 判据不能直接读 spec 上那个 missing-slot 字段: 仓里有一道闸禁止
+       (`tests/test_restaurant_clarification_slot.py::
+         test_nothing_reads_the_slot_field_directly_yet`), 理由是**继承来的**
+       spec 上它是 None, 而 continuation 的判据必须仍然成立。
+       我第一版就是读它, 被那道闸在更宽的 `-k` 回归里抓到 ——
+       ⚠️ 而且是被**docstring 里的字面量**又抓了一次: 那道闸只剥 `#` 注释行,
+       docstring 照数。所以这里连提都不能原样提那个名字。
+    """
+    return bool(question) and question.startswith(_PARTIAL_STORE_ALIAS_PREFIX)
+
+
+def store_ambiguity_question(mention: str, candidates: Sequence[str]) -> str:
+    """「你说的 X，我这边有 N 家对得上：A、B。你要看哪一家？」
+
+    ⛔ 说人话，不出现「消解 / 实体 / 候选集 / 匹配度」这类黑话。
+    ⛔ 不把「全部门店」塞进选项 —— 他**说了**一家店，替他换成全店是改题。
+       想看全店他自己会说，产品不替他做这个判断。
+    """
+    names = "、".join(candidates)
+    return (
+        f"你说的「{mention}」，我这边有 {len(candidates)} 家对得上：{names}。"
+        f"你要看哪一家？"
+    )
+
+
+async def _resolve_store_mentions(
+    query: str,
+    available_stores: Sequence[str],
+) -> Optional[StoreMentionResolution]:
+    """把问句里的门店简称对上库里的全名。拿不准就说拿不准。
+
+    🔴 **它修的是什么**（2026-08-18 prod 实测，MOCK_REST 10 家真实门店，
+       简称由真名**机械派生**、⛔ 不是挑出来的）:
+
+         `_validated_llm_store_names` 的 `name not in available`  0/50 = 0.0%
+         `_canonicalize_store_mention` 的 SQL LIKE                30/50 = 60.0%
+             其中 **20 条零候选**全是「头两字/头三字 + 店」——「宝山店」
+             「徐汇店」「浦东店」，正是人最常用的说法
+
+       两条叠加的净效果: 老板**只要不打全名**，门店槽位就恒为空 ——
+       而失败方式是**静默丢弃**，他看不到任何「我没认出这家店」的痕迹。
+
+    ⛔ `available_stores` 为空时**立刻返回 None** —— 行为与改动前逐字相同。
+       今天 prod 上 `dim_store` 全表只有 MOCK_REST 那 10 行（ANALYZE 后
+       reltuples=10，RLS 无关的统计量），所以其余租户走的仍然是原路。
+       这不是保险，是**这条路今天的实际覆盖面**，登记在设计卡里。
+
+    ⚠️ 不碰库: 候选清单是调用方用 RLS 读出来的 `available_stores`，
+       本函数不可能越权，也不会给库加一次查询。
+    """
+    stores = tuple(s for s in (available_stores or ()) if s and str(s).strip())
+    if not stores or not (query or "").strip():
+        return None
+
+    from smartbi.canonical.entity_resolution.shortlist import resolve_mention
+
+    known = set(stores)
+    aliases: List[Tuple[str, str]] = []
+    ambiguous: List[Tuple[str, Tuple[str, ...]]] = []
+    seen: set = set()
+    for mention in extract_store_mentions(query):
+        text = (mention or "").strip()
+        # 已经是库里的全名 ⇒ 本来就走得通，⛔ 不多此一举
+        if not text or text in seen or text in known:
+            continue
+        seen.add(text)
+        try:
+            decision = await resolve_mention(text, stores)
+        except Exception:  # noqa: BLE001 — 消解失败绝不能把原本的路也弄没
+            logger.exception(
+                "[restaurant-intent] 门店简称消解异常, 退回原路: mention=%r", text)
+            continue
+        if decision.is_unique:
+            logger.info(
+                "[restaurant-intent] 门店简称归一: %r -> %r (%s: %s)",
+                text, decision.canonical, decision.stage, decision.detail)
+            aliases.append((text, decision.canonical))
+        elif decision.is_ambiguous:
+            logger.info(
+                "[restaurant-intent] 门店简称有歧义 -> 确认式反问: "
+                "%r -> %s (%s: %s)",
+                text, list(decision.candidates), decision.stage, decision.detail)
+            ambiguous.append((text, decision.candidates))
+        else:
+            logger.info(
+                "[restaurant-intent] 门店简称对不上, 走原路: %r (%s: %s)",
+                text, decision.stage, decision.detail)
+    if not aliases and not ambiguous:
+        return None
+    return StoreMentionResolution(
+        aliases=tuple(aliases), ambiguous=tuple(ambiguous))
+
+
 async def _load_relevant_store_options(
     pool,
     factory_id: str,
@@ -6088,6 +6225,26 @@ def _validated_llm_store_names(
     query: str,
     available_stores: Sequence[str],
 ) -> Tuple[str, ...]:
+    """LLM 提名的门店名 → 库里真实存在的全名。**本函数与改动前逐字相同。**
+
+    🔴 归一**不在这里做**, 在调用方(`_semantic_spec_from_t3`)那一格。
+       为什么: 归一的判据只有一条 ——「老板原话唯一指向哪家店」——
+       而它对**三种**模型输出形态是同一个答案:
+
+           ① store = "模拟·宝山大场社区店"   模型自己归一好了
+              → 被 `_verbatim_entity` 挡掉(不是原文子串) → 这里返回空
+           ② store = "宝山店"               模型回声老板的字
+              → 过了 verbatim, 但 `not in available` → 这里返回空
+           ③ store = null                   模型一家都没提名
+              → 这里返回空
+
+       三种都落到「这里返回空」, 于是调用方**一格**就全接住了。
+
+    ⚠️ 我第一版在这里加了两条分支分别接 ① 和 ②, 变异对照当场证明它们
+       **不红** —— 加了 ③ 那一格之后, 前两条成了同一个判据的第二、第三份
+       (形态 D)。⛔ 三份判据一定会漂, 收敛成一份。
+       ▎变异不红先证明变异生效了; 生效了还不红, 那才是「这段代码没在守东西」。
+    """
     raw: List[Any] = []
     if isinstance(parsed.get("stores"), list):
         raw.extend(parsed["stores"])
@@ -6153,6 +6310,7 @@ def _semantic_spec_from_t3(
     suggested_stores: Sequence[str] = (),
     is_continuation: bool = False,
     allow_time_default: bool = True,
+    store_resolution: Optional[StoreMentionResolution] = None,
 ) -> RestaurantQuerySpec:
     """Compile validated LLM semantics into the immutable execution contract.
 
@@ -6301,6 +6459,43 @@ def _semantic_spec_from_t3(
         or ()
     )
     store_names = _validated_llm_store_names(parsed, query, available_stores)
+    # ── 上面一条都没留下, 而老板的话唯一指向一家 → **代码直接归一** ──────
+    #
+    # 🔴 owner 定稿第四节: 「**唯一匹配** → 代码直接归一, ⛔ 不回 LLM;
+    #    抬头用全名让老板看见」。这一格是那句话的落点, 也是**唯一**的落点。
+    #
+    # 📏 为什么必须在这里而不是在 `_validated_llm_store_names` 里分情况接
+    #    (prod 实测: 同一条「浦东店最近30天营收多少」跑出**三种**模型输出):
+    #      ① store="模拟·浦东金桥社区店"  模型自己归一好了 → 被反幻觉守卫挡掉
+    #      ② store="浦东店"              模型回声老板的字 → `not in available`
+    #      ③ store=null                  一家都没提名
+    #    **三种都让上面那个函数返回空** ⇒ 一格全接住, ⛔ 不写三份判据。
+    #
+    #    ⚠️ 第 ③ 种最阴: 它走到「只缺门店 → 补默认全部门店」那一格, 于是
+    #       `store_scope=all / defaulted=True`, 下游口径闸当场拦下并说
+    #       「你问的是某家门店, 我这次挑到的却是全店合计」——
+    #       ▎系统**自己知道**老板问的是哪家店(日志里 store='浦东店'),
+    #       ▎只是那个知识没接到计划上。
+    #    ⇒ 不接的话同一句话时好时坏, 而两种结局都不报错。
+    #
+    # ⛔ 只在这三条同时成立时归一, 每条都是承重的(各有一条阴性对照钉着):
+    #    (a) 模型提名的一家都没通过 —— 通过了就尊重它, ⛔ 不覆盖模型的判断
+    #    (b) 老板的话**唯一**指向一家 —— 歧义走确认式反问, ⛔ 不替他挑
+    #    (c) 模型没有明说「全部门店」—— 说了就是他要全店, ⛔ 不改题
+    #        (「浦东店和全部门店对比」这类, 模型会给 all, 这里不动它)
+    if (
+        not store_names
+        and store_resolution is not None
+        and store_resolution.aliases
+        and store_scope != "all"
+    ):
+        store_names = tuple(
+            canonical for _mention, canonical in store_resolution.aliases
+        )[:8]
+        logger.info(
+            "[restaurant-intent] 按老板原话直接归一门店: %s query=%r",
+            list(store_names), (query or "")[:60],
+        )
     if store_names and not store_scope:
         store_scope = "single" if len(store_names) == 1 else "multiple"
     explicit_store_directory = _is_explicit_store_directory_query(query)
@@ -6525,6 +6720,45 @@ def _semantic_spec_from_t3(
         clarification_needed = False
         clarification_question = None
         clarification_options = ()
+
+    # ── 门店简称对上了多家 → **确认式反问**, ⛔ 不静默挑一个、⛔ 不静默丢弃 ──
+    #
+    # 🔴 位置是承重的, ⛔ 不能往上挪:
+    #    上面「只缺门店 → 补默认全部门店」那一格(`_AUTO_DEFAULTABLE`)会把
+    #    clarification 清掉并把 store_scope 设成 "all"。而这里的情形恰恰**不是**
+    #    「用户没说门店」——他说了「浦东店」, 只是对上了多家。
+    #    在那一格之前判, 会被它当场抹掉, 老板拿到一份**全店**的数还以为是那家店的。
+    #    ▎「没解析出 X」不等于「用户没提 X」——把前者当后者就是拿缺席当证据。
+    #
+    # ⛔ 不覆盖 `explicit_store_directory`(「我们一共几家店」不指向具体门店),
+    #    也⛔ 不覆盖模型自己已经提出的、**同样是门店槽**的反问 —— 那会把两个
+    #    问题叠在一起问。判据用结构化的 `store_scope`/`store_names`, ⛔ 不比措辞。
+    #
+    # ⚠️ `missing_slot` 保持 None: `_slot_of_clarification` 是拿问句与两个固定
+    #    常量做**字符串相等**比较, 我这句是动态生成的, 它必然返回 None。
+    #    在这里硬填 "store" 就是让字段和那个唯一的边界转换点**对不上**
+    #    (那个字段的注释写着二者「严格同步, 有用例钉住」)。
+    #    ⇒ 老板的回答走的是普通延续路径: 他答一个**全名**, 下一轮那个名字
+    #      本来就在 `available_stores` 里, 精确命中, 与本改动无关。
+    ambiguity = (
+        store_resolution.first_ambiguous()
+        if (store_resolution and not explicit_store_directory and not store_names)
+        else None
+    )
+    if ambiguity is not None:
+        logger.info(
+            "[restaurant-intent] 门店简称有歧义: mention=%r options=%s query=%r",
+            ambiguity[0], list(ambiguity[1]), (query or "")[:60],
+        )
+    # 🔴 **这里只观测, 一个槽位都不动。** 反问在 `_build_spec` **之后**才落地。
+    #
+    #    第一版在这里就把 `store_scope` 改成了 None —— 而那恰好是
+    #    `_build_spec` 里既有那份消歧(`ambiguous_partial_store`)的**触发条件**
+    #    (`llm_store_scope == "single"`)。于是我亲手关掉了它, 再由我自己接管,
+    #    表现是既有的 `test_semantic_partial_store_alias_requires_one_real_
+    #    catalogue_match` 变红 —— 看起来像「两份在抢」, 实际是**我把它掐了**。
+    #    ▎读一份代码的触发条件之前, 先确认自己没在上游把它改掉。
+
     if clarification_needed and not clarification_question:
         clarification_question = "我还缺一个关键信息，能再具体说一下这次想看什么吗？"
 
@@ -6537,7 +6771,7 @@ def _semantic_spec_from_t3(
         asks_profitability = False
     dish = _verbatim_entity(parsed.get("dish"), query)
     primary_store = store_names[0] if len(store_names) == 1 else None
-    return _build_spec(
+    spec = _build_spec(
         code,
         query,
         confidence=confidence,
@@ -6581,6 +6815,60 @@ def _semantic_spec_from_t3(
             daypart_contract_repair or food_cost_ratio_contract_repair
         ),
     )
+    if ambiguity is None:
+        return spec
+
+    # ⛔ **既有那份先行** —— `_build_spec` 里的 `ambiguous_partial_store` 早就在做
+    #    「门店简称对上多家 → 反问」这件事(措辞「请问您指的是哪家「X」？」)。
+    #    ▎同一个东西有两份, 它一定会漂 (形态 D)。
+    #
+    #    两份的**触发条件不同**, 所以不是重复而是接力:
+    #      既有那份要求 `llm_store_scope == "single"` **且**模型一家都没选。
+    #      prod 实测「社区店最近30天营收多少」模型返回的是
+    #      `store_scope=null` + `clarification_needed=true` ⇒ 它够不着,
+    #      老板拿到的是一句通用的「要看哪一组门店」——**候选一个都没列**。
+    #
+    #    ⛔ 判据**不能**读 `spec.missing_slot` —— 仓里有一道闸禁止
+    #       (继承来的 spec 上它是 None)。改用从同一个措辞模板派生的
+    #       `is_partial_store_alias_question`, 那句话因此只有一处定义。
+    #
+    # ⛔ 未做, 显式登记: **两句措辞还没合成一句**。合并要动
+    #    `tests/test_restaurant_intent_clarification.py` 里钉着字面量的断言,
+    #    那不在本轮的改动范围内。解冻条件见设计卡「未做」一节。
+    if spec.clarification_needed and is_partial_store_alias_question(
+        spec.clarification_question
+    ):
+        logger.info(
+            "[restaurant-intent] 门店歧义已由既有的 ambiguous_partial_store 接住, "
+            "本轮不重复反问: mention=%r", ambiguity[0])
+        return spec
+
+    # 🔴 **必须在 `_build_spec` 之后再钉一次** —— 上面那次赋值会被它抹掉。
+    #
+    #    实测: `_build_spec` 的 contract-repair 分支(「显式槽位编译出唯一 resolver
+    #    时, 模型那个泛泛的澄清标记就不再真实」)无条件执行
+    #        clarification_needed = False; clarification_question = None
+    #    于是「社区店」这一轮拿到 clarification_options 却 needed=False,
+    #    最终由下游 `_apply_store_scope_guard` 给出一句**通用**的门店范围反问 ——
+    #    老板看到的是「请选择全部门店，或直接输入门店名称」, 而不是
+    #    「你说的社区店有 4 家对得上」。产出端有了、消费端把它抹了(形态 B)。
+    #
+    #    ⛔ 不去改 `_build_spec` 那个 clear: 它守的是**另一件真事**(模型自撰的
+    #       泛泛澄清)。这里的歧义不是模型报的, 是代码查库查出来的事实 ——
+    #       两件事共用一个标记位, 就在这里各自钉住各自的。
+    # ⛔ 也不去改 `_apply_store_scope_guard`: 它开头那道
+    #    `clarification_needed and "time" not in slots` 早退**已经**会放我过去,
+    #    前提正是 needed 为 True。修好这里, 那边一行都不用动。
+    return _seal_query_plan(replace(
+        spec,
+        clarification_needed=True,
+        clarification_question=store_ambiguity_question(*ambiguity),
+        clarification_options=tuple(ambiguity[1]),
+        store_scope=None,
+        store_slots=(),
+        store_scope_defaulted=False,
+        plan_hash="",
+    ))
 
 
 def _t3_contract_violation(content: str) -> Optional[str]:
@@ -7103,6 +7391,25 @@ async def _parse_restaurant_query_impl(
             )
             suggested_stores = ()
 
+        # ── 门店简称 → 库里全名 (缺口 #3 / #16 的接线点) ────────────────────
+        #
+        # 🏠 **生产上就是这一行保证它被调用**: `parse_restaurant_query` 是餐饮
+        #    问答唯一的规划入口, 下面 T3 与零 token 回放两条出口都吃它的结果。
+        #    钉在真实入口上的断言:
+        #    `test_entity_shortlist_wiring.py::
+        #     test_parse_restaurant_query_normalizes_a_store_shorthand_end_to_end`
+        #
+        # ⛔ 放在 `available_stores` 之后是承重的: 候选清单就是它, 本函数**不查库**。
+        # ⛔ 放在零 token 回放**之前**是承重的: 回放那条路也要归一(见 `_replay_plan_spec`)。
+        # ⚠️ 异常一律吞掉退回 None —— 一个新增的辅助路径不该让整条问答挂掉。
+        try:
+            store_resolution = await _resolve_store_mentions(
+                semantic_query, available_stores)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[restaurant-intent] 门店简称消解不可用, 退回原路: %s", exc)
+            store_resolution = None
+
         # ── Zero-token flywheel exits (see `_replay_zero_token_plan`) ──────
         # Admission is deliberately narrow: this turn must be the SELF-
         # CONTAINED sentence the reviewed registry / plan cache are keyed on.
@@ -7126,6 +7433,7 @@ async def _parse_restaurant_query_impl(
                 norm_query,
                 available_stores=available_stores,
                 suggested_stores=suggested_stores,
+                store_resolution=store_resolution,
                 allow_stale=False,
             )
             if replayed is not None:
@@ -7167,6 +7475,7 @@ async def _parse_restaurant_query_impl(
                     norm_query,
                     available_stores=available_stores,
                     suggested_stores=suggested_stores,
+                    store_resolution=store_resolution,
                     allow_stale=True,
                 )
                 if replayed is not None:
@@ -7208,6 +7517,7 @@ async def _parse_restaurant_query_impl(
             semantic_query,
             available_stores=available_stores,
             suggested_stores=suggested_stores,
+            store_resolution=store_resolution,
         )
         if (
             zero_token_eligible
@@ -7789,6 +8099,18 @@ async def _parse_continuation(
                 exc,
             )
             suggested_stores = ()
+        # ⛔ 延续轮**也要**归一 —— 这是本函数第 3 个 `_semantic_spec_from_t3` 出口。
+        #    只改前两个就是「同一个东西改了一半」: 首轮「宝山店的营收」认得出来,
+        #    而「宝山店的营收」+「最近30天」合成之后又认不出来, 两次行为不一致
+        #    且都不报错。⚠️ 用 `concatenated`(原问句+答案), ⛔ 不用裸 `query` ——
+        #    店名在原问句里, 答案里通常只有一个时间词。
+        try:
+            store_resolution = await _resolve_store_mentions(
+                concatenated, available_stores)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[restaurant-intent] 延续轮门店简称消解不可用, 退回原路: %s", exc)
+            store_resolution = None
         semantic_history: List[Dict[str, Any]] = list(history or [])[-20:]
         semantic_history.extend([
             {"role": "user", "content": original_query},
@@ -7822,6 +8144,7 @@ async def _parse_continuation(
             concatenated,
             available_stores=available_stores,
             suggested_stores=suggested_stores,
+            store_resolution=store_resolution,
             is_continuation=True,
         )
 
