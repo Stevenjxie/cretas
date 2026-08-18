@@ -134,6 +134,17 @@ REGISTRY: dict[str, str] = {
     "_ANALYSIS_CANNOT_TOKENS": LEXICAL,
     "_ANALYSIS_TOPIC_TOKENS": LEXICAL,
     "_APPROVED_TIME_ANSWERS": LEXICAL,
+    # 判「无价格权限时正文有没有把三件事说清」(缺什么/怎么拿到/他自己要干什么)。
+    # 与上面那几张同一类: **判产品自己产出的正文**, ⛔ 不是判用户输入,
+    # 所以没有「换成对租户目录校验」这条出路。
+    # ⚠️ 它们是**代理判据**, 真正的收敛是把面向用户的权限说明收到一处产出、
+    #    契约改扫那一处 —— 见 docs/decisions/2026-08-18-契约认因权限而缺-设计卡.md
+    #    「五、没做完的」第 4 条。登记是留痕, ⛔ 不是豁免。
+    # 📌 `_PERMISSION_REASON_TOKENS` 只有 2 条, 低于 census 的 3 条门槛因而
+    #    当前点不到名 —— 一并登记, 免得下一个人给它加第 3 个词时突然被拦。
+    "_PERMISSION_REASON_TOKENS": LEXICAL,
+    "_PERMISSION_REMEDY_TOKENS": LEXICAL,
+    "_PERMISSION_ALTERNATIVE_TOKENS": LEXICAL,
 }
 
 #: 未登记的**命名**词表数量上限。⛔ 只许调小。

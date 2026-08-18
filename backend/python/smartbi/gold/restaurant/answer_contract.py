@@ -20,6 +20,8 @@ from smartbi.gold.restaurant.restaurant_intent import (
 # builds user-visible text from ContractResult.missing MUST go through
 # describe_missing() -- the raw tokens are internal identifiers and must
 # never be shown to the user.
+# ⚠️ 同一条纪律适用于 ContractResult.permission_blocked —— 它装的是同一批
+#    内部 token, 同样只能经 describe_missing() 渲染, ⛔ 不许直接拼进正文。
 _ELEMENT_LABELS_CN = {
     "window_label": "您问的时间范围",
     "profitability_verdict": "是否赚钱的判断",
@@ -410,18 +412,148 @@ def required_elements(spec: RestaurantQuerySpec) -> List[str]:
     return elements
 
 
-class ContractResult:
-    __slots__ = ("missing",)
+# ─────────────────────────────────────────────────────────────────────────
+# 「因权限而缺」—— 与「算不出来」是**两态**，⛔ 不是同一态的两种措辞
+#
+# 2026-08-18 实测（喂真实上游逐字产出的 text/meta 跑 validate）:
+#
+#   A 无价格权限被遮蔽   missing = ['profitability_verdict']  → 老板看到「是否赚钱的判断」
+#   C 有权限但真算不出来  missing = ['profitability_verdict']  → 老板看到「是否赚钱的判断」
+#
+# ▎两条读数**逐字相同** —— 契约里根本没有表达「因权限」的位置。
+#
+# 下游（restaurant_intent_service.py:2415）把它拼成
+#   「这次没算出是否赚钱的判断…说清楚具体范围我再试一次。」
+# 两处都是假的: **算得出，是不给他看**; 而且他把范围说一百遍也拿不到,
+# 因为拦他的是角色不是范围 —— 那正是「一条误发的提示烧掉的是可信」。
+#
+# 设计卡: docs/decisions/2026-08-18-契约认因权限而缺-设计卡.md
+# ─────────────────────────────────────────────────────────────────────────
 
-    def __init__(self, missing: List[str]):
+#: 按定义**只能由金额产出**的契约元素 —— 无价格权限时它们必然缺，
+#: 而那个缺口的成因是权限，不是算力，也不是数据。
+#:
+#: ⛔ 故意**不收**以下元素（登记是留痕不是豁免，「漏了」和「有意跳过」要分得开）:
+#:   · request_coverage      —— 混合了非金额要求(asks_priority / asks_export /
+#:                              顾客评价 / 出餐速度)。整个归到权限态会**掩盖真实
+#:                              缺口**, 那正是「量错了对象」。
+#:   · window_label / store_name / dish_name / comparison
+#:   · execution_consistency / analysis_action / non_empty_answer
+#:                           —— 与金额无关, 没有价格权限也照样该有。
+_MONEY_DEPENDENT_ELEMENTS = frozenset({
+    "profitability_verdict",
+    "margin_value",
+    "margin_integrity",
+})
+
+#: 「说清三件事」的三类词: 缺什么(为什么) / 怎么拿到 / 他自己要干什么。
+#:
+#: ⚠️ 这是**代理判据**（两张手写词表）。它判的是「三类词各出现至少一个」,
+#:    ⛔ 不假装它等于「真的说清楚了」。要收敛得把面向用户的权限说明收到
+#:    一处产出, 再让契约扫那一处 —— 与 `_explicit_analysis_gap` 同一条纪律。
+_PERMISSION_REASON_TOKENS = ("价格权限", "查看权限")
+_PERMISSION_REMEDY_TOKENS = ("管理员", "开通", "申请")
+_PERMISSION_ALTERNATIVE_TOKENS = ("可以先看", "可以换个", "换个问法", "改问", "问「")
+
+
+def _permission_masked_payload(payload: Any) -> bool:
+    """单个 meta（或子结果 meta）说不说「这一屏的金额被角色剥掉了」。
+
+    真实产出点（2026-08-18 实测 grep，⛔ 不是桩造出来的形状）:
+      · ``rbac_masked``: restaurant_ops_router.py 4597 / 6050 / 10166
+      · ``price_view`` : restaurant_ops_router.py 8532 / 8960
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("rbac_masked") is True:
+        return True
+    # ⛔ 必须 `is False`, ⛔ 不许写成 `not payload.get("price_view")`:
+    #    缺省是 None, 那表示「这个 resolver 不报告价格权限」, **不是**「没权限」。
+    #    按真值判断会让所有不报告的 resolver 一起被误判成无权限。
+    #    ▎不确定就当不是权限问题 —— fail-safe 方向是保持今天的行为。
+    return payload.get("price_view") is False
+
+
+def _permission_signal(meta: Optional[Dict[str, Any]]) -> bool:
+    payload = meta or {}
+    if _permission_masked_payload(payload):
+        return True
+    # 多意图合并(restaurant_intent_service._combine_results)只把 rbac_masked
+    # 提升到顶层, `price_view` 会留在 sub_results 里 —— 同一条判据要够得着它,
+    # 否则这个特性在多意图问句上静默失效(机制在、没接上)。
+    sub_results = payload.get("sub_results")
+    if isinstance(sub_results, dict):
+        return any(
+            _permission_masked_payload(sub) for sub in sub_results.values()
+        )
+    return False
+
+
+def _permission_explained(answer_text: str) -> bool:
+    """正文有没有把三件事说清: **缺什么 / 怎么拿到 / 他自己要干什么**。
+
+    只说「你没这个权限」不算数 —— 那只说了第一件。
+
+    实测 A（restaurant_ops_router.py:4588-4599 逐字）三件事齐全:
+        「…属于成本/价格权限，当前角色不能查看金额。」          ← 缺什么
+        「可以先看销量视角：问「哪个菜卖得好」看菜品销量排行；」   ← 他要干什么
+        「如需毛利数据请联系管理员开通价格查看权限。」            ← 怎么拿到
+
+    实测 B（resolve_sales_summary 就地脱敏）**一件都没有**:
+    `if spec.wants_margin:` 整块挂在 `if can_see_money:` 下且没有 else,
+    毛利这件事正文里一个字不说 ⇒ 这条判据在 B 上是 False, 于是 B 的行为
+    逐字不变（继续走今天那条拒答）。⛔ 不在这里放行 —— 放行只是把「假建议」
+    换成「沉默」, 两条都不满足「说清三件事」。修 B 的位置在 router, 见设计卡。
+    """
+    text = answer_text or ""
+    return (
+        _contains_any(text, _PERMISSION_REASON_TOKENS)
+        and _contains_any(text, _PERMISSION_REMEDY_TOKENS)
+        and _contains_any(text, _PERMISSION_ALTERNATIVE_TOKENS)
+    )
+
+
+class ContractResult:
+    """契约读数。两个维度**正交**，⛔ 不是一个维度的两种叫法:
+
+    · ``missing``            缺什么（移除已被权限解释掉的那些之后的余量）
+    · ``permission_blocked`` 其中哪些是**因为角色没有价格权限**而缺的
+
+    ⇒ ``permission_blocked`` 空不空，把「因权限而缺」与「算不出来」分开;
+      ``missing`` 空不空，把「正文已经说清」与「正文没说清」分开。
+
+        A 正文已说清   missing=[]            permission_blocked=['profitability_verdict']   passed=True
+        B 正文没说清   missing=[两项]        permission_blocked=[同样两项]                   passed=False
+        C 真算不出来   missing=[一项]        permission_blocked=[]                          passed=False
+    """
+
+    __slots__ = ("missing", "permission_blocked", "permission_explained")
+
+    def __init__(
+        self,
+        missing: List[str],
+        permission_blocked: Optional[List[str]] = None,
+        permission_explained: bool = False,
+    ):
         self.missing = missing
+        self.permission_blocked = list(permission_blocked or [])
+        self.permission_explained = bool(permission_explained)
 
     @property
     def passed(self) -> bool:
         return not self.missing
 
+    @property
+    def blocked_by_permission(self) -> bool:
+        """这一轮有没有要素是**因权限**拿不到 —— 与「算不出来」互斥的那一态。"""
+        return bool(self.permission_blocked)
+
     def __repr__(self) -> str:  # pragma: no cover - debug convenience
-        return f"ContractResult(missing={self.missing!r})"
+        return (
+            f"ContractResult(missing={self.missing!r}, "
+            f"permission_blocked={self.permission_blocked!r}, "
+            f"permission_explained={self.permission_explained!r})"
+        )
 
 
 def validate(
@@ -481,4 +613,35 @@ def validate(
         elif element == "analysis_action":
             if not _analysis_action_present(spec, text):
                 missing.append(element)
-    return ContractResult(missing=missing)
+
+    # ── 「因权限而缺」是**一态**，不是「算不出来」的一种说法 ──────────────
+    #
+    # ⛔ 只在上游**显式说了**金额被权限剥掉时才走这条路(`is True` / `is False`,
+    #    见 `_permission_masked_payload`)。缺省一律当成不是权限问题 —— 那样
+    #    这段代码在 18 个不报告价格权限的 resolver 上一行都不执行, 行为零变化。
+    permission_blocked: List[str] = []
+    permission_explained = False
+    if missing and _permission_signal(meta):
+        permission_blocked = [
+            element for element in missing
+            if element in _MONEY_DEPENDENT_ELEMENTS
+        ]
+        permission_explained = _permission_explained(text)
+        if permission_blocked and permission_explained:
+            # 正文已经把三件事(缺什么/怎么拿到/他自己要干什么)说清了 ⇒
+            # 这份答案已经是这个角色能拿到的上限, ⛔ 不再判它「算不出来」。
+            # 与 `required_elements` 顶部那条能力表同源: 一个**永远产不出**的
+            # 要求变成永久免责声明, 只会训练用户忽略免责声明。
+            missing = [
+                element for element in missing
+                if element not in _MONEY_DEPENDENT_ELEMENTS
+            ]
+        # ⚠️ 没说清(B)时**不移除**: 行为与今天逐字相同, 只是把成因标注出来。
+        #    在契约里放行只是把「假建议」换成「沉默」—— 那句三件事齐全的话
+        #    该由 resolver 出, 见设计卡「五、没做完的」第 1 条。
+
+    return ContractResult(
+        missing=missing,
+        permission_blocked=permission_blocked,
+        permission_explained=permission_explained,
+    )
