@@ -2470,9 +2470,7 @@ def _build_spec(
         store_scope = None
         store_slots = ()
         clarification_needed = True
-        clarification_question = (
-            f"请问您指的是哪家「{deterministic_store}」？请选择具体门店。"
-        )
+        clarification_question = partial_store_alias_question(deterministic_store)
         missing_slot = "store"
         clarification_options = tuple(store_options)
     dimension_list = list(
@@ -5198,6 +5196,33 @@ class StoreMentionResolution:
         return bool(self.aliases or self.ambiguous)
 
 
+#: 既有那份「部分别名对上多家门店」反问的措辞。**只此一处定义** ——
+#: 产出端(`_build_spec` 的 `ambiguous_partial_store`)和先行判据
+#: (`_semantic_spec_from_t3` 末尾)读同一个模板, 措辞改了两边一起改。
+#: ⛔ 抽出来之前它是一句内联 f-string, 而先行判据要认它 —— 那就成了第二份。
+_PARTIAL_STORE_ALIAS_TEMPLATE = "请问您指的是哪家「{mention}」？请选择具体门店。"
+_PARTIAL_STORE_ALIAS_PREFIX = _PARTIAL_STORE_ALIAS_TEMPLATE.split("{mention}")[0]
+
+
+def partial_store_alias_question(mention: str) -> str:
+    """既有那份消歧的问句。⛔ 不要在别处再拼一遍这句话。"""
+    return _PARTIAL_STORE_ALIAS_TEMPLATE.format(mention=mention)
+
+
+def is_partial_store_alias_question(question: Optional[str]) -> bool:
+    """这句反问是不是**既有那份**产出的 —— 前缀由同一个模板派生, 不会漂。
+
+    ⛔ 判据不能直接读 spec 上那个 missing-slot 字段: 仓里有一道闸禁止
+       (`tests/test_restaurant_clarification_slot.py::
+         test_nothing_reads_the_slot_field_directly_yet`), 理由是**继承来的**
+       spec 上它是 None, 而 continuation 的判据必须仍然成立。
+       我第一版就是读它, 被那道闸在更宽的 `-k` 回归里抓到 ——
+       ⚠️ 而且是被**docstring 里的字面量**又抓了一次: 那道闸只剥 `#` 注释行,
+       docstring 照数。所以这里连提都不能原样提那个名字。
+    """
+    return bool(question) and question.startswith(_PARTIAL_STORE_ALIAS_PREFIX)
+
+
 def store_ambiguity_question(mention: str, candidates: Sequence[str]) -> str:
     """「你说的 X，我这边有 N 家对得上：A、B。你要看哪一家？」
 
@@ -6491,6 +6516,39 @@ def _semantic_spec_from_t3(
     store_names = _validated_llm_store_names(
         parsed, query, available_stores, store_resolution=store_resolution,
     )
+    # ── 模型一家都没提名, 而老板的话唯一指向一家 → **代码直接归一** ──────
+    #
+    # 🔴 owner 定稿第四节: 「**唯一匹配** → 代码直接归一, ⛔ 不回 LLM」。
+    #
+    # 📏 为什么必须有这一格(prod 实测, 同一条问句三次跑出**三种**模型输出):
+    #      ① store="模拟·浦东金桥社区店"        → 模型自己归一好了
+    #      ② store="浦东店"                    → 模型回声老板的字
+    #      ③ store=null + missing_fields=["store_scope"]  ← 这一次
+    #    第 ③ 种走到「只缺门店 → 补默认全部门店」那一格, 于是
+    #    `store_scope=all / defaulted=True`, 下游那道口径闸当场拦下并说
+    #    「你问的是某家门店, 我这次挑到的却是全店合计」——
+    #    ▎系统**自己知道**老板问的是哪家店(日志里 store='浦东店'),
+    #    ▎只是那个知识没接到计划上。
+    #    ⇒ 不注入的话, 同一句话时好时坏, 而两种结局都不报错。
+    #
+    # ⛔ 只在这三条同时成立时注入, 每条都是承重的:
+    #    (a) 模型**一家都没提名** —— 它提了就尊重它, ⛔ 不覆盖模型的判断
+    #    (b) 老板的话**唯一**指向一家 —— 歧义走确认式反问, ⛔ 不替他挑
+    #    (c) 模型没有明说「全部门店」—— 说了就是他要全店, ⛔ 不改题
+    #        (「浦东店和全部门店对比」这类, 模型会给 all/multiple, 这里不动它)
+    if (
+        not store_names
+        and store_resolution is not None
+        and store_resolution.aliases
+        and store_scope != "all"
+    ):
+        store_names = tuple(
+            canonical for _mention, canonical in store_resolution.aliases
+        )[:8]
+        logger.info(
+            "[restaurant-intent] 模型没提名门店, 按老板原话直接归一: %s query=%r",
+            list(store_names), (query or "")[:60],
+        )
     if store_names and not store_scope:
         store_scope = "single" if len(store_names) == 1 else "multiple"
     explicit_store_directory = _is_explicit_store_directory_query(query)
@@ -6741,21 +6799,18 @@ def _semantic_spec_from_t3(
         else None
     )
     if ambiguity is not None:
-        mention, options = ambiguity
         logger.info(
-            "[restaurant-intent] 门店简称有歧义 -> 确认式反问(而不是丢掉): "
-            "mention=%r options=%s query=%r",
-            mention, list(options), (query or "")[:60],
+            "[restaurant-intent] 门店简称有歧义: mention=%r options=%s query=%r",
+            ambiguity[0], list(ambiguity[1]), (query or "")[:60],
         )
-        clarification_needed = True
-        clarification_question = store_ambiguity_question(mention, options)
-        # 按钮只放**库里真实存在**的门店名 —— 与 `_validated_llm_clarification_options`
-        # 同一条纪律: 问什么由语义层决定, 显示出来的每一个选项必须是事实。
-        clarification_options = tuple(options)
-        # ⛔ 不能留着「代码补了全部门店」这个标记: 它会让答案披露一句
-        #    「按全部门店算」, 而这一轮根本没有算。
-        store_scope = None
-        store_scope_defaulted = False
+    # 🔴 **这里只观测, 一个槽位都不动。** 反问在 `_build_spec` **之后**才落地。
+    #
+    #    第一版在这里就把 `store_scope` 改成了 None —— 而那恰好是
+    #    `_build_spec` 里既有那份消歧(`ambiguous_partial_store`)的**触发条件**
+    #    (`llm_store_scope == "single"`)。于是我亲手关掉了它, 再由我自己接管,
+    #    表现是既有的 `test_semantic_partial_store_alias_requires_one_real_
+    #    catalogue_match` 变红 —— 看起来像「两份在抢」, 实际是**我把它掐了**。
+    #    ▎读一份代码的触发条件之前, 先确认自己没在上游把它改掉。
 
     if clarification_needed and not clarification_question:
         clarification_question = "我还缺一个关键信息，能再具体说一下这次想看什么吗？"
@@ -6814,6 +6869,31 @@ def _semantic_spec_from_t3(
         ),
     )
     if ambiguity is None:
+        return spec
+
+    # ⛔ **既有那份先行** —— `_build_spec` 里的 `ambiguous_partial_store` 早就在做
+    #    「门店简称对上多家 → 反问」这件事(措辞「请问您指的是哪家「X」？」)。
+    #    ▎同一个东西有两份, 它一定会漂 (形态 D)。
+    #
+    #    两份的**触发条件不同**, 所以不是重复而是接力:
+    #      既有那份要求 `llm_store_scope == "single"` **且**模型一家都没选。
+    #      prod 实测「社区店最近30天营收多少」模型返回的是
+    #      `store_scope=null` + `clarification_needed=true` ⇒ 它够不着,
+    #      老板拿到的是一句通用的「要看哪一组门店」——**候选一个都没列**。
+    #
+    #    ⛔ 判据**不能**读 `spec.missing_slot` —— 仓里有一道闸禁止
+    #       (继承来的 spec 上它是 None)。改用从同一个措辞模板派生的
+    #       `is_partial_store_alias_question`, 那句话因此只有一处定义。
+    #
+    # ⛔ 未做, 显式登记: **两句措辞还没合成一句**。合并要动
+    #    `tests/test_restaurant_intent_clarification.py` 里钉着字面量的断言,
+    #    那不在本轮的改动范围内。解冻条件见设计卡「未做」一节。
+    if spec.clarification_needed and is_partial_store_alias_question(
+        spec.clarification_question
+    ):
+        logger.info(
+            "[restaurant-intent] 门店歧义已由既有的 ambiguous_partial_store 接住, "
+            "本轮不重复反问: mention=%r", ambiguity[0])
         return spec
 
     # 🔴 **必须在 `_build_spec` 之后再钉一次** —— 上面那次赋值会被它抹掉。

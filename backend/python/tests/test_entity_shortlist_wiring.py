@@ -210,6 +210,55 @@ async def test_parse_restaurant_query_normalizes_a_store_shorthand_end_to_end(
 
 
 @pytest.mark.asyncio
+async def test_the_code_normalizes_even_when_the_model_names_no_store_at_all():
+    """🔴 **承重**: 模型一家都没提名 + 报「缺门店范围」时, 代码按老板原话直接归一。
+
+    📏 prod 实测: 同一条「浦东店最近30天营收多少」三次跑出**三种**模型输出,
+       这是第三种 —— `store=null` + `missing_fields=["store_scope"]`。
+       没有这一格时它走「只缺门店 → 补默认全部门店」, 下游口径闸当场拦下:
+           「你问的是某家门店，我这次挑到的却是全店合计，所以这次我没敢算。」
+       ▎系统自己知道老板问的是哪家店, 只是那个知识没接到计划上。
+       ⇒ 同一句话时好时坏, 而两种结局都不报错。
+
+    ⚠️ 这条是**prod 端到端跑出来的**, ⛔ 不是我从代码推的 ——
+       前两轮同一条 query 都是绿的, 第三轮才露出来。
+    """
+    plan = dict(_plan(None))
+    plan["store_scope"] = None
+    plan["clarification_needed"] = True
+    plan["missing_fields"] = ["store_scope"]
+    pool = _FakePool()
+    with patch.object(ri, "_t3_llm_parse", new=AsyncMock(return_value=plan)):
+        spec = await parse_restaurant_query(
+            "浦东店最近30天营收多少", pool, factory_id=FACTORY,
+            semantic_first=True)
+
+    assert spec.store_slots == ("模拟·浦东金桥社区店",), (
+        f"模型没提名时代码没有归一: {spec.store_slots}")
+    assert spec.store_scope == "single"
+    assert not spec.store_scope_defaulted, (
+        "老板说了门店, 却被打上「代码补了全部门店」的披露标记")
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_all_store_scope_is_never_narrowed_to_one_store():
+    """🔴 阴性对照（承重）: 模型明说「全部门店」时, ⛔ 不许被归一收窄成一家。
+
+    没有这一条, 上面那格就会把「浦东店和全店比一比」这类问题**改题** ——
+    老板要的是对比, 拿到的是一家店。
+    """
+    plan = dict(_plan(None))
+    plan["store_scope"] = "all"
+    pool = _FakePool()
+    with patch.object(ri, "_t3_llm_parse", new=AsyncMock(return_value=plan)):
+        spec = await parse_restaurant_query(
+            "浦东店和全部门店最近30天营收对比", pool, factory_id=FACTORY,
+            semantic_first=True)
+    assert spec.store_scope == "all"
+    assert spec.store_slots == ()
+
+
+@pytest.mark.asyncio
 async def test_a_catalogue_name_the_users_words_do_not_point_to_is_still_rejected():
     """🔴 阴性对照（承重）: 模型吐出一个**库里存在但老板没提**的门店 → 仍然丢弃。
 
@@ -305,6 +354,46 @@ async def test_an_ambiguous_shorthand_asks_which_store_instead_of_dropping_it():
     assert spec.store_scope != "all"
     assert not spec.store_scope_defaulted, (
         "反问这一轮根本没算, 不许打上「按全部门店算」的披露标记")
+
+
+@pytest.mark.asyncio
+async def test_the_pre_existing_disambiguation_wins_when_it_already_fired():
+    """🔴 承重（形态 D）: 仓里**已经有一份**「简称对上多家 → 反问」——
+    `_build_spec` 的 `ambiguous_partial_store`（措辞「请问您指的是哪家「X」？」）。
+    它触发过的那一轮, 我这份**必须让路**, ⛔ 不许再盖一句自己的。
+
+    两份不是重复而是接力: 既有那份要求 `llm_store_scope == "single"` **且**
+    模型一家都没选; prod 实测「社区店」模型给的是 `store_scope=null`,
+    它够不着 —— 那一格才归我。
+
+    ⚠️ 这条是被更宽的 `-k` 回归抓出来的:
+       `test_restaurant_intent_clarification.py::
+        test_semantic_partial_store_alias_requires_one_real_catalogue_match`
+       在我的第一版下变红, 因为两份同时触发、我的在后面赢了。
+       ▎窄跑「没有失败」和「我没跑到它」是同一个读数。
+    """
+    plan = dict(_plan(None))
+    # ⚠️ intent/dimensions 必须自洽, ⛔ 不能让 `_build_spec` 的 contract-repair
+    #    触发 —— 那条分支会把 clarification/missing_slot **一并抹掉**,
+    #    既有那份就没接住, 于是「让路」这件事根本没被测到(第一版就是这样,
+    #    断言红的原因是场景没构造对, 不是产品有缺陷)。
+    plan["intent"] = "RESTAURANT_OPS_STORE_MARGIN"
+    plan["dimensions"] = ["store"]
+    plan["store_scope"] = "single"          # ← 既有那份的触发条件
+    plan["clarification_needed"] = True
+    plan["missing_fields"] = ["time_range"]
+    plan["time_range"] = None
+    pool = _FakePool()
+    with patch.object(ri, "_t3_llm_parse", new=AsyncMock(return_value=plan)):
+        spec = await parse_restaurant_query(
+            "社区店最近30天营收多少", pool, factory_id=FACTORY,
+            semantic_first=True)
+
+    assert spec.clarification_needed
+    assert "请问您指的是哪家" in (spec.clarification_question or ""), (
+        "既有那份没接住 —— 要么它的条件变了, 要么我把它盖掉了")
+    assert "你要看哪一家" not in (spec.clarification_question or ""), (
+        "两份同时开口了 —— 老板会看到两种说法的同一个问题")
 
 
 @pytest.mark.asyncio
