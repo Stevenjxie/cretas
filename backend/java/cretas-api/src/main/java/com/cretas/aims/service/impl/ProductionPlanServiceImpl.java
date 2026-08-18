@@ -273,6 +273,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private BomRecipeRepository bomRecipeRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomRecipeItemRepository bomRecipeItemRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -5351,7 +5354,41 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         Set<String> bomMaterialTypeIds = eligibleItems.stream()
                 .map(BomRecipeItem::getMaterialTypeId)
                 .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        // 🔴 2026-08-18 修复: 调料存在【另一张表】bom_seasoning_items, 从来进不了这个白名单。
+        //
+        // prod 实测(F006 PLAN-1786954657305): 系统自己生成的领料单 9 行, 白名单只认 7 行 ——
+        // 差的两行正是 AUXILIARY 的「香辛料」「黄油调味料」。工人按单领了、投了, 结单时被告知
+        // 「所选原料批次不属于该生产计划 BOM」。同一个「什么算 BOM 内物料」有两个定义(形态 D):
+        //   产出侧 ProcessSheetServiceImpl.buildAutomaticBomRequirements 读 bom_seasoning_items 合成投料行
+        //   消费侧 这里 只读 bom_recipe_items ⇒ 自己发的料自己不认
+        //
+        // ⚠️ 这半个洞是「领料单补上调料」那个修复(#2803)造出来的: 在那之前领料单里没有调料,
+        //    没人领得到, 也就撞不到这道闸。修一处会把拒答挪到下一处 —— 本仓硬约束 8 的原形。
+        //
+        // ⚠️ 与上面那段 2026-08-03 的注释同族: 都是「本来就不挂工艺投入槽的成本行被白名单漏掉」。
+        //    调料同样不挂槽, 所以这里直接并入, 不参与槽判定。
+        //    本方法只产出白名单集合, 不参与任何扣减与成本计算; 原料侧「必须落在钉住工艺的精确
+        //    投入槽上」那条约束一个字没放松(带槽行仍走上面的判据)。
+        if (bomSeasoningItemRepository != null) {
+            Set<String> recipeIdsForSeasoning = new LinkedHashSet<>();
+            recipeIdsForSeasoning.add(rulesRecipe.getId());
+            recipeIdsForSeasoning.add(recipe.get().getId());
+            for (String seasoningRecipeId : recipeIdsForSeasoning) {
+                try {
+                    bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(seasoningRecipeId).stream()
+                            .filter(Objects::nonNull)
+                            .map(com.cretas.aims.entity.bom.BomSeasoningItem::getMaterialTypeId)
+                            .map(this::trimToNull)
+                            .filter(Objects::nonNull)
+                            .forEach(bomMaterialTypeIds::add);
+                } catch (RuntimeException ex) {
+                    // ⛔ 读不到调料不能让结单整个挂掉, 但也不能装作没这回事 —— 留痕给排查用。
+                    log.warn("[结单BOM白名单] 调料明细读不出来 recipe={}: {}",
+                            seasoningRecipeId, ex.getMessage());
+                }
+            }
+        }
         if (bomItemSubstituteRepository != null && !eligibleItems.isEmpty()) {
             Set<Long> eligibleParentIds = eligibleItems.stream()
                     .map(BomRecipeItem::getId).filter(Objects::nonNull).collect(Collectors.toSet());
