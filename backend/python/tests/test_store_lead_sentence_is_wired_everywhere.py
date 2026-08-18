@@ -137,6 +137,36 @@ def test_the_lead_is_gated_and_not_unconditional():
         )
 
 
+def test_the_lead_is_separated_from_what_follows():
+    """🔴 那句话末尾要有换行 —— 否则它和下一段**粘成一行**。
+
+    📏 prod 实测（领料那处漏了它，n=1101）:
+        「…按门店拆多半找不到东西。领用食材前 10 名:」
+
+    ⚠️ 这是**结构判据**（AST 看拼接表达式里有没有换行常量），
+       ⛔ 挡不住「换行加错位置」。
+    """
+    tree = ast.parse(inspect.getsource(rr))
+    for fn in ("resolve_stock_shortage", "resolve_requisition_trend"):
+        node = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn
+        )
+        assigns = [
+            a for a in ast.walk(node)
+            if isinstance(a, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "lead" for t in a.targets)
+        ]
+        assert assigns, f"{fn} 里找不到 lead 的赋值"
+        consts = {
+            c.value for a in assigns for c in ast.walk(a)
+            if isinstance(c, ast.Constant) and isinstance(c.value, str)
+        }
+        assert "\n" in consts, (
+            f"{fn} 的那句判断末尾没有换行 —— 它会和下一段粘成一行"
+        )
+
+
 def test_the_lead_and_the_table_read_the_same_total():
     """⛔ 首段和表格的覆盖度判断必须读**同一个分母**。
 
