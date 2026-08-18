@@ -425,6 +425,37 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                      @Param("warehouseId") String warehouseId);
 
     /**
+     * 某物料的可用在手量<b>按仓库分组</b>。回答一个问题: 「这个物料的货到底在哪几个仓、各多少」。
+     *
+     * <h3>🔴 为什么需要它 (2026-08-18 prod 实测, MR20260818-0004)</h3>
+     * 领料单来源仓=原料仓(WH-RAW)、目标仓=生产仓(WH-WKS)。「封膜」「成品盒」两行在
+     * <b>原料仓 0 件</b>, 全部库存在<b>生产仓</b>(封膜 20 卷 / 成品盒 1100 盒)。FEFO 自动分批
+     * 在来源仓查空之后回退到<b>全厂</b>查询, 挑中了生产仓的批次, 随后物理迁移那一步以
+     * {@code PRODUCTION_REQUISITION_BATCH_WAREHOUSE_MISMATCH} 拒绝 —— 拒绝是对的, 但当时那句
+     * 「请重新确认领料, 由系统按来源仓先进先出选择批次」是<b>无效指引</b>: 重新确认多少次都挑不到,
+     * 因为来源仓根本没有这个物料。要让用户能动手, 必须告诉他货实际在哪个仓、有多少。
+     *
+     * <h3>⚠️ 口径</h3>
+     * 这里的筛选条件与 {@link #findAvailableBatchesFEFOByWarehouse} <b>逐条一致</b>
+     * (AVAILABLE / 余量>0 / 排除 PRODUCTION_BATCH WIP / 仅公司库存) —— 报出来的数就是
+     * FEFO <b>实际看得见</b>的那个数。⛔ 不要单独放宽其中任何一条: 两边一旦漂开,
+     * 文案就会说出「原料仓有 20 卷」而 FEFO 又拣不到它, 比不给数字更糟。
+     *
+     * <p>返回 {@code Object[]{warehouseId, onHand}}。{@code warehouseId} <b>可能为 null</b>
+     * (历史上无仓库归属的批次) —— 调用方要把它当成「未归仓」如实展示, ⛔ 不要塞给任意一个仓。
+     */
+    @Query("SELECT m.warehouseId, SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "GROUP BY m.warehouseId")
+    List<Object[]> sumAvailableGroupedByWarehouse(@Param("factoryId") String factoryId,
+                                                   @Param("materialTypeId") String materialTypeId);
+
+    /**
      * 查找即将过期的批次
      */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
