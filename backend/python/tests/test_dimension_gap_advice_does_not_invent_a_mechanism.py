@@ -106,6 +106,48 @@ def test_the_suggestion_is_computed_not_hardcoded():
     assert _DIMENSION_LABEL["dish"] in b
 
 
+def test_no_dimension_name_appears_out_of_nowhere():
+    """🔴 文案里出现的维度名，必须全部来自 `asked ∪ supported`。
+
+    ⚠️ 这条是**补写**的：变异 M4（把建议词写死成「门店或菜品」，正是上一次
+       同型缺陷的原样）在原来那 12 条上**全绿**。
+       原因是我的断言比的是「整句会不会变」，而前半段仍随 `supported` 变，
+       于是整句仍然不同 —— 断言没打在被守的行为上（形态 C）。
+
+    ⇒ 判据换成结构性的：**冒出一个既没被问、也不被支持的维度名 = 编的**。
+       这一条同时覆盖「建议写死」和「随手编一个维度」两种长相。
+
+    ⚠️ 近似：维度名之间可能互为子串，这里按整词包含判，不做分词。
+    """
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _canonical_dimensions,
+        _supported_dimensions,
+    )
+
+    cases = [
+        (("dish", "meal_period"), ("RESTAURANT_OPS_GROSS_MARGIN",)),
+        (("store", "meal_period"), ("RESTAURANT_OPS_DAYPART_PERFORMANCE",)),
+        (("store", "dish"), ("RESTAURANT_OPS_SALES_SUMMARY",)),
+        (("store",), ("RESTAURANT_OPS_INVENTORY_WARNING",)),
+    ]
+    checked = 0
+    for dims, plan in cases:
+        text = _advice(dims, plan)
+        if not text:
+            continue
+        checked += 1
+        allowed_keys = set(_canonical_dimensions(dims)) | _supported_dimensions(plan)
+        allowed = {_DIMENSION_LABEL.get(k, k) for k in allowed_keys}
+        for key, label in _DIMENSION_LABEL.items():
+            if label in text and label not in allowed:
+                raise AssertionError(
+                    f"{plan} × {dims}: 文案里冒出了维度「{label}」({key})，"
+                    f"它既没被问也不被支持 ⇒ 是编的\n"
+                    f"允许出现的: {sorted(allowed)}\n{text}"
+                )
+    assert checked >= 3, f"只有 {checked} 组产出了文案 —— 阳性对照不足"
+
+
 def test_no_extra_dimension_says_nothing():
     """阴性对照：没有多出来的维度时 ⛔ 一个字都不许说。"""
     assert _advice(("store",), ("RESTAURANT_OPS_SALES_SUMMARY",)) == ""
