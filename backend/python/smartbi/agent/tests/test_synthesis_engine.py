@@ -965,8 +965,18 @@ class TestSynthesize:
         assert resp.source == "deterministic_fallback"
         assert resp.tokens == 321
         assert resp.tokens_used_today == 331
-        assert "刚才生成的说明和系统数据对不上" in resp.answer
-        assert "数据因果门禁" not in resp.answer
+        # 🔴 2026-08-18 形态 C‴：这条原来钉的是字面
+        #    `assert "刚才生成的说明和系统数据对不上" in resp.answer` ——
+        #    而那句话正是**要消灭的东西**：它是我们自己的质检名字
+        #    （`叙述未通过数据因果门禁` 经 sanitize 后的样子），老板看不懂也用不上。
+        #    ⛔ 改断言最容易滑成删断言 ⇒ 把守的东西从**字面**抬到**性质**：
+        #      ① 兜底确实发生了（`resp.source` 已在上面钉着）
+        #      ② 开场白说清「这一轮没直接下结论」
+        #      ③ 🔴 阴性对照：内部诊断串**一个字都不许**漏出去
+        #      ④ 🔴 阴性对照：那句不安全的原话不许出现（原来就有，保留）
+        assert "这一轮我没有直接下结论" in resp.answer, resp.answer
+        for internal in ("数据因果门禁", "叙述未通过", "对不上", "grounding"):
+            assert internal not in resp.answer, f"内部诊断串漏给了老板: {internal}"
         assert unsafe_answer not in resp.answer
         assert resp.fact_check
         assert resp.fact_check["violations"]
