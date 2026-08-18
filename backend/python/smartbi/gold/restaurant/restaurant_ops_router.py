@@ -7750,11 +7750,29 @@ async def resolve_store_margin(
             },
         )
 
-    top_text = "\n".join([
-        f"{i+1}. {'**' + s['name'] + '**' if i == 0 else s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
-        f"毛利 ¥{s['gross_profit']:,.2f} ({s['margin_rate'] * 100:.1f}%), {s['bills']} 单"
-        for i, s in enumerate(top_slice)
-    ]) or "- 暂无成本完整、可参与毛利排名的门店。"
+    # 🔴 2026-08-18：编号列表 → 表格。**四个数挤在一行文字里，老板没法比。**
+    #
+    # 📏 prod 实测（MOCK_REST，「哪家店成本最高」1227 字）老板看到的是：
+    #     1. **模拟·徐汇美罗城店**: 已覆盖营收 ¥1,446,000.00 / 毛利 ¥983,290.46(68.0%), 5845 单
+    #     2. 模拟·陆家嘴正大店: 已覆盖营收 ¥1,449,468.00 / 毛利 ¥982,266.71(67.8%), 5845 单
+    #   —— 10 行 × 4 列的**排行榜**，交付定义④ 说的正是这一类：
+    #   ▎排行、对比、构成，文字说不清楚，就给表。
+    #
+    # ⛔ 走 `_markdown_table`（**全站唯一一处表格拼装**），不在这里手拼竖线。
+    # ⚠️ 第一名的加粗保留 —— 那是「点名」，`_advice_line` 之外老板最先看的东西。
+    top_text = "\n".join(_markdown_table(
+        ["#", "门店", "已覆盖营收", "毛利", "毛利率", "订单"],
+        [
+            [str(i + 1),
+             ("**" + s["name"] + "**") if i == 0 else s["name"],
+             f"¥{s['revenue_with_cost']:,.2f}",
+             f"¥{s['gross_profit']:,.2f}",
+             f"{s['margin_rate'] * 100:.1f}%",
+             f"{s['bills']:,}"]
+            for i, s in enumerate(top_slice)
+        ],
+        right_align={2, 3, 4, 5},
+    )) if top_slice else "- 暂无成本完整、可参与毛利排名的门店。"
 
     charts = [{
         "chartType": "bar",
@@ -8705,10 +8723,30 @@ async def resolve_trend_analysis(
             f"{direction} {abs(overall_rate):.1f}%\n"
         )
 
-    month_list_text = "\n".join([
-        f"  {m['month']}{f'（截至{latest_data_date.day}日）' if latest_month_partial and m is monthly[-1] and latest_data_date else ''}: "
-        f"{_money(m['revenue'])}" for m in monthly
-    ])
+    # 🔴 2026-08-18：缩进列表 → 表格。**逐期对比是竖着比的数。**
+    #
+    # 📏 prod 实测（MOCK_REST，「营收趋势怎么样」511 字）老板看到的是：
+    #     各月营收:
+    #       2026-07: ¥8,584,383.32
+    #       2026-08（截至18日）: ¥12,443,254.32
+    #   —— 交付定义④ 说的「对比」这一类。
+    #
+    # ⛔ 走 `_markdown_table`（全站唯一一处表格拼装）。
+    # ⚠️ 「（截至N日）」这个限定语**必须留在行内** —— 它说明最后一期是**未完结**的，
+    #    挪走或省掉，老板会把一个半月的数当成整月去比（本仓记过同型：
+    #    「每个数都对，合起来是谎」）。
+    month_list_text = "\n".join(_markdown_table(
+        ["月份", "营收"],
+        [
+            [f"{m['month']}"
+             + (f"（截至{latest_data_date.day}日）"
+                if latest_month_partial and m is monthly[-1] and latest_data_date
+                else ""),
+             _money(m["revenue"])]
+            for m in monthly
+        ],
+        right_align={1},
+    )) if monthly else ""
 
     weekday_avg = ww.get("weekdayAvg") or 0.0
     weekend_avg = ww.get("weekendAvg") or 0.0
