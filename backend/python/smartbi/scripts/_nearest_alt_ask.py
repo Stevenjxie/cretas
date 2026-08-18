@@ -17,7 +17,7 @@ import sys
 from smartbi.scripts._probe_bootstrap import bootstrap_probe
 
 FACTORY = "MOCK_REST"
-QUESTIONS = [
+NEAREST_ALT_QUESTIONS = [
     ("阳性对照", "营收"),
     ("替代-翻台率", "订单数"),
     ("替代-净利润", "毛利"),
@@ -40,7 +40,7 @@ async def main(ctx):
         cleared.append(fn)
     print("已清缓存: %s" % "、".join(cleared))
 
-    for tag, q in QUESTIONS:
+    for tag, q in NEAREST_ALT_QUESTIONS:
         try:
             out = await tiered_answer(q, pool, FACTORY, ctx.role,
                                       session_key="nearest-alt-probe-%s" % tag)
