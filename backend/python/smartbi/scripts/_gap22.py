@@ -105,6 +105,19 @@ rec(1, "菜单目录接进 dish 槽位核对",
     "_catalogue_says_not_a_dish 调用点: %s（总 %d）" % (_where, _cat_calls))
 
 # ── 2 绝对日期核对「原话里有没有」 ────────────────────────────────────────
+# 🔴 2026-08-18 先重测再判(owner 判据: 单轮观测不算数, 复现不了就登记不做)。
+#    同一句原话「前天和昨天哪天好」直接调 T3(`_t3_llm_parse`, prefer_high_
+#    accuracy=True, MOCK_REST, temperature=0)跑 10 轮(两批各 5), 每轮清
+#    4 个缓存(semantic_plan/route/tenant_gate/promoted_routes)。
+#    判据(逐字用 owner 的话): LLM 吐出的日期, 在原话里出现过吗? 没出现过而
+#    它自己编了一个 ⇒ 复现。10 轮读数: **0/10** 命中 prompt 里写死的示例
+#    日期(2026-06-03/2026-06-18)。⇒ **单轮观测未复现, 登记不做**, 详见
+#    docs/decisions/2026-08-18-缺口2-绝对日期核对-复测登记.md。
+#    ⚠️ 副产品(不在本条判据范围内, 单独记在那份文档里): 10 轮里 2 轮
+#    (20%) LLM 把 type 判成 "absolute" 却填了 "前天"/"昨天" 这种非 ISO
+#    日期的字面词——被 `_parse_t3_time_range` 的 ISO 正则挡下(不会污染成
+#    错误日期, 但会让那一轮解不出时间窗)。这是「类型选择不稳定」, 不是
+#    「编日期」, 与 #2 要判的缺口是两件事, 不改这里的判据。
 _d = any(defines(f, n) for f in FILES
          for n in ("_absolute_date_in_user_wording", "_date_backed_by_user_wording"))
 rec(2, "绝对日期核对「原话里有没有」", _d,
@@ -295,16 +308,30 @@ rec(12, "拒答原因分「域外」一类", _ood,
     "refusal_queue.py 里认 OUT_OF_DOMAIN = %s" % _ood)
 
 # ── 15 老板的否定写进反馈通道 ─────────────────────────────────────────────
-# 🟡 通道**已存在**（smartbi/api/restaurant_feedback.py: POST /restaurant/feedback,
-#    UPDATE user_feedback/feedback_comment, 找不到捕获行就 INSERT 孤儿行）。
-#    ⚠️ 但 prod 上 `user_feedback` 非空 = **0 行** ⇒ 典型的形态 B「机制在、没接上」。
-#    ⛔ 这里只能判「通道在不在」，**判不了「有没有人调」** ——
-#       后者要查前端/Java 调用点 + prod 行数，见另一条线的登记。
+# 🔴 2026-08-18 二次独立实测（不靠端点存在打勾, 真跑了两次端到端往返）:
+#    ① 另一条线 2026-08-18 用真实 JWT + POST 打 DEMO_REST 租户
+#       (docs/decisions/2026-08-18-缺口15-老板的否定写进反馈通道-实测登记.md,
+#       PR #2853), user_feedback IS NOT NULL 0→1 (id=28146)。
+#    ② 本条独立复测同一条链路, 换 MOCK_REST 租户(现场签 JWT, 真 POST 到
+#       prod :8083, 非 mock): RLS 确认 relrowsecurity=True, 会话级
+#       set_config('app.factory_id','MOCK_REST',false) 后 current_setting
+#       核对生效, BEFORE user_feedback_not_null(MOCK_REST)=0, HTTP 200,
+#       AFTER=1(id=28465), Δ=+1, 落库字段与请求体逐一对应。
+#    ⇒ **机制没坏, 两次独立调用都写成功** —— 但这只证明「能写」, 不证明
+#      「有人调」。RESET GUC 读全表(跨租户): user_feedback IS NOT NULL
+#      的行**全库只有这 2 条**, 且 query 字段都带 PROBE 标记, 均为诊断探针
+#      写入, 无一条是自然使用。同一时间窗口 prod 访问日志:
+#      /restaurant/feedback 命中 0 次, 同窗口 /tiered-answer 命中 312 次
+#      (对照)。⇒ 真实成因是**通道在、无人调**（owner 给的两个分支的第二种
+#      措辞), 不是「机制在没接上」。端点文件存在不再是判据本身，只作为
+#      背景证据的一部分保留。
 _fb_ep = os.path.exists(os.path.join(ROOT, "smartbi", "api",
                                      "restaurant_feedback.py"))
-rec(15, "否定写进反馈通道（⚠️ 只判通道在不在）", _fb_ep,
-    "端点文件存在=%s ⚠️ **判不了有没有人调** —— prod user_feedback 曾实测 0 行"
-    % _fb_ep)
+rec(15, "否定写进反馈通道（真实调用证据, 非端点存在）", False,
+    "端点存在=%s 且机制两次独立端到端验证可写(DEMO_REST id=28146→MOCK_REST "
+    "id=28465, 详见脚本注释); 但全库 user_feedback IS NOT NULL 仅 2 行且均为"
+    "诊断探针标记, 同窗口访问日志 /feedback=0 次 vs /tiered-answer=312 次 "
+    "⇒ **通道在、无人调**（0 次真实用户调用）" % _fb_ep)
 
 # ── 16 实体模糊命中走确认式反问 ───────────────────────────────────────────
 _amb = any(defines(f, n) for f in FILES
