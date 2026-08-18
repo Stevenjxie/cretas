@@ -199,6 +199,37 @@ public class SalesServiceImpl implements SalesService {
     private com.cretas.aims.service.inventory.PriceListService priceListService;
 
     /**
+     * 单位落库归一 —— 「不许英文单位, 用户看到必须是中文」(Steve 2026-08-18).
+     *
+     * <h3>🔴 为什么销售侧非接不可 (prod 实测 2026-08-18)</h3>
+     * {@code sales_order_items.unit} 里躺着 {@code box}×2 / {@code case}×1,
+     * {@code sales_delivery_items.unit} 里还有 {@code box}×2。而对应商品
+     * 「SOP-20260817-01-黄油鸡-成品800g」的<b>档案单位本来就是中文「盒」</b>,
+     * 包装规格也是「箱/盒」—— 英文<b>不是从档案带出来的</b>, 是 web-admin
+     * {@code canonicalSalesOrderItemPayload} 在构造请求体时把「盒」正规化成了 {@code box}
+     * (前端 {@code UNIT_ALIASES} 的规范码方向与后端<b>相反</b>: 前端 盒→box, 后端 box→盒)。
+     *
+     * <p>{@link UnitContractService#storageUnit} 的 javadoc 写着「全系统唯一口径,
+     * <b>任何写入路径都必须走这里</b>」, 而全仓 5 个调用点里<b>没有一个在销售侧</b> ——
+     * 典型的本仓形态 B「机制在、只是没接上」。这里把它接上。
+     *
+     * <p>⚠️ 只治<b>写入源头</b>。读侧出口翻译已由 PR #2837 上线, ⛔ 不在这里重复翻一遍。
+     *
+     * <p>Optional 注入: 与本类其它 optional 依赖同 idiom, 未注册时退回原样写入
+     * (= 今天的行为, 不会更糟)。真实 Spring 上下文里 {@code UnitContractServiceImpl}
+     * 是 {@code @Service}, 由 {@code SalesOrderUnitStorageContractTest} 钉住它确实被接上。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
+    /**
+     * 销售下单「发得出货吗」的三档明示 (非阻断). Optional —— 未注册时不出提示。
+     * 拦截开关默认关闭, 见 {@code SalesOrderStockAvailabilityService#ENFORCE_GATE_PROPERTY}。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.sales.SalesOrderStockAvailabilityService stockAvailabilityService;
+
+    /**
      * P1 #23 S-CREDIT-1: 客户信用预检 (2026-05-17).
      * SUSPENDED → 硬阻塞; WARNING (exceeds) → 仅 log (soft warn, FE 通过 GET credit-status 预呈现).
      * Optional — 未注册时跳过检查 (不影响现有逻辑).
@@ -473,7 +504,8 @@ public class SalesServiceImpl implements SalesService {
             }
             item.setProductName(productName);
             item.setQuantity(itemDTO.getQuantity());
-            item.setUnit(itemDTO.getUnit());
+            // 写入点 1/5 (createSalesOrder, 客户端入参) — 见 storageUnit() javadoc
+            item.setUnit(storageUnit(factoryId, itemDTO.getUnit()));
             applyPackagingSelection(factoryId, itemDTO, item);
             // Issue #793: auto-apply 客户协议价 when caller did not provide explicit unitPrice.
             // Resolution: customer-specific selling price → global selling price → caller's value.
@@ -728,6 +760,14 @@ public class SalesServiceImpl implements SalesService {
         if (!priceWarnings.isEmpty()) {
             log.info("创建销售订单: factoryId={}, orderNumber={}, 含 {} 条研发预估价预警 (非阻断)",
                     factoryId, orderNumber, priceWarnings.size());
+        }
+
+        // 「发得出货吗」三档明示 (非阻断, 第一步只提示不拦截) — 同 priceWarnings 通道。
+        List<String> stockAdvisories = collectStockAdvisories(factoryId, request.getItems());
+        order.setStockAdvisories(stockAdvisories);
+        if (!stockAdvisories.isEmpty()) {
+            log.info("创建销售订单: factoryId={}, orderNumber={}, 含 {} 条库存可发性提示 (非阻断)",
+                    factoryId, orderNumber, stockAdvisories.size());
         }
 
         log.info("创建销售订单: factoryId={}, orderNumber={}, items={}", factoryId, orderNumber, items.size());
@@ -2151,7 +2191,8 @@ public class SalesServiceImpl implements SalesService {
                 }
                 item.setProductName(productName);
                 item.setQuantity(itemDTO.getQuantity());
-                item.setUnit(itemDTO.getUnit());
+                // 写入点 2/5 (updateSalesOrder, 客户端入参)
+                item.setUnit(storageUnit(factoryId, itemDTO.getUnit()));
                 SalesOrderItem previous = oldItemsByProduct.get(itemDTO.getProductTypeId());
                 if (previous != null
                         && previous.getPackagingSpecId() != null
@@ -2400,7 +2441,9 @@ public class SalesServiceImpl implements SalesService {
             newItem.setProductTypeId(srcItem.getProductTypeId());
             newItem.setProductName(srcItem.getProductName());
             newItem.setQuantity(srcItem.getQuantity());
-            newItem.setUnit(srcItem.getUnit());
+            // 写入点 3/5 (copySalesOrder) — 源行可能是存量英文码, 复制出来的是【新行】,
+            // 新行不该再带英文。storageUnit 幂等, 源行已规范时这里是恒等。
+            newItem.setUnit(storageUnit(factoryId, srcItem.getUnit()));
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setDiscountRate(srcItem.getDiscountRate() != null
                     ? srcItem.getDiscountRate() : BigDecimal.ZERO);
@@ -2653,7 +2696,9 @@ public class SalesServiceImpl implements SalesService {
             item.setProductTypeId(itemDTO.getProductTypeId());
             item.setProductName(itemDTO.getProductName());
             item.setDeliveredQuantity(itemDTO.getDeliveredQuantity());
-            item.setUnit(itemDTO.getUnit());
+            // 写入点 4/5 (createDeliveryRecord, 客户端入参) — prod 实测
+            // sales_delivery_items.unit 也有 box×2, 与销售行同源
+            item.setUnit(storageUnit(factoryId, itemDTO.getUnit()));
             SalesOrderItem sourceOrderItem = resolveDeliverySourceOrderItem(
                     itemDTO, sourceOrderItemsById, sourceOrderItemsByProduct,
                     request.getSalesOrderId() != null && !request.getSalesOrderId().isBlank());
@@ -2825,7 +2870,8 @@ public class SalesServiceImpl implements SalesService {
             item.setProductTypeId(source.getProductTypeId());
             item.setProductName(source.getProductName());
             item.setDeliveredQuantity(requested.getQuantity());
-            item.setUnit(source.getUnit());
+            // 写入点 5/5 (createDeliveryShipment, 从母发运行复制) — 同 3/5, 新行不带英文
+            item.setUnit(storageUnit(factoryId, source.getUnit()));
             item.setUnitPrice(source.getUnitPrice());
             item.setSourceWarehouseCode(source.getSourceWarehouseCode());
             item.setPackagingSpecId(source.getPackagingSpecId());
@@ -4504,6 +4550,78 @@ public class SalesServiceImpl implements SalesService {
      * 查不到 productType 的行(原料/辅料/包材走物料字典, 本来就不在 product_types 里)一律放行 ——
      * 那四类都要能卖(Steve 2026-08-12「出了半成品全开」), 误拦它们比漏拦半成品更糟。
      */
+    /**
+     * 单位落库前归一成权威码 —— 销售侧<b>所有</b>写入点都走这一个函数。
+     *
+     * <p>权威表在 {@code UnitContractServiceImpl.systemAliases()}: 计数/包装类的<b>规范码就是中文字</b>
+     * ({@code alias("盒","盒","box")} —— 码是「盒」, {@code box} 是别名), 质量/体积/长度类保留
+     * 国际符号 ({@code kg}/{@code g}/{@code t}/{@code jin}/{@code ml}…)。所以本函数
+     * 「box→盒」而「kg→kg」, ⛔ 不是无差别中文化。
+     *
+     * <p>⛔ <b>没有新建第三张单位表</b> —— 本仓已经有三张在漂(形态 D), 这里只调既有权威。
+     *
+     * <p>{@code storageUnit} 对已经规范的值是<b>幂等</b>的(盒→盒, kg→kg, 只→只),
+     * 对权威表认不出的自由文本原样返回, 所以接在写入点上不会改写用户自己填的东西。
+     */
+    private String storageUnit(String factoryId, String rawUnit) {
+        if (unitContractService == null || rawUnit == null || rawUnit.isBlank()) {
+            return rawUnit;
+        }
+        String canonical = unitContractService.storageUnit(factoryId, rawUnit);
+        if (canonical == null || canonical.isBlank()) {
+            return rawUnit;
+        }
+        if (!canonical.equals(rawUnit)) {
+            log.info("单位落库归一: factoryId={}, raw={}, stored={}", factoryId, rawUnit, canonical);
+        }
+        return canonical;
+    }
+
+    /**
+     * 下单时明示「这东西发得出去吗」—— <b>只提示, 不拦截</b>(第一步)。
+     *
+     * <p>三档与实测覆盖率见 {@code SalesOrderStockAvailabilityService} 的类 javadoc。
+     * 拦截分支由 {@code isEnforcing()} 控制, 默认关闭; 打开的前提写在
+     * {@code ENFORCE_GATE_PROPERTY} 上。
+     */
+    private List<String> collectStockAdvisories(
+            String factoryId, List<CreateSalesOrderRequest.SalesOrderItemDTO> items) {
+        List<String> advisories = new ArrayList<>();
+        if (stockAvailabilityService == null || items == null || items.isEmpty()) {
+            return advisories;
+        }
+        List<com.cretas.aims.service.sales.SalesOrderStockAvailabilityService.Line> lines =
+                new ArrayList<>();
+        for (CreateSalesOrderRequest.SalesOrderItemDTO item : items) {
+            if (item == null || item.getProductTypeId() == null || item.getProductTypeId().isBlank()) {
+                continue;
+            }
+            lines.add(new com.cretas.aims.service.sales.SalesOrderStockAvailabilityService.Line(
+                    item.getProductTypeId(), item.getProductName(), item.getUnit()));
+        }
+        List<com.cretas.aims.service.sales.SalesOrderStockAvailabilityService.Availability> results =
+                stockAvailabilityService.assess(factoryId, lines);
+        for (var r : results) {
+            if (r.message() != null && !r.message().isBlank()) {
+                advisories.add(r.message());
+            }
+        }
+        if (stockAvailabilityService.isEnforcing()) {
+            var blocked = results.stream()
+                    .filter(r -> r.tier()
+                            == com.cretas.aims.service.sales.SalesOrderStockAvailabilityService.Tier.NONE)
+                    .findFirst().orElse(null);
+            if (blocked != null) {
+                throw new BusinessException(400, blocked.message())
+                        .withCode("SALES_ORDER_ITEM_NO_STOCK")
+                        .withHint("去采购下单或建生产计划; 若确实有货, 请先补做入库")
+                        .withHintTarget("productTypeId")
+                        .withSeverity("BLOCKING");
+            }
+        }
+        return advisories;
+    }
+
     private void assertItemsAreSellable(
             String factoryId, List<CreateSalesOrderRequest.SalesOrderItemDTO> items) {
         if (items == null || items.isEmpty()) {

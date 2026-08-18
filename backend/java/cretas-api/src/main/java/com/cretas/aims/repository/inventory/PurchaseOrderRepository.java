@@ -39,6 +39,16 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
 
     Page<PurchaseOrder> findByFactoryIdAndStatusOrderByCreatedAtDesc(String factoryId, PurchaseOrderStatus status, Pageable pageable);
 
+    /**
+     * 销售下单「发得出货吗」的<b>在途采购</b>一档 —— 按租户 + 一组状态取采购单.
+     *
+     * <p>调用方 {@code SalesOrderStockAvailabilityService} 只用它做<b>只读明示</b>,
+     * 状态清单见该类的 {@code INBOUND_PURCHASE_STATUSES}(已批准/待财审/财审通过/部分到货)。
+     * 派生查询, 无 JPQL 字面量。
+     */
+    List<PurchaseOrder> findByFactoryIdAndStatusIn(
+            String factoryId, java.util.Collection<PurchaseOrderStatus> statuses);
+
     /** W-12 fix: SO detail "关联采购" tab filter. */
     Page<PurchaseOrder> findByFactoryIdAndSalesOrderId(String factoryId, String salesOrderId, Pageable pageable);
 
