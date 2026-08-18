@@ -1283,6 +1283,29 @@ async def post_restaurant_tiered_answer(
             # Java's own flow rather than serve an empty/broken answer.
             return {"delegate": False}
 
+        # ── 飞轮 B: 答不上的也要进飞轮 ────────────────────────────────────
+        #
+        # owner 定稿六之二节 / 缺口清单第 11 项。📏 在此之前拒答只写进普通日志,
+        # 没有分类、没有队列、没有人看 —— 「拒答」是个终点, 不产生任何改进。
+        #
+        # 🔑 **接在这里**的三个理由:
+        #   1. 这是 RN App 餐饮问答的生产入口(Java GoldBackedRestaurantTool 委派),
+        #      而飞轮 A 的 miss 记录(`log_intent_miss`, 上面 20 行)就接在同一个
+        #      函数里 —— 两条飞轮的采集点并排, ⛔ 不散落。
+        #   2. 这一步**在分支之前**: 拒答有两种形状(clarification / 带
+        #      DATA_GAP·OUT_OF_DOMAIN 码的 answer), 接在分支后面必然漏掉一种。
+        #   3. `result` 与 `spec` 都在手边 —— 分类用的是**结构性信号**
+        #      (维度差 / unsupported_requirements / data_gap 标记), ⛔ 不读答案文本。
+        #
+        # ⚠️ fire-and-forget: 对用户零延迟, 且 `record_refusal` 自身 fail-open,
+        #    记账失败绝不连累这次回答。
+        from smartbi.gold.restaurant.refusal_queue import record_refusal
+
+        asyncio.create_task(record_refusal(
+            pool, factory_id=fid, query=effective_query, result=result,
+            spec=spec, java_tool_name=body.java_tool_name,
+        ))
+
         if result["kind"] == "clarification":
             clarification_response = {
                 "delegate": True,
