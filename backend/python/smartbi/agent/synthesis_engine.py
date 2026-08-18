@@ -716,6 +716,44 @@ _MISSING_DIMENSION_TERMS: Dict[str, Tuple[str, ...]] = {
     "promotion": ("活动", "营销活动", "促销", "优惠", "折扣", "核销", "活动带动"),
 }
 
+#: 归因七步链第 ⑥ 步（给排查方向）：**这个主因，接下来该往哪几个方面查**。
+#:
+#: ⛔ 这不是第二张维度表 —— label / required_data / enables 一律来自
+#:    `dimension_catalog.DIMENSIONS`，这里只登记 catalog 里没有的那一件事：
+#:    「哪个主因该往哪几维查」。⇒ 加一个维度只需改 catalog，措辞不会漂（形态 D）。
+#:
+#: ⚠️ 键是 `compute_store_attribution` 的 `primary_cause`，它只有两个取值
+#:    （`客流` / `客单价`，见那个函数末尾的三分支）——⛔ 不是开集，
+#:    所以这张表**可以**穷举，而穷举正是它能被断言钉死的原因。
+#:
+#: 逐条理由（⛔ 不是「相关的都列上」）：
+#:   客单价低 = 客人来了但花得少 ⇒ 折扣给多了 / 卖的菜结构不同 /
+#:              外卖客单价低于堂食 / 午市客单价低于晚市
+#:   客流低   = 人少了           ⇒ 丢在哪个时段 / 哪个渠道 / 门口有没有人经过 /
+#:              口碑掉了 / 天气节假日 / 商场活动 / 周边演出 / 竞品
+#:
+#: 🔴 顺序是**排查顺序**，不是重要性排序：先看自己能改的（折扣、菜单），
+#:    再看外部的。第一条命中必须经得起老板去查 —— 判据见
+#:    `_append_investigation_directions`：只说**这份 FactBook 里真的有数**的那些。
+_CAUSE_INVESTIGATION_DIMENSIONS: Dict[str, Tuple[str, ...]] = {
+    "客单价": ("promotion", "dish_sales", "channel", "meal_period"),
+    "客流": (
+        "meal_period", "channel", "physical_traffic", "review",
+        "weather", "holiday", "mall_activity", "nearby_event", "competitor",
+    ),
+}
+
+#: 第 ⑦ 步：都排查不掉才轮到运营问题。
+#:
+#: ⛔ 它**不宣称已经排除过** —— 产品并没有逐条跑过那些维度，说「都排除了」是假话。
+#:    它是一句**反向**的话：拦住「营收低 ⇒ 就是店长不行」这个跳步。
+#: ⚠️ 原设计卡把 ⑦ 挂在 ⑤（反问现实事件）下面。⑤ 不上线，但 ⑦ 不依赖 ⑤ ——
+#:    它是**任何**排查链的收尾句，而 ⑥ 就是一条排查链。改挂到 ⑥。
+_INVESTIGATION_LAST_RESORT = (
+    "上面这些都查过、还是解释不了，才轮到怀疑「这家店自己的运营」"
+    "（服务、出品、人手）—— 现在还没到那一步。"
+)
+
 _PRESCRIBED_NUMBER_RE = re.compile(
     r"(?:预算|目标|KPI|投入|投放|花费|提升到|提升至|提高到|提高至|"
     r"回升到|回升至|增加到|增加至|降到|降至|控制在|争取达到|"
@@ -1448,6 +1486,7 @@ class ComprehensiveSynthesisEngine:
                         fact_check=fc_meta,
                         plain_language=restaurant_scope,
                     )
+                thin_answer = self._append_investigation_directions(thin_answer, factbook)
                 thin_answer = self._append_dimension_guidance(thin_answer, factbook)
                 thin_answer = _customer_visible_answer(
                     thin_answer,
@@ -1537,6 +1576,10 @@ class ComprehensiveSynthesisEngine:
                 fact_check=fc_meta,
                 plain_language=restaurant_scope,
             )
+        # ⑥⑦ 排查方向要排在「还可补充的方面」**之前** —— 它是结论的一部分，
+        # 那张 12 条的清单是附录。⚠️ 两处接线数量与 `_append_dimension_guidance`
+        # 逐一对应（硬约束 8），有一道 AST 断言钉着这件事。
+        answer = self._append_investigation_directions(answer, factbook)
         answer = self._append_dimension_guidance(answer, factbook)
         answer = _customer_visible_answer(
             answer,
@@ -2909,6 +2952,103 @@ class ComprehensiveSynthesisEngine:
         except Exception as e:
             logger.warning("[synthesis] dimension analysis failed (non-fatal): %s", e)
             return ""
+
+    @staticmethod
+    def _append_investigation_directions(answer: str, factbook: FactBook) -> str:
+        """⑥ 给排查方向 + ⑦ 都排查不掉才轮到运营 —— **确定性追加，⛔ 不经过 LLM**。
+
+        ## 为什么是确定性追加而不是改 prompt
+
+        📏 prod 实测（MOCK_REST，绕过叙述缓存，3 轮真的重新生成）：
+        「这几条数据没接入，现在判断不了是地段问题还是经营问题」这句话
+        **LLM 自己说了 1/3 轮** —— 也就是说它既不稳定，内容也没人核对。
+        ▎能确定性算出来的东西交给模型说，就是把「说不说」和「说得对不对」
+        ▎一起交出去了。改 prompt 只能提高频率，改不了这一点。
+
+        ## 判据：只说**这份 FactBook 里真的有数**的那几维
+
+        ⛔ 判据是「查」不是「猜」—— 与 `_grounding_findings` 里那条镜像规则
+        （有数据的维度不许说成「你没提供」）**同一个数据源**：
+        `available_dimensions` / `missing_dimensions`，⛔ 不新造第二套判定。
+
+        这是反目标那句话的直接落地：**排在最前面的那个命中，他去查会不会一无所获？**
+        列进「能查」的每一维，它的数就在这同一份答案的数据段里。
+
+        ⚠️ `status == "partial"` 也算「有数」（例：优惠有结构、缺对照基线），
+        但要**当场标出来**它不全 —— 不标就是把「看得见结构」说成了「算得出结论」。
+
+        ## 🔴 口径必须写在那一行里（prod A/B 当场抓到的自相矛盾）
+
+        📏 第一版 prod A/B（MOCK_REST，AFTER 3/3 都出现了这一段）里，
+        **同一份答案**同时说了这两句：
+
+            LLM 正文：「没有单店菜品销售数据，不知道这家店卖啥、卖多少」
+            这一段  ：「系统里有数、可以接着查：菜品销售结构」
+
+        ▎两句都不算错 —— `available_dimensions` 是**全链**覆盖信号，
+        ▎而老板问的是**这家店**。这正是形态 A：
+        ▎**我量的是「全链有没有这一维」，他想知道的是「这家店有没有」。**
+        ⇒ 那一行必须带口径。⛔ 不写口径 = 在一份答案里给出两个相反的说法，
+          而自相矛盾烧掉的正是「这东西说的话能信」。
+
+        ⚠️ 口径写「全店合计」是**可保证**的，不是拍的：这一段只在 `attribution`
+        存在时才出现，而 `compute_store_attribution` 要求**至少两家**可比门店
+        ⇒ 这一轮的 FactBook 必然是多店合计口径。
+
+        ## 什么时候一个字都不说
+
+        ⛔ 每次都说就是废话（反目标里最重的那条）。四道门，任何一道不过就闭嘴：
+          1. 这一轮**没有跑归因**（`attribution` 为空 / `no_data`）
+          2. 归因没给出拖后腿门店
+          3. `primary_cause` 不在 `_CAUSE_INVESTIGATION_DIMENSIONS` 里
+          4. 能查的和查不了的**都是空**（没什么可说的）
+        """
+        attribution = factbook.attribution or {}
+        if not attribution or attribution.get("no_data"):
+            return answer
+        laggard = attribution.get("laggard") or {}
+        if not laggard.get("store_name"):
+            return answer
+        cause = str(attribution.get("primary_cause") or "").strip()
+        codes = _CAUSE_INVESTIGATION_DIMENSIONS.get(cause)
+        if not codes:
+            return answer
+
+        have = {
+            str(item.get("code")): item
+            for item in (factbook.available_dimensions or [])
+            if item.get("code")
+        }
+        lack = {
+            str(item.get("code")): item
+            for item in (factbook.missing_dimensions or [])
+            if item.get("code")
+        }
+        can_check, cannot_check = [], []
+        for code in codes:
+            item = have.get(code)
+            if item is not None:
+                partial = "（数据不全，只能看个大概）" if item.get("status") == "partial" else ""
+                can_check.append(f"**{item.get('label')}**{partial}")
+                continue
+            item = lack.get(code)
+            if item is not None:
+                cannot_check.append(f"**{item.get('label')}**")
+        if not can_check and not cannot_check:
+            return answer
+
+        lines = [answer.rstrip(), "", f"### 差距出在「{cause}」——接下来往哪儿查"]
+        if can_check:
+            lines.append(
+                "- 系统里有数、可以接着查（这几项目前都是全店合计的数）："
+                + "、".join(can_check)
+            )
+        if cannot_check:
+            lines.append(
+                "- 现在查不了（这些数据还没接进来）：" + "、".join(cannot_check)
+            )
+        lines.append("- " + _INVESTIGATION_LAST_RESORT)
+        return "\n".join(lines)
 
     @staticmethod
     def _append_dimension_guidance(answer: str, factbook: FactBook) -> str:
