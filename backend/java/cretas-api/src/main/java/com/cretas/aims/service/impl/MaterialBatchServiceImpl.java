@@ -1188,10 +1188,103 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         return exportInventoryReport(factoryId, startDate, endDate, false);
     }
 
+    /**
+     * 批次使用历史 —— 出库消耗 + 库存调整，按时间倒序。
+     *
+     * <h3>🔴 为什么重写 (2026-08-18 实测)</h3>
+     * 这里原来是 {@code // TODO} 加一句 {@code return new ArrayList<>();}，<b>无条件返回空</b>。
+     * 而它是唯一接到界面的那个出口：web-admin「调整历史」表
+     * （{@code v-if="adjustHistory.length > 0"}）因此<b>永远不显示</b>，
+     * RN「批次追溯页」出库记录节点因此<b>永远</b>显示「暂无出库记录」。
+     *
+     * <p>{@code /adjust} 明明写了完整的 {@code material_batch_adjustments}
+     * （谁 / 何时 / 前后量 / 原因），用户却一条都看不到。
+     * 判据九要的是「可查」，不是「库里有」。
+     *
+     * <p>⛔ 查不到操作人名字时写「未知操作人(ID xx)」而不是留空 —— 留空会被读成
+     * 「系统自动操作」，那是假信息。
+     */
     @Override
     public List<Map<String, Object>> getBatchUsageHistory(String factoryId, String batchId) {
-        // TODO: 从消耗记录和调整记录中获取使用历史
-        return new ArrayList<>();
+        // 先确认批次属于本厂 —— 否则这个只读接口会变成跨租户探针
+        materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+
+        List<Map<String, Object>> history = new ArrayList<>();
+
+        for (MaterialConsumption c : materialConsumptionRepository
+                .findByFactoryIdAndBatchId(factoryId, batchId)) {
+            if (c == null) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("type", "OUT");
+            row.put("typeLabel", "出库");
+            row.put("sourceType", c.getSourceType());
+            row.put("occurredAt", c.getConsumptionTime());
+            row.put("quantity", c.getQuantity());
+            row.put("operatorId", c.getRecordedBy());
+            row.put("operatorName", resolveOperatorName(c.getRecordedBy()));
+            row.put("productionPlanId", c.getProductionPlanId());
+            row.put("reason", c.getNotes());
+            history.add(row);
+        }
+
+        for (MaterialBatchAdjustment a : materialBatchAdjustmentRepository
+                .findByMaterialBatchIdOrderByAdjustmentTimeDesc(batchId)) {
+            if (a == null) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("type", "ADJUST");
+            row.put("typeLabel", "库存调整");
+            row.put("sourceType", a.getAdjustmentType());
+            row.put("occurredAt", a.getAdjustmentTime());
+            row.put("quantity", a.getAdjustmentQuantity());
+            row.put("quantityBefore", a.getQuantityBefore());
+            row.put("quantityAfter", a.getQuantityAfter());
+            row.put("operatorId", a.getAdjustedBy());
+            row.put("operatorName", resolveOperatorName(a.getAdjustedBy()));
+            row.put("reason", firstNonBlankText(a.getReason(), a.getNotes()));
+            history.add(row);
+        }
+
+        history.sort((x, y) -> {
+            LocalDateTime a = (LocalDateTime) x.get("occurredAt");
+            LocalDateTime b = (LocalDateTime) y.get("occurredAt");
+            if (a == null && b == null) {
+                return 0;
+            }
+            if (a == null) {
+                return 1;   // 时间缺失的排最后, 但不丢
+            }
+            if (b == null) {
+                return -1;
+            }
+            return b.compareTo(a);
+        });
+        return history;
+    }
+
+    /** ⛔ 查不到就说查不到, 不留空 —— 留空会被读成「系统自动操作」。 */
+    private String resolveOperatorName(Long userId) {
+        if (userId == null) {
+            return "未记录操作人";
+        }
+        if (userRepository == null) {
+            return "未知操作人(ID " + userId + ")";
+        }
+        return userRepository.findById(userId)
+                .map(u -> firstNonBlankText(u.getFullName(), u.getUsername()))
+                .filter(n -> n != null && !n.isBlank())
+                .orElse("未知操作人(ID " + userId + ")");
+    }
+
+    private static String firstNonBlankText(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a;
+        }
+        return b != null && !b.isBlank() ? b : null;
     }
 
     @Override
@@ -1430,30 +1523,40 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             batch.setStatus(MaterialBatchStatus.USED_UP);
         }
 
-        // 记录消耗（如果提供了生产计划ID）
-        if (productionPlanId != null) {
-            // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 (500)。
-            // recordedBy 走 FK→users, 必须是真实操作人; 由 controller/AI tool 线程进 operatorId。
-            // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO。
-            if (operatorId == null) {
-                throw new BusinessException(401, "无法识别操作人，无法记录领料消耗")
-                        .withHint("请重新登录后重试");
-            }
-            BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
-            MaterialConsumption consumption = new MaterialConsumption();
-            consumption.setFactoryId(factoryId);
-            consumption.setProductionPlanId(productionPlanId);
-            consumption.setBatchId(batchId);
-            consumption.setQuantity(quantity);
-            consumption.setUnitPrice(unitPrice);
-            consumption.setTotalCost(quantity.multiply(unitPrice));
-            consumption.setRecordedBy(operatorId);
-            consumption.setConsumptionTime(LocalDateTime.now());
-            // 2026-08-13: 此前从不写 notes —— 生产库 39 条消耗记录该列全空,
-            // 而 UseMaterialBatchRequest 一直对外公布 purpose/notes 两个字段。
-            consumption.setNotes(notes);
-            materialConsumptionRepository.save(consumption);
+        // 🔴 2026-08-18: 出库【一律】留痕, 不再只在带生产计划时才记。
+        //
+        // 原来是 `if (productionPlanId != null)`, 而**工人真实用的那个屏幕从不传计划**
+        // (WHOutboundIssueScreen 扫码出库确认页, body 只有 quantity) ⇒ 这个分支永远走不到。
+        // 实测(批次 a5e3740e-…, 出库 0.01kg): material_consumptions 零新增、operation_logs 零行;
+        // 变的只有 usedQuantity(累计值) 和 lastUsedAt(单个可变字段, 下次出库就被覆盖,
+        // **连是谁出的都没记**)。判据: 库存录入/转移/手工出库都要留下可查痕迹。
+        //
+        // ⚠️ productionPlanId 为 null 是合法的(该列可空; TransferServiceImpl 的 TRANSFER_OUT
+        //    行本来就不带计划) —— 不关联计划不等于不留痕。
+        if (operatorId == null) {
+            // ⛔ 记不下「是谁」的出库不许静默通过 —— 那正是这次要修的东西。
+            throw new BusinessException(401, "无法识别操作人，无法记录出库痕迹")
+                    .withHint("请重新登录后重试")
+                    .withHintTarget("operator");
         }
+        // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 (500)。
+        // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO。
+        BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+        MaterialConsumption consumption = new MaterialConsumption();
+        consumption.setFactoryId(factoryId);
+        consumption.setProductionPlanId(productionPlanId);
+        consumption.setBatchId(batchId);
+        consumption.setQuantity(quantity);
+        consumption.setUnitPrice(unitPrice);
+        consumption.setTotalCost(quantity.multiply(unitPrice));
+        consumption.setRecordedBy(operatorId);
+        consumption.setConsumptionTime(LocalDateTime.now());
+        // 不带计划的手工出库单独标一个来源, 别和报工领用混在一起
+        consumption.setSourceType(productionPlanId != null ? "PRODUCTION_ISSUE" : "MANUAL_ISSUE");
+        // 2026-08-13: 此前从不写 notes —— 生产库 39 条消耗记录该列全空,
+        // 而 UseMaterialBatchRequest 一直对外公布 purpose/notes 两个字段。
+        consumption.setNotes(notes);
+        materialConsumptionRepository.save(consumption);
 
         MaterialBatchDTO result = materialBatchMapper.toDTO(materialBatchRepository.save(batch));
 
