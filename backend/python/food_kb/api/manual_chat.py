@@ -275,6 +275,15 @@ _FACTORY_REALTIME_WIP_ANSWER = """\
 4. 中间工序存在未完成下游任务但没有配置 `semi_finished_output_code` 时，本次报工仍可成功，但必须返回非阻塞告警并明确下一步去配置半成品输出码；终端工序、已配置或下游均完成时不显示该告警。
 
 **验收结果：** 提交报工后即能回读 WIP 入账，审批不会重复入账；下游消耗产生可追溯负向流水；未知计划量不触发假完成，缺半成品码只留下清楚且可行动的告警。"""
+_FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER = """\
+当前报工把“重复提交”“同一时段重复记录”和“审批驳回”分成三类事实，不能用前端提示代替服务端库存与流水回读。
+
+1. **幂等范围：** 正式报工的幂等身份同时包含任务/工序；同一个客户端请求重试只返回原结果，不重复扣料、入 WIP 或记成本，不同工序不能因请求号相同互相吞单。
+2. **同时段守卫：** 同一任务、同一报工类型和同一时间段已经存在记录时，页面明确提示“本段已记录”，用户应查看原记录或改正时间段，不能靠连点再生成一条。计划量与实际量的差额描述为“尚未报工”或“超计划”，不把所有差额叫损耗。
+3. **驳回冲销：** 正式提交时产生的 WIP/投入库存事实，在审批驳回时按原报工身份做反向冲销；已冲销记录保持可追溯，修正后重提形成新的审批版本，审批通过不会再次重复过账。
+4. **工序与单位保真：** 用户点选哪一道工序，payload、回读和汇总就保留哪一道；批次单位与报工显示单位使用同一单位合同，“件、个、只”保持不同字面，不能用裸字符串或错误标签把单位偷偷换掉。
+
+**验收结果：** 原请求重放只有一份报工事实；同段重复在发送前后都有明确守卫；驳回后原投入/WIP已反向冲销且库存守恒；修正重提可追到原记录，不会重复扣库或重复入账。"""
 _WORKFLOW_ACTUAL_IO_ANSWER = """\
 Workflow 和 BOM 都不预设某一次报工的实际选择：Workflow 维护工序拓扑与可能投入/产出，BOM 维护主料、替代料、辅料、包材、用量和成本；生产计划固定两者的精确版本。
 
@@ -437,6 +446,15 @@ _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 4. SmartBI 的成本卡运营口径与上述期间财务口径不是一回事：汇总层展示实收营收，但毛利额和毛利率的分子、分母都只使用“有可用成本卡”的菜品营收，并用同一菜品营收口径披露覆盖率。毛利只扣食材成本，不扣人工、房租、水电等，不能称为利润或利润率。
 5. 成本卡来自理论用量，出处始终是 `ESTIMATED`。补齐缺卡菜品能提高“可算进毛利的营收覆盖率”，但不能承诺“补上就从估变实”。系统最多点名 3 道优先补卡菜并给出覆盖率可能提升；成本明显高于平均售价的异常卡会被点名并暂时排除，修正后自动重新纳入。
 6. 菜品平均毛利率和四象限毛利轴只适合相对比较，不是精确财务结果。餐饮导览助手只说明以上口径并指向正确板块，不替用户计算或分析真实经营数据。"""
+_RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER = """\
+餐饮问答现在可以把渠道、损耗、领料和盘点按门店拆分，但每次都要先证明本次事实确实带有门店身份，并披露覆盖范围。
+
+1. **同一门店宇宙：** 渠道构成、门店毛利、损耗、领料和盘点共享当前租户的门店目录；用户点名有效门店时按该店查询，问“哪家店”时才做门店排行，不能因换一种问法换租户或换一套门店名单。
+2. **覆盖不全必须先说：** 只有部分记录带门店身份时，首段就限定“以下仅覆盖已归属门店的记录”，并同时披露已覆盖/总记录或可解释的范围；不能把部分门店结果写成全品牌结论，也不能把有数据的维度说成“你没提供”。
+3. **问题和指标不能偷换：** 问渠道占比就使用渠道事实，问损耗就使用损耗数量/金额，问领料就使用领料数量/成本，问盘点就使用盘盈盘亏事实。当前指标不支持所问维度时明确拒答并给可回答改问，不能保留一个不兼容计划后答非所问。
+4. **结论要能做决定：** 门店毛利或菜品毛利回答先明确“哪些店/菜在亏或没有可比成本”，再给基于当前差距的动作；门店差异很小时不机械要求逐店排查。数字来自确定性查询，导览助手只解释入口和方法，不代算真实门店数据。
+
+**验收结果：** 回答只引用餐饮 registered source，门店名单、指标、时间窗和覆盖声明一致；工厂/F006 source 不参与餐饮回答。"""
 _RESTAURANT_DATA_PROGRESS_FOLLOWUP_ANSWER = """\
 餐饮问答把“数据来源接通进度”“成本卡营收覆盖率”和“下一步动作”分开表达，不能把一个数字冒充另一个。
 
@@ -872,6 +890,20 @@ def _needs_factory_realtime_wip_guard(query: str) -> bool:
     return reporting and runtime
 
 
+def _needs_factory_report_idempotency_rejection_guard(query: str) -> bool:
+    """Keep report retries, duplicate periods and rejection reversals deterministic."""
+    normalized = (query or "").lower()
+    reporting = any(term in normalized for term in ("报工", "工序", "wip"))
+    lifecycle = any(
+        term in normalized
+        for term in (
+            "幂等", "重复提交", "重复报工", "本段已记录", "同时段", "同一时段",
+            "驳回", "冲销", "回退库存", "反向流水", "重提", "差额", "损耗",
+        )
+    )
+    return reporting and lifecycle
+
+
 def _needs_workflow_actual_io_guard(query: str) -> bool:
     """Use the reviewed actual-I/O and per-report cost-allocation contract."""
     normalized = (query or "").lower()
@@ -1304,6 +1336,24 @@ def _needs_restaurant_single_dish_margin_guard(query: str) -> bool:
         )
     )
     return mentions_margin and mentions_single_dish_precision
+
+
+def _needs_restaurant_store_dimension_coverage_guard(query: str) -> bool:
+    """Keep store-scoped operations answers on one roster and honest coverage."""
+    normalized = (query or "").lower()
+    store_scope = any(term in normalized for term in ("门店", "哪家店", "各店", "分店"))
+    operation = any(
+        term in normalized
+        for term in ("渠道", "损耗", "领料", "盘点", "门店毛利", "菜品毛利")
+    )
+    contract = any(
+        term in normalized
+        for term in (
+            "按门店", "哪家", "排行", "对比", "覆盖", "不全", "部分记录",
+            "门店名单", "门店宇宙", "能不能拆", "是否支持",
+        )
+    )
+    return store_scope and operation and contract
 
 
 def _needs_restaurant_data_progress_followup_guard(query: str) -> bool:
@@ -2451,6 +2501,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_REALTIME_WIP_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_report_idempotency_rejection_guard(request.question)
+    ):
+        guard_answer = _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_current_gates_guard(request.question)
     ):
         # A current-gates question can intentionally combine Workflow skuId,
@@ -2484,6 +2539,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_store_dimension_coverage_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_attribution_baseline_guard(request.question)

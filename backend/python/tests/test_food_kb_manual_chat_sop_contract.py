@@ -13,6 +13,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
+    _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER,
     _FACTORY_REALTIME_WIP_ANSWER,
     _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
     _FACTORY_MATERIAL_SALES_ANSWER,
@@ -51,6 +52,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
+    _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER,
     _RESTAURANT_DAILY_CLOSE_ANSWER,
     _RESTAURANT_DAILY_PRESENTATION_ANSWER,
     _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER,
@@ -63,6 +65,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
     _needs_factory_purchase_oa_receipt_guard,
+    _needs_factory_report_idempotency_rejection_guard,
     _needs_factory_realtime_wip_guard,
     _needs_factory_form_assistant_result_guard,
     _needs_factory_material_sales_guard,
@@ -101,6 +104,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_read_write_boundary_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
+    _needs_restaurant_store_dimension_coverage_guard,
     _needs_restaurant_daily_close_guard,
     _needs_restaurant_daily_presentation_guard,
     _needs_restaurant_default_time_provenance_guard,
@@ -1673,6 +1677,14 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             ],
         ),
         (
+            _needs_factory_report_idempotency_rejection_guard,
+            [
+                "正式报工重复提交怎样保证幂等？",
+                "同一时段重复报工为什么提示本段已记录？",
+                "报工审批驳回后怎样冲销并回退库存？",
+            ],
+        ),
+        (
             _needs_restaurant_attribution_baseline_guard,
             [
                 "营收归因的订单量贡献、客单价贡献和交叉项怎么算？",
@@ -1696,6 +1708,14 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
                 "能看门店层但不能看菜品层时会暴露内部字段吗？",
             ],
         ),
+        (
+            _needs_restaurant_store_dimension_coverage_guard,
+            [
+                "渠道和损耗能不能按门店排行？",
+                "哪家店领料最多，只有部分记录有门店时覆盖怎么说？",
+                "各店盘点亏损对比是否支持门店维度？",
+            ],
+        ),
     ],
 )
 def test_20260817_reviewed_guards_cover_equivalent_questions(guard, questions):
@@ -1715,6 +1735,15 @@ def test_20260817_reviewed_answers_keep_current_non_negotiable_contracts():
     assert "今天到现在" in _RESTAURANT_FOLLOWUP_WINDOW_ANSWER
     assert "不替用户计算或分析经营数据" in _RESTAURANT_FOLLOWUP_WINDOW_ANSWER
     assert "不能悄悄改答另一个汇总层" in _RESTAURANT_DIMENSION_GAP_ANSWER
+
+
+def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
+    assert "幂等身份同时包含任务/工序" in _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER
+    assert "本段已记录" in _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER
+    assert "反向冲销" in _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER
+    assert "当前租户的门店目录" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
+    assert "覆盖不全必须先说" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
+    assert "工厂/F006 source 不参与餐饮回答" in _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER
 
 
 @pytest.mark.parametrize(
@@ -1766,6 +1795,12 @@ def test_20260817_reviewed_answers_keep_current_non_negotiable_contracts():
             "报工 WIP 是提交时还是审批时入账，半成品出库流水怎么追？",
             "factory",
             _FACTORY_REALTIME_WIP_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "正式报工重复提交、同一时段重复和审批驳回冲销分别怎样验收？",
+            "factory",
+            _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
@@ -1862,6 +1897,12 @@ def test_20260817_reviewed_answers_keep_current_non_negotiable_contracts():
             "中餐能不能自动精确算出每一道菜的真实毛利？",
             "restaurant",
             _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "渠道、损耗、领料和盘点能不能按门店排行，覆盖不全怎么说？",
+            "restaurant",
+            _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (
