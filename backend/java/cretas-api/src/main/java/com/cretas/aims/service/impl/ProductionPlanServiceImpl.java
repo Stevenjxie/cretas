@@ -3255,7 +3255,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
         //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
         List<ProductionSettlementRequest.OutputLine> terminalOutputs =
-                deriveTerminalOutputsFromReports(plan, allReports);
+                deriveTerminalOutputsFromReports(factoryId, plan, batches, allReports, issues);
         if (terminalOutputs.isEmpty()) {
             issues.add(issue("FINISHED_OUTPUT_MISSING",
                     "末道报工没有可用的产出(数量或产品缺失), 无法自动带入实际成品产量; 请在产出核对处手工填写。",
@@ -3900,15 +3900,38 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * </ul>
      */
     private List<ProductionSettlementRequest.OutputLine> deriveTerminalOutputsFromReports(
-            ProductionPlan plan, List<ProductionReport> reports) {
+            String factoryId, ProductionPlan plan, List<ProductionBatch> batches,
+            List<ProductionReport> reports, List<ProductionSettlementPrefillResponse.Issue> issues) {
         if (reports == null || reports.isEmpty()) {
             return new ArrayList<>();
         }
         Integer maxOrder = lastStepOrder(reports);
         String planProduct = plan == null ? null : trimToNull(plan.getProductTypeId());
-        // key = SKU + NUL + unit —— 分隔符用 NUL(与本文件既有写法一致, 见 workflowInputPortId 那处),
-        //       它不可能出现在业务串里, 避免 "A"+"BC" 与 "AB"+"C" 撞成同一个 key
-        Map<String, ProductionSettlementRequest.OutputLine> bySkuAndUnit = new LinkedHashMap<>();
+
+        // 产出行的批次身份 = 该报工所属【生产批次】的批次号。
+        // web 那条腿用的是 process_sheet_row.batch_number, 而那张表的 batch_number 正是同一个东西
+        // (见 ProcessSheetRow 类注释: 行锚在 batch_id / batch_number 上) —— 两条腿口径一致。
+        Map<String, String> batchNumbers = new LinkedHashMap<>();
+        if (batches != null) {
+            for (ProductionBatch b : batches) {
+                if (b != null && b.getId() != null && !isBlank(b.getBatchNumber())) {
+                    batchNumbers.put(String.valueOf(b.getId()), trimToNull(b.getBatchNumber()));
+                }
+            }
+        }
+
+        // 末道物料节点: 用既有权威 resolvePinnedTerminalNodes (web 那条腿拿它做过滤, 这里拿它填)。
+        // ⚠️ 工序任务上的 workflowNodeId 是【工序节点】(process:…), 而配方钉的是【物料节点】
+        //    (material:finished:…) —— 两者不是一个东西, 直接拿任务的去比会永远不等。实测:
+        //    task.workflow_node_id = process:36be0c48-…:1786933141612
+        //    recipe.target_terminal_node_id = material:finished:1786933141612
+        Map<String, String> pinnedTerminals = resolvePinnedTerminalNodes(factoryId, plan);
+        boolean pinned = isWorkflowPlan(plan) && !pinnedTerminals.isEmpty();
+
+        // key = SKU + NUL + 批次号 + NUL + 单位 —— 与 web 那条腿【同一个键形状】(形态 D: 不各写一份)。
+        // 分隔符用 NUL: 与本文件既有写法一致(见 workflowInputPortId 那处), 它不可能出现在业务串里,
+        // 避免 "A"+"BC" 与 "AB"+"C" 撞成同一个 key。
+        Map<String, ProductionSettlementRequest.OutputLine> byLine = new LinkedHashMap<>();
         for (ProductionReport r : reports) {
             if (r == null) {
                 continue;
@@ -3922,19 +3945,57 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
             String sku = firstNonBlank(trimToNull(r.getProductTypeId()), planProduct);
             if (isBlank(sku)) {
-                continue;   // 见上: 空 SKU 的产出行会让集合比对恒不相等
+                continue;   // 空 SKU 的产出行会让下游集合比对恒不相等
+            }
+            // ⛔ 不在钉住集合里的 SKU 不许出线, 也不许静默丢掉 —— 明说是哪一个, 让人能去核对。
+            //    (这一条替代了「materialNodeId 由用户传、服务端过滤」那道闸: 本腿没有用户输入,
+            //     真正在守的是「只有计划钉住的末道 SKU 才会被算成成品产出」。)
+            String terminalNodeId = pinnedTerminals.get(sku);
+            if (pinned && terminalNodeId == null) {
+                addIssueOnce(issues, "WORKFLOW_OUTPUT_SKU_NOT_PINNED",
+                        "末道报工的产品 " + sku + " 不在本计划钉住的 Workflow 末道产出集合里, 未带入成品产出; "
+                                + "请核对报工选的产品, 或确认该产出是否应计入本计划。",
+                        "terminalOutputs");
+                continue;
+            }
+            String batchNumber = r.getBatchId() == null
+                    ? null : batchNumbers.get(String.valueOf(r.getBatchId()));
+            if (isBlank(batchNumber)) {
+                addIssueOnce(issues, "WORKFLOW_OUTPUT_BATCH_MISSING",
+                        "末道报工找不到对应的生产批次号, 无法带入成品产出; 请在产出核对处手工填写批次号。",
+                        "terminalOutputs");
+                continue;
             }
             String unit = trimToNull(r.getOutputUnit());
-            String key = sku + " " + (unit == null ? "" : unit);
-            ProductionSettlementRequest.OutputLine line = bySkuAndUnit.get(key);
+            String key = sku + " " + batchNumber + " " + (unit == null ? "" : unit);
+            ProductionSettlementRequest.OutputLine line = byLine.get(key);
             if (line == null) {
-                bySkuAndUnit.put(key, ProductionSettlementRequest.OutputLine.builder()
-                        .productTypeId(sku).quantity(qty).unit(unit).build());
+                byLine.put(key, ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId(sku)
+                        .batchNumber(batchNumber)
+                        .quantity(qty)
+                        .unit(unit)
+                        .materialNodeId(terminalNodeId)
+                        .build());
             } else {
                 line.setQuantity(line.getQuantity().add(qty));
             }
         }
-        return new ArrayList<>(bySkuAndUnit.values());
+        return new ArrayList<>(byLine.values());
+    }
+
+    /** 同一个 code 只记一次 —— 同一批报工里多行触发同一个原因时, 不要刷屏。 */
+    private void addIssueOnce(List<ProductionSettlementPrefillResponse.Issue> issues,
+            String code, String message, String field) {
+        if (issues == null) {
+            return;
+        }
+        for (ProductionSettlementPrefillResponse.Issue existing : issues) {
+            if (existing != null && code.equals(existing.getCode())) {
+                return;
+            }
+        }
+        issues.add(issue(code, message, field));
     }
 
     private BigDecimal deriveLastStepOutput(List<ProductionReport> reports) {
