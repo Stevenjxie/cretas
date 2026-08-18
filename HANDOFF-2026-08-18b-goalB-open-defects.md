@@ -277,10 +277,32 @@ CLAUDEPF-调料乙   cat=AUXILIARY  requiredQty=None  bomItemId=None  ← 按配
 
 ## 待 owner 定的两条（我已给出倾向并按它继续做）
 
-1. **App 报工要不要扣生产仓库存** → 倾向：**不改扣减时机**（报工是事实记录、可驳回；
-   多道工序引用同一批原料，结单一次性聚合去重才不会重复扣）。但要补
-   **「已报工占用」**，让生产仓可用量 = 在手 − 已提交报工引用量（`reserved_quantity`
-   这一列本来就是干这个的）。否则报工完到结单之间，账面有货而物理已投产。
+1. **App 报工要不要扣生产仓库存** → 「不改扣减时机」这半条仍然成立；
+   **但我给的另一半（用 `reserved_quantity` 记占用）被实测推翻了。**
+
+   我当时说「`reserved_quantity` 这一列本来就是干这个的」——
+   **只查了谁写它，没查谁读它。** 实测（PR #2866 的闸把结论钉成可执行的）：
+
+   ```
+   reserved_quantity 现状: 0 / 89 个在用批次有值 —— 没有任何代码在写它
+   getCurrentQuantity() 会减 reserved, 而结单路径【三处】都读它:
+     · deriveRawConsumptions(预填)   available < qty → RAW_BATCH_INSUFFICIENT, 静默丢行
+     · validateConsumptionLine       跨计划闸 + ensureQuantityWithinAvailable
+     · postMaterialBatchConsumption  ensureQuantityWithinAvailable, 然后 used += qty
+   ⇒ 为报工 R 占的量, 会挡住 R 自己的结单
+   实测 16 个被 materialBatchRefs 引用的批次 refQty == receipt_quantity == 20 (16/16)
+   ⇒ available = 20 − 0 − 20 = 0 ⇒ **每一次结单都会挂**, 不是边缘情况
+   ```
+
+   ⇒ 正确的做法是**释放必须发生在结单三道闸之前**，也就是 `settleProduction` 内部，
+   而且三条释放路径（驳回 / 冲销 / 结单扣减）要用同一个口径。
+   ⛔ 只做「报工时占用」而不同时解决释放 = 永久占住库存，比不做更糟 ——
+   所以那一轮**一行生产代码都没改**，只交了闸。
+
+   ⚠️ 顺带抓到一个现成缺陷：先撞上的是**跨计划**那道闸，文案说
+   「已被**其他未结生产计划**待结占用…请先**结清冲突计划**」——
+   现场根本没有别的计划，占用它的是**本计划自己的报工**。
+   把人支去找一个不存在的计划。（已被 #2866 的断言钉住。）
 2. **销售订单「必须入过库」怎么算** → 倾向：判据改成**「当前有在手库存」**
    （「入过库」是不可撤销的历史事实，守不住任何东西）。分三级：有在手→放行；
    无在手但有在途采购/在产计划→放行+明示；两者都无→拦并给下一步。
