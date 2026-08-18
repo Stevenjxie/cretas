@@ -173,6 +173,14 @@ def test_store_dimension_still_keeps_the_full_factbook(monkeypatch):
 
 # ── 没问门店：逐字不变（meal_period / time 是基础轴，不单独处理） ─────────
 
+# ⚠️ 只跟 baseline **比相等**不够 —— 如果 gate 被变异成无条件触发, baseline
+#    自己也会被同样"污染", 两边仍然相等, 断言看不出来(2026-08-18 实测: 变异
+#    `if True or asked_by_store(...)` 时, 三条只比 baseline 的断言全绿放过)。
+#    ⇒ 额外钉一个**绝对值**: 不问门店时原文必须**逐字等于** service 层
+#    返回的那段原始文本, 不许多出任何前导句。
+_UNMODIFIED_ANSWER_TEXT = _forecast_answer()["answer_text"]
+
+
 def test_no_dimensions_is_byte_identical_to_before(monkeypatch):
     _patch_service(monkeypatch)
     baseline = asyncio.run(resolve_staffing_advice(_FakePool(), "MOCK_REST"))
@@ -180,26 +188,31 @@ def test_no_dimensions_is_byte_identical_to_before(monkeypatch):
         _FakePool(), "MOCK_REST", dimensions=(),
     ))
     assert baseline.answer_text == explicit_empty.answer_text
+    assert explicit_empty.answer_text == _UNMODIFIED_ANSWER_TEXT, (
+        "不问门店却多出了内容 —— 那句判断被改成了无条件触发"
+    )
 
 
 def test_meal_period_dimension_alone_does_not_trigger_the_lead(monkeypatch):
     """⛔ 判据只走 asked_by_store —— meal_period 是基础轴, 与 DAYPART_
     PERFORMANCE 先例一致(该 resolver 登记维度相同, 也只特殊处理 store)。"""
     _patch_service(monkeypatch)
-    baseline = asyncio.run(resolve_staffing_advice(_FakePool(), "MOCK_REST"))
     meal_period_asked = asyncio.run(resolve_staffing_advice(
         _FakePool(), "MOCK_REST", dimensions=("meal_period",),
     ))
-    assert baseline.answer_text == meal_period_asked.answer_text
+    assert meal_period_asked.answer_text == _UNMODIFIED_ANSWER_TEXT, (
+        "问了 meal_period 却触发了店铺点名句 —— gate 判据不该走这一维"
+    )
 
 
 def test_time_dimension_alone_does_not_trigger_the_lead(monkeypatch):
     _patch_service(monkeypatch)
-    baseline = asyncio.run(resolve_staffing_advice(_FakePool(), "MOCK_REST"))
     time_asked = asyncio.run(resolve_staffing_advice(
         _FakePool(), "MOCK_REST", dimensions=("time",),
     ))
-    assert baseline.answer_text == time_asked.answer_text
+    assert time_asked.answer_text == _UNMODIFIED_ANSWER_TEXT, (
+        "问了 time 却触发了店铺点名句 —— gate 判据不该走这一维"
+    )
 
 
 # ── 零缺口：不编一个不存在的缺口 ────────────────────────────────────────
