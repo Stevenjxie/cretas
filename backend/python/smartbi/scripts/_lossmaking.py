@@ -56,7 +56,7 @@ from smartbi.gold.restaurant import restaurant_intent_service as svc  # noqa: E4
 from smartbi.gold.restaurant import restaurant_ops_router as rr  # noqa: E402
 from smartbi.tenant_ctx import set_factory_id  # noqa: E402
 
-QS = [
+LOSSMAKING_QS = [
     ("🔴目标", "有几家店是亏钱的"),
     ("✅对照", "有没有店是亏钱的"),
 ]
@@ -121,7 +121,7 @@ async def main() -> int:
 
     n_answer_control = 0
     for rnd in range(1, ROUNDS + 1):
-        for tag, q in QS:
+        for tag, q in LOSSMAKING_QS:
             cleared = _clear()
             handler.lines.clear()
             set_factory_id(FID)
