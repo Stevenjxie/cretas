@@ -93,9 +93,20 @@ class _NoFetchrowPool:
 
 
 class _PoisonPool:
-    """.acquire() 一旦被调用就报错 —— 用来证明「不该查」的分支真的没查。"""
+    """.acquire() 一旦被调用就计数 + 报错。
 
-    def acquire(self):  # pragma: no cover - 断言路径本身就是失败
+    🔴 C″ 教训: helper 自己有 `except Exception` 兜底, 如果只在这里
+    `raise AssertionError`, 异常会被 helper 悄悄吞掉、返回 None ——
+    看起来像「验证通过」, 其实只验证了「查询失败会被吞」(另一条测试已经
+    在测这件事), 没有验证「根本没有发起查询」。⇒ 用调用计数做真正的判据,
+    `raise` 只是双保险。
+    """
+
+    def __init__(self):
+        self.acquire_calls = 0
+
+    def acquire(self):
+        self.acquire_calls += 1
         raise AssertionError("不应该在这个分支里查询数据库")
 
 
@@ -108,20 +119,28 @@ def _run(coro):
 # ══════════════════════════════════════════════════════════════════════
 
 def test_returns_none_without_querying_when_window_start_is_none():
-    """全部历史查询(没有一个窗口起点可比较) —— 连库都不该查。"""
+    """全部历史查询(没有一个窗口起点可比较) —— 连库都不该查。
+
+    判据用**调用计数**, 不是「拿到 None 就算过」—— 否则「查询失败被吞」
+    和「根本没查询」会是同一个读数, 分不清 early-return 是不是真的生效。
+    """
+    pool = _PoisonPool()
     got = _run(R._empty_window_last_record_date(
-        _PoisonPool(), "F1", table="agg_daily", window_start=None,
+        pool, "F1", table="agg_daily", window_start=None,
     ))
     assert got is None
+    assert pool.acquire_calls == 0, "window_start=None 时仍然发起了查询"
 
 
 def test_returns_none_without_querying_for_unlisted_table():
     """table 不在 allowlist 里 —— 同样不查库, 防的是任意字符串被拼进 SQL。"""
+    pool = _PoisonPool()
     got = _run(R._empty_window_last_record_date(
-        _PoisonPool(), "F1", table="fact_pos_transaction_typo",
+        pool, "F1", table="fact_pos_transaction_typo",
         window_start=date(2026, 8, 1),
     ))
     assert got is None
+    assert pool.acquire_calls == 0, "未登记的 table 仍然发起了查询"
 
 
 def test_returns_the_date_when_nothing_came_in_since():
@@ -316,12 +335,14 @@ async def test_trend_analysis_full_history_empty_never_queries_for_a_hint(monkey
     —— helper 应该连库都不查(用 _PoisonPool 证明), 而不是查到什么算什么。
     """
     _install_empty_trend_bundle(monkeypatch)
+    pool = _PoisonPool()
 
     got = await R.resolve_trend_analysis(
-        _PoisonPool(), "MOCK_REST", role="restaurant_owner", query="营收趋势",
+        pool, "MOCK_REST", role="restaurant_owner", query="营收趋势",
         date_range=None,
     )
 
     assert got.meta["no_data"] is True
     assert got.meta["last_record_before_window"] is None
     assert "最后一条记录是" not in got.answer_text
+    assert pool.acquire_calls == 0, "全部历史窗口不该为提示句查询数据库"
