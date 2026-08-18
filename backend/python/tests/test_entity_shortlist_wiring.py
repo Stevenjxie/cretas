@@ -126,9 +126,16 @@ class _FakePool:
 def _plan(store):
     """一份完整的单店营收计划。`store` 就是模型提名的那个名字。
 
-    ⚠️ 它必须是问句的**原文子串** —— `_verbatim_entity` 的反幻觉守卫要求如此,
-       所以模型能吐出来的最多就是老板打的那几个字, ⛔ 它变不出库里的全名。
-       这正是「归一必须由代码做」的原因。
+    🔴 **`store` 的取值必须是真模型会产出的形状** —— 这一条是踩出来的:
+
+       我第一版所有用例都喂**老板打的简称**(`store="宝山店"`), 单测全绿,
+       而 prod 端到端 **3/3 全红**。2026-08-18 prod 打出的原始 plan 是:
+
+           Q: 宝山店最近30天营收多少
+           store = "模拟·宝山大场社区店"   ← 模型看得到门店清单, 自己归一好了
+
+       ▎桩的自由度让我可以构造任何输入, **包括真实上游永远不会给出的输入**
+       ▎(形态 B‴)。所以下面的用例按 prod 实测分成两族, 各自标明形状来源。
     """
     return {
         "intent": "RESTAURANT_OPS_SALES_SUMMARY",
@@ -166,24 +173,67 @@ async def _ask(query, store_in_plan, pool=None):
 
 
 @pytest.mark.asyncio
-async def test_parse_restaurant_query_normalizes_a_store_shorthand_end_to_end():
-    """🔴 **承重**: 老板说「宝山店」, 计划里落的必须是**库里的全名**。
+@pytest.mark.parametrize("query,llm_store,expect", [
+    # 形态 1（**prod 实测的真 LLM 行为**, 2026-08-18 三条问句 3/3 都是这个形状）:
+    #   模型看得到租户门店清单, 自己就把简称改写成了全名 —— 而那个全名
+    #   不是问句原文子串, 于是被 `_verbatim_entity` 反幻觉守卫丢掉。
+    ("宝山店最近30天营收多少", "模拟·宝山大场社区店", "模拟·宝山大场社区店"),
+    ("徐汇店最近30天营收多少", "模拟·徐汇美罗城店", "模拟·徐汇美罗城店"),
+    ("浦东店最近30天营收多少", "模拟·浦东金桥社区店", "模拟·浦东金桥社区店"),
+    # 形态 2: 模型**回声**老板打的简称。回放/晋升表里存着的旧计划是这个形状,
+    #   所以两族都要接住。
+    ("宝山店最近30天营收多少", "宝山店", "模拟·宝山大场社区店"),
+    ("陆家嘴店最近30天营收多少", "陆家嘴店", "模拟·陆家嘴正大店"),
+])
+async def test_parse_restaurant_query_normalizes_a_store_shorthand_end_to_end(
+    query, llm_store, expect,
+):
+    """🔴 **承重**: 老板说简称, 计划里落的必须是**库里的全名**。
 
-    守的行为: 归一发生在真实入口上, 而且抬头用的是库里的名字 ——
+    守的行为: 归一发生在真实入口上, 抬头用的是库里的名字 ——
     ⛔ 不是老板打的那几个字。
 
-    📏 改动前实测: `name not in available` 让 50 条机械派生的简称命中 **0 条**,
-       槽位被**静默丢弃**, 老板看不到任何「我没认出这家店」的痕迹。
+    📏 改动前实测两族都挂:
+       · 形态 1 被 `_verbatim_entity` 丢掉（prod 端到端 3/3 拿到通用反问）
+       · 形态 2 被 `name not in available` 丢掉（50 条简称命中 0 条 = 0.0%）
+       两族的失败方式都是**静默丢弃**, 老板看不到任何痕迹。
     """
-    spec = await _ask("宝山店最近30天营收多少", "宝山店")
+    spec = await _ask(query, llm_store)
 
-    assert spec.store_slots == ("模拟·宝山大场社区店",), (
+    assert spec.store_slots == (expect,), (
         f"门店简称没有被归一成库里的全名: {spec.store_slots}")
-    assert spec.store_slot == "模拟·宝山大场社区店"
+    assert spec.store_slot == expect
     assert spec.store_scope == "single"
     assert not spec.clarification_needed, "唯一命中不该反问"
     # 阴性: 老板打的字本身**不许**留在计划里 —— 它不是库里的名字
-    assert "宝山店" not in spec.store_slots
+    assert llm_store not in spec.store_slots or llm_store == expect
+
+
+@pytest.mark.asyncio
+async def test_a_catalogue_name_the_users_words_do_not_point_to_is_still_rejected():
+    """🔴 阴性对照（承重）: 模型吐出一个**库里存在但老板没提**的门店 → 仍然丢弃。
+
+    这条守的是「放行的判据是两个独立来源一致」, ⛔ 不是「在清单里就放行」。
+    没有它, 上面那条「认下模型的改写」就等于把反幻觉守卫整个拆了 ——
+    老板问「最近30天营收多少」, 模型随手挑一家, 他会拿到一家店的数
+    当成全店的看。
+    """
+    spec = await _ask("最近30天营收多少", "模拟·徐汇美罗城店")
+    assert spec.store_slots == (), (
+        f"老板一个字都没提门店, 模型挑的那家却进了计划: {spec.store_slots}")
+
+
+@pytest.mark.asyncio
+async def test_the_llm_may_not_pick_one_when_the_users_words_are_ambiguous():
+    """🔴 阴性对照（承重）: 老板说「社区店」(对上 4 家), 模型挑了其中一家
+    → **不认**, 走确认式反问。
+
+    ▎⛔ 不要替他做判断。产品给依据和判断, 决定是他的。
+    """
+    spec = await _ask("社区店最近30天营收多少", "模拟·宝山大场社区店")
+    assert spec.store_slots == ()
+    assert spec.clarification_needed
+    assert "你要看哪一家" in (spec.clarification_question or "")
 
 
 @pytest.mark.asyncio

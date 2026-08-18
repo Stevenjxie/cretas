@@ -6203,6 +6203,47 @@ def _is_explicit_store_directory_query(query: str) -> bool:
     )
 
 
+def _llm_rewrote_the_name_to_a_catalogue_entry(
+    value: Any,
+    store_resolution: Optional[StoreMentionResolution],
+) -> Optional[str]:
+    """模型**自己把简称改写成了库里的全名**时, 认下它 —— 但只在
+    「老板自己的话也唯一指向同一家店」的前提下。
+
+    🔴 2026-08-18 prod 实测(真 LLM, ⛔ 不是桩)。问「宝山店最近30天营收多少」,
+       模型返回的是:
+
+           store  = "模拟·宝山大场社区店"      ← 它看得到租户门店清单, 自己归一好了
+           stores = ["模拟·宝山大场社区店"]
+           store_scope = "single"   clarification_needed = false
+
+       而 `_verbatim_entity` 要求实参是**问句原文子串** —— 问句里只有
+       「宝山店」, 于是这个**完全正确**的全名被反幻觉守卫当场丢掉,
+       `store_slots` 空 → 下游给出一句通用的「要看哪一组门店」反问。
+       三条简称问句 **3/3** 都这么挂的。
+
+    ▎这就是 owner 定稿第四节写的第 1 类:「**归一**（最高频）：
+    ▎LLM 顺手改写了名字 → 查库查不到」。
+    ⚠️ 我一开始把它读成「模型不会归一」, 单测的桩因此喂了 `store: "宝山店"`
+       ——**一个真模型不会产出的形状**(形态 B‴)。桩绿而 prod 红, 差别全在这里。
+
+    ⛔ 为什么这不是在削弱反幻觉守卫: 判据是**两个互相独立的来源指向同一家店**
+       —— 模型那一侧从我们喂给它的租户门店清单里选, 代码这一侧从**老板原话**
+       里抽出简称再对库消解。两边独立得出同一个全名才放行。
+    ⛔ 只认**唯一**别名, ⛔ 不认歧义候选: 老板说「社区店」而库里有 4 家时,
+       让模型替他挑一家就是**替他做判断** —— 那一路要走确认式反问。
+    """
+    if not isinstance(value, str) or store_resolution is None:
+        return None
+    candidate = value.strip().strip("「」\"'")
+    if not candidate:
+        return None
+    for _mention, canonical in store_resolution.aliases:
+        if candidate == canonical:
+            return canonical
+    return None
+
+
 def _validated_llm_store_names(
     parsed: Dict[str, Any],
     query: str,
@@ -6212,12 +6253,18 @@ def _validated_llm_store_names(
 ) -> Tuple[str, ...]:
     """LLM 提名的门店名 → 库里真实存在的全名。
 
-    🔴 `store_resolution` 之前这里是 `name not in available: continue` ——
-       **静默丢弃**。prod 实测: 机械派生的 50 条门店简称, 精确成员判定
-       命中 **0 条(0.0%)**。老板说「宝山店」而库里叫「模拟·宝山大场社区店」,
-       槽位就这么没了, 而他看不到任何痕迹。
+    两个入口, 对应 prod 实测的两种真实形态:
 
-    ⛔ 归一之后放进 `output` 的是**库里的全名**, ⛔ 不是老板打的字 ——
+    1. 模型**回声**老板打的简称(回放/晋升计划里存的旧形状) → 用
+       `store_resolution` 归一成全名。
+    2. 模型**自己改写**成了库里的全名(真 LLM 今天的行为, 实测 3/3) → 被
+       `_verbatim_entity` 挡在门外, 由 `_llm_rewrote_the_name_to_a_catalogue_entry`
+       在两个独立来源一致时认下。
+
+    📏 改动前实测: 机械派生的 50 条门店简称, `name not in available` 命中
+       **0 条(0.0%)**; 而失败方式是**静默丢弃** —— 老板看不到任何痕迹。
+
+    ⛔ 放进 `output` 的一律是**库里的全名**, ⛔ 不是老板打的字 ——
        抬头要让他看见系统认的是哪一家(owner 定稿第四节)。
     """
     raw: List[Any] = []
@@ -6230,8 +6277,11 @@ def _validated_llm_store_names(
     for value in raw:
         name = _verbatim_entity(value, query)
         if not name:
-            continue
-        if available and name not in available:
+            name = _llm_rewrote_the_name_to_a_catalogue_entry(
+                value, store_resolution)
+            if not name:
+                continue
+        elif available and name not in available:
             canonical = (
                 store_resolution.alias_for(name) if store_resolution else None
             )
