@@ -1763,6 +1763,36 @@ class ComprehensiveSynthesisEngine:
             "如何优化", "给建议", "给方案", "优化方案", "改进方案", "帮助决策",
             "行动方案", "运营策略",
         )
+        # 🔴 2026-08-18: `decision_cues` 十四个词**全是「怎么做」型**，
+        #    一个「要不要 / 该不该」型都没有 —— 而是非题恰恰是老板最直接的决定。
+        #
+        # 📏 prod 实测(MOCK_REST, 绕过 narrative_cache, 真实入口):
+        #      问「我要不要关掉最差的那家店」
+        #      → synthesize 收到 '我要不要关掉最差的那家店 最近30天'
+        #      → mode=lookup / auto_expand=False / attribution=**False**
+        #      → `factbook.attribution = None`  ⇒ **量价分解那一步根本没跑**
+        #      → 老板拿到的 670 字里「客单价」出现 **0 次**
+        #
+        #    ▎`compute_store_attribution`(客流效应 / 客单价效应, 恒等式)**代码里
+        #    ▎早就有**，只是这句话够不着它 —— 形态 B：机制在，没接上。
+        #
+        #    对「要不要关店」这个问题，最有用的一句正是它给的那句：
+        #    「不是没人来，是每单少花了钱 —— 关店解决不了这个」。
+        #
+        # ⛔ 判据不能只看是非词: 「要不要看一下昨天营收」也含「要不要」，
+        #    让它 auto_expand 拉满 21 个维度是纯成本。所以**必须同时**命中
+        #    门店/落后线索 —— 复用上面已有的 `_wants_store` / `_wants_lag`，
+        #    ⛔ 不新造第二张门店词表（形态 D：同一件事两份必漂）。
+        #
+        # ⚠️ 「能不能」故意不收: 「能不能给我看看营收」是取数请求，不是决定。
+        _yes_no_decision_cues = (
+            "要不要", "该不该", "值不值得", "划不划算",
+            "有没有必要", "是不是该", "是否应该", "是否值得",
+        )
+        _is_yes_no_decision = (
+            any(k in ql for k in _yes_no_decision_cues)
+            and (_wants_store or _wants_lag)
+        )
         diagnose_cues = (
             "为什么", "原因", "归因", "哪里有问题", "生意不好", "经营不佳",
             "下滑原因", "下降原因", "异常原因",
@@ -1799,7 +1829,7 @@ class ComprehensiveSynthesisEngine:
                 "period_comparison", "supplier_anomaly",
             )
         )
-        if any(k in ql for k in decision_cues):
+        if any(k in ql for k in decision_cues) or _is_yes_no_decision:
             plan["analysis_mode"] = "decision"
             plan["auto_expand"] = True
         elif any(k in ql for k in diagnose_cues):
