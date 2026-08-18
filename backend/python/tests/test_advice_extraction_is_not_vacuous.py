@@ -18,6 +18,7 @@ from smartbi.gold.restaurant.restaurant_intent_service import (
     _dimension_gap_advice,
 )
 from smartbi.scripts.restaurant_advice_is_actionable_probe import (
+    _EXTRACTOR_FIXTURE,
     extract_advice,
 )
 
@@ -44,34 +45,62 @@ class _Spec:
 
 # ── 承重：对产品**真实产出**有效 ────────────────────────────────────────────
 
+def test_the_extractor_is_alive_on_the_historical_format():
+    """🔴 抽取器的**活性对照** —— 对一条已知含可照抄建议的串必须有效。
+
+    ⚠️ 这一条原来写的是「对产品**当前**真实产出有效」。
+       2026-08-18 产品**撤掉了**那句可照抄的引号问句（实测 4/4 兑现不了），
+       于是那条断言当场红 —— 而它红得**理直气壮**：断言守的是一个
+       我们已经不想要的行为（形态 C‴）。
+
+    ⇒ 抽取器的活性改用**内置 fixture** 验；
+      「产品现在给不给可照抄问句」由下面那条**独立**断言管。
+      ▎两件事压在一个读数里，就分不清「抽取器坏了」和「产品不再承诺」。
+    """
+    got = extract_advice(_EXTRACTOR_FIXTURE)
+    assert got, f"抽取器对历史格式失效了:\n{_EXTRACTOR_FIXTURE}"
+    assert any("怎么样" in g for g in got), got
+    for cand in got:
+        assert 2 <= len(cand) <= 20, f"抽出来的不像一句问话: {cand!r}"
+
+
 @pytest.mark.parametrize("dims,plan", [
-    # `both` 非空那一支：「想看的话分开问，例如先问「按门店怎么样」。」
     (("store", "dish"), ("RESTAURANT_OPS_DAYPART_PERFORMANCE",)),
-    # `supported` 非空、`both` 为空那一支：「换成问「按食材怎么样」我就能答。」
     (("store",), ("RESTAURANT_OPS_INVENTORY_WARNING",)),
 ])
-def test_it_extracts_the_advice_the_product_actually_emits(dims, plan):
-    """🔴 ⛔ 不拿我编的例句测 —— 直接调产品那个函数拿真串。
+def test_the_product_no_longer_hands_out_a_copyable_question(dims, plan):
+    """🔴 产品**不许**再给可照抄的引号问句 —— 📏 实测那些 4/4 兑现不了。
 
-    ⚠️ 这正是本仓记过的形态：闸在断言里**自己模拟**了被测行为，
-       于是它绿着而生产那条路根本没调它。
+    ▎一句兑现不了的承诺，比不给建议更糟：他照做、失败一次，之后就不再照做，
+    ▎而那时我们真正给对的建议也一起失效。
+
+    ⛔ 逐条实测过，**没有一个构造规则能保证兑现**：
+       「按食材看库存预警」2/2 ✅，但「全部门店 最近30天 按门店看营收与订单」
+       补全两个槽仍然 **0/2**。⇒ 按模板发建议只是换一批兑现不了的。
+
+    ⇒ 改成描述**动作**（「换成按食材问同一件事」）：老板照做时用的是**他自己的话**，
+      话题天然在句子里 —— 📏「哪些食材最缺货」「按食材最缺货」都 2/2 ✅。
     """
     text = _dimension_gap_advice(_Spec(dims), tuple(plan))
     assert text, f"{plan} × {dims} 没产出建议 —— 用例没打中分支"
-    got = extract_advice(text)
-    assert got, f"抽取器对产品真实文案失效了:\n{text}"
-    assert any("怎么样" in g for g in got), got
+    assert not extract_advice(text), (
+        f"又给出可照抄的引号问句 {extract_advice(text)} —— 实测这类 4/4 兑现不了\n{text}"
+    )
 
 
-def test_the_extracted_string_is_a_question_not_a_fragment():
-    """抽出来的东西要能**原样拿去问** —— 否则下一步就是拿碎片去查库。"""
-    text = _dimension_gap_advice(_Spec(("store", "dish")),
-                                 ("RESTAURANT_OPS_DAYPART_PERFORMANCE",))
-    got = extract_advice(text)
-    assert got
-    for cand in got:
-        assert 2 <= len(cand) <= 20, f"抽出来的不像一句问话: {cand!r}"
-        assert "、" not in cand or "怎么样" in cand, cand
+@pytest.mark.parametrize("dims,plan", [
+    (("store", "dish"), ("RESTAURANT_OPS_DAYPART_PERFORMANCE",)),
+    (("store",), ("RESTAURANT_OPS_INVENTORY_WARNING",)),
+])
+def test_it_still_tells_him_what_to_do(dims, plan):
+    """阴性对照：⛔ 撤掉可照抄问句**不等于**不给出路。
+
+    交付定义⑤ 要的是「他自己要干什么」—— 撤成一句「算不出」就是把标准降了。
+    """
+    text = _dimension_gap_advice(_Spec(dims), tuple(plan))
+    assert "问同一件事" in text, (
+        "撤掉引号问句的同时把「他要干什么」也撤掉了\n" + text
+    )
 
 
 # ── 阴性对照：⛔ 不许把任意引号内容当成建议 ────────────────────────────────

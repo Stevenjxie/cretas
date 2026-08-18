@@ -28,9 +28,19 @@
 「一条建议都没有」——和「产品不再给建议」长得一模一样。
 
 ⇒ 阳性对照（⛔ 不许省）：
-  · 至少要有一条拒答**解析出**建议；解析率近 0% 或近 100% 都**先查仪器**
-    （本仓的数字出处闸就是这么抓出自己两个缺陷的）
+  · **抽取器对一条已知含建议的串有效** —— 见 `_EXTRACTOR_FIXTURE`
   · 至少要有一条问句 `kind == "answer"`，否则整条链没到执行
+
+🔴 **阳性对照不能写成「实际读数里至少有一条建议」** —— 那会把两件相反的事
+   压成同一个读数：
+
+       抽取器坏了            → 一条建议都没有
+       产品**不再给**可照抄的建议 → 一条建议都没有
+
+   而后者正是 2026-08-18 的**修复方向**（实测那些建议 4/4 兑现不了，
+   于是改成描述动作、不给可照抄的字面问句）。
+   ▎按第一版写法，产品修好的那一刻，探针会报「没量到」。
+   ⇒ 抽取器的活性用**内置 fixture** 验，实际读数里有几条建议只是**读数**。
 
 ## 三态退出码（硬约束 4）
 
@@ -93,6 +103,17 @@ _ADVICE_RE = re.compile(r"[「『]([^」』]{2,20})[」』]")
 #: 只认真正像「换个问法」的那种 —— ⛔ 否则会把答案里任意引号内容当成建议。
 _ADVICE_HINT = ("怎么样", "看看", "问")
 
+#: 🔴 抽取器的**活性对照**：一条已知含可照抄建议的串。
+#:
+#: 它是 2026-08-18 之前 `_dimension_gap_advice` 真正产出过的原话
+#: （那一版实测 **4/4 兑现不了**，因此已改成描述动作、不再给可照抄问句）。
+#: ⇒ 留它在这里**只做一件事**：证明抽取器还活着。
+#:    ⛔ 不许拿它当「产品应该这么说」的样板 —— 它正是被撤掉的那句。
+_EXTRACTOR_FIXTURE = (
+    "你这句要按门店来看，而这次这个数我只能按食材给你，按门店拿不到。"
+    "换成问「按食材怎么样」我就能答。"
+)
+
 _CLEARERS = ("clear_semantic_plan_cache", "clear_route_cache",
              "clear_tenant_gate_cache", "clear_promoted_routes_cache")
 
@@ -146,7 +167,13 @@ async def main() -> int:
         print("\n⛔ rc=2 LLM 槽没有活账号: %s —— 每条答案都会是 fail-closed 拒答,"
               " 读数作废" % "、".join(dead))
         return 2
-    print("每次调用前清: %s\n" % ", ".join(_CLEARERS))
+    print("每次调用前清: %s" % ", ".join(_CLEARERS))
+
+    # 🔴 抽取器活性对照 —— ⛔ 不靠「实际读数里有没有建议」:
+    #    「抽取器坏了」和「产品不再给可照抄的建议」会读成同一个数。
+    extractor_alive = bool(extract_advice(_EXTRACTOR_FIXTURE))
+    print("抽取器活性对照 = %s（对已知含建议的串抽到 %s）\n"
+          % (extractor_alive, extract_advice(_EXTRACTOR_FIXTURE) or "无"))
 
     refusals = 0
     with_advice = 0
@@ -206,19 +233,25 @@ async def main() -> int:
     print("  目录非空 = %s" % catalogue_ok)
     print("  对照问句「%s」答上 = %s (%d/%d 轮)"
           % (POSITIVE_CONTROL, answered_any > 0, answered_any, ROUNDS))
-    print("  至少一条拒答解析出建议 = %s (%d/%d)"
-          % (with_advice > 0, with_advice, refusals))
-    if refusals:
-        rate = with_advice / refusals * 100
-        print("  建议解析率 = %.1f%%  ⚠️ 近 0%% 或近 100%% 都**先查仪器**" % rate)
+    print("  抽取器活性 = %s（对内置 fixture 有效）" % extractor_alive)
+    # ⚠️ 下面这行是**读数**，⛔ 不是阳性对照 —— 产品可以合法地一条建议都不给。
+    print("  实际读数里带可照抄建议的拒答 = %d/%d" % (with_advice, refusals))
 
-    if not (catalogue_ok and answered_any and with_advice):
+    if not (catalogue_ok and answered_any and extractor_alive):
         print("\n⛔ rc=2 仪器没活着 —— 本次读数作废, ⛔ 不要拿它做前后对比")
         return 2
     if broken:
         print("\n⚠️ rc=1 有建议兑现不了 —— 读数有效, 且指向缺陷")
         return 1
-    print("\n✅ rc=0 所有给出的建议都兑现了")
+    if not with_advice:
+        # ⛔ 0 条建议时说「都兑现了」是把**阴性证据说成阳性** ——
+        #    与「(空=零新增)」那类硬编码结论标签同一个形状:
+        #    结论必须由实际值算出来。
+        print("\n✅ rc=0 本轮**一条可照抄的建议都没给**（⇒ 没有可被违约的承诺）。"
+              "\n   ⚠️ 这不等于「建议都对」—— 它等于「没给建议」。"
+              "\n   抽取器活性已单独验过, 所以这个 0 不是仪器坏了。")
+        return 0
+    print("\n✅ rc=0 给出的 %d 条建议全部兑现" % with_advice)
     return 0
 
 
