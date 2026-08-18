@@ -3964,9 +3964,12 @@ async def resolve_stock_shortage(
 
     # 🔴 同 `resolve_requisition_trend`：那句判断此前只接了损耗一处。
     #    ⛔ 三个 resolver 共用同一张门店表，判断也要共用同一句话（形态 D）。
+    # ⚠️ 末尾那个换行**不能省** —— 📏 prod 实测（领料那处漏了它）:
+    #    「…按门店拆多半找不到东西。领用食材前 10 名:」两句粘成一行。
+    #    ⛔ 与 `resolve_wastage_top` 那处的 `+ "\n"` 同一个形状。
     lead = (_store_lead_sentence(
         store_rows, noun="盘亏",
-        all_total=float(total["shortage_cost"] or 0.0))
+        all_total=float(total["shortage_cost"] or 0.0)) + "\n"
         if asked_by_store(dimensions) else "")
 
     answer = (
@@ -4485,7 +4488,7 @@ async def resolve_requisition_trend(
         store_rows, noun="领料",
         # ⛔ 与紧跟其后的 `_store_breakdown_block` 传**同一个**总额 ——
         #    两处覆盖度判断读同一个分母，否则首段和表格会各说各的。
-        all_total=float(total_cost or 0.0))
+        all_total=float(total_cost or 0.0)) + "\n"
         if asked_by_store(dimensions) else "")
 
     answer = (
