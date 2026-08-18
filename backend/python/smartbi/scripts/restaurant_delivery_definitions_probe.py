@@ -88,11 +88,54 @@ _TABLE_RE = re.compile(r"\|\s*:?-{3,}", re.M)
 #: ⚠️ 修漏报 ≠ 靠加词逼近。判据仍然是代理的：它看不见一句全新措辞的出路。
 _ACTION_WORDS = ("换成", "先问", "分开问", "可以问", "请选择", "请输入",
                  "提供", "导出", "补齐", "补上", "核对", "再问", "改成",
-                 "一次说全", "直接输入", "直接说", "可以先看", "改看")
+                 "一次说全", "直接输入", "直接说", "可以先看", "改看",
+                 # 🔴 2026-08-18 补：这三条**有 prod 原文为证**，是词表没跟上
+                 #    新上线的文案，⛔ 不是「加词逼近」。
+                 #    「翻台率怎么样」(#2841 上线后, n=156):
+                 #        「眼下最接近的是订单数。**想看的话**，**说「订单数」就行**。」
+                 #      ⇒ 旧词表判「给了动作=False」，而那句正是**他要干什么**。
+                 #    「哪个供应商报价最贵」(#2831 三态, n=196):
+                 #        「**你要做的**：让采购在录单据时把供应商填上。」
+                 #    「食材成本占营收多少」(#2829 去黑话后):
+                 #        「所以这个数的前提是：这段时间的**头和尾各盘一次库**。」
+                 "想看的话", "就行", "你要做的", "各盘一次库", "确认")
 
 #: 阳性对照：这几条**已知**应该命中，用来证明仪器活着。
 _CONTROL_TABLE = "哪家店卖得最好"        # 排行 ⇒ 必须给表
 _CONTROL_EXTRA = "最近损耗怎么样"        # 答案里有门店表 + 损耗类型 ⇒ 必须多说一层
+
+#: ② 的五个标记 —— 全是**代理判据**（词表匹配），逐个单独计数，
+#: ⛔ 不先合并成一个布尔，⛔ 不报「达标率」。
+#: 📏 2026-08-18 实测它们有判别力（不是近 0 也不是近 100）:
+#:    a_对比 61.9% · b_口径 42.9% · c_异常 38.1% · d_建议 71.4% · e_缺口 38.1%
+_EXTRA_MARKS = {
+    # a) 派生对比：他问一个数，产品给出这个数**内部的**差异
+    "a_对比": re.compile(r"(最高|最低|最强|最弱|相差|高于|低于|领先|落后|"
+                        r"差距主要来自|拆开看)"),
+    # b) 口径限制：告诉他这个数**不能怎么读**
+    "b_口径": re.compile(r"(不代表|别把它读成|别读成|算不出来|没覆盖|分不开|"
+                        r"做不了|不在.{0,6}结论里|只能当参考|⛔)"),
+    # c) 异常点名：具体对象 + 「这不合常理」
+    "c_异常": re.compile(r"🔴"),
+    # d) 可执行动作
+    #    ⚠️ 词表故意收得比「建议：」宽 —— 📏 实测「哪个时段生意最好」的收尾
+    #    「时段差距大时**先看**排班与备货」没有「建议」二字，旧词表漏报。
+    #    ⛔ 但这仍是代理判据，⛔ 不靠继续加词逼近。
+    "d_建议": re.compile(r"(建议动作|建议[:：]|⇒ 下一步|下一步[:：]|"
+                        r"先看|先查|先拉|先核|你要做的|想看的话)"),
+    # e) 缺口点名：哪一块数据没有
+    "e_缺口": re.compile(r"(缺成本卡|没有成本卡|缺的是|暂无|未覆盖|覆盖 ?\d|"
+                        r"还没有数据|没记是哪家)"),
+}
+
+#: 🔴 ② **不适用**的意图 —— 清单/计数类问题，「不多说」是**合法状态**。
+#: 📏 实测：「一共有多少家店」答「10 家 + 名单」，多说一层是画蛇添足。
+#: ▎与「算『缺了多少』之前先问『这里的空是不是一种合法状态』」同一条纪律。
+#: ⛔ 用 **intent** 判，不用问句关键词。
+_FACT_LOOKUP_INTENTS = frozenset({
+    "RESTAURANT_OPS_STORE_DIRECTORY",
+    "RESTAURANT_OPS_CAPABILITIES",
+})
 
 _LABELS = {k: getattr(v, "label", str(v)) for k, v in DIMENSIONS.items()}
 
@@ -142,11 +185,15 @@ async def main() -> int:
             rows.append({
                 "q": q, "kind": kind, "n": len(text), "cat_n": cat_n,
                 "asked": asked, "ranking": ranking,
+                # 🔴 ② 用 intent 判豁免，⛔ 不用问句关键词
+                "intent": getattr(spec, "intent", None) if spec else None,
                 "table": bool(_TABLE_RE.search(text)),
                 "shown": _dims_in_text(text),
                 "action": any(w in text for w in _ACTION_WORDS),
                 "names_missing": bool(_dims_in_text(text)) or bool(
                     re.search(r"缺(的是|少)|没有(可用的)?[^\s。]{2,10}数据", text)),
+                # ② 的五个标记（逐个单独记，⛔ 不先合并成一个布尔）
+                **{k: bool(rx.search(text)) for k, rx in _EXTRA_MARKS.items()},
             })
 
     ans = [r for r in rows if r["kind"] == "answer"]
@@ -164,13 +211,42 @@ async def main() -> int:
             print("    🔴 %-18s n=%-5d 维度=%s" % (r["q"], r["n"], sorted(r["asked"])))
 
     # ── ② 说一件他没想到的事 ───────────────────────────────────────────
-    extra = [r for r in ans if r["shown"] - r["asked"]]
-    print("\n=== ② 说一件他没想到的事（下界：答案里的维度 > 他问的维度）===")
-    print("  答上的 %d 条里，至少多说了一层的 %d 条" % (len(ans), len(extra)))
-    flat = [r for r in ans if not (r["shown"] - r["asked"])]
-    for r in flat:
-        print("    🔴 %-18s 问=%s 答=%s"
-              % (r["q"], sorted(r["asked"]) or "∅", sorted(r["shown"]) or "∅"))
+    # 🔴 2026-08-18 重做：旧判据「答案里的维度 > 他问的维度」是**坏代理**。
+    #
+    # 📏 逐条读 prod 原文之后，它报的 🔴 里至少两条是**误报**：
+    #   「按门店看领料趋势」问=答 → 实际给了食材榜 + 门店榜**两张表** + 3 条建议动作
+    #   「折扣力度多大」  问=答 → 实际给了构成表 + 「这是让利的规模，**不代表**
+    #                              折扣带来了同等的营收增长；库里没有反事实数据」
+    #
+    # ▎那是形态 A：我想知道的 X 是「有没有说一件他没想到的事」，
+    # ▎我实际在量的 Y 是「答案里的维度标签比他问的多」。
+    #
+    # ⇒ 换成**五个各自独立的标记**，逐条贴出来让人读。
+    #   📏 实测这五个标记有判别力（⛔ 不是近 0 也不是近 100）：
+    #      a_对比 61.9% · b_口径 42.9% · c_异常 38.1% · d_建议 71.4% · e_缺口 38.1%
+    #      命中 0 个 4 条 / 1 个 5 条 / 2 个 4 条 / 5 个 8 条
+    #
+    # ⛔ **不报「达标率」** —— 验收方式是逐条读，不是打分。
+    #    这五个标记全是**代理判据**（词表匹配），⛔ 不靠加词逼近
+    #    （形态 E：加词只会让误报变多而漏报仍在）。
+    print("\n=== ② 说一件他没想到的事 ===")
+    print("  ⚠️ 五个标记都是**代理判据**（词表匹配）。⛔ 下面不报达标率，逐条读。")
+    exempt = [r for r in ans if r["intent"] in _FACT_LOOKUP_INTENTS]
+    scored = [r for r in ans if r["intent"] not in _FACT_LOOKUP_INTENTS]
+    print("  豁免 %d 条（清单/计数类问题，**不多说是合法状态**）: %s"
+          % (len(exempt), "、".join(sorted({r["q"] for r in exempt})) or "无"))
+    print("  逐条（分母 = 非豁免的 %d 条）:" % len(scored))
+    for r in scored:
+        hit = [k for k in _EXTRA_MARKS if r[k]]
+        print("    %s %-20s 命中 %d: %s"
+              % ("🔴" if len(hit) <= 1 else "  ", r["q"][:20], len(hit),
+                 "、".join(hit) or "∅"))
+    print("  标记分布:")
+    for k in _EXTRA_MARKS:
+        n = sum(1 for r in scored if r[k])
+        pct = 100.0 * n / max(1, len(scored))
+        flag = "  ⚠️ 近 0/近 100 ⇒ 先查仪器" if scored and (pct < 5 or pct > 95) else ""
+        print("    %-8s %2d/%2d = %5.1f%%%s" % (k, n, len(scored), pct, flag))
 
     # ── ⑤ 答不了时说清三件事 ───────────────────────────────────────────
     print("\n=== ⑤ 答不了时说清三件事 ===")
@@ -187,25 +263,43 @@ async def main() -> int:
     ct = [r for r in rows if r["q"] == _CONTROL_TABLE and r["kind"] == "answer"]
     ce = [r for r in rows if r["q"] == _CONTROL_EXTRA and r["kind"] == "answer"]
     ok_t = bool(ct) and all(r["table"] for r in ct)
-    ok_e = bool(ce) and all(r["shown"] - r["asked"] for r in ce)
+    # ② 的对照换成新判据：这条问句的答案里有门店表 + 损耗类型 + 建议，
+    #    ⇒ 它**必须**命中 ≥2 个标记。⛔ 不再用「维度比问的多」那个坏代理。
+    ok_e = bool(ce) and all(
+        sum(1 for k in _EXTRA_MARKS if r[k]) >= 2 for r in ce)
     ok_c = all(r["cat_n"] > 0 for r in rows)
     print("  ④ 对照「%s」给了表 = %s" % (_CONTROL_TABLE, ok_t))
-    print("  ② 对照「%s」多说了一层 = %s" % (_CONTROL_EXTRA, ok_e))
+    print("  ② 对照「%s」命中 ≥2 个标记 = %s" % (_CONTROL_EXTRA, ok_e))
     print("  目录非空 = %s" % ok_c)
     if should:
         print("  ④ 命中率 %.0f%%  ⚠️ 近 0%% 或近 100%% 都**先查仪器**"
               % (len(gave) / len(should) * 100))
-    if ans:
-        print("  ② 命中率 %.0f%%  ⚠️ 同上" % (len(extra) / len(ans) * 100))
+
+    # 🔴 ② 的仪器自检（形态 A‴：判据要能实时开火）——
+    #    任一标记近 0% 或近 100%，说明**是词表的问题，不是产品结论**。
+    dead_marks = [
+        k for k in _EXTRA_MARKS
+        if scored and not (5 <= 100.0 * sum(1 for r in scored if r[k]) / len(scored) <= 95)
+    ]
+    if dead_marks:
+        print("  ⛔ ② 有标记落在 0~5%% 或 95~100%%: %s" % "、".join(dead_marks))
 
     if not (ok_t and ok_e and ok_c):
         print("\n⛔ rc=2 阳性对照没过 —— 本次读数作废")
         return 2
-    bad = (len(should) - len(gave)) + len(flat) + (len(ref) - len(both))
+    if dead_marks:
+        print("\n⛔ rc=2 ② 的词表失效了（%s）—— 那是仪器问题，⛔ 不是产品结论"
+              % "、".join(dead_marks))
+        return 2
+
+    # ⛔ ② **不进 rc 判定** —— 它是代理判据，验收方式是逐条读，不是打分。
+    #    只有 ④⑤ 这两条有硬判据的进 rc。
+    bad = (len(should) - len(gave)) + (len(ref) - len(both))
     if bad:
-        print("\n⚠️ rc=1 有 %d 条不满足 —— 读数有效，且指向缺陷" % bad)
+        print("\n⚠️ rc=1 有 %d 条不满足（④⑤）—— 读数有效，且指向缺陷" % bad)
+        print("   ② 的读数在上面逐条列着，⛔ 不折成一个数")
         return 1
-    print("\n✅ rc=0 三条判据全部满足")
+    print("\n✅ rc=0 ④⑤ 全部满足；② 逐条读上面那张表")
     return 0
 
 
