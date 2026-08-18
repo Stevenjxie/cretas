@@ -64,8 +64,19 @@ _DATA_LAYOUT_CLAIMS = (
     "没接入", "没有采集", "数据源",
 )
 
-#: 门店 × 餐段 —— **实测这两层同源**，所以任何「它们不在一起」的说法都是假的。
-_MEASURED_FALSE_CASE = ("store", "meal_period")
+#: 仍然差一层的一个组合（门店 ✅ / 菜品 ❌ 对时段 resolver 而言）。
+#:
+#: ⚠️ 原来这里锚的是 `("store", "meal_period")` —— 那正是**实测两层同源**、
+#:    因而证明那句话是假的那一组。同一个 PR 把它**补成能算的**之后，
+#:    它不再落到这个分支（`extra` 为空 ⇒ 返回空串），于是那几条断言当场红。
+#:    ⇒ 换锚点，⛔ 不是放宽断言。
+#:
+#: 🔑 换锚点也换掉了判据的**理由**，这一点要说清：
+#:    菜品级的数确实不在 `fact_pos_transaction` 上，所以「不在同一张表上」
+#:    对这一组**碰巧可能是真的**。判据不因此松动 ——
+#:    ▎系统**不知道**数据为什么拆不出来，它只知道「这个算法不服务这一层」。
+#:    ▎碰巧说对了的编造，仍然是编造。
+_MEASURED_FALSE_CASE = ("store", "dish")
 
 
 def _advice(dims, plan):
@@ -92,18 +103,37 @@ def test_it_still_says_which_layer_it_can_do():
     """
     text = _advice(_MEASURED_FALSE_CASE,
                    ("RESTAURANT_OPS_DAYPART_PERFORMANCE",))
-    assert _DIMENSION_LABEL["meal_period"] in text, "没说清差的是哪一层\n" + text
+    assert _DIMENSION_LABEL["dish"] in text, "没说清差的是哪一层\n" + text
     assert "我能算" in text, "没说清哪一层能算\n" + text
     assert "分开问" in text or "先问" in text, "没给老板下一步动作\n" + text
 
 
 def test_the_suggestion_is_computed_not_hardcoded():
     """阴性对照：建议里的维度名必须**跟着 supported 变**（上一次同型缺陷）。"""
-    a = _advice(("store", "meal_period"), ("RESTAURANT_OPS_DAYPART_PERFORMANCE",))
+    a = _advice(("store", "dish"), ("RESTAURANT_OPS_DAYPART_PERFORMANCE",))
     b = _advice(("dish", "meal_period"), ("RESTAURANT_OPS_GROSS_MARGIN",))
+    assert a and b, f"有一侧是空串，这条断言没打中分支: a={a!r} b={b!r}"
     assert a != b, "两个不同的 supported 给出同一句话 —— 建议多半又写死了"
-    assert _DIMENSION_LABEL["meal_period"] in a
+    assert _DIMENSION_LABEL["store"] in a
     assert _DIMENSION_LABEL["dish"] in b
+
+
+def test_the_now_served_combination_no_longer_gaps():
+    """✅ 正面：**同一个 PR 把那句假话对应的组合补成了能算的**。
+
+    「哪家店晚市最好」= 门店 × 时段。这个组合原来落在本函数的
+    `both` 分支上（并拿到那句「不在同一张表上」）；
+    `resolve_daypart_performance` 补了门店 × 时段交叉表、能力表补登 `store` 之后，
+    它**不该再落到这里** —— `_dimension_gap_advice` 返回空串。
+
+    ⛔ 这一条同时是「补登与真实输出一致」的另一半：
+       能力表登宽了而输出没有，这条会绿而老板拿到一张空承诺；
+       输出有了而没登记，这条会红。两边任一半漏了都在这里现形。
+    """
+    assert _advice(("store", "meal_period"),
+                   ("RESTAURANT_OPS_DAYPART_PERFORMANCE",)) == "", (
+        "门店 × 时段仍被判成差一层 —— 能力表多半没补登 store"
+    )
 
 
 def test_no_dimension_name_appears_out_of_nowhere():

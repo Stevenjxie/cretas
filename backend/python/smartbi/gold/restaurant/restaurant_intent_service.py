@@ -109,7 +109,14 @@ _RESOLVER_DIMENSIONS = {
     # 餐段本身就是这个 resolver 的输出粒度 —— 2026-08-09 放开 `meal_period` 维度后
     # 补上它。⛔ 补的依据是**它真能出**(结果按午市/晚市/夜宵分), 不是为了让某条
     #    用例过; 能力表写的是真能出的粒度, 写宽了下游会拿它当承诺。
-    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time", "meal_period"}),
+    # 2026-08-18 补 `store`。⛔ 依据同上：**它真能出** —— 同一个 commit 里
+    #    `resolve_daypart_performance` 加了门店 × 时段交叉表（JOIN dim_store，
+    #    与主表同源）。prod 实测 fact_pos_transaction 99792 行、store_id 与时段
+    #    两者零 NULL、门店×时段 20 个非空组合。
+    # 🔴 补它的直接原因是**产品在说假话**：「哪家店晚市最好」原来拿到
+    #    「这两层的数不在同一张表上」——而两层就在这一张表上。
+    #    那句话已删（改成说算法），这里补上真能出的那一半。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time", "meal_period", "store"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
@@ -1495,9 +1502,13 @@ def _resolver_kwargs(
         # ⚠️ 只发出来还不够 —— `resolve_by_code` 按**签名**过滤 kwargs, 没声明
         #    这个形参的 resolver 照样**静默**丢掉。两半都要接, 见
         #    `tests/test_wastage_answers_the_asked_dimension.py` 的前两条。
-        # ⚠️ 今天只有 `resolve_wastage_top` 消费它; 其余 17 个 resolver **故意
-        #    不改**(登记在那份用例的模块 docstring 里), 它们收不到这个键的行为
-        #    与改动前逐字相同 —— 5 个带 **kwargs 的会收到但不读, 12 个被过滤掉。
+        # ⚠️ 消费它的 resolver 是**逐个加**的, 不是一次全改:
+        #      2026-08-18  `resolve_wastage_top`            门店损耗排行
+        #      2026-08-18  `resolve_daypart_performance`    门店 × 时段交叉表
+        #    其余 16 个**故意不改**, 它们收不到这个键的行为与改动前逐字相同
+        #    —— 带 **kwargs 的会收到但不读, 其余被签名过滤掉。
+        # ⛔ 加一个就要同时补登 `_RESOLVER_DIMENSIONS`, 而**依据是它真能出**;
+        #    只发不接 = 假承诺, 只接不登 = 能算的被说成算不出。两边都要动。
         "dimensions": tuple(spec.dimensions),
     }
     start, end = spec.date_range

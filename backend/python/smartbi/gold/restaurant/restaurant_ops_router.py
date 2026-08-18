@@ -1867,6 +1867,14 @@ _DEMO_GOLD_MAPPED_CODES = frozenset({
     "RESTAURANT_OPS_WASTAGE_TOP",
     "RESTAURANT_OPS_STOCK_SHORTAGE",
     "RESTAURANT_OPS_REQUISITION_TREND",
+    # 🔴 2026-08-18 补: 时段表现当天开始**出门店 × 时段交叉表**, 于是它进了
+    #    「门店宇宙必须一致」这一族 —— 与 08-17 补 CHANNEL_MIX 同一个理由,
+    #    同一条判据(「加能力时要同时问一句: 它有没有进入某个必须一致的族」)。
+    # ⚠️ 我这次**没有主动想起**它 —— 是
+    #    `test_no_unregistered_store_capable_resolver` 把我拦下来的。
+    #    ⇒ 那道闸值回票价: 不补的后果是静默的(两套门店、两个都「对」的数)。
+    # ⛔ 没有登进下面那张「刻意不映射」表 —— 那张表已棘轮到 0, 只许变短。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE",
 })
 
 #: 能按门店分组、但**刻意没有**进上面那张表的 resolver。
@@ -9618,6 +9626,7 @@ async def resolve_daypart_performance(
     smartbi_pool, factory_id: str, days: int = 30, *,
     role: Optional[str] = None, query: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    dimensions: Sequence[str] = (),
 ) -> OpsAnswer:
     """历史时段表现 —— 「哪个时段生意最好」。
 
@@ -9637,6 +9646,28 @@ async def resolve_daypart_performance(
     ELSE 被算成「夜宵」—— 那不是夜宵, 是没时间戳。没时间戳的单量如实披露, 不摊派。
 
     金额是价格权限数据 —— 非价格角色只出单量与占比(与 resolve_channel_mix 同规矩)。
+
+    ## `dimensions` 含 `store` 时多出一张门店 × 时段交叉表（2026-08-18）
+
+    🔴 加它的直接原因是**产品在说假话**: 「哪家店晚市最好」原来拿到
+       「按门店我能算, 但你这句还要求再按餐段拆一层, **这两层的数不在同一张
+       表上**, 拆不出来」。prod 实测那句是假的 ——
+
+           fact_pos_transaction  99792 行
+             store_id 为 NULL 的行 = 0     meal_period 为 NULL 的行 = 0
+             门店 × 时段 非空组合 = 20     (10 店 × 午市/晚市)
+
+       两层就在**这一张表**上, 而且本 resolver 连 `meal_period` 列都不读, 它从
+       **同一张表**的时间戳现算 ⇒ 两层比「同表」更同源。
+       那句话已在 `_dimension_gap_advice` 删掉(改成说算法)，这里补上**真能出**。
+
+    ⛔ 能力表 `_RESOLVER_DIMENSIONS` 里的 `store` 是在这段代码写完之后才补的 ——
+       依据是「它真能出」, 与 2026-08-09 补 `meal_period`、08-17 补 `wastage_type`
+       同一道程序。写宽了下游会拿它当承诺。
+
+    ⚠️ 覆盖度: 门店靠 `JOIN dim_store` 得到, 归不到店的单**必须说出来**
+       (阈值读 `_STORE_COVERAGE_COMPLETE_RATIO`, ⛔ 不新写第二份)。
+       MOCK_REST 上 store_id 零 NULL ⇒ **这条在它上面验不到**, 由单测守。
     """
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
     from smartbi.gold.restaurant.daypart import DAYPART_CASE_SQL
@@ -9675,6 +9706,26 @@ async def resolve_daypart_performance(
                 """,
                 factory_id, days, exact_start, exact_end,
             )
+            # 门店 × 时段。⛔ 只在真的问了门店时才查 —— 多一次全表聚合不是免费的,
+            #    而且不问就给会让每个时段问句都多出一张十行表。
+            store_rows = []
+            if asked_by_store(dimensions):
+                store_rows = await conn.fetch(
+                    f"""
+                    SELECT s.name AS store_name,
+                           {DAYPART_CASE_SQL} AS daypart,
+                           COUNT(*)::int                        AS bills,
+                           SUM(COALESCE(t.gross_amount,0))::float AS revenue
+                      FROM fact_pos_transaction t
+                      JOIN dim_store s ON s.store_id = t.store_id
+                     WHERE t.factory_id = $1
+                       AND t.time IS NOT NULL
+                       AND t.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+                       AND t.date <= COALESCE($4::date, CURRENT_DATE)
+                     GROUP BY 1, 2
+                    """,
+                    factory_id, days, exact_start, exact_end,
+                )
 
     untimed_bills = int((untimed or {}).get("n") or 0)
     if not rows:
@@ -9746,6 +9797,72 @@ async def resolve_daypart_performance(
         right_align={1, 2, 3, 4, 5} if can_see_money else {1, 2}))
 
     top = ordered[0]["daypart"]
+
+    # ── 门店 × 时段 ────────────────────────────────────────────────────────
+    # 老板问「哪家店晚市最好」时要的就是这个。⛔ 不替他挑时段(那句里的「晚市」
+    #    是个**值**, spec 里只带着 `meal_period` 这个**维度**, 没有值) ——
+    #    整张交叉表给他, 哪一列他自己认得。⛔ 不替他做判断。
+    store_cross_total = 0.0
+    if store_rows:
+        dayparts = [r["daypart"] for r in ordered]
+        by_store: Dict[str, Dict[str, Any]] = {}
+        for r in store_rows:
+            slot = by_store.setdefault(
+                r["store_name"], {"bills": {}, "revenue": {}, "total": 0.0})
+            slot["bills"][r["daypart"]] = int(r["bills"])
+            slot["revenue"][r["daypart"]] = float(r["revenue"] or 0.0)
+            slot["total"] += (float(r["revenue"] or 0.0) if can_see_money
+                              else int(r["bills"]))
+        store_cross_total = sum(
+            float(r["revenue"] or 0.0) for r in store_rows)
+
+        ranked = sorted(by_store.items(), key=lambda kv: kv[1]["total"], reverse=True)
+        # 首段: 在**生意最好的那个时段**里点名最强的门店 + 极差。
+        # ⛔ 极差走 `_store_revenue_spread` —— 门店极差只此一处计算(形态 D)。
+        top_slot_rows = [
+            {"store_name": name, "revenue": (d["revenue"] if can_see_money
+                                             else d["bills"]).get(top, 0)}
+            for name, d in by_store.items()
+        ]
+        top_slot_rows.sort(key=lambda r: r["revenue"], reverse=True)
+        spread = _store_revenue_spread(top_slot_rows)
+
+        lines.append("")
+        unit = "营收" if can_see_money else "单量"
+        head = (f"按门店看**{top}**：**{top_slot_rows[0]['store_name']}**最强"
+                if top_slot_rows else "")
+        if head and spread:
+            hi, lo, pct = spread
+            head += (f"，{unit}"
+                     + (f"¥{hi:,.2f}" if can_see_money else f"{hi:,.0f}")
+                     + f"；最弱的是 {top_slot_rows[-1]['store_name']} "
+                     + (f"¥{lo:,.2f}" if can_see_money else f"{lo:,.0f}")
+                     + f"，相差 {pct:.1f}%")
+        if head:
+            lines.append(head + "。")
+
+        # 覆盖度: 归不到店的单必须说出来 —— ⛔ 阈值读同一个常量, 不写第二份。
+        if can_see_money and total_rev > 0:
+            if store_cross_total < total_rev * _STORE_COVERAGE_COMPLETE_RATIO:
+                lines.append(
+                    f"> ⚠️ 上面这张门店表只覆盖了 "
+                    f"¥{store_cross_total:,.2f}／全部 ¥{total_rev:,.2f}"
+                    f"（{store_cross_total / total_rev * 100:.1f}%），"
+                    f"其余的单归不到具体门店 —— 别拿它当全部生意看。"
+                )
+
+        lines.append("")
+        headers = ["门店"] + [f"{d}{unit}" for d in dayparts]
+        table_rows = []
+        for name, d in ranked:
+            src = d["revenue"] if can_see_money else d["bills"]
+            table_rows.append(
+                [name] + [(f"¥{src.get(dp, 0):,.0f}" if can_see_money
+                           else f"{src.get(dp, 0):,}") for dp in dayparts])
+        lines.extend(_markdown_table(
+            headers, table_rows,
+            right_align=set(range(1, len(headers)))))
+
     if untimed_bills:
         lines.append("")
         lines.append(f"> 另有 {untimed_bills:,} 单没有下单时间，不在以上拆分内。")
@@ -9760,7 +9877,12 @@ async def resolve_daypart_performance(
         answer_text="\n".join(lines),
         charts=[], kpis=kpis,
         meta={"window_label": window_label, "untimed_bills": untimed_bills,
-              "top_daypart": top, "scope_matches_request": True},
+              "top_daypart": top, "scope_matches_request": True,
+              # 机器可读侧也要有 —— 正文有表而 meta 没有, 就是形态 B 第 7 例
+              # (投影丢失): 数据在产出端, 消费端找不到。
+              "by_store": bool(store_rows),
+              "store_count": len({r["store_name"] for r in store_rows}),
+              "store_covered_revenue": store_cross_total},
     )
 
 
