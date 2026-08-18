@@ -4545,7 +4545,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withCode("WORKFLOW_RECEIPT_AGGREGATE_MISMATCH");
         }
 
-        allocateWorkflowOutputCosts(factoryId, plan.getId(), outputLines);
+        String costWarning = allocateWorkflowOutputCosts(factoryId, plan.getId(), outputLines);
         LocalDateTime receivedAt = LocalDateTime.now();
         for (ProductionSettlementOutputLine output : outputLines) {
             FinishedGoodsBatch batch = createFinishedGoodsForOutputLine(
@@ -4573,14 +4573,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setWarehouseReceivedBy(receivedBy);
         settlement.setWarehouseReceivedAt(receivedAt);
         settlement.setPostingStatus("POSTED");
-        settlement.setPostingMessage("Warehouse confirmed every pinned Workflow terminal output line");
+        // ⛔ 这两句是【用户可见】的: 原来是英文("Warehouse confirmed every pinned Workflow
+        //    terminal output line" / "Completed N production batch records"), 直接出现在
+        //    App/web 的响应里。判据: 用户看到的必须是中文。
+        settlement.setPostingMessage("仓库已确认全部末道产出, 成品已入库");
         productionSettlementRepository.save(settlement);
         int completedBatchCount = markReceiptProductionBatchesCompleted(
                 factoryId, plan.getId(), settlement);
-        List<String> warnings = completedBatchCount > 0
-                ? List.of("Completed " + completedBatchCount + " production batch records")
-                : Collections.emptyList();
-        return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(), warnings);
+        return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(),
+                buildReceiptWarnings(completedBatchCount, costWarning));
     }
 
     private String outputReceiptKey(String productTypeId, String batchNumber, String unit) {
@@ -4603,14 +4604,68 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
-    private void allocateWorkflowOutputCosts(
+    /**
+     * 组装仓库确认入库要给用户看的提示。
+     *
+     * <p>抽成纯函数是为了让闸能断言<b>行为</b>而不是源码文本 —— 2026-08-18 实测:
+     * 第一版闸写的是 {@code src.contains("warnings.add(costWarning)")}, 而变异
+     * {@code if (false && costWarning != null)} 把行为改掉了、那行字符却still在,
+     * 于是闸<b>纹丝不动</b>。本仓形态 C⁸: 闸要量结构/行为, 不要量文本。
+     *
+     * @param costWarning 成本算不出时的原因; {@code null} 表示成本正常算出来了
+     */
+    public static List<String> buildReceiptWarnings(int completedBatchCount, String costWarning) {
+        List<String> warnings = new ArrayList<>();
+        if (completedBatchCount > 0) {
+            warnings.add("已同步 " + completedBatchCount + " 个生产批次为已完工");
+        }
+        // 🔴 成本算不出时必须说出来 —— 静默留空会让用户以为「成本还没算」或「成本就是 0」
+        if (costWarning != null) {
+            warnings.add(costWarning);
+        }
+        return warnings;
+    }
+
+    /**
+     * 给末道产出行分摊成本。
+     *
+     * @return {@code null} 表示分摊成功; 非 null 是<b>给用户看的原因</b>(为什么没有成本 + 下一步)。
+     *
+     * <h3>🔴 为什么要返回原因而不是静默 return (2026-08-18 prod 实测)</h3>
+     *
+     * 原来这里 {@code totalCost == null} 就直接 return, 于是 {@code allocated_cost} /
+     * {@code unit_cost} 一路留空、成品批次的 {@code unit_cost} 也是空, <b>而界面上没有任何说明</b> ——
+     * 用户只看到成本栏是空的, 不知道是「还没算」「算不出」还是「真的是 0」。
+     *
+     * <p>本仓原则: <b>禁止降级处理, 不返回假数据, 明确显示错误</b>; 判据: <b>凡是拦住人的地方都要告诉下一步</b>。
+     * ⛔ 特别地: 不许把「算不出」写成 ¥0 —— 那会让后续 COGS 按零成本结转。
+     *
+     * <p>实测那次算不出的根因(<b>本方法不负责修</b>, 属成本口径, 见 PR 说明):
+     * 结单把领用事实写进 {@code production_settlement_consumptions}(4 行, RAW_MATERIAL, 各 20kg),
+     * 而 {@code OrderCostBreakdownService} 按 {@code material_consumptions.production_batch_id} 归集 ——
+     * <b>两张表不相交</b> ⇒ totalRawInput=0 ⇒ totalCost=0 ⇒ 这里拿到 null。
+     */
+    private String allocateWorkflowOutputCosts(
             String factoryId, String planId, List<ProductionSettlementOutputLine> lines) {
         BigDecimal totalCost = resolvePlanTotalCost(factoryId, planId);
         if (totalCost == null) {
-            return;
+            log.warn("[结单成本] 算不出本计划权威成本, 成品单位成本留空 factory={} plan={} "
+                    + "(检查 OrderCostBreakdownService.computeByPlan 是否归集到了本计划的原料领用)",
+                    factoryId, planId);
+            return COST_UNAVAILABLE_WARNING;
         }
         allocateWorkflowOutputCostsFromTotal(totalCost, lines);
+        return null;
     }
+
+    /**
+     * 成本算不出时给用户的那句话。⛔ 不要改成「成本为 0」之类的说法 ——
+     * 「算不出」和「是 0」对下游(COGS 结转/毛利)是两件完全不同的事。
+     */
+    public static final String COST_UNAVAILABLE_WARNING =
+            "本次未能算出成品单位成本: 没有归集到本计划的原料领用成本。"
+            + "成品已按实收数量入库, 单位成本留空(不填 ¥0, 避免后续按零成本结转)。"
+            + "下一步: 请在成本核算处人工核对本计划成本, 或联系管理员检查成本归集配置。";
 
     static void allocateWorkflowOutputCostsFromTotal(
             BigDecimal totalCost, List<ProductionSettlementOutputLine> lines) {
