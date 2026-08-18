@@ -9514,6 +9514,54 @@ async def resolve_channel_mix(
     )
 
 
+def _supplier_price_no_comparison_text(window_label: str, coverage: dict) -> str:
+    """有报价数据但比不了价 —— **三态**，⛔ 不是同一句话。
+
+    🔴 2026-08-18 prod 实测（MOCK_REST）把原来那一句话钉死了：
+
+        obs 24 | ingredient 24 | **supplier 0** | 2026-08-08
+
+    24 条报价、24 种食材，而**供应商这一列全是 NULL**。
+    原文说「没有任何一种食材同时来自两家以上供应商」——那句话暗示
+    「每种食材有一家供应商」，而真相是**一条都没记是哪家**。
+
+    ⇒ 老板照它去做（「让两家都报价」）会**一无所获**，因为录进去照样没有
+      供应商这一栏。那正是反目标第一条：
+      ▎排在最前面的那个命中，他去查会不会一无所获。
+
+    ⛔ 数从 `coverage` 来，不编；措辞按 `supplier_count` 分三态，不写死。
+    """
+    sup = int(coverage.get("supplier_count") or 0)
+    ing = int(coverage.get("ingredient_count") or 0)
+    obs = int(coverage.get("observation_count") or 0)
+    tail = ("\n\n单一供应商的价格高低无从比较，不会拿不同食材的单价互相比。")
+    if sup == 0:
+        return (
+            f"{window_label}有 {obs:,} 条采购报价（{ing} 种食材），"
+            "但**每一条都没记是哪家供应商**，所以比不了价。\n\n"
+            "缺的是采购单据里的**供应商**这一栏 —— ⛔ 不是「每种食材只有一家」，"
+            "是这一栏根本没填。\n\n"
+            "你要做的：让采购在录单据时把供应商填上。"
+            "填上之后，同一种食材向两家买过，这里就能告诉你差多少。"
+            + tail
+        )
+    if sup == 1:
+        return (
+            f"{window_label}只有 1 家供应商的报价（{ing} 种食材），"
+            "没有第二家可比。\n\n"
+            "你要做的：同一种食材下次向另一家也要一次价、录进采购单据，"
+            "这里就能告诉你差多少。"
+            + tail
+        )
+    return (
+        f"{window_label}有 {sup} 家供应商的报价，覆盖 {ing} 种食材 —— "
+        "但**没有任何一种食材同时来自两家以上供应商**，因此没有可比的对象。\n\n"
+        "你要做的：挑一种买得最多的食材，下次向两家各要一次价、都录进采购单据，"
+        "这里就能告诉你差多少。"
+        + tail
+    )
+
+
 async def resolve_supplier_price(
     smartbi_pool, factory_id: str, days: int = 90, *,
     role: Optional[str] = None, query: Optional[str] = None,
@@ -9551,12 +9599,17 @@ async def resolve_supplier_price(
         return OpsAnswer(
             code="RESTAURANT_OPS_SUPPLIER_PRICE",
             title="供应商比价",
+            # ⛔ 表名 `agg_supplier_price` 不给店长 —— 那是给工程师的。
+            #    机器可读侧留在 meta.missing_source 里, 不丢。
+            # ⚠️ 其余措辞**原样保留** —— 去黑话只动黑话, 顺手改措辞只会白白
+            #    弄红既有断言（本轮当场犯了一次: 把「接入」改成「接进来」）。
             answer_text=(
                 "还没有供应商报价数据，因此比不了价。\n\n"
                 "这不是「不归我管」——供应商报价属于经营数据，缺的是**采购单据里的"
-                "供应商单价还没有接入**（数据表 `agg_supplier_price` 目前为空）。\n"
+                "供应商单价还没有接入**。\n"
                 "接入之后这里可以回答：同一食材各家供应商的报价差多少、"
-                "哪家最贵哪家最便宜。"
+                "哪家最贵哪家最便宜。\n\n"
+                "你要做的：确认采购单据录的时候带上了供应商和单价。"
             ),
             charts=[], kpis=[],
             meta={"no_data": True, "missing_source": "agg_supplier_price"},
@@ -9569,13 +9622,11 @@ async def resolve_supplier_price(
         return OpsAnswer(
             code="RESTAURANT_OPS_SUPPLIER_PRICE",
             title=f"供应商比价（{window_label}）",
-            answer_text=(
-                f"{window_label}有供应商报价数据，但**没有任何一种食材同时来自两家以上"
-                "供应商**，因此没有可比的对象。单一供应商的价格高低无从比较，"
-                "不会拿不同食材的单价互相比。"
-            ),
+            answer_text=_supplier_price_no_comparison_text(window_label, coverage),
             charts=[], kpis=[],
-            meta={"window_label": window_label, "comparable_items": 0},
+            meta={"window_label": window_label, "comparable_items": 0,
+                  "supplier_count": int(coverage.get("supplier_count") or 0),
+                  "ingredient_count": int(coverage.get("ingredient_count") or 0)},
         )
 
     lines = [f"**同一食材的供应商报价差（{window_label}）：**", ""]
