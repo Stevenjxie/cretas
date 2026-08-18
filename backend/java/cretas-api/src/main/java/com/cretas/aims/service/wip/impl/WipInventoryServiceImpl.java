@@ -6,6 +6,8 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
+import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
@@ -18,7 +20,10 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.workflow.WorkflowByproductNodes;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -55,6 +60,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductTypeRepository productTypeRepo;
+    /** SP1-T4 Wave2 — Workflow(画布)任务的产出结构来源 (画布不写 WorkProcess.semiFinishedOutputCode)。 */
+    private final ProductionWorkflowInstanceRepository workflowInstanceRepo;
+    private final WorkflowTaskPortRepository workflowTaskPortRepo;
     /** 产品族自动识别 (以原料为主) — SFI 防呆过滤的"同族"信号来源, 就地识别零手填. */
     private final ProductFamilyResolver productFamilyResolver;
     /** SP3: 成本更新事件发布 — 异步回填+预警. */
@@ -1409,6 +1417,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     // ========== SP1 T4 — Output options endpoint ==========
 
+    /** 与 WorkflowClerkSheetServiceImpl 内同名常量同值 — workflow_task_ports.material_kind 的 SEMI_FINISHED 取值。 */
+    private static final String WORKFLOW_MATERIAL_KIND_SEMI_FINISHED = "SEMI_FINISHED";
+
     @Override
     public OutputOptionsResponse getOutputOptions(String factoryId, Long batchId) {
         List<WorkProcessTask> tasks =
@@ -1432,7 +1443,93 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     ));
         }
 
+        // Workflow(画布)任务不写 WorkProcess.semiFinishedOutputCode —— 那是旧版"工序管理"模型的
+        // 字段。画布任务的产出结构表达在 workflow_task_ports (direction=OUTPUT), 上面那段 legacy
+        // 循环对它们恒空。半成品产出候选项改从这里取, 与 legacy 结果合并返回。
+        items.addAll(workflowOutputOptions(factoryId, batchId, tasks));
+
         log.debug("[SP1-T4] getOutputOptions factoryId={} batchId={} → {} items", factoryId, batchId, items.size());
         return OutputOptionsResponse.builder().items(items).build();
+    }
+
+    /**
+     * SP1 T4 workflow(画布)分支 — 从 {@code workflow_task_ports} 取本批次各任务的半成品产出端口
+     * (direction=OUTPUT, materialKind=SEMI_FINISHED), 映射成 {@link OutputOptionsResponse.OutputOptionItem}。
+     *
+     * <ul>
+     *   <li>{@code semiCode} 用 {@code ProductType.code}(如 PTSEMI-F006-2001) —— 工厂内唯一
+     *       (product_types 表 (factory_id, code) 唯一约束), 人类可读 (禁止把 skuId UUID 甩给用户),
+     *       且与画布上"这是同一个半成品产品"的语义天然对齐(同产品多批次共用一条移动加权 WIP 行,
+     *       与旧版 WorkProcess.semiFinishedOutputCode 按工序固定的口径一致)。</li>
+     *   <li>副产 (画布 {@code data.isByproduct} 标记) 排除 —— 与 PR #2846 把副产接到报工端时
+     *       "不再显示成半成品也不再独立成行"的语义保持一致, 不把副产误当"半成品产出选项"提供。
+     *       唯一判据收敛在 {@link WorkflowByproductNodes}, 不在此处另写一份。</li>
+     *   <li>一个工序任务在画布上可以有多个 SEMI_FINISHED 产出端口(2B.2 多产出), 因此一个 taskId
+     *       可能对应多条 item —— 与 legacy 单产出假设不同, 调用方(RN 报工屏)目前只消费
+     *       {@code items[0]}, 多产出的选择 UI 是已知的后续缺口, 不在本次修复范围内。</li>
+     * </ul>
+     */
+    private List<OutputOptionsResponse.OutputOptionItem> workflowOutputOptions(
+            String factoryId, Long batchId, List<WorkProcessTask> tasks) {
+        ProductionWorkflowInstance instance = workflowInstanceRepo
+                .findByFactoryIdAndProductionBatchId(factoryId, batchId)
+                .orElse(null);
+        if (instance == null) {
+            return List.of();
+        }
+        Set<String> byproductNodeIds =
+                WorkflowByproductNodes.byproductMaterialNodeIds(instance.getNodesJson());
+
+        Map<Long, WorkProcessTask> tasksById = tasks.stream()
+                .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
+
+        List<WorkflowTaskPort> semiOutputPorts = workflowTaskPortRepo
+                .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId()).stream()
+                .filter(p -> WorkflowTaskPort.Direction.OUTPUT.equals(p.getDirection()))
+                .filter(p -> WORKFLOW_MATERIAL_KIND_SEMI_FINISHED.equals(p.getMaterialKind()))
+                .filter(p -> !byproductNodeIds.contains(p.getMaterialNodeId()))
+                .filter(p -> tasksById.containsKey(p.getTaskId()))
+                .collect(Collectors.toList());
+        if (semiOutputPorts.isEmpty()) {
+            return List.of();
+        }
+
+        List<String> skuIds = semiOutputPorts.stream()
+                .map(WorkflowTaskPort::getSkuId)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, ProductType> productTypesBySku = productTypeRepo
+                .findByFactoryIdAndIdIn(factoryId, skuIds).stream()
+                .collect(Collectors.toMap(ProductType::getId, pt -> pt, (a, b) -> a));
+
+        List<String> workProcessIds = semiOutputPorts.stream()
+                .map(p -> tasksById.get(p.getTaskId()).getWorkProcessId())
+                .filter(id -> id != null)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, WorkProcess> workProcessesById = workProcessRepo
+                .findByFactoryIdAndIdIn(factoryId, workProcessIds).stream()
+                .collect(Collectors.toMap(WorkProcess::getId, wp -> wp, (a, b) -> a));
+
+        List<OutputOptionsResponse.OutputOptionItem> items = new ArrayList<>();
+        for (WorkflowTaskPort port : semiOutputPorts) {
+            ProductType productType = productTypesBySku.get(port.getSkuId());
+            if (productType == null || productType.getCode() == null || productType.getCode().isBlank()) {
+                // 禁止降级处理: 缺可读产品编码时明确跳过并留痕, 不要把 skuId UUID 当 semiCode 塞给用户。
+                log.warn("[SP1-T4][workflow] 半成品产出端口缺少可用产品编码, 跳过: factoryId={} taskId={} "
+                                + "workflowPortId={} skuId={}",
+                        factoryId, port.getTaskId(), port.getWorkflowPortId(), port.getSkuId());
+                continue;
+            }
+            WorkProcessTask task = tasksById.get(port.getTaskId());
+            WorkProcess wp = workProcessesById.get(task.getWorkProcessId());
+            items.add(OutputOptionsResponse.OutputOptionItem.builder()
+                    .taskId(task.getId())
+                    .processName(wp != null ? wp.getProcessName() : productType.getName())
+                    .semiCode(productType.getCode())
+                    .processOrder(task.getProcessOrder())
+                    .build());
+        }
+        return items;
     }
 }

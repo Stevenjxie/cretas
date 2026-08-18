@@ -11,6 +11,8 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +58,8 @@ class ReverseReportPostingTest {
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository workProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private ProductionWorkflowInstanceRepository workflowInstanceRepo;
+    @Mock private WorkflowTaskPortRepository workflowTaskPortRepo;
     @Mock private ProductFamilyResolver productFamilyResolver;
     @Mock private ApplicationEventPublisher eventPublisher;
 
@@ -66,7 +70,8 @@ class ReverseReportPostingTest {
     @BeforeEach
     void setUp() {
         svc = new WipInventoryServiceImpl(wipRepo, txnRepo, reportRepo, lineageEdgeRepo,
-                taskRepo, workProcessRepo, productTypeRepo, productFamilyResolver, eventPublisher);
+                taskRepo, workProcessRepo, productTypeRepo, workflowInstanceRepo, workflowTaskPortRepo,
+                productFamilyResolver, eventPublisher);
 
         report = new ProductionReport();
         report.setId(23814L);

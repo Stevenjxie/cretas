@@ -10,6 +10,8 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -146,6 +148,7 @@ class SemiConsumptionWritesLedgerTest {
                 wipRepo, txnRepo, reportRepo,
                 mock(BatchLineageEdgeRepository.class), taskRepo,
                 mock(WorkProcessRepository.class), mock(ProductTypeRepository.class),
+                mock(ProductionWorkflowInstanceRepository.class), mock(WorkflowTaskPortRepository.class),
                 mock(ProductFamilyResolver.class), mock(ApplicationEventPublisher.class));
 
         ProductionReport report = new ProductionReport();

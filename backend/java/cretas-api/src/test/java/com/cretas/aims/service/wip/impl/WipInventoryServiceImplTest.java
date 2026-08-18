@@ -1,18 +1,24 @@
 package com.cretas.aims.service.wip.impl;
 
 import com.cretas.aims.dto.yield.OutputOptionsResponse;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
+import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,6 +32,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +76,15 @@ class WipInventoryServiceImplTest {
     @Mock
     private WorkProcessRepository workProcessRepo;
 
+    @Mock
+    private ProductTypeRepository productTypeRepo;
+
+    @Mock
+    private ProductionWorkflowInstanceRepository workflowInstanceRepo;
+
+    @Mock
+    private WorkflowTaskPortRepository workflowTaskPortRepo;
+
     // SP3 added ApplicationEventPublisher.publishEvent(ProductionCostUpdatedEvent) to
     // WipInventoryServiceImpl.postSemiOutputLedger — mock required so @InjectMocks can inject it.
     @Mock
@@ -80,6 +98,9 @@ class WipInventoryServiceImplTest {
 
     @Captor
     private ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor;
+
+    @Captor
+    private ArgumentCaptor<Collection<String>> skuIdsCaptor;
 
     /**
      * F1 修复后 FINISHED 路径 first-IN 桩: findForUpdate(empty) → ensureRowExists saveAndFlush 占位行
@@ -997,6 +1018,264 @@ class WipInventoryServiceImplTest {
 
         assertEquals(0, resp.getItems().size());
         verify(workProcessRepo, never()).findByFactoryIdAndId(anyString(), anyString());
+    }
+
+    // ========== SP1 T4 workflow(画布) 分支 ==========
+    //
+    // 画布任务不写 WorkProcess.semiFinishedOutputCode (那是旧版"工序管理"模型的字段) —— 产出结构
+    // 表达在 workflow_task_ports。上面四条 T4 legacy 测试之所以在这条分支加入后仍然通过, 是因为
+    // workflowInstanceRepo 未显式打桩时 Mockito 对 Optional 返回类型默认给 Optional.empty()
+    // (ReturnsEmptyValues), 恰好命中 workflowOutputOptions 的"无 workflow 实例 → 直接返回空表"分支。
+
+    private WorkflowTaskPort port(Long taskId, String workflowPortId, WorkflowTaskPort.Direction direction,
+                                   String materialKind, String materialNodeId, String skuId) {
+        WorkflowTaskPort p = new WorkflowTaskPort();
+        p.setFactoryId(FACTORY_ID);
+        p.setWorkflowInstanceId(900L);
+        p.setTaskId(taskId);
+        p.setWorkflowPortId(workflowPortId);
+        p.setDirection(direction);
+        p.setOrdinal(0);
+        p.setMaterialNodeId(materialNodeId);
+        p.setMaterialKind(materialKind);
+        p.setSkuId(skuId);
+        p.setUnit("kg");
+        p.setUnitCode("kg");
+        p.setRequired(true);
+        return p;
+    }
+
+    @Test
+    @DisplayName("T4 workflow: 单个 SEMI_FINISHED OUTPUT 端口 → 一条 item, semiCode=ProductType.code (非 UUID)")
+    void getOutputOptions_workflowSingleSemiOutput() {
+        Long batchId = 300L;
+        Long taskId = 10L;
+        Long instanceId = 900L;
+
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(taskId).factoryId(FACTORY_ID).productionBatchId(batchId)
+                .workProcessId("WP-WF-01").workflowInstanceId(instanceId)
+                .workflowNodeId("process:WP-WF-01:w1").processOrder(1).build();
+
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                FACTORY_ID, batchId, "PT-01", 171L, 1, "[]", "[]", LocalDateTime.now());
+        instance.setId(instanceId);
+
+        WorkflowTaskPort inPort = port(taskId, "in:pig", WorkflowTaskPort.Direction.INPUT,
+                "RAW_MATERIAL", "material:raw:pig", "RMT-1");
+        WorkflowTaskPort outPort = port(taskId, "out:s1", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:s1", "SKU-SEMI-1");
+
+        WorkProcess wp = WorkProcess.builder()
+                .id("WP-WF-01").factoryId(FACTORY_ID).processName("拆骨").build();  // 无 semiFinishedOutputCode
+
+        ProductType semiType = new ProductType();
+        semiType.setId("SKU-SEMI-1");
+        semiType.setFactoryId(FACTORY_ID);
+        semiType.setCode("PTSEMI-F006-2001");
+        semiType.setName("猪蹄净肉(半成品)");
+
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(task));
+        when(workProcessRepo.findByFactoryIdAndId(FACTORY_ID, "WP-WF-01")).thenReturn(Optional.of(wp));
+        when(workflowInstanceRepo.findByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(Optional.of(instance));
+        when(workflowTaskPortRepo.findByFactoryIdAndWorkflowInstanceId(FACTORY_ID, instanceId))
+                .thenReturn(List.of(inPort, outPort));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(wp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(semiType));
+
+        OutputOptionsResponse resp = service.getOutputOptions(FACTORY_ID, batchId);
+
+        assertEquals(1, resp.getItems().size());
+        OutputOptionsResponse.OutputOptionItem item = resp.getItems().get(0);
+        assertEquals(taskId, item.getTaskId());
+        assertEquals("拆骨", item.getProcessName());
+        assertEquals("PTSEMI-F006-2001", item.getSemiCode());
+        assertEquals(1, item.getProcessOrder());
+    }
+
+    @Test
+    @DisplayName("T4 workflow: 同一任务两个 SEMI_FINISHED OUTPUT 端口 (2B.2 多产出) → 两条 item, 不互相覆盖")
+    void getOutputOptions_workflowMultiSemiOutputSameTask() {
+        Long batchId = 301L;
+        Long taskId = 11L;
+        Long instanceId = 901L;
+
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(taskId).factoryId(FACTORY_ID).productionBatchId(batchId)
+                .workProcessId("WP-WF-02").workflowInstanceId(instanceId)
+                .workflowNodeId("process:WP-WF-02:w1").processOrder(1).build();
+
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                FACTORY_ID, batchId, "PT-02", 171L, 1, "[]", "[]", LocalDateTime.now());
+        instance.setId(instanceId);
+
+        WorkflowTaskPort out1 = port(taskId, "out:s1", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:s1", "SKU-SEMI-1");
+        WorkflowTaskPort out2 = port(taskId, "out:s2", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:s2", "SKU-SEMI-2");
+
+        WorkProcess wp = WorkProcess.builder()
+                .id("WP-WF-02").factoryId(FACTORY_ID).processName("拆骨").build();
+
+        ProductType semi1 = new ProductType();
+        semi1.setId("SKU-SEMI-1");
+        semi1.setFactoryId(FACTORY_ID);
+        semi1.setCode("PTSEMI-F006-2001");
+        semi1.setName("猪蹄净肉(半成品)");
+        ProductType semi2 = new ProductType();
+        semi2.setId("SKU-SEMI-2");
+        semi2.setFactoryId(FACTORY_ID);
+        semi2.setCode("PTSEMI-F006-2002");
+        semi2.setName("猪蹄碎肉(半成品)");
+
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(task));
+        when(workProcessRepo.findByFactoryIdAndId(FACTORY_ID, "WP-WF-02")).thenReturn(Optional.of(wp));
+        when(workflowInstanceRepo.findByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(Optional.of(instance));
+        when(workflowTaskPortRepo.findByFactoryIdAndWorkflowInstanceId(FACTORY_ID, instanceId))
+                .thenReturn(List.of(out1, out2));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(wp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(semi1, semi2));
+
+        OutputOptionsResponse resp = service.getOutputOptions(FACTORY_ID, batchId);
+
+        assertEquals(2, resp.getItems().size());
+        resp.getItems().forEach(i -> assertEquals(taskId, i.getTaskId()));
+        List<String> codes = resp.getItems().stream()
+                .map(OutputOptionsResponse.OutputOptionItem::getSemiCode)
+                .sorted()
+                .toList();
+        assertEquals(List.of("PTSEMI-F006-2001", "PTSEMI-F006-2002"), codes);
+    }
+
+    @Test
+    @DisplayName("T4 workflow: 画布 data.isByproduct 标记的物料节点不作为半成品产出选项出现 (对齐 PR #2846)")
+    void getOutputOptions_workflowExcludesByproductFlaggedPort() {
+        Long batchId = 302L;
+        Long taskId = 12L;
+        Long instanceId = 902L;
+
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(taskId).factoryId(FACTORY_ID).productionBatchId(batchId)
+                .workProcessId("WP-WF-03").workflowInstanceId(instanceId)
+                .workflowNodeId("process:WP-WF-03:w1").processOrder(1).build();
+
+        String nodesJson = "[{\"id\":\"material:semi:byp\",\"data\":{\"isByproduct\":true}},"
+                + "{\"id\":\"material:semi:main\",\"data\":{}}]";
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                FACTORY_ID, batchId, "PT-03", 171L, 1, nodesJson, "[]", LocalDateTime.now());
+        instance.setId(instanceId);
+
+        WorkflowTaskPort byproductPort = port(taskId, "out:byp", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:byp", "SKU-BYP");
+        WorkflowTaskPort mainPort = port(taskId, "out:main", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:main", "SKU-MAIN");
+
+        WorkProcess wp = WorkProcess.builder()
+                .id("WP-WF-03").factoryId(FACTORY_ID).processName("拆骨").build();
+        ProductType mainType = new ProductType();
+        mainType.setId("SKU-MAIN");
+        mainType.setFactoryId(FACTORY_ID);
+        mainType.setCode("PTSEMI-F006-9001");
+        mainType.setName("主半成品");
+
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(task));
+        when(workProcessRepo.findByFactoryIdAndId(FACTORY_ID, "WP-WF-03")).thenReturn(Optional.of(wp));
+        when(workflowInstanceRepo.findByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(Optional.of(instance));
+        when(workflowTaskPortRepo.findByFactoryIdAndWorkflowInstanceId(FACTORY_ID, instanceId))
+                .thenReturn(List.of(byproductPort, mainPort));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(wp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(mainType));
+
+        OutputOptionsResponse resp = service.getOutputOptions(FACTORY_ID, batchId);
+
+        assertEquals(1, resp.getItems().size());
+        assertEquals("PTSEMI-F006-9001", resp.getItems().get(0).getSemiCode());
+
+        // 强对照: 副产的 skuId 必须连查询都没发出去 —— 不是"查了但没命中", 是"从没打算查"。
+        verify(productTypeRepo).findByFactoryIdAndIdIn(eq(FACTORY_ID), skuIdsCaptor.capture());
+        assertEquals(List.of("SKU-MAIN"), new ArrayList<>(skuIdsCaptor.getValue()));
+    }
+
+    @Test
+    @DisplayName("T4 workflow: SEMI_FINISHED 端口的 skuId 解析不出 ProductType.code 时跳过, 不把 UUID 冒充半成品编码返回")
+    void getOutputOptions_workflowSkipsPortWithoutResolvableProductCode() {
+        Long batchId = 303L;
+        Long taskId = 13L;
+        Long instanceId = 903L;
+
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(taskId).factoryId(FACTORY_ID).productionBatchId(batchId)
+                .workProcessId("WP-WF-04").workflowInstanceId(instanceId)
+                .workflowNodeId("process:WP-WF-04:w1").processOrder(1).build();
+
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                FACTORY_ID, batchId, "PT-04", 171L, 1, "[]", "[]", LocalDateTime.now());
+        instance.setId(instanceId);
+
+        WorkflowTaskPort outPort = port(taskId, "out:orphan", WorkflowTaskPort.Direction.OUTPUT,
+                "SEMI_FINISHED", "material:semi:orphan", "SKU-ORPHAN");
+
+        WorkProcess wp = WorkProcess.builder()
+                .id("WP-WF-04").factoryId(FACTORY_ID).processName("拆骨").build();
+
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(task));
+        when(workProcessRepo.findByFactoryIdAndId(FACTORY_ID, "WP-WF-04")).thenReturn(Optional.of(wp));
+        when(workflowInstanceRepo.findByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(Optional.of(instance));
+        when(workflowTaskPortRepo.findByFactoryIdAndWorkflowInstanceId(FACTORY_ID, instanceId))
+                .thenReturn(List.of(outPort));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of(wp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());  // 找不到
+
+        OutputOptionsResponse resp = service.getOutputOptions(FACTORY_ID, batchId);
+
+        assertEquals(0, resp.getItems().size());
+    }
+
+    @Test
+    @DisplayName("T4 workflow: INPUT 端口 / FINISHED_GOOD OUTPUT 端口都不当半成品产出选项")
+    void getOutputOptions_workflowIgnoresNonSemiFinishedOutputPorts() {
+        Long batchId = 304L;
+        Long taskId = 14L;
+        Long instanceId = 904L;
+
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(taskId).factoryId(FACTORY_ID).productionBatchId(batchId)
+                .workProcessId("WP-WF-05").workflowInstanceId(instanceId)
+                .workflowNodeId("process:WP-WF-05:w1").processOrder(1).build();
+
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                FACTORY_ID, batchId, "PT-05", 171L, 1, "[]", "[]", LocalDateTime.now());
+        instance.setId(instanceId);
+
+        WorkflowTaskPort inSemi = port(taskId, "in:s3", WorkflowTaskPort.Direction.INPUT,
+                "SEMI_FINISHED", "material:semi:s3", "SKU-SEMI-3");
+        WorkflowTaskPort outFinished = port(taskId, "out:fin", WorkflowTaskPort.Direction.OUTPUT,
+                "FINISHED_GOOD", "material:output:fin", "SKU-FIN");
+
+        WorkProcess wp = WorkProcess.builder()
+                .id("WP-WF-05").factoryId(FACTORY_ID).processName("拼装分装").build();
+
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(task));
+        when(workProcessRepo.findByFactoryIdAndId(FACTORY_ID, "WP-WF-05")).thenReturn(Optional.of(wp));
+        when(workflowInstanceRepo.findByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(Optional.of(instance));
+        when(workflowTaskPortRepo.findByFactoryIdAndWorkflowInstanceId(FACTORY_ID, instanceId))
+                .thenReturn(List.of(inSemi, outFinished));
+
+        OutputOptionsResponse resp = service.getOutputOptions(FACTORY_ID, batchId);
+
+        assertEquals(0, resp.getItems().size());
+        // 两个端口都不合格 (方向不对 / 材质不对) → 从没走到批量查 ProductType 那一步。
+        verify(productTypeRepo, never()).findByFactoryIdAndIdIn(anyString(), any());
     }
 
     // ==================== 修2 (🔴): FINISHED 路径混合成本诚实 null ====================
