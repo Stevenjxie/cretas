@@ -52,8 +52,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
+from typing import Optional
 
 from smartbi.scripts._probe_bootstrap import (
     LLM_UNAVAILABLE_AUTHORITY,
@@ -136,8 +138,50 @@ def verdict(kind, code, text) -> str:
     return "D-%s" % kind
 
 
-async def run_turn(pool, query: str, session_key: str) -> dict:
+#: `[llm_router]` 的**故障**类告警关键词。⛔ 只收故障，不收它的普通日志 ——
+#: 否则任何 warning 都会被算成抖动，读数虚高。
+_FLAP_MARKS = ("timeout", "exception", "output invalid", "exhausted",
+               "empty_api_key", "circuit")
+
+
+class FlapCollector(logging.Handler):
+    """把**当前这一条问句期间**的 LLM 供应商故障挂到这一行读数上。
+
+    ## 为什么每条读数要带它（设计卡 `2026-08-18-全景读数自带LLM抖动记录-设计卡.md`）
+
+    📏 同一命令同一天跑三次：`39/48 (故障 8)`、`40/48 (故障 9)`、`38/48 (故障 16)`。
+    方向一致，于是「38 vs 40」看起来像产品退步 —— 我自己就据此写过一次
+    「未达基线」。而**逐条对应之后因果被否掉**：
+
+        答上 20 条，其中期间有 LLM 故障的占 **50.0%**
+        拒答  4 条，其中期间有 LLM 故障的占 **25.0%**   ← 拒答侧反而更低
+
+    ⇒ 抖动与拒答无关。但把这件事查清楚花了三轮探针，全部成本都在**事后**
+    把日志和读数手工对起来。
+    ▎**报数字要带口径，而「那一条问句期间抖了没」就是这个口径的一部分。**
+
+    ⛔ 它只**报**，不改判定 —— 不用它过滤读数（「有故障就不计入」），
+       那会把「没量到」偷偷折叠进「没问题」。
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.bucket = []
+
+    def emit(self, record):  # noqa: A003 - logging.Handler 的接口
+        try:
+            msg = record.getMessage()
+        except Exception:  # noqa: BLE001 - 收集器自己绝不能把跑批弄挂
+            return
+        if "[llm_router]" in msg and any(m in msg for m in _FLAP_MARKS):
+            self.bucket.append(msg[:90])
+
+
+async def run_turn(pool, query: str, session_key: str,
+                   flaps: "Optional[FlapCollector]" = None) -> dict:
     """完全复刻 `gold_reads.py` 那条生产序列（含 dish_catalogue_scope 的范围）。"""
+    if flaps is not None:
+        flaps.bucket = []
     set_factory_id(FID)
     async with rr.dish_catalogue_scope(pool, FID):
         catalogue = rr.current_dish_catalogue()
@@ -175,6 +219,8 @@ async def run_turn(pool, query: str, session_key: str) -> dict:
         "n": len(text),
         "fp": _fp(text),
         "verdict": verdict(result.get("kind"), code, text),
+        # 这一条问句**期间**的 LLM 供应商故障数 —— 见 `FlapCollector` 的 docstring。
+        "flap": len(flaps.bucket) if flaps is not None else None,
     }
 
 
@@ -185,7 +231,11 @@ def emit(row: dict) -> None:
              row.get("code", row.get("intent", "-")), row.get("tier", "-"),
              ",".join(row.get("plan", [])) or "∅",
              ",".join(row.get("dims", [])) or "∅",
-             row.get("contract"), row.get("n"), row.get("fp")))
+             row.get("contract"), row.get("n"), row.get("fp")),
+          end="")
+    # ⛔ 只在**非零**时打 —— 每行都挂个 `flap=0` 会把这一列变成噪音,
+    #    而它存在的意义是「这一条读数当时环境正常吗」。
+    print("  flap=%d" % row["flap"] if row.get("flap") else "")
 
 
 async def main() -> int:
@@ -197,12 +247,14 @@ async def main() -> int:
           % (clear_caches(),))
 
     rows, tally, gaps = [], {}, 0
+    flaps = FlapCollector()
+    logging.getLogger().addHandler(flaps)
     for rnd in range(1, ROUNDS + 1):
         print("\n---------- 第 %d 轮 ----------" % rnd)
         for qi, q in enumerate(QUESTIONS):
             key = ("pan-shared-r%d" % rnd) if SHARED_KEY else (
                 "pan-r%d-q%d" % (rnd, qi))
-            row = await run_turn(pool, q, key)
+            row = await run_turn(pool, q, key, flaps)
             row["round"] = rnd
             rows.append(row)
             emit(row)
@@ -210,12 +262,36 @@ async def main() -> int:
             if row.get("contract") is False:
                 gaps += 1
 
+    logging.getLogger().removeHandler(flaps)
+
     total = len(rows)
     answered = tally.get("A-有答案", 0)
     print("\n### 全景小计: 答上(A) %d / %d" % (answered, total))
     for k in sorted(tally):
         print("    %-14s %d" % (k, tally[k]))
     print("    契约缺口(contract_pass=False) = %d" % gaps)
+
+    # ── 口径：这一次跑的环境正不正常 ─────────────────────────────────────
+    # ⛔ 报数字要带口径。📏 同一命令同一天三次: 39/48(故障 8)、40/48(故障 9)、
+    #    38/48(故障 16) —— 不带这一列时,「38 vs 40」会被读成产品退步
+    #    (我自己就据此写过一次「未达基线」)。
+    # ⛔ 它只**报**, 不参与 rc 判定 —— 逐条对应已证明抖动与拒答无关
+    #    (答上侧 50% 有故障, 拒答侧只有 25%)。
+    ans_rows = [r for r in rows if r.get("verdict") == "A-有答案"]
+    ref_rows = [r for r in rows if r.get("verdict") != "A-有答案"]
+    total_flaps = sum(r.get("flap") or 0 for r in rows)
+
+    def _pct(group):
+        if not group:
+            return "—"
+        return "%.1f%%" % (sum(1 for r in group if r.get("flap")) / len(group) * 100)
+
+    print("    LLM 供应商故障 = %d 次（答上侧 %s 有故障 / 拒答侧 %s）"
+          % (total_flaps, _pct(ans_rows), _pct(ref_rows)))
+    noisy = [r for r in rows if r.get("flap")]
+    if noisy:
+        print("    期间抖动过的条目: %s"
+              % "、".join("%s(%d)" % (r["q"], r["flap"]) for r in noisy[:8]))
 
     # ── 阳性对照（⛔ 不许省）──────────────────────────────────────────
     catalogue_ok = all(r.get("catalogue_n", 0) > 0 for r in rows)
