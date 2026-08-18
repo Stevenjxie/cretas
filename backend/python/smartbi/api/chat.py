@@ -2492,6 +2492,37 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             else None
                         )
 
+                        # ── 飞轮 B: 答不上的也要进飞轮 ────────────────────────
+                        #
+                        # 与 gold_reads.py `post_restaurant_tiered_answer`
+                        # (RN App / Java 委派入口) 同一次调用、同一条纪律 ——
+                        # 那条已接线, 这条 SSE 聊天入口(网页/多端聊天面板的生产
+                        # 入口)之前没有。⛔ 不新起分类逻辑(形态 D)。
+                        #
+                        # 🔑 接在这里(kind 分支之前, `if tiered_ops:` 渲染/
+                        #    contractPass 判断之前)的理由与 gold_reads.py 那处
+                        #    逐字相同: 拒答有两种形状(clarification / 带
+                        #    DATA_GAP·OUT_OF_DOMAIN 码的 answer), 接在分支后面
+                        #    必然漏掉一种。`spec` 已经内嵌在
+                        #    `tiered_ops["spec"]` 里(`_try_tiered_restaurant_intent`
+                        #    → `tiered_answer` 的返回形状), `record_refusal` 的
+                        #    `spec=None` 默认会自动 `result.get("spec")` 兜底,
+                        #    ⛔ 不在这里重复解析一份 spec。
+                        #
+                        # ⚠️ fire-and-forget, 对用户零延迟, `record_refusal`
+                        #    自身 fail-open。用 `_spawn_chat_bg`(不是裸
+                        #    `asyncio.create_task`) —— 本文件顶部这个 helper
+                        #    专门防止后台任务因无人持有引用而被 GC 提前回收。
+                        if tiered_ops is not None:
+                            from smartbi.gold.restaurant.refusal_queue import (
+                                record_refusal,
+                            )
+
+                            _spawn_chat_bg(record_refusal(
+                                pool, factory_id=factory_id_hdr,
+                                query=effective_user_q, result=tiered_ops,
+                            ))
+
                         if tiered_ops is None and request.table_type == "restaurant_ops":
                             # 见上一处同样的注释: 这是第 4 个载体, #2485 也漏了它。
                             logger.warning(
