@@ -2977,6 +2977,24 @@ class ComprehensiveSynthesisEngine:
         ⚠️ `status == "partial"` 也算「有数」（例：优惠有结构、缺对照基线），
         但要**当场标出来**它不全 —— 不标就是把「看得见结构」说成了「算得出结论」。
 
+        ## 🔴 口径必须写在那一行里（prod A/B 当场抓到的自相矛盾）
+
+        📏 第一版 prod A/B（MOCK_REST，AFTER 3/3 都出现了这一段）里，
+        **同一份答案**同时说了这两句：
+
+            LLM 正文：「没有单店菜品销售数据，不知道这家店卖啥、卖多少」
+            这一段  ：「系统里有数、可以接着查：菜品销售结构」
+
+        ▎两句都不算错 —— `available_dimensions` 是**全链**覆盖信号，
+        ▎而老板问的是**这家店**。这正是形态 A：
+        ▎**我量的是「全链有没有这一维」，他想知道的是「这家店有没有」。**
+        ⇒ 那一行必须带口径。⛔ 不写口径 = 在一份答案里给出两个相反的说法，
+          而自相矛盾烧掉的正是「这东西说的话能信」。
+
+        ⚠️ 口径写「全店合计」是**可保证**的，不是拍的：这一段只在 `attribution`
+        存在时才出现，而 `compute_store_attribution` 要求**至少两家**可比门店
+        ⇒ 这一轮的 FactBook 必然是多店合计口径。
+
         ## 什么时候一个字都不说
 
         ⛔ 每次都说就是废话（反目标里最重的那条）。四道门，任何一道不过就闭嘴：
@@ -3021,7 +3039,10 @@ class ComprehensiveSynthesisEngine:
 
         lines = [answer.rstrip(), "", f"### 差距出在「{cause}」——接下来往哪儿查"]
         if can_check:
-            lines.append("- 系统里有数、可以接着查：" + "、".join(can_check))
+            lines.append(
+                "- 系统里有数、可以接着查（这几项目前都是全店合计的数）："
+                + "、".join(can_check)
+            )
         if cannot_check:
             lines.append(
                 "- 现在查不了（这些数据还没接进来）：" + "、".join(cannot_check)

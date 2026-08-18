@@ -98,6 +98,10 @@ def _label(code: str) -> str:
     return dimension_definition(code).label
 
 
+_CAN_PREFIX = "- 系统里有数、可以接着查"
+_CANNOT_PREFIX = "- 现在查不了（这些数据还没接进来）："
+
+
 def _line_starting(text: str, prefix: str) -> str:
     hits = [ln for ln in text.splitlines() if ln.startswith(prefix)]
     assert len(hits) == 1, f"期望恰好一行以 {prefix!r} 开头，实际 {hits}"
@@ -122,7 +126,7 @@ class TestItOnlyNamesDimensionsWeActuallyHave:
     def test_can_check_line_lists_only_available_dimensions(self):
         """🔴 承重：「可以接着查」里出现一个 missing 维度 = 让老板白跑一趟。"""
         out = _APPEND("原文。", _factbook())
-        can = _line_starting(out, "- 系统里有数、可以接着查：")
+        can = _line_starting(out, _CAN_PREFIX)
         for code in _PROD_MISSING:
             assert _label(code) not in can, (
                 f"{_label(code)} 在 missing 里，却被说成「可以接着查」—— "
@@ -132,7 +136,7 @@ class TestItOnlyNamesDimensionsWeActuallyHave:
 
     def test_cannot_check_line_lists_only_missing_dimensions(self):
         out = _APPEND("原文。", _factbook())
-        cannot = _line_starting(out, "- 现在查不了（这些数据还没接进来）：")
+        cannot = _line_starting(out, _CANNOT_PREFIX)
         assert _label("channel") in cannot and _label("meal_period") in cannot
         for code, _status in _PROD_AVAILABLE:
             assert _label(code) not in cannot, (
@@ -141,11 +145,27 @@ class TestItOnlyNamesDimensionsWeActuallyHave:
     def test_partial_coverage_is_labelled_as_partial(self):
         """⚠️ `partial` 不标出来，就是把「看得见结构」说成了「算得出结论」。"""
         out = _APPEND("原文。", _factbook())
-        can = _line_starting(out, "- 系统里有数、可以接着查：")
+        can = _line_starting(out, _CAN_PREFIX)
         marked = can.split(_label("promotion"))[1][:14]
         assert "数据不全" in marked, can
         # 阴性对照：status=available 的那一维**不许**被标成不全
         assert "数据不全" not in can.split(_label("dish_sales"))[1][:14], can
+
+    def test_the_can_check_line_states_its_scope(self):
+        """🔴 承重：那一行必须带口径，否则同一份答案里会出现两个相反的说法。
+
+        📏 prod A/B 第一版当场抓到（MOCK_REST，AFTER 3/3）：
+
+            LLM 正文：「没有单店菜品销售数据，不知道这家店卖啥、卖多少」
+            这一段  ：「系统里有数、可以接着查：菜品销售结构」
+
+        两句都不算错 —— `available_dimensions` 是**全链**覆盖信号，
+        而老板问的是**这家店**（形态 A：量的和想知道的不是同一个）。
+        ⇒ 不写口径 = 自相矛盾，而自相矛盾烧掉的正是「这东西说的话能信」。
+        """
+        can = _line_starting(_APPEND("原文。", _factbook()), _CAN_PREFIX)
+        head = can.split("：")[0]
+        assert "全店合计" in head, f"「可以接着查」这一行没有写清口径: {head}"
 
     def test_every_named_label_comes_from_the_catalog(self):
         """⛔ 不新造第二份措辞（形态 D）—— 每个粗体名都必须逐字来自 catalog。"""
@@ -212,7 +232,7 @@ class TestTheTrafficBranch:
         fb = _factbook(stores=stores)
         out = _APPEND("原文。", fb)
         assert "差距出在「客流」" in out
-        cannot = _line_starting(out, "- 现在查不了（这些数据还没接进来）：")
+        cannot = _line_starting(out, _CANNOT_PREFIX)
         assert _label("physical_traffic") in cannot
         # 客单价那一支独有的维度⛔不许串进来
         assert _label("dish_sales") not in out
@@ -277,8 +297,24 @@ class TestItIsWiredEverywhereTheGuidanceIs:
             assert a < b, f"第 {a} 行的排查方向排在第 {b} 行的缺失清单之后"
 
     def test_rendered_order_puts_directions_before_the_missing_list(self):
-        """端到端：两段真的拼起来之后，顺序仍然是「结论 → 附录」。"""
+        """端到端：按 `synthesize` **源码里的实际顺序**渲染一遍。
+
+        🔴 第一版这条是**恒真式**：它按我自己在测试里写死的顺序拼两段，
+        于是「把源码里的两行对调」这条变异纹丝不动（B′：断言在守空气）。
+        ⇒ 顺序改从 AST 取，变异对调之后这条才会红。
+        """
+        from smartbi.agent import synthesis_engine as se
+
+        tree = ast.parse(inspect.getsource(se))
+        calls = sorted(
+            (node.lineno, node.func.attr)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None)
+            in ("_append_investigation_directions", "_append_dimension_guidance")
+        )
+        assert len(calls) >= 2, f"接线不足两处，这条断言失去意义: {calls}"
         fb = _factbook()
-        out = ComprehensiveSynthesisEngine._append_dimension_guidance(
-            _APPEND("原文。", fb), fb)
+        out = "原文。"
+        for _lineno, name in calls[-2:]:          # LLM 那条路上相邻的一对
+            out = getattr(ComprehensiveSynthesisEngine, name)(out, fb)
         assert out.index("### 差距出在") < out.index("### 还可补充的分析维度"), out
