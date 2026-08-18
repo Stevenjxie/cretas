@@ -1,0 +1,105 @@
+# Java 全量测试 · 夜间跑批 + 名单棘轮
+#
+# 🔴 为什么需要它（2026-08-18 实测）
+#
+#   origin/main 上有 19 个红的测试方法（8 Failures + 11 Errors），分布在 8 个类里，
+#   全部落在采购 / 销售发货 / 生产结算这几条写路径上。它们能一直红着没人发现，
+#   是因为【没有任何自动触发会执行它们】：
+#
+#     ci.yml:121  mvn -B test    if: inputs.full_audit   ← 只有手动全量审计才跑
+#     ci.yml:309  mvn -B verify  if: inputs.full_audit   ← 同上
+#     ci.yml:183  mvn -B package -Dmaven.test.skip=true  ← push / PR 上跑的是这条
+#     ci.yml:26   # full_audit stays manual -- the whole suite takes over an hour
+#
+#   ⇒ PR 上那个绿 = 编译并打包成功，⛔ 不是测试通过。
+#
+# ⛔ 它【不】拦 PR。它每晚跑一次，只回答一个问题：
+#    「今天有没有【新增】的红？」—— 已知的那些冻结在名单里，只许变少。
+#
+# 三态（与本仓硬约束 4 同源）
+#   rc=0  没有新增红（或基线尚未落地）
+#   rc=1  出现基线里没有的失败      ⇒ 🔴 NEW FAILURES
+#   rc=2  这次没量到（编译失败/报告为空）⇒ ⚠️ INSTRUMENT DEAD，措辞必须与 rc=1 不同
+#
+# 首次使用：手动触发一次并把 write_baseline 设为 true，
+#          从 artifact 里取出名单提交进仓库。
+#          ⛔ 不要用本地跑的结果当基线 —— 环境不同，失败集合必然不同。
+
+name: Java Full Test (nightly ratchet)
+
+on:
+  schedule:
+    # UTC 18:00 = 北京时间次日 02:00（避开白天的部署窗口）
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      write_baseline:
+        description: '用本次结果覆盖已知红名单（⛔ 只在确认新增红已修完后用）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: java-full-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run the full Java suite
+        working-directory: backend/java/cretas-api
+        # ⚠️ failure.ignore=true 是【故意的】: 我们要拿到【全部】测试的结果,
+        #    让棘轮来决定红不红。让 surefire 中途停会让名单不完整,
+        #    而不完整的名单会把「没跑到」误报成「修好了」。
+        run: mvn -B test -Dmaven.test.failure.ignore=true -Dspring.profiles.active=test
+
+      - name: Ratchet — 已知红只许变少
+        id: ratchet
+        run: |
+          set +e
+          python scripts/ci/java-test-ratchet.py \
+            --reports backend/java/cretas-api/target/surefire-reports \
+            --baseline backend/java/cretas-api/known-failing-tests.txt \
+            ${{ inputs.write_baseline && '--write-baseline' || '' }} \
+            | tee /tmp/ratchet.log
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 上传本次的失败名单（便于重新落基线）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-known-failing-tests
+          path: |
+            /tmp/ratchet.log
+            backend/java/cretas-api/known-failing-tests.txt
+          if-no-files-found: warn
+
+      # ⚠️ 两种失败【必须】用不同措辞 —— 否则「没量到」会被折叠进「没问题」，
+      #    一个连编译都过不去的跑批会安静地天天绿，而它一个测试都没看过。
+      - name: 判定 —— rc=2 没量到
+        if: steps.ratchet.outputs.rc == '2'
+        run: |
+          echo "::error title=Java 全量跑批没量到::编译失败 / surefire 报告为空 / 解析不出结果。本次读数作废，⛔ 不代表没有新增红。"
+          exit 1
+
+      - name: 判定 —— rc=1 有新增红
+        if: steps.ratchet.outputs.rc == '1'
+        run: |
+          echo "::error title=Java 全量出现新增红::有基线里没有的失败。见上方清单。⛔ 不要把它们加进基线 —— 基线只许变少。"
+          exit 1
