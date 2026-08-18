@@ -548,6 +548,14 @@ export interface WorkflowPortDescriptor {
   skuResolved: boolean;
   /** 仅 output 端口有意义: materialKind === 'FINISHED_GOOD'。 */
   finished: boolean;
+  /**
+   * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**副产**。
+   *
+   * ⚠️ 与 `materialKind` 正交 —— 画布刻意没有第 5 个 kind, 副产节点的 kind 仍是
+   * SEMI_FINISHED, 所以光看 `materialKind`/`finished` 分不出副产。
+   * 老快照/未升级后端缺这个字段时按 undefined 处理 (即「不是副产」), 行为逐字不变。
+   */
+  byproduct?: boolean | null;
 }
 
 /**

@@ -210,8 +210,18 @@ describe('入口与选择器', () => {
     expect(MATERIAL_NODE).toContain('quickMarkByproduct: [];');
     expect(EDITOR).toContain('@quick-mark-byproduct=');
     expect(EDITOR).toContain('data-testid="byproduct-quick-mark-dialog"');
-    // 真的会写库, 不是一个只弹窗不落地的假入口
-    expect(EDITOR).toMatch(/raw-material-types\/\$\{materialTypeId\}`,\s*\{\s*isByproduct: true/);
+    // 真的会写库, 不是一个只弹窗不落地的假入口。
+    //
+    // 🔴 2026-08-18: 这条断言原来钉的是 `put(.../raw-material-types/${id}`, { isByproduct: true })`。
+    // 那条路**恒定写不进去** —— 控制器上的 @Valid 在进 service 之前就跑完, 而
+    // RawMaterialTypeDTO.name 带 @NotBlank, 于是只发一个字段的部分更新一律被
+    // 400「原材料名称不能为空」拒掉 (产品负责人实测: 点「标记并选入」连弹两条红错)。
+    // 断言当时守的是「有一次写请求」这个性质, 而它把性质写成了某一个字面 URL,
+    // 于是修好那条路的时候它反过来拦人 —— 守的是历史, 不是需求。改成守新的写入口。
+    expect(EDITOR).toMatch(/raw-material-types\/\$\{materialTypeId\}\/byproduct`,\s*\{\s*isByproduct: true/);
+    // 阴性对照: 不许退回那条「只发一个字段的 PUT」。
+    // 行为侧的判据在后端 ByproductQuickMarkContractTest (拿真 Validator 跑), 这里只防回潮。
+    expect(EDITOR).not.toMatch(/put\(`\/\$\{props\.factoryId\}\/raw-material-types\/\$\{materialTypeId\}`,\s*\{\s*isByproduct/);
     // 标记完必须重载候选, 否则刚标的那个还是选不到 —— 旧路径就是死在这
     expect(EDITOR).toContain('byproductMaterialsLoaded.value = false;');
   });

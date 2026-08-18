@@ -85,5 +85,14 @@ public class WorkflowClerkSheetConfigDTO {
         private Boolean skuResolved;
         /** 仅 output 端口有意义: materialKind == FINISHED_GOOD。 */
         private Boolean finished;
+        /**
+         * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**副产**。
+         *
+         * <p>⚠️ 与 {@link #materialKind} 正交 —— 副产节点的 kind 仍然是 SEMI_FINISHED
+         * (画布刻意没有第 5 个 kind), 所以 {@code materialKind} 一个人回答不了「这是不是副产」。
+         * 在这个字段出现之前, 报工界面只能按 {@code finished} 二选一渲染 成品/半成品,
+         * 于是画布上标成副产的物料到了报工单上变成「半成品」并独立成行。
+         */
+        private Boolean byproduct;
     }
 }

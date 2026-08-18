@@ -817,7 +817,7 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
-import { get, post, put } from '@/api/request';
+import { get, patch, post, put } from '@/api/request';
 import { getUnitCatalog, type UnitCatalogItem } from '@/api/unitContract';
 import {
   createWorkProcess,
@@ -2859,8 +2859,13 @@ async function confirmByproductQuickMark(): Promise<void> {
   if (!materialTypeId || !nodeId || byproductMarkSubmitting.value) return;
   byproductMarkSubmitting.value = true;
   try {
-    // null-tolerant 更新: 只发这一个字段, 后端其余字段判空不动 (见 RawMaterialTypeServiceImpl)。
-    const res = await put(`/${props.factoryId}/raw-material-types/${materialTypeId}`, {
+    // 🔴 2026-08-18: 这里原来是 `put('/raw-material-types/{id}', { isByproduct: true })`,
+    // 注释写着「null-tolerant 更新: 后端其余字段判空不动」—— service 层确实是 null-tolerant,
+    // 但控制器上的 `@Valid` **在进 service 之前**就跑完, 而 RawMaterialTypeDTO 的 name 带
+    // `@NotBlank`。于是这个只发一个字段的请求恒定被 400「原材料名称不能为空」挡在门外,
+    // 「标记并选入」点了必弹两条红错。service 里那套 null-tolerant 分支是**到不了的代码**。
+    // 改走专门的窄接口: 它自带的契约就只有 isByproduct 一个字段。
+    const res = await patch(`/${props.factoryId}/raw-material-types/${materialTypeId}/byproduct`, {
       isByproduct: true,
     });
     if (!res.success) throw new Error(res.message || '标记失败');

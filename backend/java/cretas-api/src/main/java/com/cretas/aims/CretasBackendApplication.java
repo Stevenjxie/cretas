@@ -57,7 +57,13 @@ public class CretasBackendApplication {
                                 "http://139.196.165.140:*",
                                 "http://localhost:*",
                                 "http://127.0.0.1:*")
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        // PATCH 是 2026-08-18 补的: 仓里早已有 8+ 个 @PatchMapping 端点
+                        // (RowMarkerController / CanvasAlertController / ...), 而这份白名单里
+                        // 一直没有 PATCH —— 任何**跨源**浏览器客户端调它们都会在预检就被拒。
+                        // web-admin 至今没被咬到, 只是因为它走同源代理 (prod 用相对路径
+                        // /api/mobile + nginx, dev 用 vite proxy), 于是 CORS 根本不参与 ——
+                        // 「没出事」不等于「配对了」, 换个部署形态就会当场炸。
+                        .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(true)
                         .maxAge(3600);

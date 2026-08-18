@@ -33,7 +33,8 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
-import type { MultiOutputLine, OutputLineView } from './processSheetOutputs';
+import { byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
+import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
   SelectableUpstreamRef,
@@ -350,8 +351,17 @@ const outputPorts = computed<WorkflowPortDescriptor[]>(() => {
   const single = props.workflowContext?.output;
   return single ? [single] : [];
 });
-/** 多产出判据: 产出端口数 > 1。 */
-const isMultiOutput = computed(() => outputPorts.value.length > 1);
+/**
+ * 副产端口归位: 画布上标了副产的端口**不独立成行**, 填进主产出行的副产区。
+ *
+ * 🔴 缺陷背景 (产品负责人 2026-08-17): 在这之前 outputPorts 里的副产端口和主产出一视同仁,
+ * 于是「肥油」在报工单上独立成一行、还被标成「半成品」—— 画布上的副产角色一路丢到了这里。
+ */
+const outputPartition = computed(() => partitionOutputPorts(outputPorts.value));
+/** 独立成行的产出端口 (副产已归到副产区)。 */
+const rowOutputPorts = computed(() => outputPartition.value.rowPorts);
+/** 多产出判据: **独立成行**的产出端口数 > 1 —— 副产不算一路产出。 */
+const isMultiOutput = computed(() => rowOutputPorts.value.length > 1);
 /** Workflow 单/多产出统一使用端口行录入；legacy 计划继续走原列配置。 */
 const isPortOutputMode = computed(() => props.workflowContext != null && outputPorts.value.length > 0);
 const byproductReportingUnit = computed(() => {
@@ -857,7 +867,8 @@ function blankRow(): SheetRow {
  */
 function initMultiOutputs(): MultiOutputLine[] {
   if (!isPortOutputMode.value) return [];
-  return outputPorts.value.map((p): MultiOutputLine => ({
+  const { rowPorts, inlineByproductPorts, hostPortId } = outputPartition.value;
+  return rowPorts.map((p): MultiOutputLine => ({
     workflowPortId: p.workflowPortId,
     materialNodeId: p.materialNodeId ?? '',
     productTypeId: p.skuId,
@@ -865,18 +876,35 @@ function initMultiOutputs(): MultiOutputLine[] {
     unit: workflowPortDisplayUnit(p),
     gramsPerUnit: p.gramsPerUnit ?? null,
     finished: p.finished === true,
+    isByproduct: p.byproduct === true,
     required: p.required === true,
     selected: portSelectedByDefault(p),
     quantity: null,
     startTime: '',
     endTime: '',
     workerCount: 1,
+    boundByproducts: p.workflowPortId === hostPortId
+      ? inlineByproductPorts.map((bp) => boundByproductFromPort(bp))
+      : [],
     byproductQuantity: null,
     byproductUnit: byproductReportingUnit.value,
     byproductUnitPrice: null,
     costAllocationRatio: null,
     batchNumber: null,
   }));
+}
+
+/** 由画布副产端口造一条待填的副产条目 —— SKU/单位只读, 数量与回收单价留空等人填。 */
+function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLine {
+  return {
+    workflowPortId: port.workflowPortId,
+    materialNodeId: port.materialNodeId ?? '',
+    productTypeId: port.skuId,
+    materialName: port.materialName || `(未命名 SKU: ${port.skuId})`,
+    unit: workflowPortDisplayUnit(port),
+    quantity: null,
+    unitPrice: null,
+  };
 }
 
 function sourceIdentity(port?: WorkflowPortDescriptor): Pick<UpstreamRef, 'workflowPortId' | 'materialNodeId' | 'skuId'> {
@@ -1112,7 +1140,17 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
   const portId = p.workflowPortId || '';
   const port = portId ? outputPorts.value.find((op) => op.workflowPortId === portId) : undefined;
   const segment = p.laborSegments?.[0];
-  const byproduct = p.byproducts?.[0];
+  const { inlineByproductPorts, hostPortId } = outputPartition.value;
+  // 画布绑了副产就按绑定的那几条回填 (按名字认回已保存的数量/单价), 手填那对字段留空;
+  // 没绑才走原来的「payload 里第一条副产 = 手填值」。二选一, 与录入侧同一个判据。
+  const boundByproducts = portId === hostPortId
+    ? inlineByproductPorts.map((bp) => {
+        const base = boundByproductFromPort(bp);
+        const saved = p.byproducts?.find((b) => b.name === base.materialName);
+        return { ...base, quantity: saved?.quantity ?? null, unitPrice: saved?.unitPrice ?? null };
+      })
+    : [];
+  const manualByproduct = boundByproducts.length > 0 ? undefined : p.byproducts?.[0];
   return {
     workflowPortId: portId,
     materialNodeId: port?.materialNodeId ?? p.materialNodeId ?? '',
@@ -1121,15 +1159,17 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     unit: port ? workflowPortDisplayUnit(port) : (p.unit || p.outputUnit || ''),
     gramsPerUnit: port?.gramsPerUnit ?? null,
     finished: port ? port.finished === true : p.finished === true,
+    isByproduct: port ? port.byproduct === true : false,
     required: port?.required ?? true,
     selected: true,
     quantity: p.outputQuantity ?? null,
     startTime: segment?.startTime ?? '',
     endTime: segment?.endTime ?? '',
     workerCount: segment?.workerCount ?? 1,
-    byproductQuantity: byproduct?.quantity ?? null,
-    byproductUnit: byproduct?.unit || byproductReportingUnit.value,
-    byproductUnitPrice: byproduct?.unitPrice ?? null,
+    boundByproducts,
+    byproductQuantity: manualByproduct?.quantity ?? null,
+    byproductUnit: manualByproduct?.unit || byproductReportingUnit.value,
+    byproductUnitPrice: manualByproduct?.unitPrice ?? null,
     costAllocationRatio: p.costAllocationRatio ?? null,
     batchNumber: view.batchNumber,
   };
@@ -1540,7 +1580,28 @@ function outputLineLaborSegments(line: MultiOutputLine): LaborSegment[] | undefi
   return [{ startTime: line.startTime, endTime: line.endTime, workerCount: Math.max(1, line.workerCount || 1) }];
 }
 
+/**
+ * 本条产出行要提交的副产明细。
+ *
+ * 二选一 (`byproductEntryMode`):
+ * - `BOUND`  画布绑定 —— 逐条发, **名字用画布上那个 SKU 的真名**。后端
+ *   `ByproductBatchMaterializer.matchDeclaration` 按名字认 BOM 里的副产声明,
+ *   喂真名比喂占位串 '副产' 能匹配到更多情况, 也让多副产彼此分得开。
+ * - `MANUAL` 没绑 —— 沿用原来那对手填字段, 名字仍是占位串 '副产' (行为逐字不变)。
+ *
+ * ⛔ 两套不并存: 并存就是同一个事实有两份, 一定会漂。
+ */
 function outputLineByproducts(line: MultiOutputLine): ProcessSheetByproduct[] | undefined {
+  if (byproductEntryMode(line) === 'BOUND') {
+    const filled = line.boundByproducts.filter((bp) => bp.quantity != null && bp.quantity > 0);
+    if (filled.length === 0) return undefined;
+    return filled.map((bp) => ({
+      name: bp.materialName,
+      quantity: bp.quantity as number,
+      unit: bp.unit,
+      ...(bp.unitPrice != null ? { unitPrice: bp.unitPrice } : {}),
+    }));
+  }
   if (line.byproductQuantity == null || line.byproductQuantity <= 0) return undefined;
   return [{
     name: '副产',
@@ -1729,6 +1790,7 @@ function outputViews(row: SheetRow): OutputLineView[] {
       quantityPrecision: outputLinePrecision(line),
       yieldText: yieldRate == null ? '—' : `${yieldRate.toFixed(2)}%`,
       blocker: outputLineYieldBlocker(row, line),
+      byproductMode: byproductEntryMode(line),
       totalHoursText: outputLineTotalHours(line).toFixed(2),
       specLabel: line.finished && line.gramsPerUnit != null && line.gramsPerUnit > 0
         ? `${Number(line.gramsPerUnit.toFixed(3))}g/${displayProcessUnit(line.unit)}`
@@ -3688,6 +3750,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             :views="outputViews(row)"
             :show-cost-allocation="requiresManualCostAllocation(row)"
             hint="SKU 与单位由 Workflow 固定，不可选择"
+            :orphan-byproduct-notice="outputPartition.orphanNotice"
             @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
             @open-spec="openSpecDialog"
           />
@@ -4386,6 +4449,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     :views="outputViews(row)"
                     :show-cost-allocation="requiresManualCostAllocation(row)"
                     hint="投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定"
+                    :orphan-byproduct-notice="outputPartition.orphanNotice"
                     @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
                     @open-spec="openSpecDialog"
                   />

@@ -27,6 +27,7 @@ import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.workflow.WorkflowByproductNodes;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
@@ -237,9 +238,15 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         // 2B.2: 多产出支持 — 按 ordinal 排序投影全部产出端口 (不再抛 single-output guard)。
         outputs.sort(Comparator.comparing(WorkflowTaskPort::getOrdinal)
                 .thenComparing(WorkflowTaskPort::getWorkflowPortId));
+        // 画布上的副产角色接到报工端的那根线: 副产标记挂在**物料节点**的 data 上,
+        // 而 WorkflowTaskPort 只快照了 materialKind (副产节点的 kind 仍是 SEMI_FINISHED)。
+        // 靠 materialNodeId join 回 nodes_json 才能把角色带过来。
+        Set<String> byproductNodeIds =
+                WorkflowByproductNodes.byproductMaterialNodeIds(instanceNodesJson);
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors =
                 outputs.stream()
-                        .map(port -> toPortDescriptor(factoryId, port, projectReportingUnits))
+                        .map(port -> toPortDescriptor(
+                                factoryId, port, projectReportingUnits, Map.of(), byproductNodeIds))
                         .toList();
         if (outputDescriptors.isEmpty()) {
             throw new BusinessException(409, "Workflow 工序缺少产出端口")
@@ -273,7 +280,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                         productWorkProcess != null ? productWorkProcess.getDefaultCostCategory() : null)
                 .processOrder(task.getProcessOrder())
                 .plannedUnit(projectReportingUnits
-                        ? outputDescriptors.getFirst().getUnit()
+                        ? primaryOutput(outputDescriptors).getUnit()
                         : task.getPlannedUnit())
                 // 🔴 客户张权 2026-08-02: 这里原来是 `upstreamInputCount > 1`, 即**无视用户在
                 // Workflow 画布上配的 allowMultipleUpstreamSources, 当场按端口数重算一遍**。
@@ -291,14 +298,30 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                         .map(port -> toPortDescriptor(
                                 factoryId, port, projectReportingUnits, allowedSkuIdsByPort))
                         .toList())
-                .output(outputDescriptors.isEmpty() ? null : outputDescriptors.get(0)) // 向后兼容单产出 FE
+                .output(primaryOutput(outputDescriptors)) // 向后兼容单产出 FE
                 .outputs(outputDescriptors)
                 .build();
     }
 
-    private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
-            String factoryId, WorkflowTaskPort port, boolean projectReportingUnit) {
-        return toPortDescriptor(factoryId, port, projectReportingUnit, Map.of());
+    /**
+     * 单产出契约 / plannedUnit 用哪个端口 —— **第一个非副产**产出。
+     *
+     * <p>原来直接取 {@code outputDescriptors.get(0)}: 副产端口的 ordinal 只要排在前面,
+     * 顶层 productTypeId 和 plannedUnit 就会变成副产的, 而副产是「附带出来的物料」,
+     * 不该替这道工序回答「产出的是什么、按什么单位计划」。
+     *
+     * <p>全是副产时回落第一个 —— 那种图在别处已经被判为配置错误 (画布只配副产没配主产出),
+     * 这里不额外抛, 免得一个配置问题让整张报工单打不开。
+     */
+    private static WorkflowClerkSheetConfigDTO.PortDescriptor primaryOutput(
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors) {
+        if (outputDescriptors.isEmpty()) {
+            return null;
+        }
+        return outputDescriptors.stream()
+                .filter(descriptor -> !Boolean.TRUE.equals(descriptor.getByproduct()))
+                .findFirst()
+                .orElse(outputDescriptors.getFirst());
     }
 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
@@ -306,6 +329,15 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
             WorkflowTaskPort port,
             boolean projectReportingUnit,
             Map<String, List<String>> allowedSkuIdsByPort) {
+        return toPortDescriptor(factoryId, port, projectReportingUnit, allowedSkuIdsByPort, Set.of());
+    }
+
+    private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
+            String factoryId,
+            WorkflowTaskPort port,
+            boolean projectReportingUnit,
+            Map<String, List<String>> allowedSkuIdsByPort,
+            Set<String> byproductNodeIds) {
         List<String> allowedSkuIds = allowedSkuIdsByPort.getOrDefault(
                 port.getWorkflowPortId(),
                 port.getSkuId() == null ? List.of() : List.of(port.getSkuId()));
@@ -344,6 +376,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .selectionGroupMaxSelections(port.getSelectionGroupMaxSelections())
                 .skuResolved(lookup.resolved())
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))
+                .byproduct(port.getMaterialNodeId() != null
+                        && byproductNodeIds.contains(port.getMaterialNodeId()))
                 .build();
     }
 
