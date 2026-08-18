@@ -1711,6 +1711,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 throw new BusinessException(400,
                         "第 " + index + " 段工时填写不完整: 开始时间/结束时间/人数都要填")
                         .withCode("PROCESS_SHEET_LABOR_SEGMENT_INCOMPLETE")
+                        .withHint("请在本行「工时」里把第 " + index + " 段的开始时间、结束时间、人数补齐后再提交")
                         .withHintTarget("工时段")
                         .withSeverity("BLOCKING");
             }
@@ -1718,6 +1719,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 throw new BusinessException(400,
                         "第 " + index + " 段工时的人数必须大于 0, 当前 " + segment.getWorkerCount())
                         .withCode("PROCESS_SHEET_LABOR_SEGMENT_INVALID_HEADCOUNT")
+                        .withHint("请把第 " + index + " 段的人数改成实际上工人数（至少 1 人）；"
+                                + "这一段没人干就把它删掉")
                         .withHintTarget("工时段")
                         .withSeverity("BLOCKING");
             }
