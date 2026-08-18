@@ -17,6 +17,8 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
+import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
@@ -181,10 +183,17 @@ class ReversalPhantomWipContractTest {
         when(reportRepo.findYieldReportsByTask(anyString(), any())).thenReturn(List.of());
         when(txnRepo.findByFactoryIdAndReportId(anyString(), anyLong())).thenReturn(List.of());
 
+        // ⚠️ 2026-08-18 语义冲突修复: PR #2867 给 WipInventoryServiceImpl 加了两个构造参数
+        //    (ProductionWorkflowInstanceRepository / WorkflowTaskPortRepository) 用于画布产出选项。
+        //    本文件与 #2867 在【不同文件的不同行】上改动, git 自动合并零冲突, 两个 PR 各自 CI 也全绿
+        //    —— 但合到一起编译不过。这类冲突文本层面看不见, 只有【合并后编译一次】才暴露。
         WipInventoryServiceImpl svc = new WipInventoryServiceImpl(
                 wipRepo, txnRepo, reportRepo, mock(BatchLineageEdgeRepository.class),
                 mock(WorkProcessTaskRepository.class), mock(WorkProcessRepository.class),
-                mock(ProductTypeRepository.class), mock(ProductFamilyResolver.class),
+                mock(ProductTypeRepository.class),
+                mock(ProductionWorkflowInstanceRepository.class),
+                mock(WorkflowTaskPortRepository.class),
+                mock(ProductFamilyResolver.class),
                 mock(ApplicationEventPublisher.class));
 
         ProductionReport report = ProductionReport.builder()
