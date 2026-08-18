@@ -754,6 +754,68 @@ _INVESTIGATION_LAST_RESORT = (
     "（服务、出品、人手）—— 现在还没到那一步。"
 )
 
+
+def _rank_missing_by_this_rounds_cause(
+    factbook: FactBook,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """把「还可以补充的方面」分成 (先说的, 收起来的)。
+
+    ## 它解决的是取舍顺序，⛔ 不是「说假话」
+
+    📏 prod 实测（MOCK_REST，绕过叙述缓存，n=1743 / n=1853 两轮一致）:
+    「我要不要关掉最差的那家店」末尾列了 **12 条**「还可以补充的方面」——
+    商场客流 / 菜品毛利 / 堂食外卖 / 午晚市 / 评价口碑 / 库存风险 / 排班人效 /
+    天气 / 节假日 / 商场活动 / 周边演出 / 竞品商圈。
+
+    ⚠️ **每一条都是真的**（那些数据确实没接入）。问题在取舍顺序:
+       **能不能决定 > 覆盖得全不全**。一份 12 项的「还缺什么」清单，
+       把上面那段能让他做决定的结论淹掉了。
+
+    ## 排序依据由数据算出来，⛔ 不是拍一个数字
+
+    这一轮的 `primary_cause` 是 `compute_store_attribution` 从门店行
+    **确定性算出来**的；`_CAUSE_INVESTIGATION_DIMENSIONS` 登记了
+    「这个主因该往哪几维查」。⇒ 落在那条排查路径上、而这一轮又**查不了**的，
+    就是「补上之后能改变这一次判断」的那几维；路径外的补上也解释不了
+    这一次的差距（主因是客单价时，天气不在这条路上）。
+
+    ▎**留几条不是我定的** —— 是那条路径上恰好缺了几条。
+    ▎顺序也不是我定的 —— 沿用 `_CAUSE_INVESTIGATION_DIMENSIONS` 的排查顺序
+    ▎（先看自己能改的：折扣、菜单；再看外部的：天气、竞品）。
+
+    ⇒ 它同时消掉一处形态 D：同一份答案里原来有**两份**缺失维度清单
+      （⑥ 的「现在查不了」+ 这张附录），措辞和顺序各写各的。
+      现在附录就是 ⑥ 那一行的**详情页**（怎么拿到 + 拿到能算什么）。
+
+    ## 拿不到排序依据时 ⛔ 不排序
+
+    没跑归因 / 主因没登记 / 那条路径上一条都不缺 —— 三种情况都返回
+    `(全部, [])`，保持原行为。⛔ 没有依据就不许拍一个数字砍。
+
+    ## ⛔ 收起来的那些必须有出口
+
+    本函数只负责**分档**；渲染方必须把第二档的名字列出来并说清怎么要 ——
+    「绝不静默丢掉」是本仓纪律（同 `strip_ungrounded_lines` 的
+    `_DROPPED_NOTICE`）。
+    """
+    missing = [item for item in (factbook.missing_dimensions or [])]
+    attribution = factbook.attribution or {}
+    if not attribution or attribution.get("no_data"):
+        return missing, []
+    cause = str(attribution.get("primary_cause") or "").strip()
+    codes = _CAUSE_INVESTIGATION_DIMENSIONS.get(cause)
+    if not codes:
+        return missing, []
+    by_code = {str(item.get("code")): item for item in missing if item.get("code")}
+    lead_codes = [code for code in codes if code in by_code]
+    if not lead_codes:
+        return missing, []
+    on_path = set(lead_codes)
+    return (
+        [by_code[code] for code in lead_codes],
+        [item for item in missing if str(item.get("code")) not in on_path],
+    )
+
 _PRESCRIBED_NUMBER_RE = re.compile(
     r"(?:预算|目标|KPI|投入|投放|花费|提升到|提升至|提高到|提高至|"
     r"回升到|回升至|增加到|增加至|降到|降至|控制在|争取达到|"
@@ -1486,6 +1548,7 @@ class ComprehensiveSynthesisEngine:
                         fact_check=fc_meta,
                         plain_language=restaurant_scope,
                     )
+                thin_answer = self._append_store_comparison_table(thin_answer, factbook)
                 thin_answer = self._append_investigation_directions(thin_answer, factbook)
                 thin_answer = self._append_dimension_guidance(thin_answer, factbook)
                 thin_answer = _customer_visible_answer(
@@ -1577,8 +1640,10 @@ class ComprehensiveSynthesisEngine:
                 plain_language=restaurant_scope,
             )
         # ⑥⑦ 排查方向要排在「还可补充的方面」**之前** —— 它是结论的一部分，
-        # 那张 12 条的清单是附录。⚠️ 两处接线数量与 `_append_dimension_guidance`
-        # 逐一对应（硬约束 8），有一道 AST 断言钉着这件事。
+        # 那张 12 条的清单是附录。⚠️ 三处接线数量逐一对应（硬约束 8），
+        # 有一道 AST 断言钉着这件事。
+        # 顺序: 门店对比表（证据）→ 排查方向（结论的一部分）→ 缺什么（附录）。
+        answer = self._append_store_comparison_table(answer, factbook)
         answer = self._append_investigation_directions(answer, factbook)
         answer = self._append_dimension_guidance(answer, factbook)
         answer = _customer_visible_answer(
@@ -2954,6 +3019,97 @@ class ComprehensiveSynthesisEngine:
             return ""
 
     @staticmethod
+    def _append_store_comparison_table(answer: str, factbook: FactBook) -> str:
+        """把 `attribution["stores"]` 摊成一张表 —— **确定性渲染，⛔ 不经过 LLM**。
+
+        ## 为什么这里必须有表（交付定义 ④：排行/对比/构成 ⇒ 给表）
+
+        📏 `restaurant_delivery_definitions_probe` 实测：该给表的 11 条里给了 10 条，
+        剩的那 1 条就是「我要不要关掉最差的那家店」（走 synthesis，维度=[]）。
+
+        📏 prod 实拍（MOCK_REST，绕过叙述缓存）的正文里有这类话：
+
+            「10家店营收都在209万~215万之间，模拟·打浦桥日月光店是最后一名，
+              但差距极小，并非『病入膏肓』」
+
+        ▎**这句话正是他要用来做决定的那句，而它现在只能被相信、不能被核对。**
+        ▎「要不要关掉最差的那家」取决于最差那家和其余的**断层有多大** ——
+        ▎断层是排序出来的东西，一段散文说不清，一张按差额排的表一眼就看得出。
+
+        ## ⛔ 不是新数据，是同一批数换个形状
+
+        📏 实测 `_render_finance` 喂给模型的 `Top 门店` 名单与
+        `compute_store_attribution` 的 `stores` **同源同值**
+        （打浦桥 ¥2,089,545.23 ↔ Δ -31,326）。这张表只是把模型**已经看过**的
+        那份名单渲染给老板，⛔ 没有引入任何新的数字来源。
+        ⚠️ 所以它排在 FactReconciler 之后也不会造出对不上的数。
+
+        ## 淹没检查（与那张 12 条清单是同一个取舍）
+
+        结论在第一段，表在正文之后 —— ⛔ 它不会把结论顶下去；
+        同一轮里那张 12 条的「还可以补充的方面」被
+        `_rank_missing_by_this_rounds_cause` 收成 2 条 + 一行出口，
+        净行数基本持平，而**能核对的东西**多了一张表。
+
+        ## 上限复用，⛔ 不新造第二个
+
+        行数上限用 `LLM_STORE_ROSTER_CAP` —— 那是本仓
+        「一次给老板看多少家店」的**唯一**定义（形态 D）。
+        ⚠️ 按差额升序截断会藏掉最好的那几家，而「跨度多大」正是决策要看的，
+           所以跨度**写在表前那一行里**（最低/最高/平均都来自同一份 stores），
+           截断时再明说少了几家。
+        """
+        attribution = factbook.attribution or {}
+        if not attribution or attribution.get("no_data"):
+            return answer
+        stores = [
+            store for store in (attribution.get("stores") or [])
+            if store.get("store_name") and store.get("revenue") is not None
+        ]
+        if len(stores) < 2:
+            return answer
+
+        ranked = sorted(stores, key=lambda s: s.get("delta_revenue") or 0)
+        laggard_name = (attribution.get("laggard") or {}).get("store_name")
+        shown = ranked[:LLM_STORE_ROSTER_CAP]
+
+        def _wan(value: Any, signed: bool = False) -> str:
+            number = float(value or 0) / 10000.0
+            return f"{number:+.1f}万" if signed else f"{number:.1f}万"
+
+        head = (
+            f"### {len(stores)} 家店摊开看"
+            f"（按和门店平均的差额排，差得最多的在最上面）"
+        )
+        scope = (
+            f"营业额最低 {_wan(ranked[0].get('revenue'))}、"
+            f"最高 {_wan(ranked[-1].get('revenue'))}、"
+            f"门店平均 {_wan(attribution.get('bench_revenue'))}。"
+        )
+        lines = [
+            answer.rstrip(), "", head, "", scope, "",
+            "| 门店 | 营业额 | 单量 | 客单价 | 和门店平均差 |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+        for store in shown:
+            name = str(store.get("store_name"))
+            if laggard_name and name == laggard_name:
+                name += "（垫底）"
+            lines.append(
+                f"| {name} | {_wan(store.get('revenue'))} "
+                f"| {int(store.get('bills') or 0):,} "
+                f"| {float(store.get('avg_ticket') or 0):.1f} "
+                f"| {_wan(store.get('delta_revenue'), signed=True)} |"
+            )
+        if len(ranked) > len(shown):
+            lines.append("")
+            lines.append(
+                f"（表里只列了差得最多的 {len(shown)} 家，"
+                f"另外 {len(ranked) - len(shown)} 家在系统里，说门店名可以单看。）"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
     def _append_investigation_directions(answer: str, factbook: FactBook) -> str:
         """⑥ 给排查方向 + ⑦ 都排查不掉才轮到运营 —— **确定性追加，⛔ 不经过 LLM**。
 
@@ -3052,7 +3208,16 @@ class ComprehensiveSynthesisEngine:
 
     @staticmethod
     def _append_dimension_guidance(answer: str, factbook: FactBook) -> str:
-        """Append deterministic missing-data guidance after fact reconciliation."""
+        """Append deterministic missing-data guidance after fact reconciliation.
+
+        🔴 2026-08-18: 这一段原来把 `missing_dimensions` **全部**逐条展开
+        （📏 prod 实测 12 条），把上面那段能让老板做决定的结论淹掉了。
+        取舍顺序是硬的：**能不能决定 > 数字准不准 > 覆盖得全不全**。
+
+        ⇒ 排序/分档交给 `_rank_missing_by_this_rounds_cause`（依据由数据算出，
+          ⛔ 不在这里拍一个数字）；这里只负责渲染，并且
+          ⛔ **绝不静默丢掉**收起来的那些 —— 名字全列出来 + 说清怎么要。
+        """
         missing = factbook.missing_dimensions
         is_demo = factbook.data_mode == "DEMO"
         if not missing and not is_demo:
@@ -3065,11 +3230,25 @@ class ComprehensiveSynthesisEngine:
                 "不代表任何真实客户经营情况。",
             ])
         if missing:
+            lead, folded = _rank_missing_by_this_rounds_cause(factbook)
             lines.extend(["", "### 还可补充的分析维度"])
-            for item in missing:
+            for item in lead:
                 lines.append(
                     f"- **{item.get('label')}**：需要{item.get('required_data')}；"
                     f"补充后可{item.get('enables')}。"
+                )
+            if folded:
+                cause = str(
+                    (factbook.attribution or {}).get("primary_cause") or ""
+                ).strip()
+                # ⛔ 不说「补了也没用」—— 那是替他做判断。只说排查顺序，
+                #    并把名字全列出来 + 告诉他怎么要（这就是那个出口）。
+                lines.append(
+                    f"- 另外 {len(folded)} 个方面也还没有数据，"
+                    f"但这一轮的差距出在「{cause}」，先补上面这几项更有可能解释它，"
+                    f"它们排在后面："
+                    + "、".join(str(item.get("label")) for item in folded)
+                    + "。想看哪一项，直接说它的名字。"
                 )
             lines.append("")
             lines.append("缺失维度当前保持为空，不按 0 处理，也不参与原因判断。")
