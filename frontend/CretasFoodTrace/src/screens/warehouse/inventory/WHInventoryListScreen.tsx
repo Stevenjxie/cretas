@@ -603,7 +603,10 @@ export function WHInventoryListScreen() {
                 .map((b) => (
                   <View key={b.unit} style={styles.countUnitChip}>
                     <Text style={styles.countUnitValue}>{formatQuantity(b.quantity)}</Text>
-                    <Text style={styles.countUnitLabel}>{b.unit} · {b.batchCount}批</Text>
+                    {/* ⛔ 这里不能用 b.unit —— 那是 canonicalUnit() 折出来的英文归一键
+                        (盒 → box), 渲染它等于我们自己把中文翻成英文给用户看。
+                        b.unit 留给上面的 React key 用。 */}
+                    <Text style={styles.countUnitLabel}>{b.displayLabel} · {b.batchCount}批</Text>
                   </View>
                 ))}
             </View>

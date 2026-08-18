@@ -10,6 +10,7 @@ import {
   sameUnit,
   convertByHierarchy,
   bucketByDimension,
+  displayUnit,
   formatQuantity,
 } from '../../../utils/packagingUnitConversion';
 import type { MaterialPackagingHierarchy } from '../../../services/api/materialPackagingApiClient';
@@ -177,6 +178,65 @@ describe('bucketByDimension — 汇总时按量纲分组', () => {
 
   it('空输入返回空数组, 不是一个 0', () => {
     expect(bucketByDimension([])).toEqual([]);
+  });
+
+  // 🔴 2026-08-18: 判据「不许英文单位, 用户看到必须是中文」。
+  // 这里的坑不是后端存了英文 —— 是**我们自己**把中文折成英文再显示:
+  // canonicalUnit('盒') === 'box', 而 bucket.unit 曾被直接渲染到屏幕上。
+  it('渲染用 displayLabel 是中文, 即使内部归一键是英文码', () => {
+    const buckets = bucketByDimension([
+      { unit: '盒', quantity: 10000 },
+      { unit: 'box', quantity: 213 },
+      { unit: 'slice', quantity: 5 },
+    ]);
+
+    const box = buckets.find((b) => b.unit === 'box')!;
+    // 内部键保持英文 —— 分组/比较/React key 靠它, 这一侧是对的, 不要改
+    expect(box.unit).toBe('box');
+    // 面向用户的那一侧必须是中文
+    expect(box.displayLabel).toBe('盒');
+    expect(buckets.find((b) => b.unit === 'slice')!.displayLabel).toBe('片');
+
+    // 阳性对照: 断言真的在看「计数」桶, 而不是遍历了个空数组
+    expect(buckets.filter((b) => b.kind === 'count').length).toBe(2);
+    // 每个计数桶的展示名都不许残留英文字母
+    for (const b of buckets.filter((x) => x.kind === 'count')) {
+      expect(b.displayLabel).not.toMatch(/[a-z]/i);
+    }
+  });
+
+  it('重量桶的展示名仍是 kg —— 计量符号刻意不翻, 与后端 UnitDisplayNames 取舍一致', () => {
+    const buckets = bucketByDimension([{ unit: 'g', quantity: 700340 }]);
+    const weight = buckets.find((b) => b.kind === 'weight')!;
+    expect(weight.displayLabel).toBe('kg');
+  });
+});
+
+describe('displayUnit — 面向用户的单位写法', () => {
+  it('计数/包装码翻成中文', () => {
+    expect(displayUnit('box')).toBe('盒');
+    expect(displayUnit('case')).toBe('箱');
+    expect(displayUnit('pcs')).toBe('件');
+    expect(displayUnit('bag')).toBe('袋');
+    expect(displayUnit('BOX')).toBe('盒'); // 库里出现过大小写混写
+  });
+
+  it('⛔ 计量符号一律不翻 —— 秤上/单据上/国标上都这么写', () => {
+    for (const symbol of ['kg', 'g', 'mg']) {
+      expect(displayUnit(symbol)).toBe(symbol);
+    }
+  });
+
+  it('已经是中文的 / 表里没收的, 原样返回, 不会被改写也不会变空', () => {
+    expect(displayUnit('盒')).toBe('盒');
+    expect(displayUnit('自定义单位')).toBe('自定义单位');
+    expect(displayUnit('(未标注)')).toBe('(未标注)');
+  });
+
+  it('null / 空串不抛错', () => {
+    expect(displayUnit(null)).toBe('');
+    expect(displayUnit(undefined)).toBe('');
+    expect(displayUnit('   ')).toBe('');
   });
 });
 

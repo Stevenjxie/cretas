@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -26,8 +27,34 @@ import java.util.UUID;
 public class ProductionPlanMapper {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * 单位出口 —— 逐值走 {@link UnitDisplayNames#display}, 保留 key 与 null 语义。
+     *
+     * <p>值已经是中文/计量符号时是 no-op, 所以可以无条件套。
+     */
+    private static java.util.Map<String, String> displayUnits(java.util.Map<String, String> byProduct) {
+        if (byProduct == null) {
+            return null;
+        }
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        byProduct.forEach((productId, unit) -> out.put(productId, UnitDisplayNames.display(unit)));
+        return out;
+    }
+
     /**
      * Entity 转 DTO
+     *
+     * <p>🔴 <b>单位一律经 {@link UnitDisplayNames#display} 出口</b> (2026-08-18):
+     * prod 实测 {@code GET /api/mobile/F006/production-plans/{id}} 返回过
+     * {@code "sourceDisplayUnit": "box"} —— 字段名里带 display, 值却是英文码。
+     * 库里 {@code production_plans.source_display_unit} 确有 {@code box}/{@code case} 各 1 行
+     * (归一之前写进去的存量)。判据是「录入/显示/换算后三处一致, 且用户看到必须是中文」,
+     * 所以翻译放在<b>这一处权威出口</b>, ⛔ 不在 N 个调用点各写一份 if/else。
+     *
+     * <p>⚠️ 对已经是中文的值和计量符号(kg/g/t)都是 no-op, 因此无条件套是安全的;
+     * 且 {@code box} 本来就是契约里 {@code 盒} 的别名, 翻过去不会改变任何比较的结果。
+     * 覆盖面由 {@code ProductionPlanUnitDisplayContractTest} 反射钉住(新增 *Unit 字段自动纳入)。
      */
     public ProductionPlanDTO toDTO(ProductionPlan plan) {
         if (plan == null) {
@@ -39,10 +66,10 @@ public class ProductionPlanMapper {
                 .planNumber(plan.getPlanNumber())
                 .productTypeId(plan.getProductTypeId())
                 .plannedQuantity(plan.getPlannedQuantity())
-                .plannedUnit(plan.getPlannedUnit())
+                .plannedUnit(UnitDisplayNames.display(plan.getPlannedUnit()))
                 .sourceDisplayQuantity(plan.getSourceDisplayQuantity())
-                .sourceDisplayUnit(plan.getSourceDisplayUnit())
-                .workflowOutputUnit(plan.getWorkflowOutputUnit())
+                .sourceDisplayUnit(UnitDisplayNames.display(plan.getSourceDisplayUnit()))
+                .workflowOutputUnit(UnitDisplayNames.display(plan.getWorkflowOutputUnit()))
                 .plannedNetWeightGrams(plan.getPlannedNetWeightGrams())
                 .workflowSelectionMode(plan.getWorkflowSelectionMode() == null
                         ? null : plan.getWorkflowSelectionMode().name())
@@ -50,7 +77,7 @@ public class ProductionPlanMapper {
                 .selectedWorkflowVersion(plan.getSelectedWorkflowVersion())
                 .selectedWorkflowRevisionId(plan.getSelectedWorkflowRevisionId())
                 .selectedWorkflowRevisionHash(plan.getSelectedWorkflowRevisionHash())
-                .workflowOutputUnitsByProduct(plan.getWorkflowOutputUnitsByProduct())
+                .workflowOutputUnitsByProduct(displayUnits(plan.getWorkflowOutputUnitsByProduct()))
                 .selectedBomRecipeId(plan.getSelectedBomRecipeId())
                 .selectedBomVersion(plan.getSelectedBomVersion())
                 .selectedBomFamilyId(plan.getSelectedBomFamilyId())
@@ -92,7 +119,7 @@ public class ProductionPlanMapper {
             String ptName = plan.getProductType().getName();
             dto.setProductName(ptName);
             dto.setProductTypeName(ptName);  // Bug #1b (R2): alias field, previously orphan, frontend may bind to either
-            dto.setProductUnit(plan.getProductType().getUnit());
+            dto.setProductUnit(UnitDisplayNames.display(plan.getProductType().getUnit()));
         }
         // 设置创建人姓名
         if (plan.getCreatedByUser() != null) {
