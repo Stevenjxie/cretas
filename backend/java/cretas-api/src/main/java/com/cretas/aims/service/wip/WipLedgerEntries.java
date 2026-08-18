@@ -81,6 +81,59 @@ public final class WipLedgerEntries {
     }
 
     /**
+     * 构造一条「本道产出入库」的 IN 流水行。
+     *
+     * <p><b>为什么补这一条</b>：2026-08-18 查 F006 生产库实测，
+     * {@code semi_finished_inventory_transactions} 全表 8 行里
+     * <b>IN 一行都没有</b>（4 行 OUT + 4 行 REVERSE），
+     * 而 {@code semi_finished_inventory} 的 4 行各自挂着 2.00 / 240.00 / 300.00 / 10.00 的
+     * {@code produced_quantity}。⇒ 余额<b>凭空出现</b>，流水账解释不了它是怎么来的。
+     *
+     * <p>最刺眼的是 id=344 那行：{@code produced=10.00}，流水里有一条 {@code REVERSE -10}，
+     * 而 {@code IN} 是 <b>0 行</b> —— <b>冲销了一笔从来没记过账的入库</b>。
+     *
+     * <p>后果不止对不上账：{@code ReportReversalServiceImpl.replayMovingAverage} 把
+     * 「ΣIN + ΣREVERSE」当成净产出<b>回写</b>库存行，一旦净额 ≤ 0 就把
+     * produced / available 一并清零并置 DEPLETED。流水账缺 IN 行时，
+     * 这等于<b>拿「我没有证据」当「余额是 0」</b>，把真实库存抹掉。
+     *
+     * <p>⚠️ <b>余额口径与 {@link #consumptionRow} 相反</b>，与 {@link #reversalRow} 相同：
+     * 本方法<b>直接读改完的</b> {@code availableQuantity}，要求调用方
+     * <b>先把库存行累加完再调</b>。两种口径各自都对，混起来必错
+     * （2026-08-17 就是把构造点放错边，生产上落过一条 {@code balance_after = -2.000000}）。
+     *
+     * @param sfi        <b>已经累加完</b>的半成品库存行
+     * @param inQty      本次产出入库量（正数）；{@code null} 或 {@code <= 0} 返回 {@code null}
+     * @param inUnitCost 本次产出的单位成本；🔴 诚实 null 传播 —— 算不出就传 {@code null}，⛔ 不要传 0
+     * @param report     产生这笔入库的那条报工
+     * @param sourceRef  定位串，按实体 javadoc：IN → {@code intermediateBatchNo}
+     * @return IN 流水行；无需记账时返回 {@code null}
+     */
+    public static SemiFinishedInventoryTransaction productionRow(
+            SemiFinishedInventory sfi, BigDecimal inQty, BigDecimal inUnitCost,
+            ProductionReport report, String sourceRef, Long operatorId) {
+
+        if (sfi == null || report == null || inQty == null
+                || inQty.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;   // ⛔ 产出 0 不凭空造流水
+        }
+
+        return SemiFinishedInventoryTransaction.builder()
+                .factoryId(report.getFactoryId())
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT)
+                .sourceRef(sourceRef)
+                .quantity(inQty)                    // 按 javadoc：IN 为正数量
+                .unitCostAtTxn(inUnitCost)          // 诚实 null 传播：没有成本就不编一个
+                .balanceAfter(nz(sfi.getAvailableQuantity()))
+                .balanceCostAfter(sfi.getUnitCost())
+                .reportId(report.getId())
+                .operatorId(operatorId)
+                .build();
+    }
+
+    /**
      * 构造一条<b>冲销</b>流水行（驳回 / 修正一条报工时用）。
      *
      * <p>⚠️ 与 {@link #consumptionRow} 的余额口径<b>相反</b>：那一条由「扣减前」状态推出余额；

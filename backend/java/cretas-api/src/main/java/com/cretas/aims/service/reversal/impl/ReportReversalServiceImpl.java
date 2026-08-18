@@ -331,6 +331,39 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
+        // ②.5 🔴 禁止降级 (2026-08-18): 一行都没冲销, 就不许对外说撤回完成。
+        //
+        // 上面 ② 是【按报工找 IN 流水】来冲销的 —— 找不到 IN 行就一行不写、悄悄往下走,
+        // 最后照样置 DONE。实测代价: F006 生产库 14 条 reversal_log <b>全部</b> status=DONE 且
+        // reverted_txn_ids 长度为 0 (jsonb_array_length 逐条查过), 也就是说
+        // <b>这个功能上线至今 (2026-06-10 起) 一次都没有真正冲销过库存</b>,
+        // 而每一次都告诉用户"撤回完成"。报工被软删了(追溯源没了), 它产出的半成品还挂在账上,
+        // 且流水账里没有任何一行解释那批货是怎么来的 —— 这就是 phantom WIP。
+        //
+        // 判据只看【这次撤回该负责的那批 WIP】: 按 batchId 取库存行 (报工产出的行都带 batchId;
+        // 小结/逐道录入的 CLK-SEMI 行 batchId 为空, 不归整单撤回管, 不会被误伤)。
+        // ⇒ 修好 IN 侧记账之后, 正常报工必有 IN 行 ⇒ 本闸只在补全之前的存量数据上响, 窄且可信。
+        if (revertedTxnIds.isEmpty() && !reports.isEmpty()) {
+            BigDecimal stranded = BigDecimal.ZERO;
+            for (SemiFinishedInventory w : wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId)) {
+                BigDecimal avail = w.getAvailableQuantity();
+                if (avail != null && avail.compareTo(BigDecimal.ZERO) > 0) {
+                    stranded = stranded.add(avail);
+                }
+            }
+            if (stranded.compareTo(BigDecimal.ZERO) > 0) {
+                throw new BusinessException(409, String.format(
+                        "撤回失败: 批次 %d 还有 %s 半成品挂在账上, 而流水账里找不到对应的入库(IN)行, "
+                                + "撤回没法把它退回去 —— 若就这样标记完成, 报工没了而货还在, 账就对不上了",
+                        batchId, stranded.stripTrailingZeros().toPlainString()))
+                        .withCode("WIP_NOT_LEDGERED")
+                        .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
+                                + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(String.valueOf(batchId));
+            }
+        }
+
         // ③ 将对应 FinishedGoodsBatch 标记 REVERSED (如有)
         if (log_.getPlanId() != null) {
             List<FinishedGoodsBatch> fgbs =
@@ -825,11 +858,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         BigDecimal producedQty = BigDecimal.ZERO;
         BigDecimal weightedCost = BigDecimal.ZERO;
         BigDecimal consumedOut = BigDecimal.ZERO;
+        // 本行历史上一共记过多少入库量 (ΣIN)。用来判「流水账解释得了当前余额吗」, 见下方守卫。
+        BigDecimal ledgerInTotal = BigDecimal.ZERO;
         boolean hasUnknownCost = false;
 
         for (SemiFinishedInventoryTransaction txn : allTxns) {
             if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
                 BigDecimal q = txn.getQuantity();
+                if (q != null && q.compareTo(BigDecimal.ZERO) > 0) {
+                    ledgerInTotal = ledgerInTotal.add(q);
+                }
                 if (q != null && q.compareTo(BigDecimal.ZERO) > 0 && txn.getUnitCostAtTxn() != null) {
                     producedQty = producedQty.add(q);
                     weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
@@ -858,6 +896,33 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     consumedOut = consumedOut.add(q.abs());
                 }
             }
+        }
+
+        // 🔴 禁止降级 (2026-08-18): 本方法把「ΣIN + ΣREVERSE」当权威净产出【回写】库存行 ——
+        //    这只有在「每一笔入库都记过流水」时才成立。实测 F006 生产库并非如此:
+        //    全表 8 行流水 IN 为 0 行, 而 4 行库存分别挂着 2.00 / 240.00 / 300.00 / 10.00 的
+        //    produced_quantity。在那种行上跑本方法, ΣIN=0 ⇒ producedQty ≤ 0 ⇒ 下面整段把
+        //    produced / available 清零并置 DEPLETED —— 把「我没有流水证据」写成了「余额是 0」,
+        //    真实库存被抹掉, 而且不报错。
+        //
+        //    判据: 账面 produced 超过历史 ΣIN ⇒ 有入库从来没记过流水 ⇒ 流水账解释不了这行余额,
+        //    此时<b>拒绝回写</b>并整体回滚, 绝不用 0 糊过去。
+        //    ⚠️ 反向不成立: 正常冲销过的行 produced 会小于 ΣIN (被 REVERSE 扣过), 不触发。
+        BigDecimal producedOnRecord = sfi.getProducedQuantity() != null
+                ? sfi.getProducedQuantity() : BigDecimal.ZERO;
+        if (producedOnRecord.compareTo(ledgerInTotal) > 0) {
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 半成品 %s 账面产出 %s, 而流水账里只记过 %s 的入库 —— "
+                            + "差额 %s 没有入库流水可冲销, 强行重算会把这批库存抹平",
+                    sfi.getIntermediateBatchNo(),
+                    producedOnRecord.stripTrailingZeros().toPlainString(),
+                    ledgerInTotal.stripTrailingZeros().toPlainString(),
+                    producedOnRecord.subtract(ledgerInTotal).stripTrailingZeros().toPlainString()))
+                    .withCode("WIP_LEDGER_INCOMPLETE")
+                    .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
+                            + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(sfi.getIntermediateBatchNo());
         }
 
         if (producedQty.compareTo(BigDecimal.ZERO) <= 0) {

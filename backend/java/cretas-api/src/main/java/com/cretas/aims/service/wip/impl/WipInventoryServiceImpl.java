@@ -140,7 +140,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 rollLabor = rollup.laborCost();
                 rollMaterial = rollup.materialCost();
             }
-            SemiFinishedInventory producedWip = upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial);
+            SemiFinishedInventory producedWip = upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial,
+                    operatorId);
             // W4 成本链修复: FINISHED/legacy 路径也发 SP3 成本事件 → 回填 SalesOrderItem.costUnitPrice.
             // 此前仅 SEMI 路径 (postSemiOutputLedger) 发事件, 导致整合/旧式报工 (output_kind=null,
             // F006 实际数据全走此路径) 即使算出 WIP unitCost 也永不回填 costUnitPrice → 财审 actualCost 永远 null。
@@ -881,7 +882,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     }
 
     private SemiFinishedInventory upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
-                                   BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
+                                   BigDecimal rollLaborCost, BigDecimal rollMaterialCost,
+                                   Long operatorId) {
         String wipNo = generateBatchNo(task);
         BigDecimal out = nz(report.getOutputQuantity());
         String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
@@ -939,7 +941,35 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         } else {
             wip.setUnitCost(null);
         }
-        return wipRepo.save(wip);
+        SemiFinishedInventory saved = wipRepo.save(wip);
+
+        // 🔴 2026-08-18: 这条路一直在改余额却<b>从不记流水</b>。F006 生产库实测 8 行流水里
+        //    IN 是 0 行, 而 4 行库存各挂着 2/240/300/10 的 produced —— 余额凭空出现,
+        //    追溯链断在这里。OUT 侧 2026-08-17 已补 (consumeSourceWip), IN 侧就是这一处。
+        //
+        //    ⚠️ 流水行在库存行【累加完之后】构造 —— productionRow 直接读改完的 availableQuantity,
+        //       与 consumptionRow(读扣减前) 口径相反, 混用会算出错的 balanceAfter。
+        //
+        //    幂等: 同一份报工在同一条库存行上只允许有一条 IN。撤回是【逐 IN 行】写冲销的,
+        //    多写一条 IN 就会被冲销两次 —— 所以这里不能只靠外层 wipPosted 标记。
+        BigDecimal thisRollup = nullSafeAdd(null, rollLaborCost, rollMaterialCost);
+        BigDecimal inUnitCost = (thisRollup != null && out.signum() > 0)
+                ? thisRollup.divide(out, 4, RoundingMode.HALF_UP)
+                : null;   // 诚实 null: 无工价无料价 → 成本未知, ⛔ 不摊成 ¥0
+        boolean inAlreadyLedgered = report.getId() != null
+                && txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
+                        .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType())
+                                && java.util.Objects.equals(t.getSemiFinishedId(), saved.getId()));
+        if (!inAlreadyLedgered) {
+            SemiFinishedInventoryTransaction inTxn =
+                    WipLedgerEntries.productionRow(saved, out, inUnitCost, report, wipNo, operatorId);
+            if (inTxn != null) {
+                txnRepo.save(inTxn);
+                log.info("[wip] upsertProducedWip 记 IN 流水: factory={}, wipNo={}, qty={}, unitCost={}, balanceAfter={}",
+                        factoryId, wipNo, out, inUnitCost, saved.getAvailableQuantity());
+            }
+        }
+        return saved;
     }
 
     private CostRollup calculateTaskCostRollup(String factoryId, Long workProcessTaskId) {

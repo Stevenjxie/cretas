@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -873,9 +874,13 @@ class WipInventoryServiceImplTest {
         final java.util.Map<String, SemiFinishedInventory> holders = new java.util.HashMap<>();
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(eq(FACTORY_ID), anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(holders.get(inv.<String>getArgument(1))));
+        // 🔴 2026-08-18: 原来两条占位行都被赋成同一个 id (8887) —— 而 intermediate_batch_no 上有
+        //    唯一约束, 两条不同批次号的行【不可能】共用一个主键。桩要问一句「真实上游真的会给出
+        //    这个形状吗」: 不会。改成自增, 否则「两条流水落在不同库存行上」这种断言写不出来。
+        final java.util.concurrent.atomic.AtomicLong seq = new java.util.concurrent.atomic.AtomicLong(8887L);
         when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
             SemiFinishedInventory sfi = inv.getArgument(0);
-            if (sfi.getId() == null) sfi.setId(8887L);
+            if (sfi.getId() == null) sfi.setId(seq.getAndIncrement());
             holders.put(sfi.getIntermediateBatchNo(), sfi);
             return sfi;
         });
@@ -892,8 +897,20 @@ class WipInventoryServiceImplTest {
         verify(wipRepo, times(2)).save(any(SemiFinishedInventory.class));
         // F1: SEMI + FINISHED 两条路径各建一次 0 量占位行 → saveAndFlush 共 2 次
         verify(wipRepo, times(2)).saveAndFlush(any(SemiFinishedInventory.class));
-        // txnRepo.save called ONCE: for SEMI IN ledger
-        verify(txnRepo, times(1)).save(any(SemiFinishedInventoryTransaction.class));
+        // 2026-08-18: 从 1 次改成 2 次 —— 两条路径各产出一批半成品, 就该各记一条 IN 流水。
+        // 旧断言 (times(1)) 守的是「FINISHED 路径不记流水」这个【已被判定为缺陷】的行为:
+        // 实测 F006 生产库全表 8 行流水里 IN 是 0 行, 而库存行挂着 240/300 的 produced ——
+        // 余额凭空出现。需求变了, 所以改断言; 并且从「几次」抬到「是什么」。
+        ArgumentCaptor<SemiFinishedInventoryTransaction> both =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(txnRepo, times(2)).save(both.capture());
+        for (SemiFinishedInventoryTransaction t : both.getAllValues()) {
+            assertEquals(SemiFinishedInventoryTransaction.TxnType.IN, t.getTxnType(),
+                    "SEMI 与 FINISHED 两条产出路径必须各留一条 IN 流水");
+        }
+        assertNotEquals(both.getAllValues().get(0).getSemiFinishedId(),
+                both.getAllValues().get(1).getSemiFinishedId(),
+                "两条 IN 流水分别落在两条不同的库存行上, 不是同一行记了两次");
     }
 
     @Test
@@ -923,9 +940,22 @@ class WipInventoryServiceImplTest {
 
         service.postApprovedOutput(FACTORY_ID, report, task, 10L);
 
-        // No txnRepo interaction for legacy path
-        verify(txnRepo, never()).findByFactoryIdAndReportId(anyString(), anyLong());
-        verify(txnRepo, never()).save(any());
+        // 2026-08-18: 旧断言是 `verify(txnRepo, never()).save(any())` —— 它把
+        // 「legacy 路径产出半成品但不记流水」当成正确行为钉住了, 而那正是 phantom WIP 的成因:
+        // 报工撤回时按 report_id 找 IN 行冲销, 找不到就一行不写还照样置 DONE
+        // (F006 生产库 14 条 reversal_log 全部 reverted_txn_ids 长度为 0)。
+        // 这条断言守的是历史不是需求 ⇒ 改断言, 并抬到「性质」: 必须留下一条能解释余额的 IN 行。
+        ArgumentCaptor<SemiFinishedInventoryTransaction> cap =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(txnRepo).save(cap.capture());
+        SemiFinishedInventoryTransaction in = cap.getValue();
+        assertEquals(SemiFinishedInventoryTransaction.TxnType.IN, in.getTxnType());
+        assertEquals(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT, in.getSourceType());
+        assertEquals(0, in.getQuantity().compareTo(new BigDecimal("75")), "IN 必须是正数量, 且等于本次产出量");
+        assertEquals(500L, in.getReportId(), "流水必须挂在产生它的那条报工上 —— 撤回按 report_id 找它");
+        assertEquals(0, in.getBalanceAfter().compareTo(new BigDecimal("75")), "余额快照要与库存行一致");
+        // 诚实成本: (30 + 45) / 75 = 1.0000
+        assertEquals(0, in.getUnitCostAtTxn().compareTo(new BigDecimal("1.0000")));
         // Regular WIP path runs (累加后 save)
         verify(wipRepo).save(any(SemiFinishedInventory.class));
     }
