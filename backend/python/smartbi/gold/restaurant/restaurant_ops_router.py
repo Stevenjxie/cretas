@@ -9977,11 +9977,54 @@ async def resolve_daypart_performance(
     if untimed_bills:
         lines.append("")
         lines.append(f"> 另有 {untimed_bills:,} 单没有下单时间，不在以上拆分内。")
+    # ── 交付定义②「说一件他没想到的事」: 差距来自**人数**还是**每单消费** ────
+    # 📏 prod 实测(2026-08-18, MOCK_REST): 表里营收占比 62.6% 与单量占比 62.7%
+    #    几乎相同、客单价 ¥374.5 vs ¥376.4(午市**还略高**) —— 答案全在那张表里,
+    #    而产品**一个字没说**, 只念了他问的那个数。
+    # 🔴 而原来那句收尾「弱时段适合用套餐或时段价拉客流」是**没看数据就给的**:
+    #    若差距真的来自每单消费, 那句建议是错的。反目标第一条 ——
+    #    ▎一条误发的提示, 烧掉的是「这东西说的话能信」。
+    # ⛔ 标签由**实际值算出来**, 不写死(本仓记过: 结论标签硬编码 = 内容对、标签假)。
+    gap_line = ""
+    driver = ""
+    if can_see_money and len(ordered) >= 2:
+        q1, q2 = int(ordered[0]["bills"]), int(ordered[-1]["bills"])
+        r1, r2 = float(ordered[0]["revenue"]), float(ordered[-1]["revenue"])
+        bot = ordered[-1]["daypart"]
+        if q1 > 0 and q2 > 0 and r1 != r2:
+            p1, p2 = r1 / q1, r2 / q2
+            # 量价分解: (Q1-Q2)·P2 + (P1-P2)·Q1 == Q1·P1 - Q2·P2, 两项之和恒等于
+            # 营收差 —— ⛔ 不是两个各自估出来的数, 所以老板加一下必然对得上。
+            vol_effect = (q1 - q2) * p2
+            price_effect = (p1 - p2) * q1
+            driver = "来了多少人" if abs(vol_effect) >= abs(price_effect) else "每单花多少钱"
+            gap_line = (
+                f"{top}比{bot}多 ¥{r1 - r2:,.0f}。拆开看："
+                f"单量{'多' if q1 >= q2 else '少'} {abs(q1 - q2):,} 单"
+                f"（折合 ¥{vol_effect:,.0f}），"
+                f"每单平均消费{'高' if p1 >= p2 else '低'} ¥{abs(p1 - p2):,.1f}"
+                f"（折合 ¥{price_effect:,.0f}）"
+                f" —— 差距主要来自**{driver}**。"
+            )
     lines.append("")
-    lines.append(
-        f"生意最好的是**{top}**。时段差距大时先看排班与备货是否跟着时段走；"
-        "弱时段适合用套餐或时段价拉客流，不必按全天平均去配人。"
-    )
+    if gap_line:
+        lines.append(gap_line)
+        lines.append("")
+    if driver == "来了多少人":
+        lines.append(
+            f"生意最好的是**{top}**。差在人数上 —— 想把弱时段做起来，"
+            "先拉客流（套餐、时段价、外卖时段投放），⛔ 提价帮不上忙。"
+        )
+    elif driver == "每单花多少钱":
+        lines.append(
+            f"生意最好的是**{top}**。人数差得不多，差在每单消费上 —— "
+            "先看弱时段的菜单结构和加菜引导，⛔ 光拉客流填不平这个差。"
+        )
+    else:
+        lines.append(
+            f"生意最好的是**{top}**。时段差距大时先看排班与备货是否跟着时段走；"
+            "弱时段适合用套餐或时段价拉客流，不必按全天平均去配人。"
+        )
     return OpsAnswer(
         code="RESTAURANT_OPS_DAYPART_PERFORMANCE",
         title=f"时段表现（{window_label}）",
@@ -9993,7 +10036,10 @@ async def resolve_daypart_performance(
               # (投影丢失): 数据在产出端, 消费端找不到。
               "by_store": bool(store_rows),
               "store_count": len({r["store_name"] for r in store_rows}),
-              "store_covered_revenue": store_cross_total},
+              "store_covered_revenue": store_cross_total,
+              # 正文有而 meta 没有 = 形态 B 第 7 例(投影丢失)。⛔ 空串不写成 None,
+              # 它是「这次没分解」的合法状态, 与「不知道」不同。
+              "gap_driver": driver},
     )
 
 
