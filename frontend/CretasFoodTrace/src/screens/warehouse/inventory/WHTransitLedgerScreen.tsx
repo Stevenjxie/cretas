@@ -269,7 +269,7 @@ export default function WHTransitLedgerScreen() {
               return (
                 <View key={key} style={styles.outputLine}>
                   <Text style={styles.outputIdentity}>
-                    {COPY.sku}: {line.productTypeId}  ·  {COPY.batch}: {line.batchNumber}
+                    {COPY.sku}: {line.productName || line.productTypeId}  ·  {COPY.batch}: {line.batchNumber}
                   </Text>
                   <TextInput
                     mode="outlined"

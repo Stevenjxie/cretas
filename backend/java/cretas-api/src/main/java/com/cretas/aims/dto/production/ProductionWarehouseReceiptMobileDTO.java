@@ -41,6 +41,13 @@ public class ProductionWarehouseReceiptMobileDTO {
     @AllArgsConstructor
     public static class OutputLine {
         private String productTypeId;
+        /**
+         * 逐行的真实品名。仓管在「待确认入库」屏上逐行核对时看的是这个,
+         * 不是 {@link #productTypeId} 那串 UUID。查不到时是一句说明性的中文,
+         * 绝不回落成 UUID / 空串 (见 controller 的 UNKNOWN_PRODUCT_NAME)。
+         * productTypeId 保留在载荷里供确认回传和技术支持定位用。
+         */
+        private String productName;
         private String batchNumber;
         private BigDecimal reportedQuantity;
         private BigDecimal receivedQuantity;

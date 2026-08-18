@@ -91,6 +91,32 @@ public class WarehouseResolver {
     }
 
     /**
+     * 成品仓 (WH-FG) 的仓库名 — 供「待确认入库」屏告诉仓管这批货该收进哪个仓。
+     *
+     * <p><b>与 {@link #resolveFinishedGoodsId} 共用同一个 code 权威</b>
+     * ({@link WarehouseCodes#WH_FG})，所以「屏上显示的仓」与「确认入库时实际写进的仓」
+     * 不可能漂成两个 —— 后者正是 {@code ProductionPlanServiceImpl.createFinishedGoodsForOutputLine}
+     * 调 {@code resolveFinishedGoodsId} 落的那个仓。
+     *
+     * <p>诚实-null: 工厂没有 WH-FG seed / 已软删 / 名字为空 → 返回 {@code null}，
+     * 与 {@link #displayName} 的约定一致。
+     *
+     * <p>⛔ 与 {@link #resolveFinishedGoodsId} 不同，<b>这里不抛异常</b>：这是只读展示路径，
+     * 一个没配成品仓的工厂不该让整屏待办列表 500。调用方负责把 {@code null} 翻成用户看得懂的
+     * 「未指定」文案，⛔ 不是渲染成空白或 null。
+     */
+    public String resolveFinishedGoodsName(String factoryId) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return null;
+        }
+        return factoryWarehouseRepository
+                .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, WarehouseCodes.WH_FG)
+                .map(FactoryWarehouse::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(null);
+    }
+
+    /**
      * 研发/中试库 (WH-RD) id — 试制批次 (is_trial=true) 产出专属仓库。
      * SP10 §RD-1, V20261023_01 seed。有配置覆盖则优先用配置。
      */
