@@ -162,18 +162,26 @@ def test_it_reuses_the_existing_resolver():
         )
 
 
-def test_it_is_wired_at_the_place_that_refuses():
-    """🔴 形态 B：机制在、没接上。
+def test_it_is_wired_at_both_sources_of_the_mention():
+    """🔴 形态 B + 硬约束 8：**两个来源都要核对，⛔ 不是「有调用就算」**。
 
-    拒答发生在 `tiered_answer` 里 `store_mention` 的推导处 ——
-    核对必须接在**那里**，⛔ 不是接在一个没人调的辅助函数上。
+    `store_mention` 有两个来源，拆掉任一个都会漏：
+
+        ① store_slots / extract_store_mentions(...)   ← 正则抽的
+        ② spec.store_slot                             ← LLM 填的槽
+
+    📏 这条断言的第一版只问「有没有调用」，变异 M6 只删掉来源①的那处接线，
+       而来源②那处还在 ⇒ **断言纹丝不动**。
+    ▎硬约束 8 的原形：数的要是「这条路上有几处读同一份数据源」，
+    ▎⛔ 不是「这个名字出现过几次」。
     """
-    src = inspect.getsource(svc.tiered_answer)
-    tree = ast.parse(inspect.cleandoc(src))
-    called = {
-        n.func.id for n in ast.walk(tree)
+    tree = ast.parse(inspect.cleandoc(inspect.getsource(svc.tiered_answer)))
+    calls = [
+        n for n in ast.walk(tree)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-    }
-    assert "_mentions_backed_by_catalogue" in called, (
-        "核对没接到 tiered_answer 上 —— 它守不到那句拒答"
+        and n.func.id == "_mentions_backed_by_catalogue"
+    ]
+    assert len(calls) >= 2, (
+        f"只接了 {len(calls)} 处 —— `store_mention` 有**两个**来源"
+        "（正则抽的 / spec.store_slot），漏掉任一个那句拒答都还会发生"
     )
