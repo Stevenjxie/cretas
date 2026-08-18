@@ -1682,7 +1682,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private String generateRequisitionNo(String factoryId) {
         String datePart = LocalDateTime.now().format(DATE_FMT);
         String prefix = "MR" + datePart;
-        int next = nextSequenceAfterMax(repository.findMaxRequisitionNo(factoryId, prefix));
+        // ⚠️ LIKE 的通配串在 Java 侧拼好再传。写成 CONCAT(:prefix, '%') 时 Postgres 报
+        //    `could not determine data type of parameter $2` —— native 查询里参数没有类型上下文,
+        //    它推不出来。2026-08-18 实测: 修复上线后建单从 409 变成 500, 更难看。
+        int next = nextSequenceAfterMax(repository.findMaxRequisitionNo(factoryId, prefix + "%"));
         return String.format("%s-%04d", prefix, next);
     }
 

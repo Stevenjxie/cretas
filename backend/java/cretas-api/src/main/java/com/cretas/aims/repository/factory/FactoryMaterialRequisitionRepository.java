@@ -44,9 +44,9 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
      * 哪怕那张单后来被删了。
      */
     @Query(value = "SELECT MAX(requisition_no) FROM factory_material_requisitions "
-            + "WHERE factory_id = :factoryId AND requisition_no LIKE CONCAT(:prefix, '%')",
+            + "WHERE factory_id = :factoryId AND requisition_no LIKE :pattern",
             nativeQuery = true)
-    String findMaxRequisitionNo(@Param("factoryId") String factoryId, @Param("prefix") String prefix);
+    String findMaxRequisitionNo(@Param("factoryId") String factoryId, @Param("pattern") String pattern);
 
     /**
      * P1-5 车间仓 20:00 清仓扫描: 查所有状态为 ISSUED/IN_USE 且创建时间早于今天的 FMR
