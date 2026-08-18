@@ -271,6 +271,30 @@ async def main() -> int:
         print("    %-14s %d" % (k, tally[k]))
     print("    契约缺口(contract_pass=False) = %d" % gaps)
 
+    # ── 两个口径都报 ⛔ 不只报对自己有利的那个 ──────────────────────────
+    #
+    # 🔴 `verdict()` 的第一条是 `"还没有数据" in text ⇒ B-诚实缺数据`，
+    #    于是一个 **948 字、`contract=True`、`kind=answer`** 的经营诊断答案，
+    #    只因正文里提到某项数据没有，整条被降级出 A。
+    #
+    # ▎而「答得上」的定义是**产品给出答案，而不是「我没敢算」**。
+    # ⇒ 按那个定义要看 `kind == "answer"` 的条数。
+    #
+    # ⛔ **不改 `verdict()`** —— 改分类器等于改仪器，前后读数立刻不可比。
+    #    这里只是把第二个口径**也**打出来，并说清两者差在哪。
+    # 📏 2026-08-18 实测：`A-有答案 40` / `B-诚实缺数据 1` / `D 7`，
+    #    而 `kind==answer` = **41** —— 差的那一条就是那份 948 字的诊断。
+    kind_answered = sum(1 for r in rows if r.get("kind") == "answer")
+    print("    ── 口径二: kind==answer = %d / %d" % (kind_answered, total))
+    if kind_answered != answered:
+        downgraded = [r["q"] for r in rows
+                      if r.get("kind") == "answer"
+                      and r.get("verdict") != "A-有答案"]
+        print("       两个口径差 %d 条 —— 它们**给了答案**但被 verdict 归到别处:"
+              % (kind_answered - answered))
+        for q in dict.fromkeys(downgraded):
+            print("         · %s" % q)
+
     # ── 口径：这一次跑的环境正不正常 ─────────────────────────────────────
     # ⛔ 报数字要带口径。📏 同一命令同一天三次: 39/48(故障 8)、40/48(故障 9)、
     #    38/48(故障 16) —— 不带这一列时,「38 vs 40」会被读成产品退步

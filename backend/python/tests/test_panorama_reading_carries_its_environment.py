@@ -175,3 +175,54 @@ def test_flap_does_not_feed_the_exit_code():
         assert not bad, (
             f"退出码判定里用上了抖动计数 {bad} —— 它只报不判"
         )
+
+
+# ── 两个口径 ──────────────────────────────────────────────────────────────
+
+def test_it_reports_both_answered_metrics():
+    """🔴 `A-有答案` 和 `kind==answer` 是**两个口径**，都要报。
+
+    📏 2026-08-18 实测：`A-有答案 40` / `B-诚实缺数据 1` / `D 7`，
+    而 `kind==answer` = **41**。差的那一条是一份 **948 字、`contract=True`**
+    的经营诊断答案 —— `verdict()` 的第一条
+    （`"还没有数据" in text ⇒ B`）把它降级出了 A。
+
+    ▎而「答得上」的定义是**产品给出答案，而不是「我没敢算」**。
+
+    ⛔ **不改 `verdict()`** —— 改分类器等于改仪器，前后读数立刻不可比。
+       ⇒ 只把第二个口径也打出来，并列出差在哪几条。
+    """
+    import ast
+    import inspect
+
+    from smartbi.scripts import restaurant_panorama_probe as probe
+
+    src = inspect.getsource(probe.main)
+    tree = ast.parse(src)
+    literals = {
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    }
+    assert any("kind==answer" in s for s in literals), (
+        "没有报第二个口径 —— 只报 A 会漏掉「给了答案但被归到 B」的那些"
+    )
+    # 阳性对照：原来那个口径还在（⛔ 不许用新口径把旧的挤掉）
+    assert any("全景小计" in s for s in literals), sorted(literals)[:6]
+
+
+def test_the_classifier_itself_is_untouched():
+    """⛔ 钉住 `verdict()` 没被改动 —— 改它 = 改仪器 = 前后不可比。
+
+    ⚠️ 它的第一条正是把那份 948 字答案降级的那一条；
+       想让数字好看最简单的办法就是删掉它。这条断言拦的就是那个。
+    """
+    import inspect
+
+    from smartbi.scripts import restaurant_panorama_probe as probe
+
+    src = inspect.getsource(probe.verdict)
+    assert '"还没有数据" in (text or "")' in src, (
+        "verdict() 的降级判据被动过了 —— 前后读数不再可比"
+    )
+    assert 'return "B-诚实缺数据"' in src
+    assert 'return "A-有答案"' in src
