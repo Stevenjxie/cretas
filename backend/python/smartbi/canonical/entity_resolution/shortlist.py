@@ -149,9 +149,17 @@ def strip_entity_suffix(mention: str) -> str:
     """去掉「店/门店/分店/餐厅」这类尾缀。
 
     ⛔ 只去**一个**：「宝山店店」这种不是人话，多去一层只会把真名削短。
-    ⛔ 整个词就是尾缀时不动它（「门店」不该变成空串）。
+    ⛔ 整个词就是尾缀时**原样返回**。
+
+    🔴 第一版写的是 `len(text) > len(suffix)`，被自己的用例当场抓出来：
+       那个守卫只挡得住**同长**的那个尾缀，挡不住更短的 ——
+       「门店」跳过 `门店`（2 > 2 为假）之后被 `店` 削成「门」，
+       而「门」会去包含匹配上所有带「门」的店名。
+       ⇒ 判据换成「整个词是不是尾缀」，与长度无关。
     """
     text = (mention or "").strip()
+    if text in ENTITY_SUFFIXES:
+        return text
     for suffix in ENTITY_SUFFIXES:
         if text.endswith(suffix) and len(text) > len(suffix):
             return text[: -len(suffix)]

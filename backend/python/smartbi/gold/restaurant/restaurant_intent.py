@@ -6719,7 +6719,7 @@ def _semantic_spec_from_t3(
         asks_profitability = False
     dish = _verbatim_entity(parsed.get("dish"), query)
     primary_store = store_names[0] if len(store_names) == 1 else None
-    return _build_spec(
+    spec = _build_spec(
         code,
         query,
         confidence=confidence,
@@ -6763,6 +6763,35 @@ def _semantic_spec_from_t3(
             daypart_contract_repair or food_cost_ratio_contract_repair
         ),
     )
+    if ambiguity is None:
+        return spec
+
+    # 🔴 **必须在 `_build_spec` 之后再钉一次** —— 上面那次赋值会被它抹掉。
+    #
+    #    实测: `_build_spec` 的 contract-repair 分支(「显式槽位编译出唯一 resolver
+    #    时, 模型那个泛泛的澄清标记就不再真实」)无条件执行
+    #        clarification_needed = False; clarification_question = None
+    #    于是「社区店」这一轮拿到 clarification_options 却 needed=False,
+    #    最终由下游 `_apply_store_scope_guard` 给出一句**通用**的门店范围反问 ——
+    #    老板看到的是「请选择全部门店，或直接输入门店名称」, 而不是
+    #    「你说的社区店有 4 家对得上」。产出端有了、消费端把它抹了(形态 B)。
+    #
+    #    ⛔ 不去改 `_build_spec` 那个 clear: 它守的是**另一件真事**(模型自撰的
+    #       泛泛澄清)。这里的歧义不是模型报的, 是代码查库查出来的事实 ——
+    #       两件事共用一个标记位, 就在这里各自钉住各自的。
+    # ⛔ 也不去改 `_apply_store_scope_guard`: 它开头那道
+    #    `clarification_needed and "time" not in slots` 早退**已经**会放我过去,
+    #    前提正是 needed 为 True。修好这里, 那边一行都不用动。
+    return _seal_query_plan(replace(
+        spec,
+        clarification_needed=True,
+        clarification_question=store_ambiguity_question(*ambiguity),
+        clarification_options=tuple(ambiguity[1]),
+        store_scope=None,
+        store_slots=(),
+        store_scope_defaulted=False,
+        plan_hash="",
+    ))
 
 
 def _t3_contract_violation(content: str) -> Optional[str]:
