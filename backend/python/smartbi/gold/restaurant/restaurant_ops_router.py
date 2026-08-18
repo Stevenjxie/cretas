@@ -7841,13 +7841,41 @@ async def resolve_store_margin(
         ],
     }] if top_slice else []
 
+    # 🔴 2026-08-18 prod 实测（MOCK_REST，「哪家店成本最高」n=1285）:
+    #    10 家店毛利率 **67.7% ~ 68.0%**（差 0.3 个百分点），而这里无条件点名
+    #    「需要复盘的门店: 模拟·宝山大场社区店 毛利率 67.7%, 先查低毛利菜品占比…」
+    #    ⇒ 老板照它去查那一家，**必然一无所获**。
+    #    ▎反目标第一条: 一条误发的提示，烧掉的是「这东西说的话能信」。
+    #      上新提示之前问一句 —— **排在最前面的那个命中，他去查会不会一无所获。**
+    #
+    # ⛔ 阈值复用 `_STORE_SPREAD_WORTH_CHASING_PCT`，⛔ 不新写一份（形态 D）。
+    # ⛔ 极差也复用 `_store_revenue_spread` —— 它算的是 `(hi-lo)/hi*100` 的
+    #    **相对**极差，与量纲无关，所以喂毛利率同样成立（⚠️ 函数名带 revenue
+    #    只是它最初的用途；这里喂的是 margin_rate，注释写在这里免得下一个人误读）。
+    # ⚠️ 差距小的时候说「不在门店之间」，⛔ 不顺嘴指向菜品 —— 那是编。
     weak_store_text = ""
     if len(ranked_store_list) > 1:
-        weakest = sorted(ranked_store_list, key=lambda s: s["margin_rate"])[0]
-        weak_store_text = (
-            f"\n\n需要复盘的门店: **{weakest['name']}** 毛利率 {weakest['margin_rate'] * 100:.1f}%, "
-            f"先查低毛利菜品占比、套餐折扣和损耗领料是否偏高。"
-        )
+        _by_rate = sorted(ranked_store_list, key=lambda s: s["margin_rate"])
+        weakest, strongest = _by_rate[0], _by_rate[-1]
+        _rate_spread = _store_revenue_spread(
+            [{"revenue": s["margin_rate"]} for s in ranked_store_list])
+        _rel_pct = _rate_spread[2] if _rate_spread else 0.0
+        _pp = (strongest["margin_rate"] - weakest["margin_rate"]) * 100
+        if _rel_pct < _STORE_SPREAD_WORTH_CHASING_PCT:
+            weak_store_text = (
+                f"\n\n{len(ranked_store_list)} 家店的毛利率差得很少"
+                f"（最高 {strongest['margin_rate'] * 100:.1f}%、"
+                f"最低 {weakest['margin_rate'] * 100:.1f}%，相差 {_pp:.1f} 个百分点）"
+                f"—— **按门店查多半找不到东西**，差异不在门店之间。"
+            )
+        else:
+            weak_store_text = (
+                f"\n\n需要复盘的门店: **{weakest['name']}** "
+                f"毛利率 {weakest['margin_rate'] * 100:.1f}%"
+                f"（最高的 {strongest['name']} 是 "
+                f"{strongest['margin_rate'] * 100:.1f}%，相差 {_pp:.1f} 个百分点）, "
+                f"先查低毛利菜品占比、套餐折扣和损耗领料是否偏高。"
+            )
     margin_summary = (
         f"已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{avg_rate * 100:.1f}%**"
         if total_profit is not None and avg_rate is not None
