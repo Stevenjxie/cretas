@@ -187,7 +187,15 @@ async def test_the_table_is_sorted_by_the_same_slot_the_lead_names():
     text = ans.answer_text
 
     lead = text.split("各门店分时段")[0]
-    assert "陆家嘴正大店" in lead, "首段点名的不是晚市最强那家\n" + lead
+    # ⛔ 断言「被点名为最强」，不是「出现过」——
+    #    变异「首段改按总计排」第一轮**全绿**：那时首段说的是
+    #    「徐汇美罗城店最强…最弱的是 陆家嘴正大店」，陆家嘴照样出现在 lead 里。
+    assert "**陆家嘴正大店**最强" in lead, (
+        "首段点名为最强的不是晚市最强那家\n" + lead
+    )
+    assert "**徐汇美罗城店**最强" not in lead, (
+        "首段点名的是**总计**最强那家 —— 与表格口径漂了\n" + lead
+    )
 
     # 表格第一条数据行的门店名
     body = text.split("各门店分时段")[1]
@@ -208,6 +216,31 @@ async def test_the_table_declares_how_it_is_sorted():
     assert "按晚市营收从高到低" in ans.answer_text, (
         "表格没写排序口径\n" + ans.answer_text
     )
+
+
+@pytest.mark.asyncio
+async def test_the_declared_sort_slot_is_computed_not_hardcoded():
+    """⛔ 排序口径里的时段名必须由 `top` 算出来。
+
+    ⚠️ 补写的：变异「写死成『晚市』」第一轮**全绿** ——
+       因为默认桩里首位时段本来就是晚市，两种实现给出同一句话。
+       ⇒ 换一个**午市更大**的桩，让写死看得见（形态 B⁴：
+         一道比较式的闸，要问「有没有一种输入能让它红」）。
+    """
+    lunch_heavy_daypart = [
+        {"daypart": "午市", "bills": 9000, "revenue": 5000000.00,
+         "guests": 18000, "window_start": "2026-07-20", "window_end": "2026-08-18"},
+        {"daypart": "晚市", "bills": 3000, "revenue": 1000000.00,
+         "guests": 6000, "window_start": "2026-07-20", "window_end": "2026-08-18"},
+    ]
+    ans = await _answer(dimensions=("store",), daypart_rows=lunch_heavy_daypart)
+    text = ans.answer_text
+    assert "按午市营收从高到低" in text, (
+        "首位时段是午市，排序口径却不是它 —— 多半写死了\n" + text
+    )
+    assert "按晚市营收从高到低" not in text, text
+    # 首段也要跟着走（同一个 `top`）
+    assert "按门店看**午市**" in text, "首段的时段没跟着 top 变\n" + text
 
 
 @pytest.mark.asyncio
