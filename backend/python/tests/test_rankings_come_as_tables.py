@@ -139,6 +139,105 @@ def test_the_partial_month_caveat_stays_in_the_cell():
     )
 
 
+def _assign_subtree(func, name):
+    """取 `func` 里对 `name` 的赋值子树。"""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(func))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in n.targets):
+            return n
+    raise AssertionError(f"找不到 {name} 的赋值")
+
+
+def test_the_partial_month_caveat_is_produced_by_the_shared_helper():
+    """🔴 「（截至N日）」由 `_month_label` 产出 —— 直接调它，**跑行为**。
+
+    ⚠️ 补写的经过（留痕，别再走一遍）：第一版只测 `_markdown_table`
+       （喂我自己造的行），变异「把限定语挪出格外」**全绿** ——
+       那是本仓反复记的「测了 helper，没测接线」。
+       第二版改成 AST 看「调用点有没有用到那两个名字」，**仍然全绿** ——
+       变异写成 `("" if True else f"（截至…")`，名字留在死分支里。
+       ⛔ 这时不该再去收窄 AST（形态 C⁸ 反过来：与其收窄判据，不如改结构），
+       所以把行构造抽成 `_month_label`，判据从「结构」回到「行为」。
+    """
+    from datetime import date as _date
+
+    from smartbi.gold.restaurant.restaurant_ops_router import _month_label
+
+    d = _date(2026, 8, 18)
+    assert _month_label("2026-08", is_last=True, partial=True, latest_day=d) == (
+        "2026-08（截至18日）")
+    # 阴性对照三条：不是最后一期 / 这一期是完整的 / 压根不知道到哪天
+    assert _month_label("2026-07", is_last=False, partial=True, latest_day=d) == "2026-07"
+    assert _month_label("2026-07", is_last=True, partial=False, latest_day=d) == "2026-07"
+    assert _month_label("2026-07", is_last=True, partial=True, latest_day=None) == "2026-07"
+
+
+def test_the_caveat_has_exactly_one_definition():
+    """🔴 形态 D：这个限定语原先**有两份**（表格一份、图表 xAxis 一份）。
+
+    📏 硬约束 8（改共享结构前后各数一次）：改之前 `git grep -c '（截至'`
+       在 `resolve_trend_analysis` 里数到 **2 处手写**，改之后 **0 处手写
+       + 1 处 helper**，两处都调 `_month_label`。
+
+    ⛔ 这条闸钉的是「⛔ 不许再复制第三份」，不是「helper 算得对」
+       （后者由上面那条行为断言守）。
+    """
+    import ast
+    import inspect
+
+    from smartbi.gold.restaurant import restaurant_ops_router as rr
+
+    import re
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(rr.resolve_trend_analysis))
+    tree = ast.parse(src)
+
+    # ⛔ 不 grep 源码文本 —— 第一版就是这么写的，把**注释里的举例**
+    #    （`2026-08（截至18日）: ¥…`）也数了进去，闸当场误报。
+    #    本仓记过三次同型（数注解不剥注释 / grep 数进 docstring / 数 `/ all_gross`）：
+    #    ▎字符串计数量的是**文本**，AST 量的是**结构**。
+    hand_written = [
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        and re.search(r"（截至[^）]*日）", n.value)
+    ]
+    assert not hand_written, (
+        f"又出现了手写的月份限定语 {hand_written} —— 用 `_month_label`，⛔ 别复制第三份"
+    )
+
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "_month_label"
+    ]
+    assert len(calls) == 2, f"_month_label 的调用点应为 2 处（表格 + 图表），拿到 {len(calls)}"
+
+
+def test_the_bold_is_applied_at_the_call_site():
+    """🔴 **调用点**必须给第一名加粗。
+
+    ⚠️ 同上：变异「第一名不加粗」在只测 helper 的用例上全绿。
+    """
+    import ast
+
+    from smartbi.gold.restaurant import restaurant_ops_router as rr
+
+    node = _assign_subtree(rr.resolve_store_margin, "top_text")
+    consts = {n.value for n in ast.walk(node)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    has_cmp = any(
+        isinstance(n, ast.Compare) and isinstance(n.left, ast.Name)
+        and n.left.id == "i"
+        for n in ast.walk(node))
+    assert "**" in consts, f"调用点没有加粗标记（常量 {sorted(consts)[:8]}）"
+    assert has_cmp, "调用点没有「第几名」的判断 —— 加粗会落到所有行或都没有"
+
+
 def test_an_empty_ranking_says_so_instead_of_an_empty_table():
     """阴性对照：没有可排名的门店时 ⛔ 不许给一张空表。
 

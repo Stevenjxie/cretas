@@ -8517,6 +8517,22 @@ async def resolve_sales_summary(
     )
 
 
+def _month_label(
+    month: str, *, is_last: bool, partial: bool, latest_day: Optional[date],
+) -> str:
+    """月份标签 —— 最后一期未完结时带上「（截至N日）」。
+
+    ⚠️ 这个限定语说明最后一期是**未完结**的。省掉或挪走，老板会拿一个
+       半月的数当整月去比（本仓记过同型：▎**每个数都对，合起来是谎**）。
+
+    🔴 抽出来的原因是它原先**有两份**（表格一份、图表 xAxis 一份）——
+       形态 D「同一个东西有两份，它一定会漂」。⛔ 不要再复制第三份。
+    """
+    if is_last and partial and latest_day is not None:
+        return f"{month}（截至{latest_day.day}日）"
+    return month
+
+
 async def resolve_trend_analysis(
     smartbi_pool, factory_id: str, *, role: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
@@ -8738,10 +8754,9 @@ async def resolve_trend_analysis(
     month_list_text = "\n".join(_markdown_table(
         ["月份", "营收"],
         [
-            [f"{m['month']}"
-             + (f"（截至{latest_data_date.day}日）"
-                if latest_month_partial and m is monthly[-1] and latest_data_date
-                else ""),
+            [_month_label(m["month"], is_last=m is monthly[-1],
+                          partial=latest_month_partial,
+                          latest_day=latest_data_date),
              _money(m["revenue"])]
             for m in monthly
         ],
@@ -8863,11 +8878,9 @@ async def resolve_trend_analysis(
             "chartType": "line",
             "title": f"月度营收趋势 ({window_text})",
             "xAxis": {"data": [
-                (
-                    f"{m['month']}（截至{latest_data_date.day}日）"
-                    if latest_month_partial and m is monthly[-1] and latest_data_date
-                    else m["month"]
-                )
+                _month_label(m["month"], is_last=m is monthly[-1],
+                             partial=latest_month_partial,
+                             latest_day=latest_data_date)
                 for m in monthly
             ]},
             "series": [{
