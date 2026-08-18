@@ -4885,6 +4885,108 @@ async def clear_pending_clarifications(pool) -> None:
         logger.warning(f"[restaurant-intent] pending-clarification clear failed: {exc}")
 
 
+async def _is_new_topic_not_a_reply(
+    query: str,
+    pool,
+    *,
+    factory_id: str,
+    semantic_first: bool,
+    session_summary: "Optional[str]" = None,
+    continued_intent: str = "",
+) -> bool:
+    """这一句是**换了话题**，还是在**回答我上一句反问**。
+
+    ## 缺陷（📏 四组对照，唯一变量是前置问句；阳性对照：无前置组 answer）
+
+        ① 无前置                        → answer 948
+        ② 只有「米饭卖得怎么样」          → **clarification 23**
+                                          「你想针对哪几家门店做优化？以及看哪个时间范围？」
+        ③ 只有「哪家店缺货最严重」        → answer 948
+        ④ 两条都有（全景里的真实顺序）    → **clarification 14**
+                                          「你想针对哪家门店做优化决策？」
+
+    ▎老板问「我要不要关掉最差的那家店」—— **他要做一个决定**，
+    ▎而系统反问他「哪家门店」。
+
+    元凶是 ②：「米饭卖得怎么样」注册了一个**合法**的槽位反问 pending
+    （「这项分析要看哪一组门店、哪个时间范围？」）。⛔ 不能靠「不注册」来修 ——
+    它真的在问槽位。问题在**消费端**：老板没回答那个槽位，他换了话题，
+    而下一句被**无条件**当成对它的回答，`combined_query = 前一句 + 新问句`。
+
+    ⚠️ ④ 组还看到 pending 本身在累积：`米饭卖得怎么样 哪家店缺货最严重`
+       —— 那是 `resolver_query_seed 无条件累积` 那条登记未做的现场。
+
+    ## 判据：这一句**自己**编译一次，是不是一句完整问句
+
+    📏 可用性是量出来的，⛔ 不是推出来的（各独立编译一次）：
+
+        槽位回答  上个月 / 最近30天 / 陆家嘴店 / 全部门店 /
+                  全部门店 最近30天 / 晚市 / 按食材   → False   **0/7 误判**
+        新话题    我要不要关掉最差的那家店 / 最近生意怎么样 /
+                  哪家店卖得最好 / 最近损耗怎么样 /
+                  折扣力度多大 / 哪道菜毛利最高       → True    **6/6**
+
+    ⚠️ 四个条件，**后三条都是被既有断言逼出来的**（⛔ 不是设计时想到的）：
+
+    · `intent` 非空 **且** `not clarification_needed`
+      —— 「晚市」抽得出 `DAYPART_PERFORMANCE` 但仍在回答反问；
+         只看 `intent` 会把它误判成新话题。
+    · `planner_authority == "llm"`
+      —— 📏 13 条既有断言在这一点上红过：`trusted_context` / `explicit_*` /
+         `promoted_exact` / `llm_unavailable` 全是**零 token** 路径，
+         契约是 `assert llm.await_count == 0`（「T3 挂了也能续接」）。
+         ▎T3 都挂了，就没有资格再问一次 T3。
+    · `source_tier == "llm"`
+      —— 📏 三轮链用例：独立编译「本月」**命中计划缓存**，返回完整
+         `GROSS_MARGIN` spec ⇒ 多轮链断掉。
+         ▎判据要的是「T3 现在看这句话认为它完整」，⛔ 不是「这句话以前出现过」。
+    · `intent != continued_intent`
+      —— 语义上真正的那一条：**换话题 = 问的是另一件事**。
+         📏 缺陷场景实测：独立 `BUSINESS_OPTIMIZATION` vs 续接 `STORE_MARGIN`。
+
+    ## 代价（📏 量过，⛔ 不是估的）
+
+    只在「有 pending **且** 续接后仍需澄清 **且** authority 是 llm」时多一次编译。
+    📏 全景 24 问句 × 2 轮（生产形态）拒答 **8/48 = 17%** ⇒ 下一轮才可能付这个代价，
+    **而收益正落在同一批轮次里**。⛔ 没有 pending 时一次都不多花。
+
+    ⚠️ 我一度因为「代价打在多数身上」回退过这个修法 —— **那个评估是错的**：
+       那个「多数」是**澄清链内部**的多数，而澄清链本身只占 17%。
+
+    ⛔ **不**用关键词判断「像不像新话题」—— 已裁定不重开关键词路由；
+       这里用的是**编译结果**，不是词表。
+    ⛔ 判成新话题**不等于**跳过澄清：走的是正常新问句流程，该反问照样反问。
+       与「有默认值就压掉澄清」是两件事 —— 那条说别替用户答槽位，
+       这条判的是他有没有在答。
+
+    设计卡：`docs/decisions/2026-08-18-换话题不该被当成回答反问-设计卡.md`
+    """
+    if not (query or "").strip():
+        return False
+    try:
+        alone = await parse_restaurant_query(
+            query,
+            pool,
+            factory_id=factory_id,
+            session_key=None,          # ⛔ 不带 key —— 否则又会去 pop pending
+            semantic_first=semantic_first,
+            session_summary=session_summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # ⛔ 判不出来就**照旧走续接** —— 保守方向是保住澄清续接,
+        #    而不是把一次故障变成「所有问句都成了新话题」。
+        logger.warning(
+            "[restaurant-intent] 新话题判定失败, 照旧走续接: %s", exc)
+        return False
+    return bool(
+        alone is not None
+        and alone.intent
+        and not alone.clarification_needed
+        and getattr(alone, "source_tier", None) == "llm"
+        and alone.intent != (continued_intent or "")
+    )
+
+
 async def _maybe_register_pending(
     pool, query: str, spec: Optional[RestaurantQuerySpec], factory_id: str,
     session_key: Optional[str],
@@ -6720,7 +6822,31 @@ async def _parse_restaurant_query_impl(
             continued = await _apply_store_scope_guard(
                 pool, factory_id, continued, history,
             )
+            # 🔴 续接**已经没读懂**这一句 —— 到这一步才轮到问「他是不是换话题了」。
+            # ⛔ 位置不能提前到 `_pending_pop` 之后（第一版就在那里，13 条既有断言
+            #    当场红）：那些路径的契约是「T3 挂了也能续接」。
+            # ▎判据红了不许加豁免，要看它逼出什么 —— 它逼出的是
+            # ▎**「只有在确定性续接已经失败时，才有资格多花一次编译」**。
             if (
+                continued is not None
+                and continued.clarification_needed
+                and continued.planner_authority == "llm"
+                and await _is_new_topic_not_a_reply(
+                    norm_query, pool, factory_id=factory_id,
+                    semantic_first=semantic_first,
+                    session_summary=session_summary,
+                    continued_intent=continued.intent or "",
+                )
+            ):
+                logger.info(
+                    "[restaurant-intent] 换话题, 丢弃 pending: "
+                    "pending=%.30s new=%.30s",
+                    pending.get("original_query") or "", norm_query)
+                # ⛔ 不重新注册 pending —— 那个反问已经过期了。
+                # ⛔ 也不 return —— 下面那个 return 会把续接结果原样端出去。
+                consumed_pending = False
+                continued = None
+            elif (
                 continued is not None
                 and continued.clarification_needed
                 and continued.is_clarification_continuation
@@ -6743,7 +6869,10 @@ async def _parse_restaurant_query_impl(
                     factory_id,
                     session_key,
                 )
-            return continued
+            # `continued is None` 只有一种来源：上面判成了「换话题」。
+            # ⛔ 那一支必须掉下去走正常新问句流程。
+            if consumed_pending:
+                return continued
 
     # ── 门店范围收窄: 上一轮我用默认范围答了, 这一句只是在换范围 ──────────
     #
