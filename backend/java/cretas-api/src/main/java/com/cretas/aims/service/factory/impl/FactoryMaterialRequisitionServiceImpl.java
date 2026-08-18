@@ -1663,11 +1663,47 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return item.getMaterialTypeId() != null ? item.getMaterialTypeId() : item.getId();
     }
 
+    /**
+     * 生成当天单号。
+     *
+     * <h3>🔴 2026-08-18 prod 实测: 原来按「条数 + 1」发号, 会重复发号</h3>
+     * 实体上有 {@code @Where(clause = "deleted_at IS NULL")}, 它<b>静默作用到那条 JPQL count</b>,
+     * 于是「今天发过几个号」被算成「今天还活着几张单」。F006 当天 6 张单里 1 张被软删,
+     * count 数到 5 → 发号 {@code MR20260818-0006} → 撞上<b>已经存在的</b> 0006 →
+     * 唯一约束冲突 → 用户看到「数据已存在，请勿重复提交」, 而他一次都没重复点。
+     * <b>当天剩下的时间里一张领料单都建不出来</b>, 因为每次都发同一个号。
+     *
+     * <p>⚠️ 本仓形态 A: 那个 count 查的不是我想知道的东西 —— 我想知道「发到第几号」,
+     * 它答的是「还剩几张」。软删一张就永久错位一个号。
+     *
+     * <p>改成读<b>已发出的最大号</b>(native 查询, 绕开 {@code @Where}, 看得到软删除行) + 1。
+     * 号一旦发出去就不再复用, 哪怕那张单后来被删。
+     */
     private String generateRequisitionNo(String factoryId) {
         String datePart = LocalDateTime.now().format(DATE_FMT);
         String prefix = "MR" + datePart;
-        long count = repository.countByFactoryIdAndRequisitionNoPrefix(factoryId, prefix);
-        return String.format("%s-%04d", prefix, count + 1);
+        int next = nextSequenceAfterMax(repository.findMaxRequisitionNo(factoryId, prefix));
+        return String.format("%s-%04d", prefix, next);
+    }
+
+    /**
+     * 从「当天最大单号」推下一个序号。
+     *
+     * <p>⛔ 解析不出来时回落到 1 会<b>再次撞号</b>, 所以解析失败要抛 —— 与其发一个必然冲突的号,
+     * 不如明说单号规则被破坏了。返回 1 只在「当天确实还没有单」时发生。
+     */
+    private int nextSequenceAfterMax(String maxNo) {
+        if (maxNo == null || maxNo.isBlank()) {
+            return 1;   // 当天第一张
+        }
+        int dash = maxNo.lastIndexOf('-');
+        String tail = dash >= 0 && dash + 1 < maxNo.length() ? maxNo.substring(dash + 1) : null;
+        if (tail == null || tail.isBlank() || !tail.chars().allMatch(Character::isDigit)) {
+            throw new BusinessException(500, "物料需求单号规则异常, 无法生成新单号: " + maxNo)
+                    .withHint("请联系管理员核对该工厂当天的单号")
+                    .withHintTarget("requisition_no");
+        }
+        return Integer.parseInt(tail) + 1;
     }
 
     private void assertStatus(FactoryMaterialRequisition mr, Status expected) {

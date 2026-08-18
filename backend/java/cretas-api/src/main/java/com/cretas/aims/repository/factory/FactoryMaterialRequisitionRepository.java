@@ -30,6 +30,25 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
     long countByFactoryIdAndRequisitionNoPrefix(@Param("factoryId") String factoryId, @Param("prefix") String prefix);
 
     /**
+     * 当天已经发到的最大单号 —— 发号用这个，⛔ 不要用上面那个 count。
+     *
+     * <h3>🔴 为什么必须是 nativeQuery (2026-08-18 prod 实测)</h3>
+     * 实体上有 {@code @Where(clause = "deleted_at IS NULL")}，它会<b>静默作用到 JPQL</b>。
+     * 于是「今天发过几个号」被算成「今天还活着几张单」——
+     * F006 当天 6 张单里有 1 张被软删，count 数到 5 → 发号 {@code MR20260818-0006}
+     * → 撞上<b>已经存在的</b> 0006 → 唯一约束冲突 → 用户看到
+     * 「数据已存在，请勿重复提交」，而他一次都没重复点。
+     * <b>那天剩下的时间里一张领料单都建不出来</b>（每次都发同一个号）。
+     *
+     * <p>native 查询不受 {@code @Where} 影响，能看到软删除行 —— 单号一旦发出去就不能再发，
+     * 哪怕那张单后来被删了。
+     */
+    @Query(value = "SELECT MAX(requisition_no) FROM factory_material_requisitions "
+            + "WHERE factory_id = :factoryId AND requisition_no LIKE CONCAT(:prefix, '%')",
+            nativeQuery = true)
+    String findMaxRequisitionNo(@Param("factoryId") String factoryId, @Param("prefix") String prefix);
+
+    /**
      * P1-5 车间仓 20:00 清仓扫描: 查所有状态为 ISSUED/IN_USE 且创建时间早于今天的 FMR
      * (跨天未关单, 可能需要提醒主管处理).
      */
