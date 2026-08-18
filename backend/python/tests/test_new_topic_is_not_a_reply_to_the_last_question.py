@@ -155,35 +155,50 @@ async def test_a_different_intent_means_the_continuation_already_switched(monkey
         "RESTAURANT_OPS_WASTAGE_TOP") is False
 
 
-# ── 🔴 阴性对照：缓存命中不算「这句话完整」 ────────────────────────────────
+# ── 🔴 缓存命中**是**证据 —— 但 plan 本身要完整 ────────────────────────────
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tier", ["validated_plan_cache", "plan_cache",
-                                  "promoted_exact", "reviewed_exact"])
-async def test_a_cache_hit_is_not_evidence_that_the_sentence_is_complete(
-        monkeypatch, tier):
-    """🔴 这一条是**既有用例逼出来的**（三轮链：毛利 → 「本月」 → 门店）。
+                                  "promoted_exact", "reviewed_exact", "llm"])
+async def test_a_cache_hit_counts_as_evidence(monkeypatch, tier):
+    """🔴 这条断言**反过来过一次** —— 原来守的是「缓存命中不算数」。
 
-    独立编译「本月」时命中计划缓存，返回一个完整的 `GROSS_MARGIN` spec，
-    于是「本月」被判成新话题、多轮链当场断掉。
+    加那个 `source_tier == "llm"` 条件的理由是三轮链用例（毛利 →「本月」→ 门店）：
+    独立编译「本月」命中缓存、返回完整 `GROSS_MARGIN` spec ⇒ 多轮链断掉。
 
-    ▎判据要的是「**T3 现在看这句话，认为它自己就是一句完整问句**」，
-    ▎⛔ 不是「这句话以前出现过」。缓存命中只说明后者。
+    ⛔ 但那个理由**站不住**：计划缓存的键是
+    `(factory_id, 归一化问句, version)` —— 它存的**就是「这句话单独编译的结果」**。
+    ▎命中缓存恰恰是「这句话是一句完整问句」的**更强**证据，不是更弱。
+
+    三轮链真正的问题在**桩**（`AsyncMock` 的 `side_effect` 是顺序队列，
+    判据多调一次把 `third_plan` 吃掉了）；补一条孤立「本月」的真实形状之后，
+    tier 条件就不再需要。
+
+    📏 删它的直接原因（prod 全景**轮2**插桩实测）：
+    `a_intent=BUSINESS_OPTIMIZATION a_clar=False cont=同一个` 三条全过，
+    **只有 `a_tier=plan_cache` 挡住** —— 而那个缓存是**老板轮1 问过同一句**
+    留下的，是正常状态。⇒ 老板重复问一次反而拿不到答案。
+
+    ⚡ 副作用是好的：命中缓存时这次判定**零 LLM 调用**。
     """
     table = {"本月": _Spec("RESTAURANT_OPS_GROSS_MARGIN", False, tier)}
     assert await _judge(
-        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is False, tier
+        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is True, tier
 
 
 @pytest.mark.asyncio
-async def test_the_same_sentence_from_t3_would_be_a_new_topic(monkeypatch):
-    """阳性对照：**同一个 spec** 只把 tier 换成 `llm` 就该判 True。
+@pytest.mark.parametrize("tier", ["validated_plan_cache", "plan_cache", "llm"])
+async def test_an_incomplete_plan_is_not_evidence_whatever_the_tier(
+        monkeypatch, tier):
+    """🔴 **这才是三轮链真正需要的那条**：plan 不完整 ⇒ 不算数，**与 tier 无关**。
 
-    ⛔ 少了它，上面那条「缓存命中判 False」可能只是因为判据整个坏了。
+    📏 真实环境实测：7 条槽位回答（上个月 / 最近30天 / 陆家嘴店 / 全部门店 /
+    晚市 / 按食材 …）孤立编译**全部** `intent=None, clarification_needed=True`。
+    ⇒ 挡住它们的是**plan 的形状**，⛔ 不是它从哪一层来的。
     """
-    table = {"本月": _Spec("RESTAURANT_OPS_GROSS_MARGIN", False, "llm")}
+    table = {"本月": _Spec("", True, tier)}
     assert await _judge(
-        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is True
+        monkeypatch, "本月", table, "RESTAURANT_OPS_GROSS_MARGIN") is False, tier
 
 
 # ── 保守方向：判不出来时**照旧走续接** ─────────────────────────────────────
