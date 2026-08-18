@@ -55,7 +55,10 @@ import json
 import os
 import time
 
-from smartbi.scripts._probe_bootstrap import bootstrap_probe
+from smartbi.scripts._probe_bootstrap import (
+    LLM_UNAVAILABLE_AUTHORITY,
+    bootstrap_probe,
+)
 
 FID = os.environ.get("PROBE_FID", "MOCK_REST")
 ROUNDS = int(os.environ.get("PROBE_ROUNDS", "2"))
@@ -148,6 +151,9 @@ async def run_turn(pool, query: str, session_key: str) -> dict:
     row |= {
         "intent": (spec.intent or "∅").replace("RESTAURANT_OPS_", ""),
         "tier": spec.source_tier,
+        # 来源标记：LLM 编译不出来时是 `llm_unavailable`。
+        # ⛔ 这一格是判「读数作废」用的，不是装饰 —— 见下面 rc=2 那一段。
+        "authority": spec.planner_authority,
         "plan": [c.replace("RESTAURANT_OPS_", "") for c in spec.planned_intents],
         "dims": list(spec.dimensions),
     }
@@ -220,6 +226,22 @@ async def main() -> int:
     for r in rows:
         tiers[r.get("tier", "?")] = tiers.get(r.get("tier", "?"), 0) + 1
     print("    来源标记分布: %s" % json.dumps(tiers, ensure_ascii=False))
+
+    # ⛔ 先判**这一条**再判上面那三条 —— 它是 `has_a=False` 的**成因**之一，
+    #    而原来只报「仪器没活着」，不说为什么。2026-08-18 我在另一个探针上
+    #    栽过：读数全是那句 40 字拒答，我拿它当成 PR #2812 的渲染回归去查了。
+    #    判据取 `planner_authority`，⛔ 不取文案（形态 C⁸）。
+    llm_dead = [r for r in rows
+                if r.get("authority") == LLM_UNAVAILABLE_AUTHORITY]
+    if llm_dead:
+        print("\n⛔ rc=2 %d/%d 条的 planner_authority = %s"
+              % (len(llm_dead), total, LLM_UNAVAILABLE_AUTHORITY))
+        print("    这些答案是 fail-closed 拒答, **不是产品被问倒了** ——")
+        print("    ⛔ 不要拿它们做前后对比, 更不要写进报告。")
+        print("    本进程没有活账号的槽: %s"
+              % ("、".join(ctx.llm_dead_slots) or "（无 —— 那就去查供应商侧"
+                 "配额/限流/到期: grep 'All providers exhausted'）"))
+        return 2
 
     if not (catalogue_ok and has_a and has_non_a):
         # 硬约束 4: 三态。「没量到」⛔ 不许折叠进「没问题」。
