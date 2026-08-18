@@ -745,6 +745,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     .withHint("请联系管理员检查后端库存服务配置")
                     .withSeverity("BLOCKING");
         }
+        // 🔴 越仓批次的拒绝<b>整体前置</b>到这里 (2026-08-18)。原来它写在下面的迁移主循环里,
+        //    撞上就地抛 —— 一次只报得出<b>第一个</b>物料, 而实测 MR20260818-0004 是两个
+        //    (封膜 + 成品盒) 同时越仓。前置一遍才能把它们一次列全, 也保证抛出时一行库存都还没动。
+        assertPickedBatchesAllInSourceWarehouse(factoryId, mr);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty();
             if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
@@ -763,35 +767,20 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             List<Map<String, Object>> rebuilt = new ArrayList<>(batchRows.size());
             for (Map<String, Object> batchRow : batchRows) {
                 Map<String, Object> mutableRow = new LinkedHashMap<>(batchRow);
-                // 幂等: 已迁移过 (带 workshopBatchId) → 原样保留, 不重复划出
-                Object existingWks = mutableRow.get("workshopBatchId");
                 BigDecimal moveQty = batchQuantity(batchRow);
-                if ((existingWks != null && !existingWks.toString().isBlank())
-                        || moveQty.compareTo(BigDecimal.ZERO) <= 0) {
+                // 幂等: 已迁移过 (带 workshopBatchId) / 零量行 → 原样保留, 不重复划出
+                if (!needsRelocation(batchRow)) {
                     rebuilt.add(mutableRow);
                     continue;
                 }
-                String batchId = resolveBatchId(factoryId, batchRow);
-                MaterialBatch source = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
-                        .orElseThrow(() -> new BusinessException(400, String.format(
-                                "领料调拨失败: 物料 %s 批次 %s 不存在",
-                                materialLabel(it), batchId))
-                                .withCode("PRODUCTION_REQUISITION_TRANSFER_BATCH_NOT_FOUND")
-                                .withHint("请核对领料批次后重新确认领料")
-                                .withHintTarget(it.getId())
-                                .withSeverity("BLOCKING"));
+                MaterialBatch source = loadRelocationSourceBatch(factoryId, it, batchRow);
                 if (!factoryId.equals(source.getFactoryId())) {
                     throw new BusinessException(403, "领料调拨失败: 批次不属于当前工厂 " + source.getId())
                             .withHint("请切换到正确工厂或核对批次").withSeverity("BLOCKING");
                 }
-                if (mr.getSourceWarehouseId() != null
-                        && !mr.getSourceWarehouseId().equals(source.getWarehouseId())) {
-                    throw new BusinessException(409, "领料调拨失败: 批次不属于领料单来源仓库")
-                            .withCode("PRODUCTION_REQUISITION_BATCH_WAREHOUSE_MISMATCH")
-                            .withHint("请重新确认领料，由系统按来源仓先进先出选择批次")
-                            .withHintTarget(it.getId())
-                            .withSeverity("BLOCKING");
-                }
+                // ⛔ 不要在这里再写一份「批次是否属于来源仓」的判断 —— 唯一定义在
+                //    assertPickedBatchesAllInSourceWarehouse (本方法开头已调用)。写第二份的下场是
+                //    它只报得出第一个物料, 而且注定与聚合版的口径漂开 (形态 D)。
                 if (it.getMaterialTypeId() != null
                         && !it.getMaterialTypeId().equals(source.getMaterialTypeId())) {
                     throw new BusinessException(409, "领料调拨失败: 批次物料与领料行不一致")
@@ -858,6 +847,235 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             }
             it.setBatchNumbers(rebuilt);
         }
+    }
+
+    /** {@link #onHandByWarehouseOrNull} 里代表「批次没有仓库归属」的键, 不会与真实仓库 id 撞。 */
+    private static final String NO_WAREHOUSE_KEY = "__NO_WAREHOUSE__";
+
+    /**
+     * 这一行已拣批次是否还需要物理迁移。
+     *
+     * <p>⚠️ <b>只此一份定义</b> —— {@link #assertPickedBatchesAllInSourceWarehouse} 与
+     * {@link #relocatePickedMaterialToWorkshop} 的主循环都调它。两处各写一份的下场是:
+     * 前置校验会把「已迁移过」的行当成待迁移行再校验一次, 于是一张已经转运成功的单子
+     * 重放时被自己的防呆拦住。
+     */
+    private boolean needsRelocation(Map<String, Object> batchRow) {
+        Object existingWks = batchRow.get("workshopBatchId");
+        if (existingWks != null && !existingWks.toString().isBlank()) {
+            return false;
+        }
+        return batchQuantity(batchRow).compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    /** 解析并锁定一行已拣批次对应的源批次。前置校验与迁移主循环共用, 保证「批次不存在」只有一种口径。 */
+    private MaterialBatch loadRelocationSourceBatch(String factoryId,
+                                                    FactoryMaterialRequisitionItem it,
+                                                    Map<String, Object> batchRow) {
+        String batchId = resolveBatchId(factoryId, batchRow);
+        return materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
+                .orElseThrow(() -> new BusinessException(400, String.format(
+                        "领料调拨失败: 物料 %s 批次 %s 不存在",
+                        materialLabel(it), batchId))
+                        .withCode("PRODUCTION_REQUISITION_TRANSFER_BATCH_NOT_FOUND")
+                        .withHint("请核对领料批次后重新确认领料")
+                        .withHintTarget(it.getId())
+                        .withSeverity("BLOCKING"));
+    }
+
+    /**
+     * 前置校验: 已拣批次必须全部落在领料单的<b>来源仓</b>。越仓就拒绝, 并把
+     * <b>哪个物料 / 来源仓有多少 / 货实际在哪个仓有多少</b> 一次说清。
+     *
+     * <h3>🔴 这道闸修的不是「它拒绝了」, 是那句无效指引 (2026-08-18 prod 实测)</h3>
+     * MR20260818-0004 (F006, 来源仓=原料仓 WH-RAW, 目标仓=生产仓 WH-WKS) 转运返回:
+     * <pre>
+     * 409 PRODUCTION_REQUISITION_BATCH_WAREHOUSE_MISMATCH
+     * message   : 领料调拨失败: 批次不属于领料单来源仓库
+     * actionHint: 请重新确认领料，由系统按来源仓先进先出选择批次
+     * </pre>
+     * 拒绝<b>是对的</b> —— 挑中的批次确实不在来源仓。但那句指引是<b>无效指引</b>:
+     * 「封膜」「成品盒」在原料仓 <b>0 件</b>, 全部库存在生产仓 (封膜 20 卷 / 成品盒 1100 盒),
+     * 来源仓 FEFO 重算多少次都挑不到 —— 用户只会反复重试直到放弃。
+     * 本仓判据八「凡是拦住人的地方都要告诉下一步该做什么」在这里是破的。
+     *
+     * <h3>为什么会挑到别的仓的批次</h3>
+     * {@link #findEligibleSourceBatches} 在来源仓查空之后<b>回退到全厂查询</b>
+     * (那个回退本意是照顾无仓库归属的历史批次), 于是把生产仓的批次也拣了进来。
+     * ⚠️ 本次<b>不动</b>那个回退 —— 拒绝本身是正确行为, 这里只负责把话说清楚。
+     *
+     * <h3>⛔ 不许伪造数字</h3>
+     * 在手量查不出来 (仓库/批次查询失败) 时如实说「查不出来」,
+     * ⛔ 不要用 0 顶替 —— 「不知道」被写成「是 0」会把人支去下采购单。
+     * 查询<b>成功</b>而某个仓没有条目, 那才是真的 0 (查询自带 {@code 余量 > 0} 过滤)。
+     */
+    private void assertPickedBatchesAllInSourceWarehouse(String factoryId,
+                                                         FactoryMaterialRequisition mr) {
+        String sourceWarehouseId = mr.getSourceWarehouseId();
+        if (sourceWarehouseId == null || sourceWarehouseId.isBlank()) {
+            return; // 老单没有来源仓 → 无从校验 (与改造前同一行为)
+        }
+        // 逐物料收集越仓的行, 保持单据行序 —— 用户是对着单子看的
+        Map<String, FactoryMaterialRequisitionItem> offenders = new LinkedHashMap<>();
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            BigDecimal issued = it.getIssuedQty();
+            if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            List<Map<String, Object>> rows = it.getBatchNumbers();
+            if (rows == null || rows.isEmpty()) {
+                continue; // 缺批次是另一类错, 由迁移主循环按既有口径报
+            }
+            for (Map<String, Object> row : rows) {
+                if (!needsRelocation(row)) {
+                    continue;
+                }
+                MaterialBatch source = loadRelocationSourceBatch(factoryId, it, row);
+                if (!sourceWarehouseId.equals(source.getWarehouseId())) {
+                    offenders.putIfAbsent(
+                            it.getId() != null ? it.getId() : materialLabel(it), it);
+                }
+            }
+        }
+        if (offenders.isEmpty()) {
+            return;
+        }
+
+        Map<String, String> labelCache = new HashMap<>();
+        String sourceLabel = warehouseLabel(factoryId, sourceWarehouseId, labelCache);
+        String targetWarehouseId = mr.getTargetWarehouseId();
+        String targetLabel = targetWarehouseId == null || targetWarehouseId.isBlank()
+                ? null : warehouseLabel(factoryId, targetWarehouseId, labelCache);
+
+        List<String> details = new ArrayList<>();
+        boolean anyUnknown = false;
+        boolean anyInTarget = false;
+        boolean anyElsewhere = false;
+        for (FactoryMaterialRequisitionItem it : offenders.values()) {
+            String unit = it.getUnit() != null && !it.getUnit().isBlank() ? it.getUnit() : "";
+            Map<String, BigDecimal> byWarehouse =
+                    onHandByWarehouseOrNull(factoryId, it.getMaterialTypeId());
+            if (byWarehouse == null) {
+                anyUnknown = true;
+                details.add(String.format("%s: 各仓在手量查不出来(库存查询失败), 需要人工核对",
+                        materialLabel(it)));
+                continue;
+            }
+            BigDecimal atSource = byWarehouse.get(sourceWarehouseId);
+            List<String> elsewhere = new ArrayList<>();
+            byWarehouse.entrySet().stream()
+                    .filter(e -> !sourceWarehouseId.equals(e.getKey()))
+                    .sorted(Map.Entry.<String, BigDecimal>comparingByValue().reversed())
+                    .forEach(e -> elsewhere.add(String.format("%s %s%s",
+                            warehouseLabel(factoryId, e.getKey(), labelCache),
+                            plain(e.getValue()), unit)));
+            boolean inTarget = targetWarehouseId != null && byWarehouse.containsKey(targetWarehouseId);
+            anyInTarget |= inTarget;
+            anyElsewhere |= byWarehouse.keySet().stream()
+                    .anyMatch(w -> !sourceWarehouseId.equals(w) && !w.equals(targetWarehouseId));
+            details.add(String.format("%s: 来源仓「%s」可领用 %s%s; %s",
+                    materialLabel(it), sourceLabel,
+                    plain(atSource == null ? BigDecimal.ZERO : atSource), unit,
+                    elsewhere.isEmpty()
+                            ? "全厂其它仓也没有可领用余量"
+                            : "货在 " + String.join(" / ", elsewhere)));
+        }
+
+        StringBuilder hint = new StringBuilder();
+        if (anyInTarget && targetLabel != null) {
+            hint.append(String.format(
+                    "这些料已经在目标仓「%s」了, 再从「%s」调一次调不出来 —— 请在「确认领料」把这几行的拣货数量改成 0 "
+                            + "(货已在生产仓, 报工可以直接扣); ", targetLabel, sourceLabel));
+        }
+        if (anyElsewhere) {
+            hint.append(String.format(
+                    "在别的仓的那几样, 先用「库存调拨」把它们调到「%s」再确认领料, "
+                            + "或者把这张领料单的来源仓改成货实际所在的仓; ", sourceLabel));
+        }
+        if (anyUnknown) {
+            hint.append("在手量查不出来的那几行, 请到「库存查询」人工核对后再决定; ");
+        }
+        hint.append(String.format("⛔ 直接重试「确认领料」没有用 —— 来源仓「%s」没有这些物料, "
+                + "系统按来源仓先进先出同样挑不出批次。", sourceLabel));
+
+        FactoryMaterialRequisitionItem first = offenders.values().iterator().next();
+        throw new BusinessException(409, String.format(
+                "领料调拨失败: %d 个物料的库存不在领料单来源仓「%s」—— %s",
+                offenders.size(), sourceLabel, String.join("; ", details)))
+                .withCode("PRODUCTION_REQUISITION_BATCH_WAREHOUSE_MISMATCH")
+                .withHint(hint.toString())
+                .withHintTarget(first.getId())
+                .withSeverity("BLOCKING");
+    }
+
+    /**
+     * 某物料的可用在手量按仓库分组。
+     *
+     * @return {@code null} 表示<b>查不出来</b>(仓库不可用/查询失败); 非 null 是权威读数 ——
+     *         里面没有的仓就是真的 0 (查询自带「余量 &gt; 0」过滤)。
+     *         ⛔ 调用方不许把 null 当 0, 那是把「不知道」翻译成「是 0」。
+     */
+    private Map<String, BigDecimal> onHandByWarehouseOrNull(String factoryId, String materialTypeId) {
+        if (materialBatchRepository == null || materialTypeId == null || materialTypeId.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, BigDecimal> out = new LinkedHashMap<>();
+            for (Object[] row : materialBatchRepository
+                    .sumAvailableGroupedByWarehouse(factoryId, materialTypeId)) {
+                if (row == null || row.length < 2 || row[1] == null) {
+                    continue;
+                }
+                String warehouseId = row[0] == null ? NO_WAREHOUSE_KEY : row[0].toString();
+                out.put(warehouseId, new BigDecimal(row[1].toString()));
+            }
+            return out;
+        } catch (RuntimeException e) {
+            // ⛔ 查询失败 ≠ 在手 0。留 null, 让文案如实说「查不出来」。
+            log.warn("[领料越仓] 各仓在手量查不出来 factory={} material={}: {}",
+                    factoryId, materialTypeId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 仓库 id → 「名称(代码)」。查不到就原样回 id (⛔ 不编一个名字出来)。 */
+    private String warehouseLabel(String factoryId, String warehouseId, Map<String, String> cache) {
+        if (warehouseId == null || NO_WAREHOUSE_KEY.equals(warehouseId)) {
+            return "未归仓批次";
+        }
+        String cached = cache.get(warehouseId);
+        if (cached != null) {
+            return cached;
+        }
+        String label = warehouseId;
+        if (warehouseRepository != null) {
+            try {
+                FactoryWarehouse w = warehouseRepository.findById(warehouseId).orElse(null);
+                if (w != null && factoryId.equals(w.getFactoryId())) {
+                    String name = w.getName() != null && !w.getName().isBlank() ? w.getName() : null;
+                    String code = w.getCode() != null && !w.getCode().isBlank() ? w.getCode() : null;
+                    if (name != null && code != null) {
+                        label = name + "(" + code + ")";
+                    } else if (name != null) {
+                        label = name;
+                    } else if (code != null) {
+                        label = code;
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("[领料越仓] 仓库名查不出来 {}: {}", warehouseId, e.getMessage());
+            }
+        }
+        cache.put(warehouseId, label);
+        return label;
+    }
+
+    /** 数量去掉尾随 0, 免得文案里出现 "20.000000 卷"。 */
+    private static String plain(BigDecimal value) {
+        if (value == null) {
+            return "?";
+        }
+        return value.stripTrailingZeros().toPlainString();
     }
 
     /** 生产仓批次号: 源批号 + "-WKS-" + 短 UUID, 满足 batch_number 唯一约束。 */
