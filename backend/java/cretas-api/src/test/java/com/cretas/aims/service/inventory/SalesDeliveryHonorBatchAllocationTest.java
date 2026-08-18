@@ -145,7 +145,7 @@ class SalesDeliveryHonorBatchAllocationTest {
     void ship_honorsAllocatedBatch_notFifo() throws Exception {
         FinishedGoodsBatch batchB = buildBatch("id-B", "B-NEAR-EXPIRY", "件",
                 new BigDecimal("100"), BigDecimal.ZERO);
-        when(finishedGoodsBatchRepository.findById("id-B")).thenReturn(Optional.of(batchB));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-B", FACTORY_A)).thenReturn(Optional.of(batchB));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(alloc("id-B", "B-NEAR-EXPIRY", new BigDecimal("30"), "件")));
 
@@ -169,8 +169,8 @@ class SalesDeliveryHonorBatchAllocationTest {
     void ship_honorsMultiBatchAllocation() throws Exception {
         FinishedGoodsBatch b1 = buildBatch("id-1", "B-001", "件", new BigDecimal("20"), BigDecimal.ZERO);
         FinishedGoodsBatch b2 = buildBatch("id-2", "B-002", "件", new BigDecimal("40"), BigDecimal.ZERO);
-        when(finishedGoodsBatchRepository.findById("id-1")).thenReturn(Optional.of(b1));
-        when(finishedGoodsBatchRepository.findById("id-2")).thenReturn(Optional.of(b2));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-1", FACTORY_A)).thenReturn(Optional.of(b1));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-2", FACTORY_A)).thenReturn(Optional.of(b2));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(
                         alloc("id-1", "B-001", new BigDecimal("20"), "件"),
@@ -221,7 +221,7 @@ class SalesDeliveryHonorBatchAllocationTest {
         // produced=100, 但发货前已被其它单发走 95 → 可用=5, 而分配要 30。
         FinishedGoodsBatch batch = buildBatch("id-drop", "B-DROP", "件",
                 new BigDecimal("100"), new BigDecimal("95"));
-        when(finishedGoodsBatchRepository.findById("id-drop")).thenReturn(Optional.of(batch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-drop", FACTORY_A)).thenReturn(Optional.of(batch));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(alloc("id-drop", "B-DROP", new BigDecimal("30"), "件")));
 
@@ -239,7 +239,7 @@ class SalesDeliveryHonorBatchAllocationTest {
     @Test
     @DisplayName("🔴 分配批次已删除 → 409 loud-fail (不静默跳过 → 会漏发)")
     void ship_allocatedBatchMissing_loudFail() throws Exception {
-        when(finishedGoodsBatchRepository.findById("id-gone")).thenReturn(Optional.empty());
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-gone", FACTORY_A)).thenReturn(Optional.empty());
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(alloc("id-gone", "B-GONE", new BigDecimal("10"), "件")));
 
@@ -267,7 +267,7 @@ class SalesDeliveryHonorBatchAllocationTest {
         // 批次原生=盒, produced=4454.5盒 → 可用换算 kg = 4454.5×15/1000 = 66.8175kg。
         FinishedGoodsBatch boxBatch = buildBatch("id-box", "B-BOX", "盒",
                 new BigDecimal("4454.5"), BigDecimal.ZERO);
-        when(finishedGoodsBatchRepository.findById("id-box")).thenReturn(Optional.of(boxBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-box", FACTORY_A)).thenReturn(Optional.of(boxBatch));
         // 分配记录: allocatedQty 以发货行单位 kg 记录 (allocateBatches setUnit(item.getUnit()))
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(alloc("id-box", "B-BOX", new BigDecimal("10"), "kg")));
@@ -292,7 +292,7 @@ class SalesDeliveryHonorBatchAllocationTest {
 
         FinishedGoodsBatch boxBatch = buildBatch("id-box2", "B-BOX2", "盒",
                 new BigDecimal("4454.5"), BigDecimal.ZERO);
-        when(finishedGoodsBatchRepository.findById("id-box2")).thenReturn(Optional.of(boxBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-box2", FACTORY_A)).thenReturn(Optional.of(boxBatch));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
                 .thenReturn(List.of(alloc("id-box2", "B-BOX2", new BigDecimal("10"), "kg")));
 
