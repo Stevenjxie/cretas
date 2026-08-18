@@ -9291,12 +9291,58 @@ async def resolve_inventory_warning(
     )
 
 
+def _staffing_store_lead_sentence(rows) -> str:
+    """按门店问排班时的第一句：点名缺口最大的店 + 时段 + 数字。
+
+    ## 为什么要加（📏 MOCK_REST prod 2026-08-18，见缺口 #9 剩余部分设计卡：
+    docs/decisions/2026-08-18-缺口9剩余三个-设计卡.md）
+
+    「哪家店明天最缺人」与「明天怎么排班」拿到**结构完全相同**的答案：
+    一份按缺口从大到小排序的门店 × 时段全量列表，没有一句话点名缺口最大
+    的是哪家店、哪个时段、缺几个人 —— 只能靠"排在第一行"这件事自己推。
+    数据在（``rows`` 本来就按 ``positive_gap`` 降序排好了），答案不在。
+
+    ⚠️ 与 DAYPART_PERFORMANCE（登记维度同为 {store, time, meal_period}）
+       同一道程序：只特殊处理 store —— meal_period 是这个 resolver 输出
+       的基础轴（每一行本来就带着 daypart），time 已由
+       ``horizon_from_question`` 独立解析，都不需要靠 ``dimensions`` 才能
+       "答对"。⛔ 不要看到 3 个登记维度就写 3 段特殊处理。
+
+    ⛔ 零缺口时不编一个不存在的缺口 —— 明说"已经够人"。
+    """
+    if not rows:
+        return ""
+    top = rows[0]
+    store, daypart = top.get("store_name"), top.get("daypart")
+    if not store or not daypart:
+        return ""
+    recommended = int(top.get("recommended_staff") or 0)
+    current = int(top.get("current_staff") or 0)
+    positive_gap = top.get("positive_gap")
+    gap = int(positive_gap) if positive_gap is not None else max(0, recommended - current)
+    if gap <= 0:
+        return (
+            f"按门店看：缺口最大的一格是**{store}**的**{daypart}**，"
+            f"但现有 {current} 人已经够（建议 {recommended} 人），"
+            f"没有哪个门店 × 时段仍然缺人。\n\n"
+        )
+    guests = int(top.get("predicted_guests") or 0)
+    confidence = top.get("confidence_pct")
+    conf_text = f"，置信度 {confidence}%" if confidence is not None else ""
+    return (
+        f"按门店看：缺口最大的是**{store}**的**{daypart}**，"
+        f"预测客流 {guests} 人、建议配 {recommended} 人、"
+        f"现有 {current} 人，还差 {gap} 人{conf_text}。\n\n"
+    )
+
+
 async def resolve_staffing_advice(
     smartbi_pool,
     factory_id: str,
     *,
     role: Optional[str] = None,
     query: Optional[str] = None,
+    dimensions: Sequence[str] = (),
 ) -> OpsAnswer:
     """Forecast-first staffing answer backed by the restaurant FactBook.
 
@@ -9310,6 +9356,12 @@ async def resolve_staffing_advice(
     A successful answer always includes an LLM narrative routed through the
     existing shared provider chain.  Numerical lines are rendered by code from
     the FactBook; the LLM validator rejects any model-authored digit.
+
+    ``dimensions`` 2026-08-18 新增（缺口 #9 剩余部分）：此前没有声明这个
+    形参，``resolve_by_code`` 按签名过滤 kwargs 静默丢弃，判断不了"是不是
+    按门店问"。加了之后，问门店时 ``_staffing_store_lead_sentence`` 在
+    正文最前面点名缺口最大的店 + 时段；不问门店时逐字不变（阴性对照见
+    ``tests/test_staffing_advice_answers_the_asked_dimension.py``）。
     """
     from smartbi.services.restaurant.staffing_forecast import (
         RestaurantStaffingService,
@@ -9369,10 +9421,20 @@ async def resolve_staffing_advice(
     )
     summary = dashboard.get("summary") or {}
     chart_rows = rows[:12]
+    # 问了门店 ⇒ 点名缺口最大的店 + 时段, 排在最前面。
+    # ⛔ 不问门店时逐字不变 —— 有阴性对照钉着
+    #    (test_no_dimensions_is_byte_identical_to_before /
+    #     test_meal_period_dimension_alone_does_not_trigger_the_lead /
+    #     test_time_dimension_alone_does_not_trigger_the_lead)。
+    answer_text = result["answer_text"]
+    if asked_by_store(dimensions):
+        lead = _staffing_store_lead_sentence(rows)
+        if lead:
+            answer_text = lead + answer_text
     return OpsAnswer(
         code="RESTAURANT_OPS_STAFFING_ADVICE",
         title=f"{dashboard.get('horizon_label', '未来')}预测排班",
-        answer_text=result["answer_text"],
+        answer_text=answer_text,
         charts=[{
             "chartType": "bar",
             "title": "门店时段建议人数与现有人数",
