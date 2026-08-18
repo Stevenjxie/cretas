@@ -73,30 +73,27 @@ def computable_labels(
     抽成纯函数是为了让闸能红：`schema_columns` / `tenant_value_counts` 都能在测试里
     抽掉，从而验证「清单是算出来的」而不是一个常量
     （断言「输出里有这几项」是恒真式，测不出这件事）。
+
+    ⚠️ 三层判定**只有一份**，在 `computable_metric_keys` 里；这里只负责翻标签
+       （形态 D：同一个判定两份一定会漂，而漂的方向恰好是「一边说能算、
+       另一边说不能」）。这里传 `derived={}` —— 「我这儿有的是」说的是基础
+       能力边界，派生量由基础量推出来，不重复念一遍。
     """
     if metrics is None:
         from smartbi.gold.restaurant.metric_registry import METRICS
         metrics = METRICS
-    banned = set(unsupported)
+
+    # 🔴 2026-08-12 prod 实测钉住的租户层判据: 数的是**每一列的非空值**,
+    #    ⛔ 不是「源表有没有行」。第一版按行数算, 于是「税额」「实收」
+    #    「平台抽佣」全被写进「我这儿有的是」—— 而 MOCK_REST 这几列填充率 0。
+    #    表有行 ≠ 那一列有值, 而这一段恰恰是最不能说错的一段。
+    ok = computable_metric_keys(
+        schema_columns, tenant_value_counts,
+        metrics=metrics, derived={}, unsupported=unsupported)
 
     out: List[str] = []
     for key, metric in metrics.items():
-        if key in banned:
-            continue
-        requires = tuple(getattr(metric, "requires", ()) or ())
-        if not requires:
-            continue
-        # schema 层：登记的列必须真的在库里
-        if not all(col in schema_columns for col in requires):
-            continue
-        # 租户层：这个租户在**每一个所需列**上都得有非空值
-        #
-        # 🔴 2026-08-12 prod 实测改的: 第一版只数「源表有没有行」, 于是
-        #    「税额」「实收」「平台抽佣」全被算成能算 —— 而 metric_registry 自己的
-        #    注释就写着 MOCK_REST 这几列**填充率 0**(`tax_amount`/`actual_receive`)。
-        #    表有行 ≠ 那一列有值。把它们写进「我这儿有的是」是一句假承诺,
-        #    而这一段恰恰是最不能说错的一段。
-        if not all(tenant_value_counts.get(col, 0) > 0 for col in requires):
+        if key not in ok:
             continue
         label = str(getattr(metric, "label", "") or key)
         if label not in out:
@@ -164,9 +161,151 @@ def computable_categories(
     return tuple(out)
 
 
+def computable_metric_keys(
+    schema_columns: set,
+    tenant_value_counts: Dict[str, int],
+    *,
+    metrics: Optional[Dict[str, Any]] = None,
+    derived: Optional[Dict[str, Any]] = None,
+    unsupported: Sequence[str] = (),
+) -> frozenset:
+    """这个租户现在真的算得出来的**指标 key**（含派生量）。纯函数。
+
+    ⚠️ 与 `computable_labels` 是同一件事的两个出口：那个给人看的标签，
+       这个给机器用的 key。⛔ 不是复制粘贴一份三层判定 —— 三层判定只在
+       本函数里，`computable_labels` 调它再翻标签
+       （形态 D：同一个东西两份一定会漂，而漂的方向恰好是「一边说能算、
+       另一边说不能」）。
+
+    派生量（毛利 = 营收 − 食材成本）**左右两侧都算得出来才算得出来**，
+    跑到不动点 —— 毛利率依赖毛利，毛利再依赖两个基础指标，深度不止一层。
+    """
+    if metrics is None:
+        from smartbi.gold.restaurant.metric_registry import METRICS
+        metrics = METRICS
+    if derived is None:
+        from smartbi.gold.restaurant.metric_registry import DERIVED
+        derived = DERIVED
+    banned = set(unsupported)
+
+    ok = set()
+    for key, metric in (metrics or {}).items():
+        if key in banned:
+            continue
+        requires = tuple(getattr(metric, "requires", ()) or ())
+        if not requires:
+            continue
+        # schema 层：登记的列必须真的在库里
+        if not all(col in schema_columns for col in requires):
+            continue
+        # 租户层：每一个所需列上都得有非空值（⛔ 不是「表有几行」）
+        if not all(tenant_value_counts.get(col, 0) > 0 for col in requires):
+            continue
+        ok.add(key)
+
+    changed = True
+    while changed:
+        changed = False
+        for key, item in (derived or {}).items():
+            if key in ok or key in banned:
+                continue
+            left, right = getattr(item, "left", None), getattr(item, "right", None)
+            if left in ok and right in ok:
+                ok.add(key)
+                changed = True
+    return frozenset(ok)
+
+
+def nearest_alternatives(
+    unsupported: Sequence[str],
+    computable: Sequence[str],
+    *,
+    metrics: Optional[Dict[str, Any]] = None,
+    derived: Optional[Dict[str, Any]] = None,
+    neighbours: Optional[Dict[str, Sequence[str]]] = None,
+) -> Tuple[Tuple[str, str], ...]:
+    """「眼下最接近的是 X」——⛔ 只返回**本租户实测算得出来**的那些。
+
+    返回 `((标签, 限定语短形), …)`，按 `unsupported` 的顺序，去重。
+
+    ## 承重的那一句
+
+    ▎排在最前面的那个替代，老板照着去问，**如果答不上来就是一条误发的提示**。
+
+    所以这里有两层，缺一层都不成立：
+
+    | 层 | 回答什么 | 来源 |
+    |---|---|---|
+    | 构成关系 | 这个算不出来的量由哪几个已登记指标构成 | `_UNSUPPORTED_REQUIREMENT_NEIGHBOURS`（定义式，⛔ 不是联想） |
+    | 能不能算 | 这个租户今天真的算得出来吗 | `computable`（查库：registry ∩ schema ∩ 列非空值） |
+
+    ⛔ **一个近邻都没有 → 返回空**，不退而求其次去找「同一大类里数据最全的那个」：
+       同类不等于接近（销量与退菜率同属「客流和销量」，而它跟退菜一个字都不沾）。
+       宁可这一类先不提示。
+
+    ⚠️ 限定语（`caveat_short`）**必须跟着标签一起出去**。不带限定语地拿毛利
+       顶净利润，正是系统承诺不做的「相邻指标顶替」—— 只是换到了建议这一侧。
+    """
+    if metrics is None:
+        from smartbi.gold.restaurant.metric_registry import METRICS
+        metrics = METRICS
+    if derived is None:
+        from smartbi.gold.restaurant.metric_registry import DERIVED
+        derived = DERIVED
+    if neighbours is None:
+        from smartbi.gold.restaurant.restaurant_intent import (
+            _UNSUPPORTED_REQUIREMENT_NEIGHBOURS,
+        )
+        neighbours = _UNSUPPORTED_REQUIREMENT_NEIGHBOURS
+
+    available = set(computable or ())
+    out: List[Tuple[str, str]] = []
+    seen = set()
+    for code in (unsupported or ()):
+        for key in (neighbours.get(code) or ()):
+            if key not in available:
+                continue
+            item = (metrics or {}).get(key) or (derived or {}).get(key)
+            if item is None:
+                continue
+            label = str(getattr(item, "label", "") or key)
+            if label in seen:
+                break
+            seen.add(label)
+            out.append((label, str(getattr(item, "caveat_short", "") or "")))
+            # 一个算不出来的量只给**一个**替代 —— 声明顺序就是优先级
+            # （人写的顺序 = 人审过的优先级，与 `computable_categories` 同纪律）。
+            break
+    return tuple(out)
+
+
+class TenantCapability(tuple):
+    """`(大类, 锚点)` 序列 **+ 挂在它身上的 `alternatives`**。
+
+    🔴 为什么是 tuple 子类而不是加一个参数：调用方那两行
+    （`restaurant_intent_service` 里 `tenant_capability(...)` → `render_capability_refusal(...)`）
+    是另一条线正在改的文件，本轮不碰它。让**查库那一步**把替代一起算好、
+    挂在它已经在传的那个值上，是唯一能「不改调用点也真的接上」的做法。
+
+    ⚠️ 形态 B（机制在、没接上）在这里的具体长相：给
+       `render_capability_refusal` 加一个 `alternatives=` 参数、而没有任何
+       生产调用点传它 —— 那样单测会全绿，线上一个字都不会变。
+       钉住它的是 `test_nearest_alternative.py::test_两行调用点原样接得上`：
+       它按调用点的**原样两行**跑一遍。
+    """
+
+    # ⛔ 不能写 `__slots__` —— tuple 子类不支持非空 slots（当场 TypeError）。
+
+    def __new__(cls, groups=(), alternatives=()):
+        obj = super().__new__(cls, tuple(groups))
+        obj.alternatives = tuple(alternatives)
+        return obj
+
+
 def render_capability_refusal(
     missing_labels: Sequence[str],
     available_groups: Sequence[Any],
+    alternatives: Optional[Sequence[Any]] = None,
 ) -> str:
     """§9.9 拒答模板的 ①②③ 段。**④ 不在正文里** —— 它是按钮，由调用方放进 followups。
 
@@ -179,13 +318,34 @@ def render_capability_refusal(
 
     ⚠️ `available_labels` 为空时**整段省掉**，不写「暂时什么都算不了」之类的话 ——
        空清单的成因是「查不动」，那时说任何一侧都是猜。
+
+    ## 「眼下最接近的是 X」（2026-08-18 加，缺口清单第 21 项）
+
+    `alternatives` 不传时**从 `available_groups` 身上取**（见 `TenantCapability`）——
+    调用点那两行本轮不碰，而「加了参数没人传」就是形态 B 本身。
+
+    ⛔ 有替代时**不再打那句通用的「想看哪一样…」** —— 两句「你可以说个名字」
+       并排出现，老板要先读懂它们是不是同一件事。动作只留一个，且是更具体的
+       那一个。
     """
+    if alternatives is None:
+        alternatives = getattr(available_groups, "alternatives", ())
     missing = "、".join(missing_labels) or "你问的这项"
     lines = [
         f"**{missing}现在算不出来。**",
         "",
         f"缺的是：{missing}",
     ]
+    if alternatives:
+        # 限定语跟着标签走: 「毛利（未扣人工、房租、水电）」。
+        # ⛔ 不许只在开头说一次 —— 那是「先甩数再解释」的同一个坑换个位置。
+        named = "、".join(
+            f"{label}（{caveat}）" if caveat else label
+            for label, caveat in alternatives)
+        lines += [
+            "",
+            f"眼下最接近的是{named}。想看的话，说「{alternatives[0][0]}」就行。",
+        ]
     if available_groups:
         rendered = "、".join(
             f"{category}（比如{anchor}）" for category, anchor in available_groups)
@@ -202,11 +362,13 @@ def render_capability_refusal(
         #    这里只描述**动作**，而且动作指向的是**已经验证过有数据**的那几类：
         #    `available_groups` 是查库算出来的（每一列的非空值），不是手写表。
         # ⚠️ 与「有默认值就压掉澄清」无关：这不是替他选，是告诉他怎么选。
-        lines += [
-            "",
-            "想看哪一样，直接说它的名字就行"
-            f"（例如「{available_groups[0][1]}」）。",
-        ]
+        # ⛔ 已经给了具体替代时不再打这一句（见 docstring）—— 动作只留一个。
+        if not alternatives:
+            lines += [
+                "",
+                "想看哪一样，直接说它的名字就行"
+                f"（例如「{available_groups[0][1]}」）。",
+            ]
     return "\n".join(lines)
 
 
@@ -287,7 +449,12 @@ def partial_coverage_answer(
 
 
 async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
-    """查三层，返回 `(大类, 锚点标签)` 序列。查不动 → 空元组（不猜）。"""
+    """查三层，返回 `(大类, 锚点标签)` 序列 **+ 挂在它身上的 `alternatives`**。
+    查不动 → 空元组（不猜，且 `getattr(..., "alternatives", ())` 也拿到空）。
+
+    ⚠️ 「眼下最接近的是 X」与「我这儿有的是」**同一次查库、同一份 counts** ——
+       ⛔ 不为替代再打一次库，也就不可能出现「一段说能算、另一段说不能」。
+    """
     try:
         from smartbi.gold.queries import tenant_conn
         from smartbi.gold.restaurant.generic_executor import existing_columns
@@ -325,4 +492,9 @@ async def tenant_capability(pool, factory_id: str, unsupported: Sequence[str]):
         logger.warning("[capability] 无法确认本租户能算什么, 省掉那一段: %s", exc)
         return ()
 
-    return computable_categories(schema_columns, counts, unsupported=unsupported)
+    return TenantCapability(
+        computable_categories(schema_columns, counts, unsupported=unsupported),
+        nearest_alternatives(
+            unsupported,
+            computable_metric_keys(schema_columns, counts, unsupported=unsupported)),
+    )
