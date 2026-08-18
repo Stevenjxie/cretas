@@ -763,8 +763,42 @@ def _narrative_grounding_violations(
     protects semantic honesty: an LLM may not turn a composition signal into a
     causal conclusion, and it may not use a missing dimension as either
     positive or negative evidence.  The gate runs before cache/distillation.
+
+    ⚠️ 这是 `_grounding_findings` 的**薄视图**（只取描述那一半）——
+       ⛔ 不是第二份判定逻辑（形态 D：同一件事两份必漂）。
     """
-    violations: List[str] = []
+    return [description for description, _clause in
+            _grounding_findings(answer, factbook, question)]
+
+
+def _grounding_findings(
+    answer: str,
+    factbook: FactBook,
+    question: str = "",
+) -> List[Tuple[str, str]]:
+    """同一套判定，返回 (违规描述, 触发它的那个子句)。
+
+    🔴 2026-08-18 为什么要带上子句：这道闸原来的代价是**丢弃整份答案**。
+       📏 prod 实测（MOCK_REST，绕过叙述缓存）一轮 4 条违规里**只有 1 条是真的**
+       （「建议下架或换菜单」——确实是没依据的高影响动作），
+       另外 3 条是误报，而代价是老板拿不到那 1800 字的完整分析，
+       只拿到一份数据罗列。
+    ⇒ 有了子句就能**只删违规的那几行**，见 `strip_ungrounded_lines`。
+    """
+    findings: List[Tuple[str, str]] = []
+
+    class _Sink(list):
+        """把 `violations.append(desc)` 收成 (desc, clause) —— ⛔ 不改判定代码。"""
+
+        def __init__(self):
+            super().__init__()
+            self.current_clause = ""
+
+        def append(self, description):     # noqa: D102
+            findings.append((description, self.current_clause))
+            super().append(description)
+
+    violations = _Sink()
     sentences = [
         sentence.strip(" \t\r\n-*#")
         for sentence in re.split(r"[。！？!?\n]+", answer or "")
@@ -811,6 +845,7 @@ def _narrative_grounding_violations(
         sentence_is_hedged = bool(_CAUSAL_HEDGE_RE.search(sentence))
         if not sentence_is_hedged:
             for clause in clauses:
+                violations.current_clause = clause
                 if not _CAUSAL_ASSERTION_RE.search(clause):
                     continue
                 grounded_attribution = bool(
@@ -829,6 +864,7 @@ def _narrative_grounding_violations(
                     violations.append(f"无保留因果断言：{clause[:120]}")
 
         for clause in clauses:
+            violations.current_clause = clause
             if _MISSING_DISCLOSURE_RE.search(clause):
                 continue
             for code in sorted(missing_codes):
@@ -889,7 +925,106 @@ def _narrative_grounding_violations(
             ):
                 violations.append(f"未经验证或确认的高影响动作：{clause[:120]}")
 
-    return list(dict.fromkeys(violations))
+    # 去重按**描述**（原行为），⛔ 不动 findings —— 后者要保留每条的子句。
+    seen = set()
+    deduped = []
+    for description, clause in findings:
+        if description in seen:
+            continue
+        seen.add(description)
+        deduped.append((description, clause))
+    return deduped
+
+
+#: 删完之后至少要剩下的比例。低于它就没必要给一份残缺的分析了 —— 走兜底。
+#: ⚠️ 这是一个**结构性的保守下界**，⛔ 不是「误报率阈值」。
+#:    它可以被变异打红（把它调到 0 或 1 都会有断言红）。
+_KEEP_RATIO_FLOOR = 0.5
+
+
+def strip_ungrounded_lines(
+    answer: str,
+    factbook: FactBook,
+    question: str = "",
+) -> Tuple[str, List[str]]:
+    """删掉**触发违规的那几行**，保留其余。返回 (清洗后的正文, 违规描述)。
+
+    🔴 存在的理由（📏 2026-08-18 prod 实测，MOCK_REST，绕过叙述缓存）:
+
+        这道闸原来的代价是**丢弃整份答案**。一轮 4 条违规里**只有 1 条是真的**
+        （「建议下架或换菜单」——确实是没依据的高影响动作），
+        另外 3 条是误报（「没法判断…是不是因为口碑差」是在**否定**因果、
+        「建议先上传评价导出」是补数建议、「如果发现…」是条件句）。
+        代价是老板拿不到那 1800 字的完整分析，只拿到一份数据罗列。
+
+    ⚠️ 上一轮我的修法是**给豁免词表补漏**，而下一轮 LLM 换了措辞，
+       我补的三个词**一个都没命中**，冒出 3 条全新的误报。
+       ▎LLM 的措辞是**开集**，加词追不上 ——
+       ▎那正是本仓明令禁止的「靠不断加启发式去逼近语义」。
+    ⇒ 换判据：不再追求「闸判得准」，改为**降低误判的代价**。
+
+    ⛔ 按**行**删，不按子句删：子句删掉再拼回去会产生读不通的句子，
+       而一句读不通的话同样烧掉「这东西说的话能信」。
+       markdown 的一行通常就是一个列表项或一个段落，整行删掉结构还在。
+
+    ⛔ 绝不静默删 —— 调用方必须把「删了几行、为什么」说出来。
+    """
+    findings = _grounding_findings(answer, factbook, question)
+    if not findings:
+        return answer or "", []
+
+    descriptions = [d for d, _ in findings]
+    clauses = [c for _, c in findings if c]
+    if not clauses:
+        # 判定命中了，却一条子句都没记下来 ⇒ 定位不了，只能整份退回。
+        return "", descriptions
+
+    lines = (answer or "").splitlines()
+    kept = [ln for ln in lines if not any(c and c in ln for c in clauses)]
+    cleaned = "\n".join(kept).strip()
+
+    original_len = len((answer or "").strip())
+    if not cleaned or (original_len and len(cleaned) / original_len < _KEEP_RATIO_FLOOR):
+        # 删得只剩一点点 ⇒ 给一份残缺的分析不如给一份完整的数据表。
+        return "", descriptions
+    return cleaned, descriptions
+
+
+#: 删掉之后加在正文末尾的那句说明。⛔ 绝不静默删。
+#: ⚠️ 措辞里**不出现内部判据名**（「接地闸」「因果门禁」）——
+#:    老板要知道的是「有几处我没敢说」，不是我们的质检叫什么。
+_DROPPED_NOTICE = (
+    "\n\n> ⚠️ 有 {n} 处说法我删掉了 —— 它们没有数据支撑"
+    "（可能是没依据的因果推断，或者把还没接入的数据当成了事实）。"
+    "其余内容都来自系统里查得到的数。"
+)
+
+
+def _keep_what_is_grounded(
+    answer: str,
+    violations: List[str],
+    factbook: FactBook,
+    question: str = "",
+) -> Tuple[str, List[str]]:
+    """违规时**先只删那几行**，删得下去就保留其余；删不下去才让调用方走兜底。
+
+    返回 `(可能被清洗过的正文, 仍然阻断的违规清单)` ——
+    第二个值为空就表示「已经处理掉了，⛔ 不要再走兜底」。
+
+    🔴 2026-08-18 的两轮实测（MOCK_REST，绕过叙述缓存）:
+       第一轮 4 条违规里**只有 1 条是真的**，代价却是整份 1811 字分析被丢弃。
+       第二轮我给豁免词表补了三个词，而 LLM 换了措辞 ⇒ **三个词一个都没命中**，
+       冒出 3 条全新的误报。
+       ▎LLM 措辞是**开集**，加词追不上 —— 那正是本仓明令禁止的
+       ▎「靠不断加启发式去逼近语义」。
+    ⇒ 换判据：不再追求「闸判得准」，改为**降低误判的代价**。
+    """
+    if not violations:
+        return answer, violations
+    cleaned, dropped = strip_ungrounded_lines(answer, factbook, question)
+    if not cleaned:
+        return answer, violations
+    return cleaned + _DROPPED_NOTICE.format(n=len(dropped)), []
 
 
 @dataclass
@@ -1284,6 +1419,13 @@ class ComprehensiveSynthesisEngine:
                     thin_answer, factbook, question,
                 )
                 if grounding_violations:
+                    # 🔴 违规**不再直接丢弃整份答案** —— 先只删触发违规的那几行。
+                    #    见 `_keep_what_is_grounded` / `strip_ungrounded_lines`
+                    #    的 docstring（含两轮 prod 实测）。⛔ 绝不静默删。
+                    thin_answer, grounding_violations = _keep_what_is_grounded(
+                        thin_answer, grounding_violations, factbook, question,
+                    )
+                if grounding_violations:
                     logger.warning(
                         "thin synthesis rejected by narrative grounding gate: "
                         "factory=%s violations=%s",
@@ -1367,6 +1509,11 @@ class ComprehensiveSynthesisEngine:
         grounding_violations = _narrative_grounding_violations(
             answer, factbook, question,
         )
+        if grounding_violations:
+            # 🔴 同上：先只删触发违规的那几行，⛔ 不直接丢弃整份答案。
+            answer, grounding_violations = _keep_what_is_grounded(
+                answer, grounding_violations, factbook, question,
+            )
         if grounding_violations:
             logger.warning(
                 "synthesis rejected by narrative grounding gate: "
