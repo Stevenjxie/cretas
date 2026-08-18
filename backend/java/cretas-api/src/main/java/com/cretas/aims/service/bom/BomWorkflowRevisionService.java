@@ -539,6 +539,84 @@ public class BomWorkflowRevisionService {
                 .orElse(false);
     }
 
+    /**
+     * 🔴 <b>「这个产出的成本口径是什么」的唯一权威出口。</b> 三个消费方都必须问它, 不许各自判。
+     *
+     * <p>成因(2026-08-18): 同一个问题「这是不是副产物」在仓里长出了<b>两份判据</b> ——
+     * {@code BomRecipeServiceImpl} 那两处会先问 {@link #targetProducedUnderActualIoSemantics}
+     * 把自动编号出来的占位 {@code BY_PRODUCT} 豁免掉; 而
+     * {@code ProductionPlanServiceImpl#persistWorkflowSettlementOutputs} 只判
+     * {@code outputRole == BY_PRODUCT}, <b>没有</b> ACTUAL_IO 这一层。
+     * 而 {@link com.cretas.aims.service.workflow.WorkflowActualIoSemantics#normalizeDraft}
+     * 保证今天新建的每个 workflow 都是 ACTUAL_IO ⇒ 净效果是:
+     * <b>按当前授权入口做出来的多成品计划, NRV 被结单闸要求、被 BOM 闸禁止, 结不了单。</b></p>
+     *
+     * <p>⚠️ 三态而不是布尔: 把它写成「是不是副产物」会漏掉第三种情况, 而漏掉的后果是
+     * <b>把拒答从一道闸挪到下一道</b> —— ACTUAL_IO 的非首个终端自动拿到 {@code ratio = 0},
+     * 只豁免 NRV 那道闸的话, 它下一步就会撞上
+     * {@code OUTPUT_COST_ALLOCATION_RATIO_REQUIRED}(要求 ratio &gt; 0), 用户看到的仍然是结不了单。</p>
+     */
+    @Transactional(readOnly = true)
+    public OutputCostPolicy resolveOutputCostPolicy(String factoryId, BomRecipe recipe) {
+        // ⚠️ 顺序是刻意的: 先用【便宜】的 outputRole 判, 再问【贵】的那一问。
+        //    targetProducedUnderActualIoSemantics 要读 revision 并解析整张 workflow 快照,
+        //    倒过来写会让每个 MAIN 产出也白解析一次快照(结算链路上逐产出行调用)。
+        // ⚠️ 两种顺序对【能存在的每一种形状】结果相同:
+        //    ACTUAL_IO 下的 MAIN 恒拿 ratio=100(prod 36/36 全是 100.0000), 走 ALLOCATION_RATIO
+        //    照样放行; CO_PRODUCT 在 ACTUAL_IO 下根本产生不出来(normalizeDraft 会把
+        //    outputRole 从端口上删掉, prod 全库 0 行), 万一有也是 fail-closed 的方向。
+        //    这个顺序还让它与下面的行级形态【结构上并排】, 少一处会漂的地方。
+        if (recipe == null || recipe.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) {
+            return OutputCostPolicy.ALLOCATION_RATIO;
+        }
+        // 角色与比例都是 resolveTerminalOutputs 自动编号出来的占位值, 用户从没被问过 ——
+        // 既不能要 NRV, 也不能要 ratio > 0。
+        return targetProducedUnderActualIoSemantics(factoryId, recipe)
+                ? OutputCostPolicy.ACTUAL_IO_PLACEHOLDER
+                : OutputCostPolicy.BY_PRODUCT_NRV;
+    }
+
+    /** 该产出是否<b>真的</b>按副产品净值抵扣计价(= 用户真标的副产品)。 */
+    @Transactional(readOnly = true)
+    public boolean creditsAsByProduct(String factoryId, BomRecipe recipe) {
+        return resolveOutputCostPolicy(factoryId, recipe) == OutputCostPolicy.BY_PRODUCT_NRV;
+    }
+
+    /**
+     * 同一条语义的<b>行级</b>形态: 结单产出行已经落库, 手里只有 (role, nrv), 拿不到 workflow 快照。
+     *
+     * <p>⚠️ 放在这里而不是散在 {@code ProductionPlanServiceImpl} 里, 是因为本仓的账很清楚:
+     * <b>同一个东西有两份, 它一定会漂</b> —— 坎 4 本身就是这么来的。两个形态一屏之内并排放,
+     * 并由 {@code MultiOutputCostPolicyContractTest} 钉住「对 :3090 能落库的每一种形状, 两者给出同一答案」。</p>
+     *
+     * <p>两者为什么等价(不是巧合, 是构造保证的):</p>
+     * <ul>
+     *   <li>{@code BY_PRODUCT_NRV} ⇒ 结单闸要求 {@code nrv &gt; 0} 才放行 ⇒ 落库行必有正 NRV</li>
+     *   <li>{@code ACTUAL_IO_PLACEHOLDER} ⇒ BOM 侧
+     *       ({@code BomRecipeServiceImpl} 的 {@code BOM_NON_BY_PRODUCT_NRV_FORBIDDEN} 分支)
+     *       会把 NRV 主动置 null 并禁止填 ⇒ 落库行必然 NRV 为 null</li>
+     * </ul>
+     */
+    public static OutputCostPolicy settlementLineCostPolicy(
+            BomRecipe.OutputRole outputRole, BigDecimal byproductNrvUnitPrice) {
+        if (outputRole != BomRecipe.OutputRole.BY_PRODUCT) {
+            return OutputCostPolicy.ALLOCATION_RATIO;
+        }
+        return byproductNrvUnitPrice != null && byproductNrvUnitPrice.signum() > 0
+                ? OutputCostPolicy.BY_PRODUCT_NRV
+                : OutputCostPolicy.ACTUAL_IO_PLACEHOLDER;
+    }
+
+    /** 一个终端产出的成本口径。 */
+    public enum OutputCostPolicy {
+        /** 用户真标的副产品: 必须有单位可变现净值(NRV), 不参与比例分摊。 */
+        BY_PRODUCT_NRV,
+        /** 用户授权的主产出/联产品: 必须有大于 0 的成本分摊比例。 */
+        ALLOCATION_RATIO,
+        /** ACTUAL_IO 自动编号出来的占位角色/比例: 两样都不能要, 用户没被问过。 */
+        ACTUAL_IO_PLACEHOLDER
+    }
+
     @Transactional(readOnly = true)
     public List<TerminalOutput> resolveTerminalOutputsForRevision(
             String factoryId,

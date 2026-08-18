@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -126,7 +127,16 @@ class ProductWorkflowUnifiedResolutionTest {
         WorkflowOutputResolutionDTO result = service.resolveForOutputs("F1", List.of("P1", "P2"));
 
         assertEquals("NONE", result.getResolutionMode());
-        assertEquals("未找到共享的工序 Workflow，请分开创建生产计划", result.getMessage());
+        // 2026-08-18: 断言从「字面」抬到「性质」—— 这条测试的名字就叫 ReturnsGuidance,
+        // 它守的是「有没有把下一步告诉用户」, 不是某一句措辞。
+        // 现在下一步由成因诊断出来(工艺真的没有 / 存在但没启用 / 存在但当前不可用),
+        // 所以措辞会随成因变, 而「必须有下一步」不变。
+        assertThat(result.getMessage())
+                .contains("未找到")
+                .contains("Workflow");
+        assertThat(result.getMessage())
+                .as("拦住人的地方必须说下一步 —— 只报「没找到」等于把人晾在那儿")
+                .contains("请");
     }
 
     @Test

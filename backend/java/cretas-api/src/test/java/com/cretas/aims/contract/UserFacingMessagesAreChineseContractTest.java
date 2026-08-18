@@ -61,7 +61,10 @@ class UserFacingMessagesAreChineseContractTest {
      * <p>⛔ 若本地跑出更大的数字, 先查是不是提取逻辑变了, <b>不要直接把这个数字改大</b>——
      * 改大就是把棘轮松开, 等于这道闸不存在。
      */
-    private static final int BASELINE = 45;
+    // 2026-08-18: 45 -> 41, 结算链路上 BYPRODUCT_NRV_REQUIRED /
+    // WORKFLOW_OUTPUT_UNIT_MISMATCH / PINNED_BOM_OUTPUT_POLICY_INCOMPLETE /
+    // OUTPUT_COST_ALLOCATION_RATIO_REQUIRED 四条已翻成中文并补上下一步。
+    private static final int BASELINE = 41;
 
     private static final Path SERVICE_ROOT =
             Path.of("src/main/java/com/cretas/aims/service");
