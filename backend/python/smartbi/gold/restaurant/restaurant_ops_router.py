@@ -3869,6 +3869,7 @@ async def resolve_stock_shortage(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     window_label: Optional[str] = None,
+    dimensions: Optional[Sequence[str]] = None,
 ) -> OpsAnswer:
     """Top N stocktaking shortage ingredients for the window that was asked for.
 
@@ -3961,10 +3962,18 @@ async def resolve_stock_shortage(
         store_rows, float(total["shortage_cost"] or 0.0),
         title="各门店盘亏金额", amount_header="盘亏金额", noun="盘亏")
 
+    # 🔴 同 `resolve_requisition_trend`：那句判断此前只接了损耗一处。
+    #    ⛔ 三个 resolver 共用同一张门店表，判断也要共用同一句话（形态 D）。
+    lead = (_store_lead_sentence(
+        store_rows, noun="盘亏",
+        all_total=float(total["shortage_cost"] or 0.0))
+        if asked_by_store(dimensions) else "")
+
     answer = (
         f"{window_text}盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏金额 **¥{total['shortage_cost']:.2f}**, "
         f"盘盈金额 ¥{total['surplus_cost']:.2f}\n\n"
+        f"{lead}"
         f"{top_block}\n"
         f"{store_block}\n"
         f"建议动作:\n"
@@ -4378,6 +4387,7 @@ async def resolve_requisition_trend(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     window_label: Optional[str] = None,
+    dimensions: Optional[Sequence[str]] = None,
 ) -> OpsAnswer:
     """Requisition trend + Top N ingredients for the window that was asked for.
 
@@ -4456,9 +4466,32 @@ async def resolve_requisition_trend(
         store_rows, float(total_cost or 0.0),
         title="各门店领料金额", amount_header="领料金额", noun="领料")
 
+    # 🔴 2026-08-18: `_store_lead_sentence`（「点名 + 差距 + 该不该单独去查」）
+    #    **早就存在**，但只有 `resolve_wastage_top` 接了它 ——
+    #    三个 resolver 共用 `_store_breakdown_block` 那张表，那句判断却只接了一处。
+    #    形态 B（机制在、没接上）＋ 硬约束 8（改共享结构时只改了一处）。
+    #
+    # 📏 后果（prod 实测，MOCK_REST，「按门店看领料趋势」n=995）:
+    #    交付定义② 的五个标记里**只命中 1 个**（d_建议）——
+    #    给了食材榜 + 门店榜两张表，却**一句判断都没有**。
+    #    10 家店领料金额 ¥771,915 ~ ¥795,972 相差 3.1%，
+    #    「差得很少，别按门店查」这个结论就在表里，产品没说。
+    #
+    # ⚠️ 它此前接不上的**结构原因**是这个 resolver 收不到 `dimensions`
+    #    （`resolve_by_code` 按签名过滤 kwargs，没声明的静默丢弃）——
+    #    ⇒ 判断不了「是不是按门店问」。这也是缺口 #9 理由的重写：
+    #    不是「答案逐字相同」，是「按门店问时那句判断出不来」。
+    lead = (_store_lead_sentence(
+        store_rows, noun="领料",
+        # ⛔ 与紧跟其后的 `_store_breakdown_block` 传**同一个**总额 ——
+        #    两处覆盖度判断读同一个分母，否则首段和表格会各说各的。
+        all_total=float(total_cost or 0.0))
+        if asked_by_store(dimensions) else "")
+
     answer = (
         f"{window_text}领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 **¥{total_cost:.2f}**, {len(trend)} 天有活动\n\n"
+        f"{lead}"
         f"{top_block}\n"
         f"{store_block}\n"
         f"建议动作:\n"

@@ -218,9 +218,20 @@ def test_actual_gold_callable_signatures_match_all_ten_adapters():
             "date_range", "window_label", "dimensions",
         ),
         "resolve_inventory_warning": ("smartbi_pool", "factory_id", "top_n"),
+        # ``dimensions`` 2026-08-18 新增，与 `resolve_wastage_top` 同为**尾部
+        # 可选**(default=None)，agent runtime 仍按前四个位置参数调用。
+        # 加它的理由（📏 AST 实测）: 盘点 / 领料 / 损耗三个 resolver 共用**同一张**
+        # 门店表(`_store_breakdown_block`)，而那句「点名 + 差距 + 该不该单独去查」
+        # (`_store_lead_sentence`) **只有损耗接了** —— 形态 B。
+        # 这两个接不上的**结构原因**就是它们收不到 `dimensions`
+        # (`resolve_by_code` 按签名过滤 kwargs，没声明的静默丢弃) ⇒
+        # 判断不了「是不是按门店问」。
+        # ⚠️ 不传它时产出逐字不变 —— 那句话挂在 `asked_by_store(dimensions)` 上，
+        #    有阴性对照钉着(tests/test_store_lead_sentence_is_wired_everywhere.py::
+        #    test_the_lead_is_gated_and_not_unconditional)。
         "resolve_stock_shortage": (
             "smartbi_pool", "factory_id", "days", "top_n",
-            "date_range", "window_label",
+            "date_range", "window_label", "dimensions",
         ),
         "review_summary": ("pool", "factory_id"),
         "review_store_ranking": (
