@@ -13,11 +13,16 @@ PR：[#2803](https://github.com/Stevenjxie/cretas/pull/2803)（7 个 commit，�
 判据四（无订单入库，全链走完并冲销）、判据六（采购链，收货量与在手 9/9 对账）、
 判据一大部分（换算率 3/3 验真、计数单位不硬折）。
 
-**没通过**：**判据二（两端实时通）** —— App 报工与 web 逐道录入**不是同一条账**，
-料的扣减只在 web 那条路上发生。这条是本轮最重的发现，见 §3。
+**没通过**：**判据二（两端实时通）** —— App 报工与 web 逐道录入**不是同一条账**。
+本轮修掉了它的第一道闸并**已部署验证**，但修好后立刻撞上第二道 —— 根因是同一个，
+见 §10（卡点已精确到方法名，含该做什么）。
 
-**顺带挖出两个原来不知道的**：报工撤回会留下可被领用的**幻库存**（§4）、
-**半成品能通过 API 开销售单**（防呆只在前端下拉里，§7，已修）。
+**顺带挖出三个原来不知道的**：报工撤回会留下可被领用的**幻库存**（§4）、
+**半成品能通过 API 开销售单**（防呆只在前端下拉里，§7，已修）、
+**领料单从不含调料而报工必要它**（§11，已修并部署验证）。
+
+**线上事故一起**（用户报「调拨单确认入库报错，刷新、新建都不行」）：已定位、已修、
+**已在 prod 真跑一次验证**，见 §12。
 
 ---
 
@@ -268,3 +273,130 @@ WIP 343  75 盒  available 75   AVAILABLE  ❌ 撤回后仍被 /wip/available �
 2. **副产物在 App 侧是文本还是真实产出？**
    工艺图把肥油声明成带 SKU 的产出端口，web 能把它入账；App 的 `byproducts[]` 只有名字/数量/单位。
    要不要让 App 也按端口报？
+
+---
+
+## 10. 🔴 判据二的确切卡点（部署后实测，卡点已精确到方法名）
+
+### 已修并验证的第一道闸
+
+`ensureWorkflowSettlementUsesSubmittedReports` 原来只读 `process_sheet_rows`（web 逐道录入那张表），
+于是「App 把两道工都报完、任务 COMPLETED、审批也过了」的计划，文员点「核对结单」照样
+`409 WORKFLOW_REPORTING_REQUIRED`。本轮补上 App 那条腿（每道工序任务都 COMPLETED 才放行）。
+
+**部署后实测**：这道闸**不再触发** ✅ —— 请求推进到了下一步。
+
+### 撞上的第二道闸：同一个根因，一层更深
+
+```java
+// ProductionPlanServiceImpl.settleProduction
+ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
+        ? deriveConfirmedSettlementRequest(factoryId, planId, request)   // ← 客户端传什么都不算数
+        : request;
+```
+
+**workflow 计划的结单完全由服务端重新推导**，而推导的唯一数据源还是 `process_sheet_rows` ——
+那段代码自己的错误字段就是 `"processSheetRows"`（「无法读取当前报工事实，不能结单」）。
+App 报工不写那张表 ⇒ 推出来的 `terminalOutputs` 是空的 ⇒ `409 WORKFLOW_OUTPUT_SET_MISMATCH`。
+
+**判别实验**（一个能区分两种假设的探针）：同一个计划，分别提交
+① 完全不传 `terminalOutputs` ② 传**正确**的 SKU ③ 传**错误**的 SKU ——
+**三次报错完全相同** ⇒ 客户端载荷根本没参与判定，确实是服务端推导为空。
+
+### 需要谁做什么
+
+让 `deriveConfirmedSettlementRequest` 在**没有 `process_sheet_rows`** 时回退到 `production_reports`：
+
+| 结单要的事实 | web 现在从哪来 | App 侧同样的事实在哪 |
+|---|---|---|
+| 末道产出 `terminalOutputs` | 电子表格产出行 | 末道工序的已审批报工（`outputQuantity` + `outputUnit` + 任务的 productTypeId） |
+| 原料领用 `rawMaterialConsumptions` | 电子表格投入行 | 报工单的 `materialBatchRefs`（已含 batchId/qty/unit） |
+| 工时 `laborSegments` | 电子表格工时段 | 报工单的 `totalWorkMinutes` / `totalWorkers` |
+
+三样在 App 侧都有现成数据，是**接线**问题不是缺数据。
+
+⚠️ 这一段的形状值得单独记：**我修好第一道闸之后，拒答从一道闸挪到了下一道**——
+本仓 `measurement-and-wiring` 硬约束 8 记的就是这个形态。改共享结构前要先数一遍
+「这条路上还有几处读同一份数据源」，我当时只数了闸、没数它背后的推导。
+
+---
+
+## 11. 领料单漏了调料（已修，已部署验证）
+
+调料不在 `bom_recipe_items` 里，它们有自己的表 `bom_seasoning_items`（按「每 kg 投入多少克」登记）。
+领料单只展开 BOM 行，而报工侧会读调料表向生产仓要货：
+
+```
+生成领料单 → 7 行（4 原料 + 3 包材），没有调料
+照单拣货 → 转运 → 收货
+报工      → 409「需要 1.6kg，可用 0kg，请联系仓管补料」
+             香辛料 0.8kg / 黄油调味料 0.8kg（= 10 g/kg × 80kg 投入，算术对得上）
+```
+而全厂原料仓那两样各有 20kg —— 货在，只是**领料单上根本没有这一行**。
+
+**部署后实测**：领料单 **7 行 → 9 行**，香辛料/黄油调味料 归 `AUXILIARY` 进来了 ✅
+（用量留空 —— 调料按投入量计，领料单只知道计划产出，推不出投入 kg；与既有对原料/辅料的口径一致）。
+
+---
+
+## 12. 线上事故：包材调拨确认入库必失败（已修，prod 已验证）
+
+用户报「调拨单推进到确认调拨入库报错」「刷新，新建都不行」。单据 `TRF-20260818-0897`：
+成品盒 1100 盒，原料仓 → 生产仓。
+
+**日志时序**（trace `6C5EE082`）：
+```
+11:25:09.336  扣减原料批次: deduct=1000, remaining=100
+11:25:09.340  扣减原料批次: deduct=100,  remaining=0
+11:25:09.346  调拨确认…库存已更新          ← 业务逻辑跑完了
+11:25:09.373  事务回滚: Could not commit JPA transaction
+```
+
+**根因**：同一个类型判断写了两遍，漂了 ——
+扣减侧认 `原料 || 包材`，建仓侧只认 `原料` ⇒ 包材掉进「建成品批次」那条路，
+而 `FinishedGoodsBatch.productTypeId` 是 `@NotBlank`、包材没有这个字段
+⇒ **flush 时 Bean Validation 失败**。
+
+- 为什么日志里什么都看不到：Bean Validation 失败**不产生 SQL 错误**
+- 为什么「刷新、新建都不行」：这个失败是**确定性**的
+- **数据没脏**：事务整体回滚，单据仍是 APPROVED，源批次一粒没少
+
+**修复 + prod 实测**：抽成 `storedAsMaterialBatch(item)` 一处判定（5 个调用点都走它）。
+部署后自建一张 `TRF-20260818-3894`（外箱 5 片）走完 DRAFT → APPROVED → **CONFIRMED**，
+外箱 原料仓 200 → **195** 片 / 生产仓 0 → **5** 片，新批次是 **MaterialBatch** ✅（正是修复点）。
+⚠️ 没有动史浩禾那张在途单据 —— 他重试即可。
+
+---
+
+## 13. 部署验证（硬约束 2）
+
+`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS=deployed` **恰好 1 次**。但这两条都不算判据，另外做了：
+
+| 检查 | 结果 |
+|---|---|
+| 活进程 | 只有 **10020** 在监听（蓝绿已切），PID 3438518，启动 **12:12:08** |
+| 制品 mtime | 12:11 —— **进程启动晚于制品** ✅ |
+| 阳性对照 `deductSourceInventory` | 1 ✅（**这条救了一次**：第一版探针 jar 路径是相对的，`unzip` 没打开文件，所有标记都读出 0 —— 没有阳性对照我会得出「修复没上线」的反向结论） |
+| `storedAsMaterialBatch` | 1 ✅ |
+| `hasCompletedTaskLevelReporting` | 1 ✅ |
+| `appendSeasoningItems` | 1 ✅ |
+| `assertItemsAreSellable` | 3 ✅ |
+| **真跑一次那条路径** | 包材调拨确认入库成功 + 库存守恒（见 §12）；领料单 7→9 行（见 §11）；结单闸不再触发（见 §10） |
+
+⚠️ 预热跳过（`10.66.66.1:22` 不通，脚本明说不是失败、只是走本地构建）。
+
+---
+
+## 14. 最终冲销对账
+
+| 项 | 基线 | 现在 |
+|---|---|---|
+| 原料仓 各物料在手 | 200×4 kg・200 片・20 卷・1100 盒・20×2 kg・冻猪蹄 15 | **逐条相同** ✅ |
+| 生产仓 | 只有冻猪蹄 15kg | **相同** ✅ |
+| WIP 可用 | 只有 331 = 2kg | **相同** ✅（342/343 已 DEPLETED 归零，行保留作痕迹） |
+| F006 未删报工单 | 0 | **0** ✅ |
+| 工序任务 | PENDING | **PENDING** ✅ |
+| 跨租户 mb/fgb/plans | 24 / 0 / 0 | **24 / 0 / 0** ✅ 全程未动 |
+
+软删的报工 / CLOSED 领料单 / DEPLETED 台账行 / CONFIRMED 的两张探针调拨单
+按判据九保留为**可查痕迹**，不是脏数据。
