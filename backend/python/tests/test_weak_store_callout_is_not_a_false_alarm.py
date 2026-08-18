@@ -92,15 +92,34 @@ def test_the_spread_reuses_the_shared_helper():
 
 # ── 🔴 两侧都要有话说（⛔ 不是「差得小就闭嘴」）────────────────────────────
 
+def _string_constants() -> str:
+    """把 `resolve_store_margin` 里**真正会被拼进正文**的字符串常量连起来。
+
+    🔴 2026-08-18 补写的原因（变异当场抓到）：原来这几条断言 grep **源码文本**，
+       而我自己在这个函数上面写的那段注释里**引用了 prod 原文**
+       （「需要复盘的门店: 模拟·宝山大场社区店 毛利率 67.7%…」）。
+       ⇒ M6「把提示整个关掉」和 M7「不印差距」两条变异**全绿** ——
+         不是断言没用，是**闸把我自己的注释数了进去**。
+
+    ▎本仓同型第 N 次：**字符串计数量的是文本，AST 量的是结构。**
+    ⛔ 不收窄正则，改用 AST 只取 `Constant` 的 str 值（注释不进 AST）。
+    """
+    src = inspect.cleandoc(inspect.getsource(rr.resolve_store_margin))
+    return "\n".join(
+        n.value for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    )
+
+
 def test_it_says_something_when_the_spread_is_small():
     """差得少的时候要说「别按门店查」—— ⛔ 不是什么都不说。
 
     ▎那句话本身就是「一件他没想到的事」：他问「哪家店成本最高」，
     ▎产品告诉他**这个问题问错了方向**。
     """
-    src = inspect.getsource(rr.resolve_store_margin)
-    assert "按门店查多半找不到东西" in src, "差距小的时候什么都没说"
-    assert "差异不在门店之间" in src, "没给出那个直接推论"
+    consts = _string_constants()
+    assert "按门店查多半找不到东西" in consts, "差距小的时候什么都没说"
+    assert "差异不在门店之间" in consts, "没给出那个直接推论"
 
 
 def test_it_does_not_guess_where_the_difference_is():
@@ -109,9 +128,9 @@ def test_it_does_not_guess_where_the_difference_is():
     ⚠️ 「差异更可能在菜品结构上」是**推测**，没有依据 ——
        上新提示之前问一句：他去查会不会一无所获。
     """
-    src = inspect.getsource(rr.resolve_store_margin)
+    consts = _string_constants()
     for guess in ("更可能在菜品", "多半是菜品", "问题出在菜品结构"):
-        assert guess not in src, f"顺嘴猜了一个没有依据的方向: {guess}"
+        assert guess not in consts, f"顺嘴猜了一个没有依据的方向: {guess}"
 
 
 def test_the_big_spread_branch_still_names_the_store():
@@ -120,14 +139,14 @@ def test_the_big_spread_branch_still_names_the_store():
     ⚠️ 形态 E 的反面：收窄一条提示时只说「减掉什么」是半条裁定，
        必须同时说清**保留什么**。
     """
-    src = inspect.getsource(rr.resolve_store_margin)
-    assert "需要复盘的门店" in src, "把提示整个关掉了 —— 差得多的时候也不点名了"
-    assert "先查低毛利菜品占比" in src, "差得多时的排查方向被顺手删了"
+    consts = _string_constants()
+    assert "需要复盘的门店" in consts, "把提示整个关掉了 —— 差得多的时候也不点名了"
+    assert "先查低毛利菜品占比" in consts, "差得多时的排查方向被顺手删了"
 
 
 def test_both_branches_print_the_spread():
     """🔴 两侧都要把差距**印在正文里** —— 藏起来的阈值没人能质疑。"""
-    src = inspect.getsource(rr.resolve_store_margin)
-    assert src.count("个百分点") >= 2, (
+    consts = _string_constants()
+    assert consts.count("个百分点") >= 2, (
         "只有一侧印了差距 —— 另一侧的判断读的人无法反驳"
     )
