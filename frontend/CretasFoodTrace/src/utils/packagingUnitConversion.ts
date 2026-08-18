@@ -140,10 +140,48 @@ const WEIGHT_TO_KG: Record<string, number> = {
   liang: 0.05,
 };
 
+/**
+ * canonical 码 → 中文展示名。
+ *
+ * 🔴 **为什么需要它** (2026-08-18 实测): `canonicalUnit()` 是**比较用的归一键**
+ * (它自己的注释写着「比较前先折成同一写法」), 归一方向是**中文 → 英文**。
+ * 而 `bucketByDimension` 把这个内部键直接放进 `bucket.unit`,
+ * `WHInventoryListScreen` 又把它渲染出来 —— 于是一条**存着「盒」**的批次,
+ * 被我们自己折成 `box` 再printed给用户看。**与后端存什么无关, 必然泄漏。**
+ *
+ * ⚠️ **由 `UNIT_ALIASES` 反推, 不另立一张表** —— 本仓已经吃过「同一个东西有两份
+ * 必定漂」的亏: web-admin 现有 3 张单位表, 其中 `workflowUnits.ts` 漏了 jin/t,
+ * `unitPricing.ts` 又把 t 翻成「吨」(与后端取舍相反)。这里少一张手写表就少一处漂。
+ *
+ * ⛔ 计量**符号** (g/kg/mg…) 一律不翻: 秤上、单据上、国标上都这么写 ——
+ * 与后端 `UnitDisplayNames` 的取舍一致, 所以按 `WEIGHT_TO_KG` 把重量族滤掉。
+ * (个/件 都归一到 pcs, 反推取后者「件」—— 与后端 `pcs → 件` 一致。)
+ */
+const COUNT_UNIT_DISPLAY: Record<string, string> = Object.entries(UNIT_ALIASES)
+  .filter(([, code]) => WEIGHT_TO_KG[code] == null)
+  .reduce<Record<string, string>>((acc, [chinese, code]) => {
+    acc[code] = chinese;
+    return acc;
+  }, {});
+
+/**
+ * 面向用户的单位写法。认不出来就**原样返回** ——
+ * 已经是中文的、计量符号的、以及自定义单位都走这条路, 不会被改写也不会变空。
+ */
+export function displayUnit(unit: string | null | undefined): string {
+  if (!unit) return '';
+  const trimmed = String(unit).trim();
+  if (!trimmed) return '';
+  return COUNT_UNIT_DISPLAY[trimmed.toLowerCase()] ?? trimmed;
+}
+
 export interface UnitBucket {
   /** 'weight' 组内已折成 kg; 'count' 组保持原单位 */
   kind: 'weight' | 'count';
+  /** ⛔ **内部归一键**, 用于分组/比较/React key —— 不要直接渲染, 渲染用 `displayLabel`。 */
   unit: string;
+  /** 面向用户的写法 (中文)。`unit` 是英文码时由 `displayUnit()` 翻过来。 */
+  displayLabel: string;
   quantity: number;
   batchCount: number;
 }
@@ -172,10 +210,16 @@ export function bucketByDimension(
 
   const buckets: UnitBucket[] = [];
   if (weightBatches > 0) {
-    buckets.push({ kind: 'weight', unit: 'kg', quantity: weightKg, batchCount: weightBatches });
+    buckets.push({
+      kind: 'weight', unit: 'kg', displayLabel: 'kg',
+      quantity: weightKg, batchCount: weightBatches,
+    });
   }
   for (const [unit, v] of Array.from(counts.entries()).sort((a, b) => b[1].quantity - a[1].quantity)) {
-    buckets.push({ kind: 'count', unit, quantity: v.quantity, batchCount: v.batchCount });
+    buckets.push({
+      kind: 'count', unit, displayLabel: displayUnit(unit),
+      quantity: v.quantity, batchCount: v.batchCount,
+    });
   }
   return buckets;
 }

@@ -44,6 +44,19 @@ public final class UnitDisplayNames {
      *
      * <p>覆盖面由 {@code UnitDisplayNameCoverageTest} 钉住: 契约里每个非 CJK 的码,
      * 要么在符号白名单上, 要么在这张表里且与契约的 displayName 一致。
+     *
+     * <p>🔴 2026-08-18 第二轮补<b>别名</b>: 上一轮的覆盖闸只遍历契约的<b>码</b>
+     * ({@code catalog()}), 而库里躺着的是<b>别名</b> —— {@code canonicalNativeUnit}
+     * 归一失败时回落字面, 存进去的就是用户当初打的那个英文单词。
+     * prod 实测 {@code material_packaging_hierarchy.level2_unit} 与
+     * {@code material_packaging_specs.package_unit} 各有一行 {@code ton},
+     * 而 {@code UnitContractServiceImpl:965} 的注释早就把这件事写出来了:
+     * 「归一不到 t, canonicalNativeUnit 回落字面, 用户看到的就是 "ton"」。
+     * 别名一直没有任何闸看着 ⇒ 由 {@code UnitAliasDisplayCoverageContractTest} 接管。
+     *
+     * <p>⚠️ 判据仍然是<b>「用户认不认得这个写法」</b>, 所以这一批只收<b>英文单词</b>:
+     * {@code ton}/{@code kilogram}/{@code meter} 进表, 而它们各自的<b>符号</b>
+     * {@code t}/{@code kg}/{@code m} <b>照旧不进</b> —— 去黑话只动黑话。
      */
     private static final Map<String, String> COUNTING_DISPLAY = Map.ofEntries(
             Map.entry("jin", "斤"),
@@ -62,7 +75,35 @@ public final class UnitDisplayNames {
             Map.entry("sheet", "张"),
             Map.entry("tray", "托盘"),
             Map.entry("plate", "板"),
-            Map.entry("item", "项"));
+            Map.entry("item", "项"),
+            // ── 计数/包装的英文单词别名 (契约 systemAliases() 里有, 上一轮漏了) ──
+            Map.entry("pc", "件"),
+            Map.entry("piece", "件"),
+            Map.entry("pieces", "件"),
+            Map.entry("carton", "箱"),
+            // ── 计量量纲的英文【单词】—— 符号不翻, 单词要翻 ──
+            // prod 实测有存量: level2_unit / package_unit 各 1 行 "ton"
+            Map.entry("ton", "吨"),
+            Map.entry("tons", "吨"),
+            Map.entry("tonne", "吨"),
+            Map.entry("tonnes", "吨"),
+            Map.entry("gram", "克"),
+            Map.entry("grams", "克"),
+            Map.entry("kgs", "公斤"),
+            Map.entry("kilogram", "公斤"),
+            Map.entry("kilograms", "公斤"),
+            Map.entry("millimeter", "毫米"),
+            Map.entry("millimeters", "毫米"),
+            Map.entry("centimeter", "厘米"),
+            Map.entry("centimeters", "厘米"),
+            Map.entry("meter", "米"),
+            Map.entry("meters", "米"),
+            Map.entry("metre", "米"),
+            Map.entry("metres", "米"),
+            Map.entry("kilometer", "千米"),
+            Map.entry("kilometers", "千米"),
+            Map.entry("kilometre", "千米"),
+            Map.entry("kilometres", "千米"));
 
     private UnitDisplayNames() {
     }
