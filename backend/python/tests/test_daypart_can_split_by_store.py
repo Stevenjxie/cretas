@@ -156,6 +156,61 @@ async def test_price_role_sees_money_as_money():
 
 
 @pytest.mark.asyncio
+async def test_the_table_is_sorted_by_the_same_slot_the_lead_names():
+    """🔴 首段点名的店必须是表格第一行 —— 两者按**同一个口径**排。
+
+    📏 prod 实测（2026-08-18，表格原来按**总计**排）：
+
+        首段:       按门店看晚市：陆家嘴正大店最强 ¥1,480,432
+        表格第一行:  徐汇美罗城店  晚市 ¥1,470,600 / 午市 ¥724,470
+
+    徐汇总计 2,195,070 > 陆家嘴 2,188,797，而**晚市**陆家嘴更高。
+    两个数各自都对、口径也都标了 —— ⛔ 但让老板去核对为什么对不上，
+    花的就是「这东西说的话能信」那笔本钱。
+
+    ⚠️ 桩里特意做成**两个口径会给出不同第一名**：
+        徐汇  晚市 1,456,843 + 午市 900,000 = 2,356,843  ← 总计最高
+        陆家嘴 晚市 1,461,700 + 午市 700,000 = 2,161,700  ← 晚市最高
+    ⛔ 不这样构造的话，这条断言在两种实现下都绿（形态 B′：恒真式）。
+    """
+    skewed = [
+        {"store_name": "陆家嘴正大店", "daypart": "晚市", "bills": 4037,
+         "revenue": 1461700.10},
+        {"store_name": "陆家嘴正大店", "daypart": "午市", "bills": 2100,
+         "revenue": 700000.00},
+        {"store_name": "徐汇美罗城店", "daypart": "晚市", "bills": 4000,
+         "revenue": 1456843.36},
+        {"store_name": "徐汇美罗城店", "daypart": "午市", "bills": 2900,
+         "revenue": 900000.00},
+    ]
+    ans = await _answer(dimensions=("store",), store_rows=skewed)
+    text = ans.answer_text
+
+    lead = text.split("各门店分时段")[0]
+    assert "陆家嘴正大店" in lead, "首段点名的不是晚市最强那家\n" + lead
+
+    # 表格第一条数据行的门店名
+    body = text.split("各门店分时段")[1]
+    data_rows = [ln for ln in body.splitlines()
+                 if ln.startswith("|") and "---" not in ln]
+    assert len(data_rows) >= 3, f"表格没解析出来\n{body}"
+    first_store = data_rows[1].split("|")[1].strip()
+    assert first_store == "陆家嘴正大店", (
+        f"表格第一行是 {first_store}，而首段点名的是陆家嘴正大店 —— "
+        f"两者不是同一个排序口径\n{body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_table_declares_how_it_is_sorted():
+    """⛔ 一张不说自己怎么排的表，读的人得自己去推。"""
+    ans = await _answer(dimensions=("store",))
+    assert "按晚市营收从高到低" in ans.answer_text, (
+        "表格没写排序口径\n" + ans.answer_text
+    )
+
+
+@pytest.mark.asyncio
 async def test_meta_carries_the_store_projection():
     """机器可读侧也要有 —— 正文有表而 meta 没有就是投影丢失（形态 B 第 7 例）。"""
     ans = await _answer(dimensions=("store",))
