@@ -367,6 +367,23 @@ public class SalesOrder extends BaseEntity {
     @JsonProperty("priceWarnings")
     private List<String> priceWarnings = new ArrayList<>();
 
+    /**
+     * 「这东西发得出去吗」的<b>明示</b> (非阻断, 2026-08-18 Steve 拍板).
+     *
+     * <p>三档判定见 {@code SalesOrderStockAvailabilityService}: 有在手 → 不出文案;
+     * 无在手但有在途/在产 → 「当前 0, 预计 X 到货」; 两者都没有 → 「查不到入库记录 + 下一步」。
+     *
+     * <p>⛔ <b>第一步只提示、不拦截</b> —— prod 实测 F006 目录 516 个可下单对象里只有约 12 个
+     * (2.3%) 有在手/在途/在产信号, LIUSHANMEN 更是<b>一条库存记录都没有却有 8 张真实销售订单</b>,
+     * 硬上任何一档都会把系统卡死。拦截开关默认关闭, 见
+     * {@code SalesOrderStockAvailabilityService#ENFORCE_GATE_PROPERTY}。
+     *
+     * <p>不持久化 (@Transient); 仅在 createSalesOrder 返回值上有意义 (与 priceWarnings 同一通道)。
+     */
+    @Transient
+    @JsonProperty("stockAdvisories")
+    private List<String> stockAdvisories = new ArrayList<>();
+
     // ==================== 计算属性 ====================
 
     @Transient
