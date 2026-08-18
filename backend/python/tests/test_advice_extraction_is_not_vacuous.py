@@ -21,6 +21,21 @@ from smartbi.scripts.restaurant_advice_is_actionable_probe import (
     extract_advice,
 )
 
+# 🔴 上面那个 import 有**副作用**：探针模块在**模块顶层**就调 `bootstrap_probe()`，
+#    而它会 `set_factory_id()` —— 一个**全局 ContextVar**。
+#
+# ⚠️ 这比 PR #2813 那次更早一步：那次污染发生在**测试运行时**，一个 autouse
+#    fixture 就能兜住；这次发生在**collection（import）时**，fixture 还没上场。
+#    症状是隔壁 `test_tenant_ctx_plumbing::test_contextvar_propagates_across_awaits`
+#    （断言 `get_factory_id() is None`）红，而**本文件全绿** ——
+#    ▎坏的是我，红的是别人。
+#
+# ⇒ import 之后**立刻**把它按回去。⛔ 不用 `set_factory_id(None)`：
+#    那个函数把 None 翻译成 `INTERNAL_SENTINEL`，不是「未设置」。
+from smartbi import tenant_ctx as _tenant_ctx  # noqa: E402
+
+_tenant_ctx.current_factory_id.set(None)
+
 
 class _Spec:
     def __init__(self, dimensions):

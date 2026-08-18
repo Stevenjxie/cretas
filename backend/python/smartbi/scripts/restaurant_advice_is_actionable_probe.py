@@ -70,7 +70,11 @@ POSITIVE_CONTROL = "最近生意怎么样"
 
 #: 会撞上维度闸的问句。⛔ 不放「一定答得上」的 —— 那样一条建议都收不到。
 #: ⚠️ 每条都**明确带两层**或带一个已知不被服务的维度。
-QUESTIONS = [
+#:
+#: ⛔ 名字**不叫 `QUESTIONS`**：`restaurant_panorama_probe` 里已经有一个同名常量,
+#:    值完全不同。`test_no_same_named_constant_drifts` 当场把我拦下来了 ——
+#:    同名不同值正是形态 D 的长相, 而读代码的人不会去比两个文件。
+REFUSAL_QUESTIONS = [
     "哪家店折扣最多",
     "哪家店最缺货",
     "哪个食材涨得最多",
@@ -163,7 +167,7 @@ async def main() -> int:
         print("  [阳性对照] %-14s kind=%-14s tier=%-11s n=%d"
               % (POSITIVE_CONTROL, pc_kind, pc_tier, len(pc_text)))
 
-        for qi, q in enumerate(QUESTIONS):
+        for qi, q in enumerate(REFUSAL_QUESTIONS):
             key = "advice-r%d-q%d" % (rnd, qi)
             kind, text, tier, cat_n = await ask(pool, q, key)
             catalogue_ok = catalogue_ok and cat_n > 0
