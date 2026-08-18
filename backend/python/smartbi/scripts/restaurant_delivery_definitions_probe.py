@@ -104,6 +104,32 @@ _ACTION_WORDS = ("换成", "先问", "分开问", "可以问", "请选择", "请
 _CONTROL_TABLE = "哪家店卖得最好"        # 排行 ⇒ 必须给表
 _CONTROL_EXTRA = "最近损耗怎么样"        # 答案里有门店表 + 损耗类型 ⇒ 必须多说一层
 
+def _required_negation_tokens() -> tuple:
+    """产品自己登记的「免责措辞必须含的词」—— ⛔ 探针不维护第二份。
+
+    来源：`smartbi.gold.restaurant.phrasing.REQUIRED_TOKENS`
+    （那张表的注释原文：「池 → 每条变体都必须包含的标记（任一即可）。
+      ⛔ 新增带免责义务的池必须登记。」）
+
+    ⚠️ 只取**中文否定词**，⛔ 不取 `{scope}` / `{window}` / `{n}` 这类占位符 ——
+       它们是模板槽位，不是口径限制。
+    ⚠️ 读不到就**退回空**，让下面的固定词表兜底 —— ⛔ 不让探针因此起不来
+       （仪器的 fail-open：读不到登记表不等于产品没说口径）。
+    """
+    try:
+        from smartbi.gold.restaurant.phrasing import REQUIRED_TOKENS
+    except Exception:  # noqa: BLE001
+        return ()
+    out = []
+    for tokens in (REQUIRED_TOKENS or {}).values():
+        for t in tokens or ():
+            if isinstance(t, str) and t and "{" not in t:
+                out.append(t)
+    return tuple(sorted(set(out)))
+
+
+_REQUIRED_NEGATION_TOKENS = _required_negation_tokens()
+
 #: ② 的五个标记 —— 全是**代理判据**（词表匹配），逐个单独计数，
 #: ⛔ 不先合并成一个布尔，⛔ 不报「达标率」。
 #: 📏 2026-08-18 实测它们有判别力（不是近 0 也不是近 100）:
@@ -113,8 +139,25 @@ _EXTRA_MARKS = {
     "a_对比": re.compile(r"(最高|最低|最强|最弱|相差|高于|低于|领先|落后|"
                         r"差距主要来自|拆开看)"),
     # b) 口径限制：告诉他这个数**不能怎么读**
-    "b_口径": re.compile(r"(不代表|别把它读成|别读成|算不出来|没覆盖|分不开|"
-                        r"做不了|不在.{0,6}结论里|只能当参考|⛔)"),
+    # 🔴 2026-08-18 订正: 这条词表**漏掉了产品自己登记的否定词**。
+    #    📏 实测（另一条线报的）: `DISCOUNT_CLOSING` 有 **3 个轮转措辞变体**，
+    #       其中 **2 个用「不能」** —— 而这条正则只认「不代表」。
+    #       ⇒ 同一天、同一问句、两条代码路径返回不同变体，
+    #         我的 ② 读数因此**在同一份代码上抖**，而抖动源我没记录。
+    #
+    # ⛔ 修法不是「再加几个词」（那是形态 E 禁止的加启发式）——
+    #    产品**自己登记过**这张表: `phrasing.REQUIRED_TOKENS`
+    #    （注释原文:「池 → 每条变体都必须包含的标记（任一即可）。
+    #      ⛔ 新增带免责义务的池必须登记。」）
+    #    ⇒ 探针**读那一份**，⛔ 不自己维护第二份（形态 D）。
+    #    ⚠️ 那张表只覆盖「带免责义务的池」，不是口径词的全集 ——
+    #       所以是**并进来**，不是替换掉。这一点写在这里免得下一个人误读。
+    "b_口径": re.compile(
+        "(" + "|".join(
+            [re.escape(t) for t in _REQUIRED_NEGATION_TOKENS]
+            + [r"别把它读成", r"别读成", r"算不出来", r"没覆盖", r"分不开",
+               r"做不了", r"不在.{0,6}结论里", r"只能当参考", r"⛔"]
+        ) + ")"),
     # c) 异常点名：具体对象 + 「这不合常理」
     "c_异常": re.compile(r"🔴"),
     # d) 可执行动作

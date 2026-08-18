@@ -139,3 +139,57 @@ def test_the_action_wordlist_is_not_a_blanket():
         assert not any(w in clause for w in _ACTION_WORDS), (
             f"一句没有动作的话被判成有动作: {clause}"
         )
+
+
+# ── 🔴 `b_口径` 读产品自己的登记表，⛔ 不维护第二份 ───────────────────────
+
+def test_the_caliber_mark_reads_the_product_registry():
+    """⛔ 口径词表只此一份 —— 读 `phrasing.REQUIRED_TOKENS`。
+
+    📏 缺陷（另一条线实测报的）：`DISCOUNT_CLOSING` 有 **3 个轮转措辞变体**，
+       其中 **2 个用「不能」**，而探针的 `b_口径` 只认「不代表」
+       ⇒ 同一天、同一问句、两条代码路径返回不同变体，
+         ② 的读数因此**在同一份代码上抖**，而抖动源没被记录。
+
+    ⛔ 修法不是「再加几个词」（形态 E 禁止的加启发式）——
+       产品**自己登记过**那张表，探针读它。
+    """
+    from smartbi.gold.restaurant.phrasing import REQUIRED_TOKENS
+    from smartbi.scripts.restaurant_delivery_definitions_probe import (
+        _REQUIRED_NEGATION_TOKENS,
+    )
+
+    assert _REQUIRED_NEGATION_TOKENS, "一个都没读到 —— 探针没接上那张登记表"
+    # 登记表里每个**中文否定词**都要在探针的词表里
+    for tokens in REQUIRED_TOKENS.values():
+        for t in tokens:
+            if "{" in t:            # 占位符不是口径词
+                continue
+            assert t in _REQUIRED_NEGATION_TOKENS, (
+                f"产品登记了「{t}」而探针读不到 —— 两份又漂开了"
+            )
+    # ⛔ 阴性对照：占位符不许混进来（它们是模板槽位，不是口径限制）
+    for placeholder in ("{scope}", "{window}", "{n}"):
+        assert placeholder not in _REQUIRED_NEGATION_TOKENS, placeholder
+
+
+def test_every_rotating_discount_variant_hits_the_caliber_mark():
+    """🔴 承重：`DISCOUNT_CLOSING` 的**每一个**轮转变体都要命中 `b_口径`。
+
+    ⚠️ 措辞轮转是设计（防复读），⛔ 不该让读数跟着轮转抖。
+    """
+    from smartbi.gold.restaurant.phrasing import DISCOUNT_CLOSING
+
+    rx = _EXTRA_MARKS["b_口径"]
+    assert len(DISCOUNT_CLOSING) >= 2, "变体少于 2 个 —— 这条用例的前提变了"
+    for variant in DISCOUNT_CLOSING:
+        assert rx.search(variant), f"这个轮转变体命不中 b_口径:\n{variant}"
+
+
+def test_the_caliber_mark_is_still_not_a_blanket():
+    """🔴 阴性对照：并进登记表 ⛔ 不许让它变成恒真式。"""
+    rx = _EXTRA_MARKS["b_口径"]
+    for plain in ("今天营业额两百万",
+                  "晚市卖了 37,970 单",
+                  "模拟·徐汇美罗城店排第一"):
+        assert not rx.search(plain), f"一句纯陈述被判成有口径限制: {plain}"
