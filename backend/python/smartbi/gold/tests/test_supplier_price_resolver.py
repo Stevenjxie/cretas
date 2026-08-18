@@ -146,6 +146,58 @@ async def test_single_supplier_ingredients_are_not_compared(sources):
 
 
 @pytest.mark.asyncio
+async def test_the_counts_follow_coverage_not_a_hardcoded_pair(sources):
+    """⛔ 那两个数必须从 `coverage` 来 —— 换一份桩，数要跟着变。
+
+    ⚠️ 补写的：变异「把数写死成 3 家/40 种」第一轮**全绿**，
+       因为上一条用例的桩**恰好就是 3/40** —— 形态 C″
+       「变异到达了，但打在断言看不见的地方」。
+       ⇒ 判据必须是「换一份桩，数跟着变」，⛔ 不是「数对不对」。
+    """
+    sources(observation_count=500, spread={"items": []},
+            supplier_count=7, ingredient_count=91)
+
+    got = await R.resolve_supplier_price(
+        _Pool(), "MOCK_REST", 90, role="factory_super_admin", query="哪个供应商报价最贵"
+    )
+
+    assert "7 家供应商" in got.answer_text, got.answer_text
+    assert "91 种食材" in got.answer_text, got.answer_text
+    assert got.meta["supplier_count"] == 7
+    assert got.meta["ingredient_count"] == 91
+
+
+@pytest.mark.asyncio
+async def test_no_table_name_reaches_the_owner(sources):
+    """🔴 表名是给工程师的 —— 三态 + 无数据那一支都不许出现。
+
+    ⚠️ 补写的：变异「表名又给店长」第一轮**全绿** —— 那是**真的没守住**
+       （⛔ 不是变异没到达）。机器可读侧留在 `meta.missing_source` 里，不丢。
+    """
+    cases = [
+        dict(observation_count=0),
+        dict(observation_count=24, spread={"items": []},
+             supplier_count=0, ingredient_count=24),
+        dict(observation_count=80, spread={"items": []},
+             supplier_count=1, ingredient_count=12),
+        dict(observation_count=120, spread={"items": []},
+             supplier_count=3, ingredient_count=40),
+    ]
+    seen_meta = False
+    for kw in cases:
+        sources(**kw)
+        got = await R.resolve_supplier_price(
+            _Pool(), "MOCK_REST", 90, role="factory_super_admin",
+            query="哪个供应商报价最贵")
+        for tech in ("agg_supplier_price", "数据表", "字段", "normalized_name"):
+            assert tech not in got.answer_text, (
+                f"技术词漏给了店长: {tech}\n{got.answer_text}")
+        seen_meta = seen_meta or (got.meta.get("missing_source") == "agg_supplier_price")
+    # 阳性对照：表名没消失，只是挪到了机器可读侧
+    assert seen_meta, "表名连 meta 里也没有了 —— 那是丢了，不是收好了"
+
+
+@pytest.mark.asyncio
 async def test_no_supplier_recorded_says_the_column_is_empty(sources):
     """🔴🔴 prod 上真正命中的那一态 —— 而原文在这一态上是**误导的**。
 
