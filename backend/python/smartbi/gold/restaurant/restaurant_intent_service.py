@@ -656,6 +656,53 @@ def _dimension_gap_advice(spec: RestaurantQuerySpec,
     )
 
 
+async def _mentions_backed_by_catalogue(
+    mentions: Sequence[str], options: Sequence[str],
+) -> Tuple[str, ...]:
+    """哪些提及**有可能**是这家租户的门店。查不到的丢掉。
+
+    🔴 **归一 ≠ 核对**（owner 2026-08-18 的原话）:
+       `_resolve_store_mentions` 做的是「简称 → 全名」, 而「有几家店」压根不是
+       店名, 归一必然失败 —— **失败之后走哪条路**才是缺陷所在。
+       它走的是「原路」= 保留正则抽出来的原文, 于是那个原文被当成门店名,
+       下游拿它拒答: 「你问的是某家门店, 我这次挑到的却是全店合计」。
+
+    ⛔ **不新写「像不像门店名」的判据** —— 用 `_resolve_store_mentions` 用的
+       同一个 `resolve_mention`。它**不查库**(候选清单就是传进去的目录),
+       所以这里不给库加一次查询, 也不可能越权。
+
+    ⚠️ **fail-open 是既有纪律**（与菜单核对同一条）:
+       目录为空 / 消解器抛异常 ⇒ **一律放行**。
+       ▎判据坏了要退回「不拦」, ⛔ 不能退回「拦住」——
+       ▎后者会把一个能答的问题变成拒答, 而那正是本次要修的病。
+    """
+    kept = tuple(m for m in mentions if m)
+    if not kept or not options:
+        return kept                                  # fail-open: 没有目录可比
+    known = set(options)
+    from smartbi.canonical.entity_resolution.shortlist import resolve_mention
+
+    out: List[str] = []
+    for mention in kept:
+        if mention in known:                         # 本来就是全名
+            out.append(mention)
+            continue
+        try:
+            decision = await resolve_mention(mention, tuple(options))
+        except Exception:  # noqa: BLE001 — 核对失败绝不能把原本的路弄没
+            logger.exception(
+                "[restaurant-intent] 门店核对异常, 放行: mention=%r", mention)
+            out.append(mention)
+            continue
+        if decision.is_unique or decision.is_ambiguous:
+            out.append(mention)                      # 对得上（唯一或多家）
+        else:
+            logger.info(
+                "[restaurant-intent] 这个提及在门店目录里查不到, 不当门店名: "
+                "%r (%s: %s)", mention, decision.stage, decision.detail)
+    return tuple(out)
+
+
 def _execution_mismatch(
     spec: RestaurantQuerySpec,
     plan: Tuple[str, ...],
@@ -1992,9 +2039,34 @@ async def tiered_answer(
             or extract_store_mentions(resolver_query)
             or extract_store_mentions(query)
         )
+        # 🔴 归一 ≠ 核对（2026-08-18 prod 实测，MOCK_REST，3 轮零抖动）
+        #
+        #     「有几家店是亏钱的」
+        #        store_slot='有几家店'  store_scope='all'  dims=()
+        #        → 「你问的是某家门店，我这次挑到的却是全店合计，所以这次我没敢算」
+        #     「有没有店是亏钱的」（对照组，3/3 答上）
+        #        → 「10 家门店中**没有毛利为负的门店**」
+        #
+        # ▎产品**完全答得出**这个问题，是它自己造的槽位把它拦了:
+        #   拒答理由念的正是 `store_slot`(说「某家门店」)与 `store_scope='all'`
+        #   (说「全店合计」)的矛盾, 而那个矛盾来自一个**根本不是门店名**的值。
+        #
+        # 成因是 fallthrough: `_resolve_store_mentions` 消解不到时「走原路」,
+        # 而走原路就是**保留正则抽出来的原文** ——
+        # ▎形态 A¹⁰: 兜底把「我不知道这是不是门店」翻译成「它就是门店」。
+        #
+        # ⛔ 复用既有消解器 `resolve_mention`（`_resolve_store_mentions` 用的
+        #    同一个, 且它**不查库** —— 候选清单就是传进去的目录）,
+        #    ⛔ 不新写第二份「像不像门店名」的判据(形态 D)。
+        store_mentions = await _mentions_backed_by_catalogue(
+            store_mentions, getattr(spec, "store_options", ()) or ())
+        _catalogued_slot = getattr(spec, "store_slot", None)
+        if _catalogued_slot and not await _mentions_backed_by_catalogue(
+                (_catalogued_slot,), getattr(spec, "store_options", ()) or ()):
+            _catalogued_slot = None
         store_mention = (
             (store_mentions[0] if len(store_mentions) == 1 else None)
-            or getattr(spec, "store_slot", None)
+            or _catalogued_slot
             if ("RESTAURANT_OPS_STORE_MARGIN" in plan
                 or "RESTAURANT_OPS_GROSS_MARGIN" in plan
                 or "RESTAURANT_OPS_SALES_SUMMARY" in plan)
