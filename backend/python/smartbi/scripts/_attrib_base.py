@@ -32,7 +32,7 @@ FID = "MOCK_REST"
 #:    一次回 clarification(「你想基于哪个时间范围」)。⇒ 单次 A/B 不作数,
 #:    跑 ROUNDS 轮并把每轮的 kind 逐条贴出来, ⛔ 不只贴汇总。
 ROUNDS = int(os.environ.get("ATTRIB_ROUNDS", "3"))
-QUESTIONS = [
+DECISION_QUESTIONS = [
     "我要不要关掉最差的那家店",
 ]
 
@@ -110,12 +110,12 @@ async def main() -> int:
 
     label = os.environ.get("ATTRIB_LABEL", "<未标注>")
     tally = []
-    for i, q in enumerate(QUESTIONS * ROUNDS):
+    for i, q in enumerate(DECISION_QUESTIONS * ROUNDS):
         SEEN.clear()
         res = await _ask(pool, q, f"ab-{label}-{i}")
         text = res.get("answer_text") or ""
         print("=" * 78)
-        print(f"[{label}] 第 {i + 1}/{len(QUESTIONS) * ROUNDS} 轮   问: {q}")
+        print(f"[{label}] 第 {i + 1}/{len(DECISION_QUESTIONS) * ROUNDS} 轮   问: {q}")
         print(f"  kind={res.get('kind')!r}  intent={res.get('intent')!r}")
         print(f"  synthesize 被调用 {len(SEEN)} 次")
         for rec in SEEN:

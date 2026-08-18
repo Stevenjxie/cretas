@@ -34,7 +34,7 @@ from smartbi.tenant_ctx import set_factory_id  # noqa: E402
 
 TENANTS = ["MOCK_REST", "DEMO_REST", "RES_3101_009", "R_GML_DEMO", "R_XMX_CHAIN"]
 
-QUESTIONS = [
+PLAN_PROBE_QUESTIONS = [
     "我要不要关掉最差的那家店",
     "最差的那家店是哪家",
     "哪家店拖后腿",
@@ -52,7 +52,7 @@ def part_a() -> None:
     print("A  plan_dimensions 读数 (纯函数, 无 DB, 无 LLM)")
     print("=" * 78)
     engine = ComprehensiveSynthesisEngine.__new__(ComprehensiveSynthesisEngine)
-    for q in QUESTIONS:
+    for q in PLAN_PROBE_QUESTIONS:
         for has_history in (False, True):
             plan = ComprehensiveSynthesisEngine.plan_dimensions(
                 engine, q, has_history=has_history)
