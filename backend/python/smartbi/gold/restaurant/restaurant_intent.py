@@ -4936,10 +4936,20 @@ async def _is_new_topic_not_a_reply(
          `promoted_exact` / `llm_unavailable` 全是**零 token** 路径，
          契约是 `assert llm.await_count == 0`（「T3 挂了也能续接」）。
          ▎T3 都挂了，就没有资格再问一次 T3。
-    · `source_tier == "llm"`
-      —— 📏 三轮链用例：独立编译「本月」**命中计划缓存**，返回完整
+    · ~~`source_tier == "llm"`~~ **已删（2026-08-18 当天）**
+      —— 加它的理由是三轮链用例：独立编译「本月」命中计划缓存、返回完整
          `GROSS_MARGIN` spec ⇒ 多轮链断掉。
-         ▎判据要的是「T3 现在看这句话认为它完整」，⛔ 不是「这句话以前出现过」。
+         🔴 但那个理由**站不住**：计划缓存的键是
+         `(factory_id, 归一化问句, version)` —— 它存的**就是「这句话单独编译
+         的结果」**。⇒ 命中缓存恰恰是「这句话是完整问句」的**更强**证据。
+         三轮链真正的问题在**桩**：`AsyncMock` 的 `side_effect` 是顺序队列，
+         判据多调一次把 `third_plan` 吃掉了；补一条**孤立「本月」**的真实形状
+         （`intent=None`）之后，这个 tier 条件就不再需要。
+      📏 删它的直接原因（prod 全景轮2 插桩实测）：
+         `a_intent=BUSINESS_OPTIMIZATION a_clar=False cont=同一个` 三条全过，
+         **只有 `a_tier=plan_cache` 挡住** —— 而那个缓存是**老板轮1 问过同一句**
+         留下的，是正常状态，不是异常。
+      ⚡ 副作用是好的：命中缓存时这次判定**零 LLM 调用**。
     · `intent != continued_intent`
       —— 语义上真正的那一条：**换话题 = 问的是另一件事**。
          📏 缺陷场景实测：独立 `BUSINESS_OPTIMIZATION` vs 续接 `STORE_MARGIN`。
@@ -4982,7 +4992,6 @@ async def _is_new_topic_not_a_reply(
         alone is not None
         and alone.intent
         and not alone.clarification_needed
-        and getattr(alone, "source_tier", None) == "llm"
         # 🔴 `intent` **相同**才是这个场景 —— 我第一版写的是「不同」，被 prod 读数否掉:
         #    实测续接**已经认出了正确的 intent**(BUSINESS_OPTIMIZATION)，
         #    问题不在意图，在**槽位**：pending 的「哪组门店 / 哪个时间范围」
