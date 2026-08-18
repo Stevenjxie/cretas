@@ -146,7 +146,11 @@ def test_it_reuses_the_existing_dimension_term_table():
 
     from smartbi.agent import synthesis_engine as se
 
-    tree = ast.parse(inspect.getsource(se._narrative_grounding_violations))
+    # ⚠️ 2026-08-18: 判定逻辑搬进了 `_grounding_findings`，
+    #    `_narrative_grounding_violations` 只剩一个**薄视图**（取描述那一半）。
+    #    ⇒ 锚点跟着搬。这**不是**「断言守旧行为」，是我搬了家而锚点没跟着搬
+    #      （形态 D 的近亲：同一件事的两个名字，改一个数不到另一个）。
+    tree = ast.parse(inspect.getsource(se._grounding_findings))
     refs = [
         node
         for node in ast.walk(tree)
@@ -154,7 +158,17 @@ def test_it_reuses_the_existing_dimension_term_table():
     ]
     assert len(refs) == 2, (
         f"真正引用了 {len(refs)} 次 —— 期望 2 次"
-        f"（缺失那条 + 本次新增的反向那条）。⛔ 不许新造第二张词表"
+        f"（缺失那条 + 反向那条）。⛔ 不许新造第二张词表"
+    )
+
+    # 🔴 阴性对照：薄视图里**一条判定都不许有** —— 否则就是两份判定（形态 D）。
+    thin = ast.parse(inspect.getsource(se._narrative_grounding_violations))
+    thin_refs = [
+        node for node in ast.walk(thin)
+        if isinstance(node, ast.Name) and node.id == "_MISSING_DIMENSION_TERMS"
+    ]
+    assert not thin_refs, (
+        "薄视图里出现了判定逻辑 —— 同一件事长出了第二份"
     )
 
 
