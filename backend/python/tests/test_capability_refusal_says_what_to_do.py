@@ -35,16 +35,35 @@ def test_it_tells_him_what_to_do():
     assert "直接说它的名字" in text, "没说他要干什么\n" + text
 
 
+def _example_in_action_line(text: str) -> str:
+    """把**动作那一句**里的例子抠出来。
+
+    ⚠️ ⛔ 不能用「整段里有没有这个词」—— 那是恒真式：
+       「我这儿有的是：客流和销量（比如销量）」这一段本来就含那个词。
+       变异「例子写死成『营收』」在第一版断言下**全绿**，就是栽在这里。
+    """
+    import re
+
+    for line in (text or "").splitlines():
+        if "直接说它的名字" in line:
+            m = re.search(r"[「『]([^」』]*)[」』]", line)
+            return m.group(1) if m else ""
+    return ""
+
+
 def test_the_example_comes_from_the_computed_list():
     """⛔ 例子必须取自**查库算出来的**那份清单，不是写死的。
 
     ⚠️ 与「建议词写死成『门店或菜品』」同型 —— 那次写死之后，
        当 `extra` 恰好是门店时它建议老板「把门店换成门店」。
+
+    🔴 判据钉的是**动作那一句里的名字**，⛔ 不是「整段里有没有这个词」
+       （见 `_example_in_action_line` 的注释：后者是恒真式，被变异打穿过）。
     """
     a = render_capability_refusal(["翻台率"], _GROUPS)
     b = render_capability_refusal(["翻台率"], (("客流和销量", "销量"),))
-    assert "营收" in a and "销量" in b, (a, b)
-    assert a != b
+    assert _example_in_action_line(a) == _GROUPS[0][1], _example_in_action_line(a)
+    assert _example_in_action_line(b) == "销量", _example_in_action_line(b)
 
 
 def test_it_does_not_hand_out_a_copyable_question():
