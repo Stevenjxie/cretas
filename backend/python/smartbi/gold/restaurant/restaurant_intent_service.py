@@ -48,6 +48,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
     resolve_output_preference,
     unsupported_requirements_disclosure,
 )
+from smartbi.services.llm_fallback_logger import run_capture_with_history
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _SERVICE_DISPATCHED_WINDOW_AWARE,
     _resolve_sales_date_range,          # ← 新增
@@ -2319,11 +2320,14 @@ async def tiered_answer(
                     generic.get("cell"), query[:60])
                 fallback_text = _prepend_action_warning(
                     str(generic.get("answer_text") or ""), action_warning)
-                asyncio.create_task(log_intent_capture(
-                    pool, spec, factory_id=factory_id, query=query,
-                    answer=fallback_text, contract_pass=False, served=True,
-                    source=capture_source,
-                    contract_missing=contract.missing,
+                asyncio.create_task(run_capture_with_history(
+                    log_intent_capture(
+                        pool, spec, factory_id=factory_id, query=query,
+                        answer=fallback_text, contract_pass=False, served=True,
+                        source=capture_source,
+                        contract_missing=contract.missing,
+                    ),
+                    pool, history,
                 ))
                 out = {
                     "kind": "answer",
@@ -2416,12 +2420,15 @@ async def tiered_answer(
                 )
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)
-            asyncio.create_task(log_intent_capture(
-                pool, spec, factory_id=factory_id, query=query,
-                answer=safe_text, contract_pass=False, served=False,
-                source=capture_source,
-                contract_missing=contract.missing,
-                rejected_answer=answer_text,
+            asyncio.create_task(run_capture_with_history(
+                log_intent_capture(
+                    pool, spec, factory_id=factory_id, query=query,
+                    answer=safe_text, contract_pass=False, served=False,
+                    source=capture_source,
+                    contract_missing=contract.missing,
+                    rejected_answer=answer_text,
+                ),
+                pool, history,
             ))
             failed_result = {
                 "kind": "clarification",
@@ -2552,10 +2559,13 @@ async def tiered_answer(
             result["result_meta"] = result_meta
         if action_warning:
             result["warning"] = action_warning
-        asyncio.create_task(log_intent_capture(
-            pool, spec, factory_id=factory_id, query=query,
-            answer=answer_text, contract_pass=contract_pass, served=True,
-            source=capture_source,
+        asyncio.create_task(run_capture_with_history(
+            log_intent_capture(
+                pool, spec, factory_id=factory_id, query=query,
+                answer=answer_text, contract_pass=contract_pass, served=True,
+                source=capture_source,
+            ),
+            pool, history,
         ))
         return result
     except Exception as e:
