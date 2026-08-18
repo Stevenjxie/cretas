@@ -7928,6 +7928,91 @@ async def resolve_store_margin(
     )
 
 
+#: 缺口清单第 17 项(`docs/decisions/2026-08-18-餐饮AI架构-完整版-owner定稿.md`
+#: 例 13): 窗口内 0 行时只报「最后一条记录是什么时候」+ 把排查交给老板,
+#: ⛔ 不猜「没同步」还是「真没开张」—— AI 判断不了这家店有没有开张。
+#:
+#: 只登记本文件里已实测「同一张日粒度表、同一种整窗口 0 行语义」的 resolver
+#: 使用; ⛔ 不是任意字符串, 表名只能来自这个 allowlist(下面的查询把它拼进
+#: SQL, 靠这张表挡掉除硬编码常量以外的任何输入)。
+_EMPTY_WINDOW_HINT_TABLES = {
+    "agg_daily": "date",
+}
+
+
+async def _empty_window_last_record_date(
+    smartbi_pool,
+    factory_id: str,
+    *,
+    table: str,
+    window_start: Optional[date],
+) -> Optional[date]:
+    """窗口内 0 行时, 查「这张表上一条记录是哪天」—— 只用于第 17 项的诚实
+    提示句, ⛔ 不用于任何业务判断。
+
+    只在能诚实回答时才返回日期, 否则一律 None(调用方必须整句不说, 不许拿
+    None 拼出「一直没有数据」这种同样是猜测的话):
+
+      - `window_start` 是 None: 调用方自己都没有一个明确的窗口起点可比较
+        (例如「全部历史」的趋势查询), 没有「之后没有数据上来」这个参照点。
+      - 表里在 `window_start` 之前一条记录都没有: 从来没有过数据, 不是
+        「停止上传」, 是完全不同的另一句话 —— 不在这条判据的实测范围内,
+        宁可不说(设计卡反目标第一条)。
+      - `window_start` 之后(含当天)仍然有记录: 说明这不是「停止上传」,
+        是这段窗口本身是个孤立缺口(前后都有数据) —— 「之后没有数据上来」
+        会是一句假话, 宁可不说。
+
+    任何查询异常(含测试里用简化 stub 代替真连接池)一律吞掉返回 None:
+    这是一句锦上添花的提示, 不能把主答案拖垮。
+    """
+    if window_start is None or table not in _EMPTY_WINDOW_HINT_TABLES:
+        return None
+    date_col = _EMPTY_WINDOW_HINT_TABLES[table]
+    try:
+        async with smartbi_pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
+            row = await conn.fetchrow(
+                f"""
+                SELECT
+                  MAX({date_col}) FILTER (WHERE {date_col} < $2) AS last_before,
+                  COUNT(*) FILTER (WHERE {date_col} >= $2) AS rows_at_or_after
+                FROM {table}
+                WHERE factory_id = $1
+                """,
+                factory_id, window_start,
+            )
+    except Exception:
+        logger.debug(
+            "empty-window last-record hint query failed "
+            "(table=%s, factory=%s) — omitting the hint sentence rather "
+            "than guessing",
+            table, factory_id, exc_info=True,
+        )
+        return None
+    if row is None:
+        return None
+    last_before = row["last_before"]
+    if last_before is None:
+        return None
+    if (row["rows_at_or_after"] or 0) > 0:
+        return None
+    return last_before
+
+
+def _empty_window_hint_sentence(last_record: Optional[date]) -> str:
+    """把「最后一条记录是哪天」拼成第 17 项要求的那句话 —— 只报事实、
+    只把排查交给老板, ⛔ 不替他判断「是没同步还是没开张」。
+    """
+    if last_record is None:
+        return ""
+    return (
+        f"最后一条记录是 {_date_text(last_record)}，之后没有数据上来。"
+        "麻烦排查一下 POS 是不是没在同步数据。"
+    )
+
+
 async def resolve_sales_summary(
     smartbi_pool,
     factory_id: str,
@@ -8168,6 +8253,13 @@ async def resolve_sales_summary(
             "先确认营业流水同步完整。"
             if asks_prohibited_actions else ""
         )
+        # 缺口清单第 17 项: 只报「最后一条记录是什么时候」+ 交给老板排查,
+        # ⛔ 不猜是没同步还是真没开张。查不到就整句不说(见 helper docstring)。
+        last_record = await _empty_window_last_record_date(
+            smartbi_pool, factory_id, table="agg_daily", window_start=date_range[0],
+        )
+        empty_window_hint = _empty_window_hint_sentence(last_record)
+        empty_window_suffix = f"\n{empty_window_hint}" if empty_window_hint else ""
         return OpsAnswer(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
@@ -8175,6 +8267,7 @@ async def resolve_sales_summary(
                 f"{actual_window}没有可用的营收和订单数据。{comparison_note}"
                 "没有用全部历史或其他日期替代。"
                 f"请先确认营业流水已经同步，再按同一时间范围重试。{no_data_guard}"
+                f"{empty_window_suffix}"
             ),
             charts=[],
             kpis=[],
@@ -8184,6 +8277,9 @@ async def resolve_sales_summary(
                 "window_start": _date_text(date_range[0]) if date_range[0] else None,
                 "window_end": _date_text(date_range[1]) if date_range[1] else None,
                 "comparison": comparison_meta,
+                "last_record_before_window": (
+                    _date_text(last_record) if last_record else None
+                ),
             },
         )
 
@@ -8617,15 +8713,30 @@ async def resolve_trend_analysis(
         return f"¥{v:,.2f}" if can_see_money else "***"
 
     if not monthly:
+        # 缺口清单第 17 项: 只报「最后一条记录是什么时候」+ 交给老板排查,
+        # ⛔ 不猜是没同步还是真没开张。查不到就整句不说(见 helper docstring)。
+        # window[0] 为 None 时(问的是「全部历史」且真的一行都没有)helper 会
+        # 主动返回 None —— 那种情况没有「之后没有数据上来」这个参照点。
+        last_record = await _empty_window_last_record_date(
+            smartbi_pool, factory_id, table="agg_daily", window_start=window[0],
+        )
+        empty_window_hint = _empty_window_hint_sentence(last_record)
+        empty_window_suffix = f"\n{empty_window_hint}" if empty_window_hint else ""
         return OpsAnswer(
             code="RESTAURANT_OPS_TREND_ANALYSIS",
             title="营收趋势分析",
             answer_text=(
                 "暂无按日期拆分的营业数据，暂时无法计算月度趋势和同比环比。\n"
                 "请先导入包含营业日期和实收金额的完整数据。"
+                f"{empty_window_suffix}"
             ),
             charts=[], kpis=[],
-            meta={"all_history": True, "no_data": True},
+            meta={
+                "all_history": True, "no_data": True,
+                "last_record_before_window": (
+                    _date_text(last_record) if last_record else None
+                ),
+            },
         )
 
     def _parse_daily_date(item: Dict[str, Any]) -> Optional[date]:
@@ -9724,13 +9835,26 @@ async def resolve_discount_summary(
     window_label = _range_text(start, end)
 
     if revenue <= 0:
+        # 缺口清单第 17 项: 只报「最后一条记录是什么时候」+ 交给老板排查,
+        # ⛔ 不猜是没同步还是真没开张。查不到就整句不说(见 helper docstring)。
+        last_record = await _empty_window_last_record_date(
+            smartbi_pool, factory_id, table="agg_daily", window_start=start,
+        )
+        empty_window_hint = _empty_window_hint_sentence(last_record)
+        empty_window_suffix = f"\n{empty_window_hint}" if empty_window_hint else ""
         return OpsAnswer(
             code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
             title=f"折扣力度（{window_label}）",
             answer_text=(
                 f"{window_label}没有营收数据，折扣占比没有分母，因此不给出比率。"
+                f"{empty_window_suffix}"
             ),
-            charts=[], kpis=[], meta={"no_data": True, "window_label": window_label},
+            charts=[], kpis=[], meta={
+                "no_data": True, "window_label": window_label,
+                "last_record_before_window": (
+                    _date_text(last_record) if last_record else None
+                ),
+            },
         )
 
     lines = [f"**折扣力度（{window_label}）：**", ""]
