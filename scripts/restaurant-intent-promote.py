@@ -4,6 +4,11 @@
   python scripts/restaurant-intent-promote.py --list
       连 smartbi 库聚合 T3(LLM 层)候选, 打印评审表(不写任何东西)。
 
+  python scripts/restaurant-intent-promote.py --counts
+      机器可读一行 (candidates=N recommended=N misses=N), 供
+      scripts/cron/restaurant-flywheel-promotion-backlog-daily.sh 这类跑批
+      脚本 grep -oP 解析。同样不写任何东西, 只是 --list 的精简版。
+
   python scripts/restaurant-intent-promote.py --apply reviewed.json
       reviewed.json = 人工从 --list 输出里挑出的条目, 形如:
         [
@@ -229,6 +234,37 @@ async def _llm_review_desk(min_count: int, limit: int, factory_id: str) -> None:
     print("⛔ 本命令不写库。确认后把要晋升的写进 JSON, 再跑 --apply。")
 
 
+async def _counts(min_confidence: float, min_count: int, limit: int, factory_id: str) -> None:
+    """机器可读一行输出 (`candidates=N recommended=N misses=N`)，给
+    `scripts/cron/restaurant-flywheel-promotion-backlog-daily.sh` 这类跑批
+    脚本解析 —— `--list` 是给人看的表格，不适合 shell `grep -oP`。
+
+    只读，与 `_list_candidates`/`_list_misses` 复用同一批聚合函数，不新造
+    第二套查询 (形态 D: 同一件事两份一定会漂)。
+
+    连不上库时打印 `counts_unavailable=true` 而不是让异常冒出去 —— 跑批脚本
+    据此判三态里的 rc=2 (这次没量到), 与 `time-phrase-backlog-daily.sh` 的
+    `INSTRUMENT DEAD` 分支同一个判据: 用**这一行有没有解析出数字**区分
+    「没问题」和「没量到」, 而不是「进程退出码」(退出码在 CLI 这一层永远是 0,
+    真正三态在 cron 脚本里裁)。
+    """
+    pool = await _open_pool()
+    if pool is None:
+        print("counts_unavailable=true")
+        return
+    try:
+        candidates = await aggregate_candidates(
+            pool, min_confidence=min_confidence, min_count=min_count, limit=limit,
+            factory_id=factory_id,
+        )
+        misses = await aggregate_misses(pool, limit=limit, factory_id=factory_id)
+    except Exception as exc:
+        print(f"counts_unavailable=true error={exc}")
+        return
+    recommended = sum(1 for c in candidates if c["recommended"])
+    print(f"candidates={len(candidates)} recommended={recommended} misses={len(misses)}")
+
+
 async def _list_misses(limit: int, factory_id: str) -> None:
     from smartbi.config import get_pg_pool
 
@@ -365,6 +401,9 @@ if __name__ == "__main__":
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--list", action="store_true", help="连库列出晋升候选 (dry-run, 不写任何东西)")
+    ap.add_argument("--counts", action="store_true",
+                    help="机器可读一行输出 (candidates=N recommended=N misses=N)，"
+                         "给跑批脚本解析；不写任何东西")
     ap.add_argument("--misses", action="store_true",
                     help="连库列出 delegate:false miss 复盘 (tiered 没接住的问法)")
     ap.add_argument("--list-routes", action="store_true", dest="list_routes",
@@ -422,6 +461,9 @@ if __name__ == "__main__":
         asyncio.run(_llm_review_desk(args.min_count, args.limit, args.factory_id))
     elif args.list:
         asyncio.run(_list_candidates(
+            args.min_confidence, args.min_count, args.limit, args.factory_id))
+    elif args.counts:
+        asyncio.run(_counts(
             args.min_confidence, args.min_count, args.limit, args.factory_id))
     elif args.misses:
         asyncio.run(_list_misses(args.limit, args.factory_id))
