@@ -107,10 +107,28 @@ CACHE_CLEARERS = (
 )
 
 #: `_execution_mismatch` 的三个可消解入参槽。⛔ 顺序无关，逐个试。
-SLOTS = ("store_dish", "dish_mention", "store_mention")
+#: ⚠️ 名字**不能**叫 `SLOTS` —— `t7_deepseek_acceptance.py` 里已经有一个
+#: `SLOTS`(LLM 槽名)，同名不同值会被 `test_no_drifted_duplicate_constants`
+#: 判成常量漂移。📏 那道闸是 CI 抓到的，我本地两次 `-k` 过滤(`probe or script`
+#: / `restaurant`)**都没选中它** —— 又一次「过滤器让『没有失败』和『我没跑到它』
+#: 变成同一个读数」。
+MISMATCH_SLOTS = ("store_dish", "dish_mention", "store_mention")
 
 REAL_MISMATCH = svc._execution_mismatch
 CALLS = []
+
+#: 🔴「今天一次重试都没有」这句话，⛔ 不能靠读代码下结论（`_t3_llm_parse` 有
+#: 4 个调用点，看代码只能说「它们**看起来**是四条不同分支」）。这里把它变成
+#: **行为读数**：数**同一次** `parse_restaurant_query` 里 T3 被调了几次。
+#:   ≤1  ⇒ 没有重试（本缺口后半确实缺）
+#:   ≥2  ⇒ 已经有重试了，那本缺口的前提本身就错了
+REAL_T3 = ri._t3_llm_parse
+T3_CALLS = []
+
+
+async def _recording_t3(*args, **kwargs):
+    T3_CALLS.append(1)
+    return await REAL_T3(*args, **kwargs)
 
 
 def _recording_mismatch(spec, plan, *, dish_mention, store_mention, store_dish):
@@ -154,7 +172,7 @@ def stacked_conflicts(call):
         if reason is None:
             break
         driver = None
-        for slot in SLOTS:
+        for slot in MISMATCH_SLOTS:
             if args[slot] is None:
                 continue
             trial = dict(args)
@@ -178,13 +196,15 @@ async def run_once(pool, query, session_key):
     """完全复刻 `gold_reads.py` 那条生产序列。"""
     clear_caches()
     before = len(CALLS)
+    T3_CALLS.clear()
     set_factory_id(FID)
     async with rr.dish_catalogue_scope(pool, FID):
         spec = await ri.parse_restaurant_query(
             query, pool, factory_id=FID, session_key=session_key,
             semantic_first=True,
         )
-    row = {"q": query}
+    # ⛔ 在 parse 之后立刻取 —— 问的是「**同一次规划**里 T3 被调了几次」。
+    row = {"q": query, "t3_n": len(T3_CALLS)}
     if spec is None:
         return row | {"kind": "spec-None", "authority": "-", "calls": []}
     row |= {
@@ -232,7 +252,9 @@ async def main():
         print("rc=2 LLM 槽没有活账号: %s" % "、".join(ctx.llm_dead_slots))
         return 2
     svc._execution_mismatch = _recording_mismatch
-    print("录音器已挂在 svc._execution_mismatch 上（只记录，不改行为）")
+    ri._t3_llm_parse = _recording_t3
+    print("录音器已挂在 svc._execution_mismatch 与 ri._t3_llm_parse 上"
+          "（只记录，不改行为）")
 
     # ── 阴性对照：同一句两遍必须逐字相同 ──────────────────────────────────
     probe_q = "最近损耗怎么样"
@@ -339,6 +361,31 @@ async def main():
     if len(ctrl_layers) < 2:
         print("rc=2 阳性对照只数出 %d 层 —— 剥离仪器数不出第二层，"
               "「多冲突 0 条」这个读数作废" % len(ctrl_layers))
+        return 2
+    # 阴性对照：一次没有冲突的调用，必须读出 **0 层** ——
+    # ⛔ 否则「层数」这个量恒 ≥1，多/单的区分就没意义了。
+    clean = [c for c in CALLS if not c["result"]]
+    if clean:
+        clean_layers, _ = stacked_conflicts(clean[0])
+        print("剥离仪器阴性对照（一次没有冲突的调用）: %d 层 %s"
+              % (len(clean_layers), "✅" if not clean_layers else "🔴 恒 ≥1，读数作废"))
+        if clean_layers:
+            return 2
+
+    # ── 🔴「今天一次重试都没有」—— 这是**行为读数**，⛔ 不是读代码 ─────────
+    t3_counts = [r.get("t3_n", 0) for r in rows]
+    dist = {}
+    for n in t3_counts:
+        dist[n] = dist.get(n, 0) + 1
+    print("\n同一次规划里 T3(`_t3_llm_parse`) 被调用的次数分布: %s"
+          % ", ".join("%d 次→%d 条" % (k, dist[k]) for k in sorted(dist)))
+    print("  最大值 = %d  ⇒ %s"
+          % (max(t3_counts) if t3_counts else 0,
+             "**一次重试都没有**（本缺口后半确实缺）"
+             if (max(t3_counts) if t3_counts else 0) <= 1
+             else "🔴 已经有重试了 —— 本缺口的前提本身就错了"))
+    if sum(t3_counts) == 0:
+        print("rc=2 T3 一次都没被调用 —— 录音器没接上，这条读数作废")
         return 2
 
     # ── 跨闸冲突计数：⛔ 不只看 `_execution_mismatch` 那一道 ─────────────
