@@ -5181,14 +5181,6 @@ class StoreMentionResolution:
     aliases: Tuple[Tuple[str, str], ...] = ()
     ambiguous: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
-    def alias_for(self, mention: Optional[str]) -> Optional[str]:
-        if not mention:
-            return None
-        for raw, canonical in self.aliases:
-            if raw == mention:
-                return canonical
-        return None
-
     def first_ambiguous(self) -> Optional[Tuple[str, Tuple[str, ...]]]:
         return self.ambiguous[0] if self.ambiguous else None
 
@@ -6228,69 +6220,30 @@ def _is_explicit_store_directory_query(query: str) -> bool:
     )
 
 
-def _llm_rewrote_the_name_to_a_catalogue_entry(
-    value: Any,
-    store_resolution: Optional[StoreMentionResolution],
-) -> Optional[str]:
-    """模型**自己把简称改写成了库里的全名**时, 认下它 —— 但只在
-    「老板自己的话也唯一指向同一家店」的前提下。
-
-    🔴 2026-08-18 prod 实测(真 LLM, ⛔ 不是桩)。问「宝山店最近30天营收多少」,
-       模型返回的是:
-
-           store  = "模拟·宝山大场社区店"      ← 它看得到租户门店清单, 自己归一好了
-           stores = ["模拟·宝山大场社区店"]
-           store_scope = "single"   clarification_needed = false
-
-       而 `_verbatim_entity` 要求实参是**问句原文子串** —— 问句里只有
-       「宝山店」, 于是这个**完全正确**的全名被反幻觉守卫当场丢掉,
-       `store_slots` 空 → 下游给出一句通用的「要看哪一组门店」反问。
-       三条简称问句 **3/3** 都这么挂的。
-
-    ▎这就是 owner 定稿第四节写的第 1 类:「**归一**（最高频）：
-    ▎LLM 顺手改写了名字 → 查库查不到」。
-    ⚠️ 我一开始把它读成「模型不会归一」, 单测的桩因此喂了 `store: "宝山店"`
-       ——**一个真模型不会产出的形状**(形态 B‴)。桩绿而 prod 红, 差别全在这里。
-
-    ⛔ 为什么这不是在削弱反幻觉守卫: 判据是**两个互相独立的来源指向同一家店**
-       —— 模型那一侧从我们喂给它的租户门店清单里选, 代码这一侧从**老板原话**
-       里抽出简称再对库消解。两边独立得出同一个全名才放行。
-    ⛔ 只认**唯一**别名, ⛔ 不认歧义候选: 老板说「社区店」而库里有 4 家时,
-       让模型替他挑一家就是**替他做判断** —— 那一路要走确认式反问。
-    """
-    if not isinstance(value, str) or store_resolution is None:
-        return None
-    candidate = value.strip().strip("「」\"'")
-    if not candidate:
-        return None
-    for _mention, canonical in store_resolution.aliases:
-        if candidate == canonical:
-            return canonical
-    return None
-
-
 def _validated_llm_store_names(
     parsed: Dict[str, Any],
     query: str,
     available_stores: Sequence[str],
-    *,
-    store_resolution: Optional[StoreMentionResolution] = None,
 ) -> Tuple[str, ...]:
-    """LLM 提名的门店名 → 库里真实存在的全名。
+    """LLM 提名的门店名 → 库里真实存在的全名。**本函数与改动前逐字相同。**
 
-    两个入口, 对应 prod 实测的两种真实形态:
+    🔴 归一**不在这里做**, 在调用方(`_semantic_spec_from_t3`)那一格。
+       为什么: 归一的判据只有一条 ——「老板原话唯一指向哪家店」——
+       而它对**三种**模型输出形态是同一个答案:
 
-    1. 模型**回声**老板打的简称(回放/晋升计划里存的旧形状) → 用
-       `store_resolution` 归一成全名。
-    2. 模型**自己改写**成了库里的全名(真 LLM 今天的行为, 实测 3/3) → 被
-       `_verbatim_entity` 挡在门外, 由 `_llm_rewrote_the_name_to_a_catalogue_entry`
-       在两个独立来源一致时认下。
+           ① store = "模拟·宝山大场社区店"   模型自己归一好了
+              → 被 `_verbatim_entity` 挡掉(不是原文子串) → 这里返回空
+           ② store = "宝山店"               模型回声老板的字
+              → 过了 verbatim, 但 `not in available` → 这里返回空
+           ③ store = null                   模型一家都没提名
+              → 这里返回空
 
-    📏 改动前实测: 机械派生的 50 条门店简称, `name not in available` 命中
-       **0 条(0.0%)**; 而失败方式是**静默丢弃** —— 老板看不到任何痕迹。
+       三种都落到「这里返回空」, 于是调用方**一格**就全接住了。
 
-    ⛔ 放进 `output` 的一律是**库里的全名**, ⛔ 不是老板打的字 ——
-       抬头要让他看见系统认的是哪一家(owner 定稿第四节)。
+    ⚠️ 我第一版在这里加了两条分支分别接 ① 和 ②, 变异对照当场证明它们
+       **不红** —— 加了 ③ 那一格之后, 前两条成了同一个判据的第二、第三份
+       (形态 D)。⛔ 三份判据一定会漂, 收敛成一份。
+       ▎变异不红先证明变异生效了; 生效了还不红, 那才是「这段代码没在守东西」。
     """
     raw: List[Any] = []
     if isinstance(parsed.get("stores"), list):
@@ -6302,17 +6255,9 @@ def _validated_llm_store_names(
     for value in raw:
         name = _verbatim_entity(value, query)
         if not name:
-            name = _llm_rewrote_the_name_to_a_catalogue_entry(
-                value, store_resolution)
-            if not name:
-                continue
-        elif available and name not in available:
-            canonical = (
-                store_resolution.alias_for(name) if store_resolution else None
-            )
-            if not canonical:
-                continue
-            name = canonical
+            continue
+        if available and name not in available:
+            continue
         if name not in output:
             output.append(name)
     return tuple(output[:8])
@@ -6513,29 +6458,31 @@ def _semantic_spec_from_t3(
         )
         or ()
     )
-    store_names = _validated_llm_store_names(
-        parsed, query, available_stores, store_resolution=store_resolution,
-    )
-    # ── 模型一家都没提名, 而老板的话唯一指向一家 → **代码直接归一** ──────
+    store_names = _validated_llm_store_names(parsed, query, available_stores)
+    # ── 上面一条都没留下, 而老板的话唯一指向一家 → **代码直接归一** ──────
     #
-    # 🔴 owner 定稿第四节: 「**唯一匹配** → 代码直接归一, ⛔ 不回 LLM」。
+    # 🔴 owner 定稿第四节: 「**唯一匹配** → 代码直接归一, ⛔ 不回 LLM;
+    #    抬头用全名让老板看见」。这一格是那句话的落点, 也是**唯一**的落点。
     #
-    # 📏 为什么必须有这一格(prod 实测, 同一条问句三次跑出**三种**模型输出):
-    #      ① store="模拟·浦东金桥社区店"        → 模型自己归一好了
-    #      ② store="浦东店"                    → 模型回声老板的字
-    #      ③ store=null + missing_fields=["store_scope"]  ← 这一次
-    #    第 ③ 种走到「只缺门店 → 补默认全部门店」那一格, 于是
-    #    `store_scope=all / defaulted=True`, 下游那道口径闸当场拦下并说
-    #    「你问的是某家门店, 我这次挑到的却是全店合计」——
-    #    ▎系统**自己知道**老板问的是哪家店(日志里 store='浦东店'),
-    #    ▎只是那个知识没接到计划上。
-    #    ⇒ 不注入的话, 同一句话时好时坏, 而两种结局都不报错。
+    # 📏 为什么必须在这里而不是在 `_validated_llm_store_names` 里分情况接
+    #    (prod 实测: 同一条「浦东店最近30天营收多少」跑出**三种**模型输出):
+    #      ① store="模拟·浦东金桥社区店"  模型自己归一好了 → 被反幻觉守卫挡掉
+    #      ② store="浦东店"              模型回声老板的字 → `not in available`
+    #      ③ store=null                  一家都没提名
+    #    **三种都让上面那个函数返回空** ⇒ 一格全接住, ⛔ 不写三份判据。
     #
-    # ⛔ 只在这三条同时成立时注入, 每条都是承重的:
-    #    (a) 模型**一家都没提名** —— 它提了就尊重它, ⛔ 不覆盖模型的判断
+    #    ⚠️ 第 ③ 种最阴: 它走到「只缺门店 → 补默认全部门店」那一格, 于是
+    #       `store_scope=all / defaulted=True`, 下游口径闸当场拦下并说
+    #       「你问的是某家门店, 我这次挑到的却是全店合计」——
+    #       ▎系统**自己知道**老板问的是哪家店(日志里 store='浦东店'),
+    #       ▎只是那个知识没接到计划上。
+    #    ⇒ 不接的话同一句话时好时坏, 而两种结局都不报错。
+    #
+    # ⛔ 只在这三条同时成立时归一, 每条都是承重的(各有一条阴性对照钉着):
+    #    (a) 模型提名的一家都没通过 —— 通过了就尊重它, ⛔ 不覆盖模型的判断
     #    (b) 老板的话**唯一**指向一家 —— 歧义走确认式反问, ⛔ 不替他挑
     #    (c) 模型没有明说「全部门店」—— 说了就是他要全店, ⛔ 不改题
-    #        (「浦东店和全部门店对比」这类, 模型会给 all/multiple, 这里不动它)
+    #        (「浦东店和全部门店对比」这类, 模型会给 all, 这里不动它)
     if (
         not store_names
         and store_resolution is not None
@@ -6546,7 +6493,7 @@ def _semantic_spec_from_t3(
             canonical for _mention, canonical in store_resolution.aliases
         )[:8]
         logger.info(
-            "[restaurant-intent] 模型没提名门店, 按老板原话直接归一: %s query=%r",
+            "[restaurant-intent] 按老板原话直接归一门店: %s query=%r",
             list(store_names), (query or "")[:60],
         )
     if store_names and not store_scope:
